@@ -1,0 +1,6 @@
+target/
+*.wasm
+!testdata/*.wasm
+dist/
+.soroban/
+test_snapshots/

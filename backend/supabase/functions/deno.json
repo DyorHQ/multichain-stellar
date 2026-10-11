@@ -1,0 +1,21 @@
+{
+  "imports": {
+    "@stellar/stellar-sdk": "npm:@stellar/stellar-sdk@16.3.1",
+    "@blend-capital/blend-sdk": "npm:@blend-capital/blend-sdk@3.3.1",
+    "postgres": "npm:postgres@3.4.7",
+    "@noble/hashes/sha3": "npm:@noble/hashes@1.8.0/sha3"
+  },
+  "compilerOptions": {
+    "strict": true
+  },
+  "lint": {
+    "rules": {
+      "exclude": [
+        "no-explicit-any"
+      ]
+    }
+  },
+  "fmt": {
+    "lineWidth": 120
+  }
+}

@@ -1,0 +1,14 @@
+[package]
+name = "spec-shake"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Applies soroban-sdk spec shaking v2 to a contract WASM (what `stellar contract build` does), so contracts build without the full stellar-cli."
+
+[workspace]
+
+[dependencies]
+soroban-spec = "=26.1.1"
+stellar-xdr = { version = "=26.0.1", default-features = false, features = ["curr", "std"] }
+wasmparser = "0.116.1"
+wasm-encoder = "0.38"
