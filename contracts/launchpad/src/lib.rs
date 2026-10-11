@@ -26,10 +26,12 @@ pub use curve::{BuyQuote, SellQuote, BPS, MAX_TOTAL_BPS};
 /// 1,000,000,000 tokens with 7 decimals.
 pub const DEFAULT_SUPPLY: i128 = 1_000_000_000_0000000;
 const DAY_IN_LEDGERS: u32 = 17_280;
-const INSTANCE_BUMP: u32 = 30 * DAY_IN_LEDGERS;
-const INSTANCE_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
-const PERSISTENT_BUMP: u32 = 90 * DAY_IN_LEDGERS;
-const PERSISTENT_THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
+// The contract instance and its WASM are kept alive by the operator (backend keeper: ExtendFootprintTTL), never in a
+// user's call: extending the instance also extends the ~50 KB code entry, which costs ~100+ XLM of rent on testnet.
+// Rent is paid by whoever extends: 30-day extensions keep a launch's fee low; an idle launch's entries archive and
+// can be restored later.
+const PERSISTENT_BUMP: u32 = 30 * DAY_IN_LEDGERS;
+const PERSISTENT_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 const MAX_NAME: u32 = 32;
 const MAX_SYMBOL: u32 = 12;
 const MAX_URI: u32 = 256;
@@ -411,7 +413,6 @@ impl Launchpad {
         e.storage().persistent().set(&DataKey::LaunchAt(index), &token);
         bump_persistent(&e, &DataKey::LaunchAt(index));
         e.storage().instance().set(&DataKey::LaunchCount, &(index + 1));
-        bump_instance(&e);
 
         Launched {
             token: token.clone(),
@@ -481,7 +482,6 @@ impl Launchpad {
             real_quote: curve.real_quote,
         }
         .publish(&e);
-        bump_instance(&e);
         q.quote_out
     }
 
@@ -525,7 +525,6 @@ impl Launchpad {
         curve.pair = Some(pair.clone());
         save_curve(&e, &token, &curve);
         Graduated { token, pair: pair.clone(), pool_tokens, pool_quote, liquidity, burned }.publish(&e);
-        bump_instance(&e);
         pair
     }
 
@@ -653,7 +652,6 @@ fn do_buy(e: &Env, buyer: &Address, token: &Address, quote_in: i128, min_tokens_
     if completed_now {
         Completed { token: token.clone(), real_quote: curve.real_quote }.publish(e);
     }
-    bump_instance(e);
     q.tokens_out
 }
 
@@ -730,9 +728,6 @@ fn bump_persistent(e: &Env, key: &DataKey) {
     e.storage().persistent().extend_ttl(key, PERSISTENT_THRESHOLD, PERSISTENT_BUMP);
 }
 
-fn bump_instance(e: &Env) {
-    e.storage().instance().extend_ttl(INSTANCE_THRESHOLD, INSTANCE_BUMP);
-}
 
 #[cfg(test)]
 mod test;

@@ -137,14 +137,35 @@ export function newTx(source: Account, timeoutSec = 300): TransactionBuilder {
   return new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: env.network.passphrase }).setTimeout(timeoutSec);
 }
 
-/** Simulates a Soroban transaction and assembles footprint, resources and auth. */
+/** Simulates a Soroban transaction and assembles footprint, resources and auth, with headroom: state can move
+ *  between simulation and execution (Blend accrues interest every ledger), and a transaction that runs out of
+ *  budget fails on-chain (invokeHostFunctionResourceLimitExceeded). The sponsor pays the margin, never the user. */
 export async function prepare(tx: Transaction): Promise<Transaction> {
+  let sim: rpc.Api.SimulateTransactionResponse;
   try {
-    return await rpcServer().prepareTransaction(tx);
+    sim = await rpcServer().simulateTransaction(tx);
   } catch (err) {
     const msg = String((err as any)?.message ?? err);
-    throw new ApiError(422, "simulation_failed", simulationMessage(msg), { raw: msg.slice(0, 600) });
+    throw new ApiError(502, "rpc_unavailable", "Stellar RPC didn't answer. Try again.", { raw: msg.slice(0, 300) });
   }
+  if (rpc.Api.isSimulationError(sim)) {
+    throw new ApiError(422, "simulation_failed", simulationMessage(sim.error), { raw: sim.error.slice(0, 600) });
+  }
+  if (rpc.Api.isSimulationRestore(sim)) {
+    throw new ApiError(409, "needs_restore", "Part of this contract's data is archived. It is being restored; try again in a minute.");
+  }
+  const ok = sim as rpc.Api.SimulateTransactionSuccessResponse;
+  const data = ok.transactionData;
+  const r = data.build().resources();
+  const MAX_INSTRUCTIONS = 100_000_000;
+  data.setResources(
+    Math.min(MAX_INSTRUCTIONS, Math.ceil(r.instructions() * 1.25) + 100_000),
+    Math.ceil(r.diskReadBytes() * 1.2) + 1_000,
+    Math.ceil(r.writeBytes() * 1.2) + 1_000,
+  );
+  ok.minResourceFee = String(Math.ceil(Number(ok.minResourceFee) * 1.3) + 100_000);
+  ok.transactionData = data;
+  return rpc.assembleTransaction(tx, ok).build();
 }
 
 /** A read-only contract call (no state change). */

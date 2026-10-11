@@ -25,9 +25,10 @@ pub const MIN_WINDOW: u64 = 3_600;
 pub const MAX_WINDOW: u64 = 30 * 86_400;
 pub const MAX_PER_COLLECT: u32 = 20;
 const MAX_URI: u32 = 256;
+// Instance + WASM TTL is the operator's job (backend keeper), not the collector's: see launchpad/src/lib.rs.
 const DAY_IN_LEDGERS: u32 = 17_280;
-const BUMP: u32 = 90 * DAY_IN_LEDGERS;
-const THRESHOLD: u32 = 30 * DAY_IN_LEDGERS;
+const BUMP: u32 = 30 * DAY_IN_LEDGERS;
+const THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -213,7 +214,6 @@ impl Moments {
         };
         save_moment(e, &m);
         e.storage().instance().set(&DataKey::MomentCount, &id);
-        e.storage().instance().extend_ttl(THRESHOLD, BUMP);
         Published { moment_id: id, creator, uri, price, quote, max_editions, deadline: m.deadline }.publish(e);
         id
     }
@@ -260,7 +260,6 @@ impl Moments {
         }
         m.minted += quantity;
         save_moment(e, &m);
-        e.storage().instance().extend_ttl(THRESHOLD, BUMP);
         Collected { moment_id, collector, quantity, first_token_id: first, paid: total, minted: m.minted }.publish(e);
         first
     }

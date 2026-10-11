@@ -42,13 +42,14 @@ export const env = {
   get monadRelayerKey(): string | undefined {
     return read("MONAD_RELAYER_KEY");
   },
-  /** Per user per UTC day, in stroops (1 XLM = 10,000,000). */
+  /** Per user per UTC day, in stroops (1 XLM = 10,000,000). Testnet default 50 XLM; set it per network. */
   get dailyFeeBudget(): bigint {
-    return BigInt(read("LITE_DAILY_FEE_BUDGET") ?? "50000000");
+    return BigInt(read("LITE_DAILY_FEE_BUDGET") ?? "500000000");
   },
-  /** The most the sponsor pays for one transaction, in stroops. */
+  /** The most the sponsor pays for one transaction, in stroops. A launch (it deploys a token contract and pays
+   *  30 days of rent) is the most expensive call, about 2 XLM on testnet; default cap 3 XLM. */
   get maxFeePerTx(): bigint {
-    return BigInt(read("LITE_MAX_FEE_PER_TX") ?? "5000000");
+    return BigInt(read("LITE_MAX_FEE_PER_TX") ?? "30000000");
   },
   get mediaBucket(): string {
     return read("LITE_MEDIA_BUCKET") ?? "lite-media";

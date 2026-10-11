@@ -112,7 +112,7 @@ export async function friendbotFund(address: string): Promise<void> {
   const res = await fetch(`${url}?addr=${encodeURIComponent(address)}`);
   if (!res.ok) {
     const body = await res.text();
-    if (!body.includes("createAccountAlreadyExist")) throw new ApiError(502, "friendbot_failed", "Testnet Friendbot didn't answer. Try again.", { status: res.status });
+    if (!/already funded|createAccountAlreadyExist/.test(body)) throw new ApiError(502, "friendbot_failed", "Testnet Friendbot didn't answer. Try again.", { status: res.status });
   }
   for (let i = 0; i < 20; i++) {
     if (await loadAccount(address)) return;

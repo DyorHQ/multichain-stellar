@@ -12,7 +12,7 @@ import { env } from "./env.ts";
 import { ApiError, bad, notFound } from "./http.ts";
 import { assetById } from "./networks.ts";
 import { createPlan, PlanView, registerBuilder } from "./plans.ts";
-import { Contract, fromStroops, invoke, Keypair, loadAccount, newTx, prepare, requireAccount, sendSigned, sponsor, sv } from "./stellar.ts";
+import { Contract, fromStroops, invoke, Keypair, loadAccount, newTx, prepare, requireAccount, rpcServer, sendSigned, sponsor, sv } from "./stellar.ts";
 
 // ------------------------------------------------------------------------------------------------ EVM encoding
 
@@ -146,10 +146,12 @@ export async function startBridge(user: string, input: { direction: string; amou
     const rows = await sql()`
       insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (${user}, 'stellar_to_monad', 'cctp', ${amount7.toString()}, ${input.monadAddress})
       returning id, status`;
-    const plan = await createPlan(user, "bridge_out", [{
-      label: "Send USDC to Monad",
-      spec: { kind: "cctp_burn", amount: amount7.toString(), recipient: input.monadAddress, usdc: usdc.contract },
-    }]);
+    // Circle's TokenMessengerMinter pulls with transfer_from, so the burn needs an allowance first (two steps:
+    // a Soroban transaction holds one contract call).
+    const plan = await createPlan(user, "bridge_out", [
+      { label: "Allow the USDC transfer", spec: { kind: "token_approve", token: usdc.contract, spender: cctp.tokenMessengerMinter, amount: amount7.toString() } },
+      { label: "Send USDC to Monad", spec: { kind: "cctp_burn", amount: amount7.toString(), recipient: input.monadAddress, usdc: usdc.contract } },
+    ]);
     return { transfer: { id: rows[0].id, status: rows[0].status, direction: "stellar_to_monad" }, plan };
   }
   throw bad("bad_direction", "direction is monad_to_stellar or stellar_to_monad.");
@@ -204,7 +206,10 @@ export async function advanceBridges(): Promise<number> {
   let advanced = 0;
   for (const t of open) {
     const srcDomain = t.direction === "monad_to_stellar" ? env.network.bridge.monad!.domain : env.network.contracts.cctp.domain;
-    const hash = String(t.source_tx).startsWith("0x") || t.direction === "monad_to_stellar" ? String(t.source_tx) : `0x${t.source_tx}`;
+    // Iris indexes an EVM burn by its 0x hash and a Stellar burn by the hash Horizon/RPC report for the
+    // transaction (for a fee-bump, the outer hash), without 0x.
+    const raw = String(t.source_tx);
+    const hash = t.direction === "monad_to_stellar" ? (raw.startsWith("0x") ? raw : `0x${raw}`) : raw.replace(/^0x/, "");
     const res = await fetch(`${env.network.apis.iris}/v2/messages/${srcDomain}?transactionHash=${hash}`, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) continue;
     const body = await res.json();
@@ -235,6 +240,29 @@ export async function relayMintAndForward(message: Uint8Array, attestation: Uint
   tx.sign(sp);
   return await sendSigned(tx);
 }
+
+/** An allowance for a pinned spender (the CCTP TokenMessengerMinter), valid for about 3 hours. */
+registerBuilder("token_approve", async (user, spec) => {
+  const cctp = env.network.contracts.cctp!;
+  const spender = String(spec.spender);
+  if (spender !== cctp.tokenMessengerMinter) throw bad("bad_spender", "Unexpected spender.");
+  const token = String(spec.token);
+  const amount = String(spec.amount);
+  const acct = await requireAccount(user);
+  const latest = (await rpcServer().getLatestLedger()).sequence;
+  const tx = await invoke(acct, token, "approve", [sv.addr(user), sv.addr(spender), sv.i128(amount), sv.u32(latest + 2_000)]);
+  const code = assetById(env.network, token)?.code ?? "token";
+  return {
+    tx,
+    intent: {
+      kind: "approve",
+      summary: `Allow Circle's bridge to move ${fromStroops(amount)} ${code}`,
+      spend: { [token]: amount },
+      calls: [{ contract: token, fn: "approve" }],
+      display: { amount, spender: "Circle CCTP" },
+    },
+  };
+});
 
 registerBuilder("cctp_burn", async (user, spec) => {
   const cctp = env.network.contracts.cctp!;

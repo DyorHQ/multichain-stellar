@@ -8,6 +8,7 @@ import { json } from "../_shared/http.ts";
 import { settle } from "../_shared/plans.ts";
 import deployment from "../_shared/deployments/testnet.json" with { type: "json" };
 import { invoke, loadAccount, native, rpcServer, sendSigned, sponsor, sv, txStatus } from "../_shared/stellar.ts";
+import { keepAlive } from "../_shared/ttl.ts";
 
 const CURSOR = "events";
 
@@ -153,13 +154,23 @@ export async function keeper(): Promise<number> {
   return n;
 }
 
+/** Keeps the contracts, the launch-token WASM and every launch token's instance from archiving. */
+export async function ttl() {
+  const c = env.network.contracts;
+  const mine = [c.launchpad, c.moments].filter((x): x is string => Boolean(x));
+  if (mine.length === 0) return { checked: 0, extended: 0 };
+  const tokens = await sql()`select token from lite.launches order by updated_at desc limit 200`;
+  const tokenHash = (deployment as any).launchTokenWasmHash as string | undefined;
+  return await keepAlive([...mine, ...tokens.map((t) => t.token as string)], tokenHash ? [tokenHash] : []);
+}
+
 if (import.meta.main) {
   Deno.serve(async (req) => {
     const secret = env.cronSecret;
     if (!secret || req.headers.get("x-cron-secret") !== secret) return json({ error: "forbidden" }, 403);
     const started = Date.now();
     const out: Record<string, unknown> = {};
-    for (const [name, step] of [["events", indexEvents], ["settled", settlePending], ["graduated", keeper], ["bridges", advanceBridges]] as const) {
+    for (const [name, step] of [["events", indexEvents], ["settled", settlePending], ["graduated", keeper], ["bridges", advanceBridges], ["ttl", ttl]] as const) {
       try {
         out[name] = await step();
       } catch (err) {
