@@ -1,5 +1,5 @@
 // Accounts: activation (Friendbot on testnet, sponsored reserves on mainnet), sponsored trustlines, balances, sends.
-import { Operation } from "@stellar/stellar-sdk";
+import { Memo, Operation } from "@stellar/stellar-sdk";
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { ApiError, bad } from "./http.ts";
@@ -63,15 +63,33 @@ registerBuilder("activate", async (user, spec) => {
   return { tx, intent, cosignSponsor: true };
 });
 
+function memoOf(spec: Record<string, unknown>): Memo | null {
+  if (!spec.memo) return null;
+  const value = String(spec.memo);
+  switch (spec.memoType) {
+    case "id":
+      if (!/^[0-9]{1,20}$/.test(value)) throw bad("bad_memo", "That memo ID isn't a number.");
+      return Memo.id(value);
+    case "hash":
+      // SEP-24 sends hash memos base64-encoded.
+      return Memo.hash(Buffer.from(value, /^[0-9a-f]{64}$/i.test(value) ? "hex" : "base64").toString("hex"));
+    default:
+      if (new TextEncoder().encode(value).length > 28) throw bad("bad_memo", "A text memo is at most 28 bytes.");
+      return Memo.text(value);
+  }
+}
+
 registerBuilder("payment", async (user, spec) => {
   const asset = assetById(env.network, String(spec.asset)) ?? tokenAsset(String(spec.asset));
   const to = String(spec.to);
   const amount = BigInt(String(spec.amount));
   const acct = await requireAccount(user);
-  const display = { asset: asset.code, amount: fromStroops(amount, asset.decimals), to };
+  const memo = memoOf(spec);
+  const display = { asset: asset.code, amount: fromStroops(amount, asset.decimals), to, memo: spec.memo ? String(spec.memo) : null };
   if (asset.classic && isAccountId(to)) {
     const dest = await classicBalances(to);
     let tb = newTx(acct);
+    if (memo) tb = tb.addMemo(memo);
     if (!dest) {
       if (asset.classic !== "native") throw new ApiError(409, "recipient_inactive", "That account doesn't exist yet, so it can't receive this asset.");
       if (amount < 10_000_000n) throw bad("too_small", "A new account needs at least 1 XLM.");

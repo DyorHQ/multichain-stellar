@@ -10,3 +10,5 @@ ios/**/*.xcodeproj/
 ios/**/xcuserdata/
 ios/**/.build/
 ios/**/DerivedData/
+ios/Packages/*/.build/
+ios/Packages/*/Package.resolved

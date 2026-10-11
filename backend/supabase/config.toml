@@ -1,0 +1,27 @@
+# Supabase project: dyorhq-stellar-testnet (separate from production; see docs/RUNBOOK-testnet.md).
+project_id = "dyorhq-stellar-testnet"
+
+[api]
+# The lite schema is never exposed through PostgREST: every read and write goes through the Edge Functions.
+schemas = ["public"]
+extra_search_path = ["public"]
+
+[db]
+major_version = 17
+
+# Both functions check their own credentials (the Lite JWT + tester allowlist, or the cron secret).
+[functions.lite]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+[functions.lite-indexer]
+verify_jwt = false
+import_map = "./functions/deno.json"
+
+[storage]
+file_size_limit = "25MiB"
+
+[storage.buckets.lite-media]
+public = true
+file_size_limit = "25MiB"
+allowed_mime_types = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime", "application/json"]

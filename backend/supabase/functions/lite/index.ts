@@ -99,10 +99,14 @@ router.on("POST /v1/account/faucet", async ({ req }) => json(await testnetFaucet
 
 router.on("POST /v1/send", async ({ req }) => {
   const u = await user(req);
-  const body = await readJson<{ asset: string; to: string; amount: string }>(req);
+  const body = await readJson<{ asset: string; to: string; amount: string; memo?: string; memoType?: string }>(req);
   const amount = amountArg(body.amount, "amount");
   const to = stringArg(body.to, "to", 69);
-  return json(await createPlan(u, "payment", [{ label: "Send", spec: { kind: "payment", asset: stringArg(body.asset, "asset", 60), to, amount: amount.toString() } }]));
+  // Anchors and exchanges need a memo on withdrawals (SEP-24 withdraw_memo / withdraw_memo_type).
+  const memoType = body.memo ? (body.memoType ?? "text") : null;
+  if (memoType && !["text", "id", "hash"].includes(memoType)) throw bad("bad_memo", "memoType is text, id or hash.");
+  const spec = { kind: "payment", asset: stringArg(body.asset, "asset", 60), to, amount: amount.toString(), memo: body.memo ?? null, memoType };
+  return json(await createPlan(u, "payment", [{ label: "Send", spec }]));
 });
 
 // ------------------------------------------------------------------------------------------------ plans & transactions

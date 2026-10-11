@@ -59,7 +59,9 @@ export class Router {
   async handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const all = url.pathname.split("/").filter(Boolean);
-    const start = all.indexOf("v1");
+    // Supabase serves this function under /functions/v1/<name>/ (or /<name>/ inside the runtime): the API's own
+    // "v1" is the last one.
+    const start = all.lastIndexOf("v1");
     const parts = start >= 0 ? all.slice(start) : all;
     for (const r of this.routes) {
       if (r.method !== req.method || r.parts.length !== parts.length) continue;
