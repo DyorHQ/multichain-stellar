@@ -402,9 +402,10 @@ What ran, and the evidence, are in [VERIFICATION.md](VERIFICATION.md).
   - Migrations plus SQL tests on Postgres 16 (RLS closed to anon and authenticated, the budget function, candles).
   - `backend/tests/e2e/lite_e2e.ts` runs the whole journey on testnet as the phone would.
 - **iOS:**
-  - StellarKit's 11 tests on Linux: the official SEP-5 vector, 39 verifier vectors shared with the server, and a live
-    testnet journey in Swift.
-  - DyorLite and the harness compile in CI on macOS (`.github/workflows/ios.yml`).
+  - StellarKit's 11 tests on Linux and macOS: the official SEP-5 vector, 39 verifier vectors shared with the server,
+    and a live testnet journey in Swift.
+  - DyorLite and the harness build in Xcode, and DyorLite's tests run on the iOS Simulator, locally and in CI on
+    macOS (`.github/workflows/ios.yml`).
 
 ## 10. Roadmap
 

@@ -22,8 +22,8 @@ docs/        Architecture, decisions, runbook, iOS integration, verification
 |---|---|
 | Contracts | 31 tests pass, including graduation against the real Soroswap WASM. Deployed to testnet. |
 | Backend | 18 unit tests and the SQL tests pass. The full user journey ran on testnet through the API (27 sponsored transactions). |
-| StellarKit | 11 Swift tests pass on Linux, including 39 shared verifier vectors and a live testnet journey. |
-| DyorLite UI + harness | Written and statically type-checked. First real Xcode build happens in CI (`ios.yml`) once the repo is pushed. |
+| StellarKit | 11 Swift tests pass on Linux and macOS, including 39 shared verifier vectors. The live testnet journey ran on Linux (it skips without `LITE_API`). |
+| DyorLite UI + harness | Both build in Xcode 26.6 with no errors or warnings, and DyorLite's 4 tests pass on an iPhone 17 simulator. No screen has been run against a live API yet. |
 | Main-app integration | Drop-in files and a patch guide for after the Oct 13 submission. The live Monad app is untouched. |
 
 ## Run it

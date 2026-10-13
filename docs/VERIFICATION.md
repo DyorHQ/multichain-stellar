@@ -6,12 +6,13 @@ What was proven, how, and what is still open. Last full run: **2026-10-13** on S
 
 | Suite | Command | Result |
 |---|---|---|
-| Contracts | `cd contracts && ./build.sh && cargo test` | 31 passed (launch-token 6, launchpad 18, moments 7) |
+| Contracts | `cd contracts && ./build.sh && cargo test` (Rust 1.91+) | 31 passed (launch-token 6, launchpad 18, moments 7) |
 | Backend unit | `deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/` | 18 passed |
 | Schema | migrations + `backend/tests/sql/lite_schema_test.sql` on Postgres 16 | 15 tables closed to anon/authenticated; budget and candles OK |
 | Type check | `deno check` on both functions and every script | 0 errors |
-| StellarKit | `cd ios/Packages/StellarKit && swift test` (Swift 6.3.3, Linux) | 11 passed, including the live journey below |
-| DyorLite + harness | Real Swift compiler against iOS 18 SDK signature stubs; deliberately broken files were rejected | 0 errors; first real Xcode build runs in `ios.yml` |
+| StellarKit | `cd ios/Packages/StellarKit && swift test` (Swift 6.3.3, Linux and macOS) | 11 passed, including the live journey below (Linux). On macOS 10 passed and the journey skipped without `LITE_API` |
+| DyorLite | `xcodebuild -scheme DyorLite` build, then test on an iPhone 17 simulator (Xcode 26.6, iOS 26.5) | 0 errors, 0 warnings; 4 tests passed |
+| LiteHarness | `xcodegen generate`, then `xcodebuild -scheme LiteHarness` for the iOS Simulator (Xcode 26.6) | 0 errors, 0 warnings |
 
 ## Testnet journey (`backend/tests/e2e/lite_e2e.ts`)
 
@@ -79,8 +80,8 @@ The live Swift journey (`LiteJourneyTests`) does six things:
 
 ## Not yet verified
 
-- **DyorLite and LiteHarness in Xcode.** They type-check against stubs of the iOS 18 SDK. The first real build is
-  the `ios.yml` run after the repo is pushed.
+- **DyorLite and LiteHarness against a live API.** Both build in Xcode and DyorLite's unit tests pass, but no
+  screen has been run against a deployed `lite` API yet.
 - **Main-app integration** (`ios/Integration/`). It is written against DyorKit's actual APIs (`MeraSession.revealPhrase`,
   `TransactionSender`, `TransactionStep.call`), but it compiles only inside the DyorHQ target, after Oct 13.
 - **The Supabase-hosted runtime.** Everything ran on Deno 2.9 with Postgres 16 locally. Storage uploads, `pg_cron` and

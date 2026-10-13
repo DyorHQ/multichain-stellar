@@ -4,6 +4,11 @@ on:
     paths: ["ios/**", ".github/workflows/ios.yml"]
   pull_request:
     paths: ["ios/**"]
+# An explicit `shell: bash` runs with -o pipefail (the default shell does not), so `xcodebuild … | tail` fails when
+# xcodebuild fails instead of reporting tail's success.
+defaults:
+  run:
+    shell: bash
 jobs:
   stellarkit-linux:
     # StellarCore and LiteClient are pure Swift: the verifier vectors run on Linux too.

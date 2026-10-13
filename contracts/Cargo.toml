@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2021"
 license = "LicenseRef-DyorHQ-Proprietary"
 publish = false
-rust-version = "1.84"
+rust-version = "1.91"
 
 [workspace.dependencies]
 # OpenZeppelin stellar-tokens 0.7.2 requires soroban-sdk ^26.1. Contracts built on SDK 26 run unchanged on

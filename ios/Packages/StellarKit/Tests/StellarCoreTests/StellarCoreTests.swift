@@ -25,7 +25,7 @@ private struct VerifierVector: Decodable {
     let decoded: Decoded
 }
 
-private func load<T: Decodable>(_ name: String) throws -> T {
+private func loadVectors<T: Decodable>(_ name: String) throws -> T {
     let url = try XCTUnwrap(Bundle.module.url(forResource: name, withExtension: "json", subdirectory: "Vectors"))
     return try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
 }
@@ -47,7 +47,7 @@ final class StrKeyTests: XCTestCase {
 
 final class KeyTests: XCTestCase {
     func testSep5OfficialVector() throws {
-        let v: KeyVectors = try load("keys")
+        let v: KeyVectors = try loadVectors("keys")
         for k in v.sep5 {
             let signer = try StellarDerivation.sep5(mnemonic: k.mnemonic, index: k.index)
             XCTAssertEqual(signer.address, k.address)
@@ -66,7 +66,7 @@ final class KeyTests: XCTestCase {
     }
 
     func testSep53SignaturesInteroperate() throws {
-        let v: KeyVectors = try load("keys")
+        let v: KeyVectors = try loadVectors("keys")
         let signer = try StellarSigner(secret: v.sep53.secret)
         let digest = SHA256Bridge.hash(Array(("Stellar Signed Message:\n" + v.sep53.message).utf8))
         // The JS signature verifies here, and ours verifies too (CryptoKit's ed25519 may be randomized).
@@ -86,7 +86,7 @@ final class KeyTests: XCTestCase {
     }
 
     func testAssetContractIDs() throws {
-        let v: KeyVectors = try load("keys")
+        let v: KeyVectors = try loadVectors("keys")
         for s in v.sac {
             let network: StellarNetwork = s.network == "mainnet" ? .mainnet : .testnet
             let asset: Asset
@@ -115,7 +115,7 @@ final class AmountTests: XCTestCase {
 final class VerifierVectorTests: XCTestCase {
     /// Every vector the TypeScript verifier judged: the Swift verifier must reach the same verdict and outflow.
     func testAgreesWithTheServerVerifier() throws {
-        let vectors: [VerifierVector] = try load("verifier")
+        let vectors: [VerifierVector] = try loadVectors("verifier")
         XCTAssertGreaterThan(vectors.count, 30)
         var compared = 0
         for v in vectors {
@@ -155,7 +155,7 @@ final class VerifierVectorTests: XCTestCase {
     }
 
     func testSigningAddsAVerifiableSignature() throws {
-        let vectors: [VerifierVector] = try load("verifier")
+        let vectors: [VerifierVector] = try loadVectors("verifier")
         let v = try XCTUnwrap(vectors.first { $0.name == "payment ok" })
         var envelope = try TransactionEnvelope(base64: v.envelope)
         let signer = try StellarSigner(secret: "SBGWSG6BTNCKCOB3DIFBGCVMUPQFYPA2G4O34RMTB343OYPXU5DJDVMN")
