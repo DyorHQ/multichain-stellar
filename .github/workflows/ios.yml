@@ -20,23 +20,35 @@ jobs:
         working-directory: ios/Packages/StellarKit
 
   apple:
-    runs-on: macos-15
+    # The DyorHQ app ships with Xcode 26.6 (App Store uploads need the iOS 26 SDK), so Lite is built with Xcode 26 too.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
-      - name: Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app || sudo xcode-select -s /Applications/Xcode_26.5.app
+          xcodebuild -version
       - name: StellarKit tests (macOS, CryptoKit-backed)
         run: swift test
         working-directory: ios/Packages/StellarKit
+      # Each xcodebuild logs to $RUNNER_TEMP/xcodebuild.log; a failure prints the compiler errors, not only the tail.
       - name: DyorLite builds for iOS
         working-directory: ios/Packages/DyorLite
-        run: xcodebuild -scheme DyorLite -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation build | tail -30
+        run: |
+          xcodebuild -scheme DyorLite -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation build \
+            > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { grep -E ": error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u; tail -30 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+          tail -3 "$RUNNER_TEMP/xcodebuild.log"
       - name: DyorLite tests (iOS Simulator)
         working-directory: ios/Packages/DyorLite
-        run: xcodebuild -scheme DyorLite -destination 'platform=iOS Simulator,name=iPhone 16' test | tail -30
+        run: |
+          xcodebuild -scheme DyorLite -destination 'platform=iOS Simulator,name=iPhone 17' test \
+            > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { grep -E ": error:|failed \(" "$RUNNER_TEMP/xcodebuild.log" | sort -u; tail -30 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+          grep -E "Executed [0-9]+ test" "$RUNNER_TEMP/xcodebuild.log" | tail -1
       - name: LiteHarness app builds
         working-directory: ios
         run: |
           brew install xcodegen
           xcodegen generate
-          xcodebuild -project LiteHarness.xcodeproj -scheme LiteHarness -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -30
+          xcodebuild -project LiteHarness.xcodeproj -scheme LiteHarness -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { grep -E ": error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u; tail -30 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+          tail -3 "$RUNNER_TEMP/xcodebuild.log"
