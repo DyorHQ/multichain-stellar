@@ -4,6 +4,7 @@ on:
     paths: ["backend/**", ".github/workflows/backend.yml"]
   pull_request:
     paths: ["backend/**"]
+  workflow_dispatch:
 jobs:
   test:
     runs-on: ubuntu-24.04
