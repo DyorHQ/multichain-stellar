@@ -5,6 +5,8 @@
 !.env.example
 node_modules/
 .DS_Store
+# backend/scripts/local-stack.sh: local Postgres data, logs and PID files
+/.local-stack/
 # iOS
 ios/**/*.xcodeproj/
 ios/**/xcuserdata/

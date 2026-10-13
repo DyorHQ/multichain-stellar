@@ -126,3 +126,25 @@ tables. Then:
 - `select * from lite.sponsor_usage order by fee_stroops desc limit 20;`
 - Function logs: Supabase dashboard → Edge Functions → `lite-indexer` → Logs. Each run reports events indexed,
   transactions settled, launches graduated, bridges advanced and TTL entries extended.
+
+## 8. Local stack (the iOS Simulator and the journey test)
+
+`backend/scripts/local-stack.sh` runs Lite's backend on this Mac against Stellar testnet, with no hosted project: Postgres
+16 (Homebrew) on 127.0.0.1:54329, the `lite` API on 127.0.0.1:8000 and `lite-indexer` on 127.0.0.1:8001, plus a loop that
+calls the indexer every minute in place of the cron job.
+
+```bash
+backend/scripts/local-stack.sh start        # first run: initdb, migrations and the schema tests
+backend/scripts/local-stack.sh status
+backend/scripts/local-stack.sh invite "Jay simulator"   # the code goes to .secrets/local-invites.txt, never the terminal
+backend/scripts/local-stack.sh stop
+```
+
+- The app's Debug internal build (DyorHQ repo, `ios/Internal/generate.py`) uses `http://127.0.0.1:8000/lite`; the
+  simulator shares the Mac's loopback.
+- Secrets reach the processes only through `.secrets/local-functions.env`, which `backend/scripts/local/make-local-env.ts`
+  derives from `.secrets/testnet-functions.env` without its hosted `LITE_DB_URL`. Every process starts from an empty
+  environment.
+- Not available locally: media uploads and Moment metadata (they need Supabase Storage, so those routes answer 503). Coins
+  launch without an image; Moments can't be published from the app.
+- The local keepers spend the shared testnet sponsor's XLM, like the hosted indexer does.

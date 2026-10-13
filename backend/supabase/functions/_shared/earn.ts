@@ -48,18 +48,21 @@ export async function markets(): Promise<Market[]> {
   for (const p of env.network.contracts.blendPools) {
     const pool = await loadPool(p.id);
     for (const [assetId, r] of pool.reserves) {
+      // Only assets in the network registry: the phone signs for pinned token contracts only, so a reserve outside it
+      // (Blend's test wETH and wBTC) could never be supplied from Lite.
       const reg = assetById(env.network, assetId);
+      if (!reg) continue;
       out.push({
         pool: p.id,
         poolName: p.name,
         asset: assetId,
-        code: reg?.code ?? (r as any).tokenMetadata?.symbol ?? "?",
+        code: reg.code,
         decimals: r.config.decimals,
         supplyApy: r.estSupplyApy,
         borrowApy: r.estBorrowApy,
         utilization: r.getUtilizationFloat(),
         totalSupplied: r.totalSupplyFloat(),
-        note: reg?.note,
+        note: reg.note,
       });
     }
   }
@@ -72,6 +75,8 @@ export async function positions(user: string) {
     const pool = await loadPool(p.id);
     const pu = await pool.loadUser(user);
     for (const [assetId, r] of pool.reserves) {
+      const reg = assetById(env.network, assetId);
+      if (!reg) continue; // as in markets(): Lite can't have supplied an asset outside the registry
       const supplied = pu.getSupply(r);
       const collateral = pu.getCollateral(r);
       const total = supplied + collateral;
@@ -79,7 +84,7 @@ export async function positions(user: string) {
         out.push({
           pool: p.id,
           asset: assetId,
-          code: assetById(env.network, assetId)?.code ?? "?",
+          code: reg.code,
           supplied: total.toString(),
           bTokens: (pu.getSupplyBTokens(r) + pu.getCollateralBTokens(r)).toString(),
         });
@@ -93,8 +98,9 @@ export async function buildEarn(user: string, action: "deposit" | "withdraw", po
   poolConfig(poolId);
   const pool = await loadPool(poolId);
   if (!pool.reserves.has(asset)) throw bad("bad_asset", "This pool doesn't have that asset.");
-  const steps: { label: string; spec: { kind: string; [k: string]: unknown } }[] = [];
   const reg = assetById(env.network, asset);
+  if (!reg) throw bad("bad_asset", "Lite doesn't support that asset.");
+  const steps: { label: string; spec: { kind: string; [k: string]: unknown } }[] = [];
   if (action === "withdraw" && reg) {
     const acct = await accountView(user);
     const trust = needsTrustline(acct.balances, reg.id);

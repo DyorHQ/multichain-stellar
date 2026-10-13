@@ -183,7 +183,18 @@ export async function trackTx(user: string, hash: string): Promise<{ hash: strin
   const rows = await sql()`select status, plan_id, step_id, ledger, error from lite.tx_log where hash = ${hash} and address = ${user}`;
   if (rows.length === 0) throw notFound("Transaction");
   const row = rows[0];
-  if (row.status !== "pending") return { hash, status: row.status as string, ledger: row.ledger as number, error: (row.error as string) ?? undefined };
+  if (row.status !== "pending") {
+    const settled = { hash, status: row.status as string, ledger: row.ledger as number, error: (row.error as string) ?? undefined };
+    // The indexer may have settled it first (settlePending). A success still answers with its return value (a new
+    // launch token or Moment id), which only RPC keeps; if RPC no longer has it, the settled row stands.
+    if (row.status === "success") {
+      try {
+        const s = await txStatus(hash);
+        if (s.status === "SUCCESS") return { ...settled, returnValue: s.returnValue };
+      } catch { /* RPC unreachable: answer from the log */ }
+    }
+    return settled;
+  }
   const s = await txStatus(hash);
   if (s.status === "PENDING") return { hash, status: "pending" };
   const status = s.status === "SUCCESS" ? "success" : "failed";

@@ -23,10 +23,15 @@ Each run uses a fresh key and plays the phone's role:
 3. The sponsor fee-bumps it.
 4. The test waits for the ledger.
 
-The 2026-10-13 run passed all 9 phases. It ran against the build session's deployment (launchpad `CC4EJ5O6…`). Later
-that day the contracts were redeployed with keys the owner holds (ARCHITECTURE §4.4), and the deploy script's smoke test
-passed on the new contracts (a launch with an initial buy, then a Moment published and collected). The full journey
-has not yet been rerun against them.
+The first 2026-10-13 run passed all 9 phases against the build session's deployment (launchpad `CC4EJ5O6…`); its
+transactions are in the table below. Later that day the contracts were redeployed with keys the owner holds
+(ARCHITECTURE §4.4), the deploy script's smoke test passed on them, and the journey ran again against the redeployed
+contracts through the local stack (`backend/scripts/local-stack.sh`, RUNBOOK §8): all 9 phases passed, 15 sponsored
+transactions, all successful on-chain, for example the
+[launch](https://stellar.expert/explorer/testnet/tx/38dbf5eab57efa558e1d70654f3dea0d980c7f8f5713db44c08fc161c513372c)
+that graduated to Soroswap and the
+[burn](https://stellar.expert/explorer/testnet/tx/40abd9152c5813dbf1cf61b49e9805e8d956792c011498523b1daaba1066a74e)
+toward Monad (attested by Circle within 33 seconds).
 
 | Phase | What happened | Example transaction |
 |---|---|---|
