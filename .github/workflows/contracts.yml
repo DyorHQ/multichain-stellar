@@ -1,0 +1,25 @@
+name: contracts
+on:
+  push:
+    paths: ["contracts/**", ".github/workflows/contracts.yml"]
+  pull_request:
+    paths: ["contracts/**"]
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: contracts } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: wasm32v1-none }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "contracts -> target\ncontracts/tools/spec-shake -> target" }
+      - name: Build WASM (spec-shaken, what we deploy)
+        run: ./build.sh
+      - name: Unit + integration tests (real Soroswap WASM from testnet)
+        run: cargo test
+      - name: WASM size budget (network max 128 KiB)
+        run: |
+          for f in dist/*.wasm; do s=$(stat -c%s "$f"); echo "$f $s"; test "$s" -lt 131072; done
+      - uses: actions/upload-artifact@v4
+        with: { name: wasm, path: contracts/dist/ }

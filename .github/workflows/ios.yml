@@ -1,0 +1,37 @@
+name: ios
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**"]
+jobs:
+  stellarkit-linux:
+    # StellarCore and LiteClient are pure Swift: the verifier vectors run on Linux too.
+    runs-on: ubuntu-24.04
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+        working-directory: ios/Packages/StellarKit
+
+  apple:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || sudo xcode-select -s /Applications/Xcode_16.app
+      - name: StellarKit tests (macOS, CryptoKit-backed)
+        run: swift test
+        working-directory: ios/Packages/StellarKit
+      - name: DyorLite builds for iOS
+        working-directory: ios/Packages/DyorLite
+        run: xcodebuild -scheme DyorLite -destination 'generic/platform=iOS Simulator' -skipPackagePluginValidation build | tail -30
+      - name: DyorLite tests (iOS Simulator)
+        working-directory: ios/Packages/DyorLite
+        run: xcodebuild -scheme DyorLite -destination 'platform=iOS Simulator,name=iPhone 16' test | tail -30
+      - name: LiteHarness app builds
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -project LiteHarness.xcodeproj -scheme LiteHarness -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -30

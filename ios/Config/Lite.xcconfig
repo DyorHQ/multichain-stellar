@@ -1,0 +1,4 @@
+// Per-developer values; the real file is git-ignored: copy to Config/Lite.local.xcconfig if you prefer.
+// LITE_API_URL is public (the function URL), never a secret. No keys belong here.
+LITE_API_URL = https:/$()/example.supabase.co/functions/v1/lite
+#include? "Lite.local.xcconfig"

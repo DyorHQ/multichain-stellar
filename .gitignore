@@ -12,3 +12,4 @@ ios/**/.build/
 ios/**/DerivedData/
 ios/Packages/*/.build/
 ios/Packages/*/Package.resolved
+ios/Config/Lite.local.xcconfig

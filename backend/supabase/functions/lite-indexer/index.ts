@@ -46,13 +46,28 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
   if (ids.length === 0) return { events: 0, latest, reset };
 
   const deployLedger = Number((deployment as any).deployLedger ?? 0);
-  const req: any = { filters: [{ type: "contract", contractIds: ids }], limit: 500 };
-  if (cur.length && cur[0].cursor) req.cursor = cur[0].cursor;
-  else req.startLedger = Math.max(deployLedger || latest - 100_000, latest - 110_000);
+  const filters = [{ type: "contract", contractIds: ids }];
+  const fromStart = () => ({ filters, limit: 500, startLedger: Math.max(deployLedger || latest - 100_000, latest - 110_000) });
+  let req: any = cur.length && cur[0].cursor ? { filters, limit: 500, cursor: cur[0].cursor } : fromStart();
 
   let count = 0;
-  for (let round = 0; round < 5; round++) {
-    const res = await rpcServer().getEvents(req);
+  // RPC scans a bounded ledger window per request and answers with a cursor at the window's end, so a page with
+  // fewer than `limit` events doesn't mean we're caught up: keep paging until the cursor reaches the latest ledger
+  // (bounded per run; the next minute's run continues).
+  for (let round = 0; round < 30; round++) {
+    let res: any;
+    try {
+      res = await rpcServer().getEvents(req);
+    } catch (err) {
+      // A cursor older than RPC retention (~7 days) is refused: restart from what RPC still has.
+      if (round === 0 && req.cursor) {
+        console.warn("cursor refused, restarting from retention window", String((err as Error).message).slice(0, 120));
+        req = fromStart();
+        res = await rpcServer().getEvents(req);
+      } else {
+        throw err;
+      }
+    }
     for (const e of res.events as any[]) {
       await handle(e, contractIdOf(e));
       count++;
@@ -60,11 +75,20 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
     await sql()`
       insert into lite.indexer_cursors (name, ledger, cursor, network_id) values (${CURSOR}, ${res.latestLedger}, ${res.cursor ?? null}, ${net.passphrase})
       on conflict (name) do update set ledger = excluded.ledger, cursor = excluded.cursor, updated_at = now()`;
-    if ((res.events as any[]).length < 500 || !res.cursor) break;
-    delete req.startLedger;
-    req.cursor = res.cursor;
+    if (!res.cursor) break;
+    if (cursorLedger(res.cursor) >= res.latestLedger - 1 && (res.events as any[]).length < 500) break;
+    req = { filters, limit: 500, cursor: res.cursor };
   }
   return { events: count, latest, reset };
+}
+
+/** Event cursors are "<TOID>-<index>"; a TOID's high 32 bits are the ledger sequence. */
+export function cursorLedger(cursor: string): number {
+  try {
+    return Number(BigInt(cursor.split("-")[0]) >> 32n);
+  } catch {
+    return 0;
+  }
 }
 
 export async function handle(e: any, contract: string): Promise<void> {

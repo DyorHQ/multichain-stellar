@@ -1,0 +1,48 @@
+# XcodeGen spec for the internal Lite harness (xcodegen generate, then open LiteHarness.xcodeproj).
+# The DyorHQ app integrates the same packages; see docs/INTEGRATION-ios.md.
+name: LiteHarness
+options:
+  bundleIdPrefix: fun.dyorhq
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+    # The Lite API: https://<testnet project ref>.supabase.co/functions/v1/lite (set in Config/Lite.xcconfig).
+    LITE_API_URL: https://example.supabase.co/functions/v1/lite
+configFiles:
+  Debug: Config/Lite.xcconfig
+  Release: Config/Lite.xcconfig
+packages:
+  StellarKit:
+    path: Packages/StellarKit
+  DyorLite:
+    path: Packages/DyorLite
+targets:
+  LiteHarness:
+    type: application
+    platform: iOS
+    sources: [LiteHarness]
+    dependencies:
+      - package: DyorLite
+      - package: StellarKit
+        product: StellarKit
+    info:
+      path: LiteHarness/Info.plist
+      properties:
+        CFBundleDisplayName: Lite (Internal)
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        ITSAppUsesNonExemptEncryption: false
+        LITE_API_URL: $(LITE_API_URL)
+        NSFaceIDUsageDescription: Face ID confirms Lite transactions.
+        NSPhotoLibraryUsageDescription: Pick a photo or video for a Moment or a coin image.
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.lite.internal
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: STELLAR_LITE
+        TARGETED_DEVICE_FAMILY: "1"
