@@ -1,5 +1,5 @@
 -- Public-read bucket for launch images, Moment media and metadata JSON. Writes happen only through signed upload
--- URLs the lite function issues, and through the function itself (service role); no storage policies for anon or
+-- URLs the lite function issues, and through the function itself (service-role key); no storage policies for anon or
 -- authenticated users. Skipped where the storage schema doesn't exist (plain Postgres in CI).
 do $$
 begin

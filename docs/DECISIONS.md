@@ -38,8 +38,15 @@ Each entry is short: the decision, why, and what would change it.
 14. **Bridge.** Testnet uses CCTP v2: Monad testnet (15) ↔ Stellar testnet (27), verified registered both ways.
     Mainnet uses NEAR Intents 1Click. For Stellar → Monad, the burn needs an `approve` first, and Iris indexes the
     fee-bump hash. Claims run through the Pro wallet.
-15. **A separate Supabase project with RLS deny-all.** The client talks only to the `lite` function, so PostgREST
-    exposes nothing.
+15. **A separate Supabase project with RLS deny-all** (the separate project is superseded by #17; RLS deny-all
+    stands). The client talks only to the `lite` function, so PostgREST exposes nothing.
 16. **Invite-only.**
     - Three gates: the build flag, the server flag (default off) and the tester allowlist.
     - Revocation is immediate.
+17. **Lite lives in the DyorHQ Supabase project** (owner, 2026-10-13: one product, one project; supersedes the
+    separate project of #15). Lite keeps its own `lite` schema, functions (`lite`, `lite-indexer`), cron job, Vault
+    entries and `lite-media` bucket, and its functions connect as `lite_api`, a role that can reach only `lite.*`
+    (migration 4). Accepted trade-off: Supabase gives every function in a project every secret, so Lite's functions
+    and their npm dependencies also receive the project's `SUPABASE_DB_URL` (which can read Vault), service-role key
+    and the app's function secrets, and the testnet sponsor key sits next to the app's secrets. What would change it:
+    mainnet, where the sponsor holds real XLM, reopens this decision.

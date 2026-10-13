@@ -54,3 +54,26 @@ begin
   delete from lite.launches where token = 'CTEST';
   raise notice 'ok: candles';
 end $$;
+
+-- 4. lite_api (the functions' LITE_DB_URL role) works inside lite and nowhere else.
+create table public.lite_api_sentinel (x int);
+insert into public.lite_api_sentinel values (1);
+do $$
+declare n int;
+begin
+  execute 'set local role lite_api';
+  if not lite.reserve_fee_budget('GROLE', 1, 10) then raise exception 'lite_api: budget reservation refused'; end if;
+  select count(*) into n from lite.sponsor_usage where address = 'GROLE';
+  if n <> 1 then raise exception 'lite_api: cannot read its own budget row'; end if;
+  delete from lite.sponsor_usage where address = 'GROLE';
+  perform 1 from lite.app_config where key = 'lite';
+  truncate lite.indexer_cursors;
+  begin
+    perform 1 from public.lite_api_sentinel;
+    raise exception 'lite_api could read public.lite_api_sentinel';
+  exception when insufficient_privilege then null;
+  end;
+  execute 'reset role';
+  raise notice 'ok: lite_api works in lite and is refused outside it';
+end $$;
+drop table public.lite_api_sentinel;

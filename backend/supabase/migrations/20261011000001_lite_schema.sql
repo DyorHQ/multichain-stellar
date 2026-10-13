@@ -1,6 +1,6 @@
--- DyorHQ Lite (Stellar) schema. Lives in its own Supabase project (dyorhq-stellar-testnet), never in production.
+-- DyorHQ Lite (Stellar) schema, in the DyorHQ Supabase project next to the Pro app's tables (DECISIONS #17).
 -- Every table has RLS on and NO policy for anon/authenticated: PostgREST exposes nothing. The Edge Functions
--- connect with the service role / database URL and enforce auth themselves (lite JWT + tester allowlist).
+-- connect as lite_api (migration 4) and enforce auth themselves (lite JWT + tester allowlist).
 
 create schema if not exists lite;
 revoke all on schema lite from public;

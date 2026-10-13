@@ -43,13 +43,14 @@ cd ios/Packages/StellarKit && swift test                      # Linux or macOS
 cd ios && xcodegen generate && open LiteHarness.xcodeproj      # the internal Lite app
 ```
 
-Production setup (the separate Supabase project, secrets, cron, invites, TestFlight) is in
+Production setup (the `lite` schema in the DyorHQ Supabase project, secrets, cron, invites, TestFlight) is in
 [docs/RUNBOOK-testnet.md](docs/RUNBOOK-testnet.md). Wiring Lite into the DyorHQ app is in
 [docs/INTEGRATION-ios.md](docs/INTEGRATION-ios.md).
 
 ## Rules
 
 - No secrets in this repo. Testnet keys live in `.secrets/` (git-ignored) and in Supabase function secrets.
-- Lite never reads or writes the production Supabase project (`fmnjqrguvopusfufmirs`). The invite script refuses its URL.
+- Lite lives in the DyorHQ Supabase project (`fmnjqrguvopusfufmirs`, DECISIONS #17) but only in its own `lite` schema:
+  its functions and scripts connect as `lite_api`, which can reach nothing else. The invite script refuses other roles.
 - Every transaction a user signs is built by the API, checked on the phone against pinned contracts and the amounts
   the user confirmed, then signed on the phone. The sponsor pays the fee only for transactions the API built.

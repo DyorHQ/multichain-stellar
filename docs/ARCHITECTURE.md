@@ -66,7 +66,7 @@ flowchart LR
     L --> K[StellarKit: keys, verify, sign, SEP-10/24]
     A --> P[Pro: DyorKit EVM, unchanged]
   end
-  subgraph Supabase["Supabase project: dyorhq-stellar-testnet (separate from production)"]
+  subgraph Supabase["Supabase project: DyorHQ (schema lite, role lite_api)"]
     F[Edge Function: lite API] --> DB[(Postgres schema lite, RLS deny-all)]
     I[Edge Function: lite-indexer, cron 1 min] --> DB
     F --> S[(Storage: lite-media)]
@@ -94,8 +94,9 @@ flowchart LR
    a plan this server built for this user in the last 10 minutes, within the user's daily budget.
 3. *Contracts hold the rules, the backend holds no user funds.* The sponsor holds testnet XLM for fees and reserves;
    nothing else is custodial.
-4. *Separate blast radius.* A separate Supabase project, separate secrets, separate repo. Production Supabase
-   (`fmnjqrguvopusfufmirs`) is never read or written by Lite.
+4. *Contained blast radius.* Lite shares the DyorHQ Supabase project (`fmnjqrguvopusfufmirs`, DECISIONS #17) but
+   keeps its own schema, functions, cron job, Vault entries and bucket, and its functions connect as `lite_api`, a
+   role that can reach only `lite.*`. The repo is separate.
 
 ### 3.1 Transaction pipeline
 
@@ -223,8 +224,9 @@ What a call costs on testnet, all paid by the sponsor:
 
 ## 5. Backend
 
-Supabase project `dyorhq-stellar-testnet` (new, separate). There are two Edge Functions in Deno, built on
-`npm:@stellar/stellar-sdk` 16.3 (the LTS line, the same major Blend's SDK uses) and `npm:@blend-capital/blend-sdk` 3.3.
+Supabase project DyorHQ (`fmnjqrguvopusfufmirs`), shared with the Pro app (DECISIONS #17). There are two Edge
+Functions in Deno, built on `npm:@stellar/stellar-sdk` 16.3 (the LTS line, the same major Blend's SDK uses) and
+`npm:@blend-capital/blend-sdk` 3.3.
 
 **`lite`** is the API (router below). It holds `SPONSOR_SECRET` (the testnet sponsor and fee account) and
 `LITE_JWT_SECRET`. Every Soroban build is simulated with headroom (+25% instructions, +20% bytes, +30% resource fee),
@@ -240,8 +242,8 @@ because state moves between simulation and execution.
 5. Advances CCTP transfers once Circle attests, and keeps contracts alive (§4.5).
 
 All client traffic goes through `lite`. Tables have RLS enabled with **no** policies for `anon` or `authenticated`,
-so PostgREST exposes nothing; the functions use the service role. Public data (launch lists, Moments) is still
-served only by the API.
+so PostgREST exposes nothing; the functions connect as `lite_api` (`LITE_DB_URL`), which has one policy per table and
+no access outside `lite`. Public data (launch lists, Moments) is still served only by the API.
 
 ### 5.1 Database schema (`lite` schema)
 
@@ -377,7 +379,7 @@ LiteRootView (TabView, Lite theme: light, rounded, large numbers)
 | Bridge | CCTP v2 testnet (Monad testnet 10143 ↔ Stellar testnet) | NEAR Intents 1Click; CCTP v2 |
 | Anchors | testanchor.stellar.org | MoneyGram Ramps (allowlist), Link, ClickPesa |
 | Sponsor | Friendbot-funded account | Funded hot account + daily budget + alerts |
-| Supabase | `dyorhq-stellar-testnet` | `dyorhq-stellar` (new) |
+| Supabase | DyorHQ project, schema `lite` | Revisit (DECISIONS #17): the sponsor then holds real XLM |
 
 ## 8. Security model
 
@@ -390,6 +392,7 @@ LiteRootView (TabView, Lite theme: light, rounded, large numbers)
 | Admin abuse | Admin can't move curve funds, LP or fees; treasury is immutable per deployment |
 | Key exfiltration | Keychain `WhenUnlockedThisDeviceOnly`, privacy cover, App Lock / passkey before signing, no key in logs or backend |
 | Leaks into public repos | This repo is private; CLAUDE.md rules apply (no secrets, no internal findings in public repos) |
+| A bug in Lite's SQL reaches the Pro app's data (shared project) | Lite's functions connect as `lite_api`, which can reach only `lite.*`. Not covered: a compromised Lite function or npm dependency still sees the project-wide secrets (DECISIONS #17) |
 
 ## 9. Testing and verification
 

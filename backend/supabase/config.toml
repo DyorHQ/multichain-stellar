@@ -1,5 +1,6 @@
-# Supabase project: dyorhq-stellar-testnet (separate from production; see docs/RUNBOOK-testnet.md).
-project_id = "dyorhq-stellar-testnet"
+# Lite's functions in the DyorHQ project (fmnjqrguvopusfufmirs, DECISIONS #17; see docs/RUNBOOK-testnet.md). Deploy
+# functions only: `supabase config push` from here would overwrite the DyorHQ project's settings with this file.
+project_id = "dyorhq-lite"
 
 [api]
 # The lite schema is never exposed through PostgREST: every read and write goes through the Edge Functions.
