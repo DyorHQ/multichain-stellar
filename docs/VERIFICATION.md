@@ -23,7 +23,10 @@ Each run uses a fresh key and plays the phone's role:
 3. The sponsor fee-bumps it.
 4. The test waits for the ledger.
 
-The 2026-10-13 run passed all 9 phases.
+The 2026-10-13 run passed all 9 phases. It ran against the build session's deployment (launchpad `CC4EJ5O6…`). Later
+that day the contracts were redeployed with keys the owner holds (ARCHITECTURE §4.4), and the deploy script's smoke test
+passed on the new contracts (a launch with an initial buy, then a Moment published and collected). The full journey
+has not yet been rerun against them.
 
 | Phase | What happened | Example transaction |
 |---|---|---|

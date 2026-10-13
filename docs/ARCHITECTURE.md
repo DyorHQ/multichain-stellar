@@ -195,13 +195,13 @@ Full addresses live in `backend/supabase/functions/_shared/networks.ts`, the sin
 `GET /v1/config`. The app also pins them at build time in `StellarCore/Network/PinnedContracts+Testnet.swift`, which
 `backend/scripts/gen-pinned.ts` generates from the deployment.
 
-**Our deployment (testnet, 2026-10-11):**
+**Our deployment (testnet, 2026-10-13, keys held by the owner; replaces the 2026-10-11 build-session deployment):**
 
 | Contract | Address |
 |---|---|
-| Launchpad | `CC4EJ5O6OIK66NET7LLUWKG7XHFVSF255GJCVBKXRQA2LAVPNWK4SMMS` |
-| Moments | `CBR4JZE7DAPAY2HYW7ZXJNWOS4LG3AVGBNFG47TU3D7GLSA7HLNKZFWY` |
-| Launch-token WASM | `e75bb198…9a9365` |
+| Launchpad | `CDZD53SNMXM4H7GUHHCCMCCS3W3VRNSG63NXB4OPVK7OELYYIGKC5I6I` |
+| Moments | `CCWP4LEV74P26RQ44EG4BBC2BD66YMDTFTR4UNCEINOSXEMG2GQA2YIR` |
+| Launch-token WASM | `c7916839…c84a2c` |
 
 ### 4.5 Who pays rent
 
