@@ -11,8 +11,16 @@ production (`fmnjqrguvopusfufmirs`).
 | Treasury | Receives protocol fees (fixed per deployment) | Public key in `deployments/testnet.json`; secret in the password manager |
 | Sponsor | Pays fees (fee-bump) and reserves; runs the keeper | Supabase secret `SPONSOR_SECRET` only |
 
-To create the sponsor: `node -e "const {Keypair}=require('@stellar/stellar-sdk');const k=Keypair.random();console.log(k.publicKey(),k.secret())"`.
-Then fund it with `curl "https://friendbot.stellar.org?addr=G…"`.
+To create the sponsor and the other function secrets without printing any of them:
+
+```bash
+deno run -A --config backend/supabase/functions/deno.json backend/scripts/new-testnet-secrets.ts
+```
+
+It writes `.secrets/testnet-functions.env` (git-ignored, mode 600) with `LITE_NETWORK`, `LITE_MIN_BUILD`,
+`SPONSOR_SECRET`, `LITE_JWT_SECRET` and `LITE_CRON_SECRET`, funds the sponsor through Friendbot and prints only the
+sponsor's public key (for `gen-pinned.ts`). Once the secrets are in Supabase (§3), move the file to the password
+manager and delete it.
 
 The sponsor spends testnet XLM on fees and on keeping contracts alive. Expect about 70 XLM a month for each 50 KB
 contract, and 1–3 XLM for each launch. Top it up through Friendbot: create a fresh account, then merge it into the
@@ -43,11 +51,10 @@ contract that isn't pinned.
 1. Create the project `dyorhq-stellar-testnet`. It costs money, so the owner creates it.
 2. Apply the migrations: `supabase link --project-ref <ref> && supabase db push`. This creates the schema, the cron
    job and the `lite-media` bucket.
-3. Set the function secrets:
+3. Set the function secrets from the file §1 wrote, so no value goes through the shell history:
    ```bash
-   supabase secrets set LITE_NETWORK=testnet SPONSOR_SECRET=S… LITE_JWT_SECRET=$(openssl rand -base64 36) \
-     LITE_CRON_SECRET=$(openssl rand -base64 24) LITE_MIN_BUILD=1
-   # optional: SOROSWAP_API_KEY=sk_…  (without it, Soroswap is quoted through its router directly)
+   supabase secrets set --project-ref <ref> --env-file .secrets/testnet-functions.env
+   # optional: add SOROSWAP_API_KEY=sk_… to that file first (without it, Soroswap is quoted through its router)
    ```
 4. Create the cron Vault entries. The value of `lite_cron_secret` must equal `LITE_CRON_SECRET`:
    ```sql
