@@ -93,17 +93,17 @@ export async function verifyChallenge(input: VerifyInput): Promise<{ token: stri
 async function ensureTester(address: string, inviteCode?: string): Promise<{ address: string; label: string | null }> {
   const existing = await sql()`select address, label, revoked_at from lite.testers where address = ${address}`;
   if (existing.length > 0) {
-    if (existing[0].revoked_at) throw forbidden("access_revoked", "Access to DyorHQ Lite was turned off for this account.");
+    if (existing[0].revoked_at) throw forbidden("access_revoked", "Access to Stellar was turned off for this account.");
     return { address, label: (existing[0].label as string) ?? null };
   }
-  if (!inviteCode) throw forbidden("not_invited", "DyorHQ Lite is invite-only during testing. Enter your invite code.");
+  if (!inviteCode) throw forbidden("not_invited", "DyorHQ on Stellar is invite-only while we test it. Enter your invite code.");
   const codeHash = hex(await sha256(inviteCode.trim().toUpperCase()));
   return await sql().begin(async (tx) => {
     const inv = await tx`
       update lite.invites set uses = uses + 1
        where code_hash = ${codeHash} and uses < max_uses and expires_at > now()
       returning id, label`;
-    if (inv.length === 0) throw forbidden("bad_invite", "That invite code isn't valid or was already used.");
+    if (inv.length === 0) throw forbidden("bad_invite", "That code isn't valid, has expired or was already used.");
     await tx`insert into lite.testers (address, invite_id, label) values (${address}, ${inv[0].id}, ${inv[0].label})`;
     return { address, label: inv[0].label as string };
   });
@@ -146,11 +146,11 @@ export async function verifyJwt(token: string): Promise<Record<string, unknown>>
 export async function requireUser(req: Request): Promise<string> {
   const auth = req.headers.get("authorization") ?? "";
   const m = auth.match(/^Bearer (.+)$/);
-  if (!m) throw unauthorized("Sign in to DyorHQ Lite to continue.");
+  if (!m) throw unauthorized("Sign in on Stellar to continue.");
   const claims = await verifyJwt(m[1]);
   const address = assertAccountId(claims.sub);
   // Revocation takes effect at once, not at token expiry.
   const rows = await sql()`select 1 from lite.testers where address = ${address} and revoked_at is null`;
-  if (rows.length === 0) throw new ApiError(403, "access_revoked", "Access to DyorHQ Lite was turned off for this account.");
+  if (rows.length === 0) throw new ApiError(403, "access_revoked", "Access to Stellar was turned off for this account.");
   return address;
 }

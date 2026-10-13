@@ -1,6 +1,8 @@
-// LiteHarness: runs DyorHQ Lite on its own, for internal testers, without touching the DyorHQ app.
-// Its account is a 24-word phrase generated on first launch and kept in the Keychain (this device only); Settings
-// can show the phrase so a tester can move to the real app later (same SEP-5 account).
+// LiteHarness: runs DyorHQ's Stellar screens on their own, for internal testers, without the DyorHQ app.
+// Its account is a 24-word phrase generated on first launch and kept in the Keychain (this device only); the same
+// SEP-5 account opens in DyorHQ from that phrase. It plays the host the app plays: it owns the account's `LiteSession`,
+// draws a header and a network chip for Stellar Home, and shows the setup run (the invite and account-setup steps,
+// which the app shows in its network sheet).
 import DyorLite
 import LocalAuthentication
 import StellarKit
@@ -9,26 +11,229 @@ import SwiftUI
 @main
 struct LiteHarnessApp: App {
     var body: some Scene {
-        WindowGroup { HarnessRoot() }
+        WindowGroup {
+            HarnessRoot()
+                .tint(LiteStyle.default.accent) // DyorHQ's app tint
+        }
     }
 }
 
 struct HarnessRoot: View {
-    @State private var keys: PhraseKeyProvider?
-    @State private var proAlert = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var session: LiteSession?
+    @State private var tab: LiteTab = .home
+    @State private var setup = false
+    @State private var monadNote = false
 
     var body: some View {
         Group {
-            if let keys {
-                LiteRootView(env: HarnessConfig.environment, keys: keys) { proAlert = true }
+            if let session {
+                LiteRootView(session: session, selection: $tab, style: .default, chrome: chrome(for: session))
+                    .sheet(isPresented: $setup) { HarnessSetupView(session: session) }
             } else {
-                ProgressView().task { keys = HarnessAccount.provider() }
+                ProgressView().task {
+                    let session = HarnessAccount.session()
+                    self.session = session
+                    await session.resumeAtLaunch()
+                }
             }
         }
-        .alert("Pro lives in the DyorHQ app", isPresented: $proAlert) {
+        // The signer a setup run holds never outlives the app's time on screen.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { session?.appDidEnterBackground() }
+        }
+        .alert("Monad lives in the DyorHQ app", isPresented: $monadNote) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This internal build only runs Lite. In DyorHQ, the same switch takes you back to Pro on Monad.")
+            Text("This internal build only runs Stellar. In DyorHQ, this button takes you back to Monad.")
+        }
+    }
+
+    private func chrome(for session: LiteSession) -> LiteChrome {
+        LiteChrome(
+            header: { context in AnyView(HarnessHeader(context: context)) },
+            networkChip: { AnyView(HarnessChip { setup = true }) },
+            unlock: {
+                // As the app does: run the setup inline; if it stops for the user, show the steps.
+                Task {
+                    await session.run()
+                    if session.state != .ready { setup = true }
+                }
+            },
+            switchToMonad: { monadNote = true }
+        )
+    }
+}
+
+/// Stands in for DyorHQ's Home header: the search capsule with the last read's status.
+struct HarnessHeader: View {
+    let context: LiteHeaderContext
+
+    var body: some View {
+        Button(action: context.openSearch) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                Text("Search tokens…").foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if let error = context.error {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(LiteStyle.default.attention).accessibilityLabel(error)
+                } else if let updatedAt = context.updatedAt {
+                    Text(updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+/// Stands in for DyorHQ's network chip: here it opens the setup steps.
+struct HarnessChip: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(verbatim: "Stellar").font(.subheadline.weight(.medium))
+                Text("Testnet")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(LiteStyle.default.attention)
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(LiteStyle.default.attention.opacity(0.14), in: Capsule())
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.leading, 10).padding(.trailing, 10).padding(.vertical, 6)
+            .background(Color(.tertiarySystemFill), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The setup run as a checklist, with the step that needs the tester: the invite code, or the account's setup. It
+/// closes itself once the session is ready; ✕ cancels between steps.
+struct HarnessSetupView: View {
+    let session: LiteSession
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Steps") {
+                    ForEach(session.steps) { row in
+                        HStack(spacing: 12) {
+                            icon(row.status)
+                            Text(title(row.step))
+                            Spacer()
+                        }
+                    }
+                }
+                switch session.state {
+                case .waiting(.invite), .failed(.invite, _):
+                    InviteView(session: session)
+                case .waiting(.setUp), .failed(.setUp, _):
+                    ActivationView(session: session)
+                case .failed(_, let failure), .unavailable(let failure):
+                    Section {
+                        Text(failure.errorDescription ?? "").foregroundStyle(LiteStyle.default.attention)
+                        if failure.canRetry { Button("Try again") { Task { await session.retry() } } }
+                    }
+                case .running:
+                    Section { ProgressView().frame(maxWidth: .infinity) }
+                case .idle, .locked:
+                    Section { Button("Start") { Task { await session.run() } } }
+                case .ready, .waiting:
+                    EmptyView()
+                }
+            }
+            .navigationTitle("Switching to Stellar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        session.cancel()
+                        dismiss()
+                    }
+                    .disabled(session.isSending)
+                }
+            }
+            .task(id: session.state) { if session.state == .ready { dismiss() } }
+        }
+        .interactiveDismissDisabled(session.isSending)
+    }
+
+    private func title(_ step: LiteSession.Step) -> String {
+        switch step {
+        case .unlock: "Unlock your Stellar key"
+        case .signIn: "Sign in"
+        case .invite: "Enter your invite code"
+        case .setUp: "Set up your Stellar account"
+        }
+    }
+
+    @ViewBuilder
+    private func icon(_ status: LiteSession.StepStatus) -> some View {
+        switch status {
+        case .pending: Image(systemName: "circle").foregroundStyle(.tertiary)
+        case .running: ProgressView().controlSize(.small)
+        case .needsYou: Image(systemName: "circle.inset.filled").foregroundStyle(LiteStyle.default.accent)
+        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(LiteStyle.default.positive)
+        case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(LiteStyle.default.attention)
+        }
+    }
+}
+
+/// First sign-in for an account: an invite code binds it to the internal-tester allowlist.
+struct InviteView: View {
+    let session: LiteSession
+    @State private var code = ""
+
+    var body: some View {
+        Section {
+            TextField("Invite code", text: $code)
+                .font(.body.monospaced())
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .submitLabel(.join)
+                .onSubmit(join)
+            if case .failed(.invite, let failure) = session.state {
+                Text(failure.errorDescription ?? "").font(.footnote).foregroundStyle(LiteStyle.default.attention)
+            }
+            Button("Join", action: join)
+                .disabled(code.filter { !$0.isWhitespace }.count < 8 || session.state == .running)
+        } header: {
+            Text("Enter your invite code")
+        } footer: {
+            Text("DyorHQ on Stellar is invite-only while we test it. You need the code only once.")
+        }
+    }
+
+    private func join() {
+        Task { await session.join(invite: code) }
+    }
+}
+
+/// Creates the Stellar account (DyorHQ pays) and enables USDC: one tap, the run's own key.
+struct ActivationView: View {
+    let session: LiteSession
+
+    var body: some View {
+        Section {
+            if case .failed(.setUp, let failure) = session.state {
+                Text(failure.errorDescription ?? "").font(.footnote).foregroundStyle(LiteStyle.default.attention)
+            }
+            Button(session.isSending ? "Setting up…" : "Set up") { Task { await session.setUp() } }
+                .disabled(session.isSending)
+        } header: {
+            Text("Set up your Stellar account")
+        } footer: {
+            Text("Creates your account and adds USDC. DyorHQ pays the network fees and the reserve, so you spend nothing. On testnet you also get 10,000 test XLM.")
         }
     }
 }
@@ -43,6 +248,15 @@ enum HarnessConfig {
 
 enum HarnessAccount {
     private static let slot = "harness-entropy"
+
+    /// The harness account's session: its phrase unlocks with the device owner's check, once per setup run.
+    @MainActor
+    static func session() -> LiteSession {
+        let keys = provider()
+        return LiteSession(env: HarnessConfig.environment, stellarAddress: keys.address, monad: nil, keys: keys) { reason in
+            LiteSession.UnlockResult(keys: keys, signer: try await keys.signer(reason: reason))
+        }
+    }
 
     static func provider() -> PhraseKeyProvider {
         let entropy = StellarKeychain.seed(account: slot, network: "testnet") ?? {

@@ -22,7 +22,7 @@ struct QRCodeView: View {
     var body: some View {
         if let image = Self.render(text) {
             Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
-                .accessibilityLabel("QR code of your Stellar address")
+                .accessibilityLabel(tr("QR code of your Stellar address"))
         } else {
             Image(systemName: "qrcode").resizable().scaledToFit().foregroundStyle(.secondary)
         }
@@ -40,11 +40,11 @@ struct QRCodeView: View {
 #else
 struct SafariView: View {
     let url: URL
-    var body: some View { Link(url.absoluteString, destination: url) }
+    var body: some View { Link(destination: url) { Text(verbatim: url.absoluteString) } }
 }
 
 struct QRCodeView: View {
     let text: String
-    var body: some View { Image(systemName: "qrcode").resizable().scaledToFit() }
+    var body: some View { Image(systemName: "qrcode").resizable().scaledToFit().accessibilityLabel(tr("QR code of your Stellar address")) }
 }
 #endif

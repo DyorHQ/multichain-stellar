@@ -3,12 +3,13 @@ import SwiftUI
 
 /// Add cash / cash out through SEP-24 anchors. The anchor's own page runs in an in-app browser; the phone signs in
 /// to the anchor with the Stellar key (SEP-10) and follows the transfer. For a withdrawal the anchor gives an
-/// address and memo, and Lite sends the payment (fee paid by DyorHQ).
+/// address and memo, and the phone sends the payment (fee paid by DyorHQ).
 @MainActor
 struct CashSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var anchors: [AnchorInfo] = []
+    @State private var loaded = false
     @State private var deposit = true
     @State private var asset = "USDC"
     @State private var web: WebPage?
@@ -22,23 +23,23 @@ struct CashSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("", selection: $deposit) {
-                        Text("Add cash").tag(true)
-                        Text("Cash out").tag(false)
+                    Picker(String(), selection: $deposit) {
+                        Text(tr("Add cash")).tag(true)
+                        Text(tr("Cash out")).tag(false)
                     }
                     .pickerStyle(.segmented)
-                    Picker("Asset", selection: $asset) {
-                        Text("USDC").tag("USDC")
-                        Text("XLM").tag("native")
+                    Picker(tr("Asset"), selection: $asset) {
+                        Text(verbatim: "USDC").tag("USDC")
+                        Text(verbatim: "XLM").tag("native")
                     }
                 }
-                Section("Providers") {
+                Section(tr("Providers")) {
                     ForEach(anchors) { a in
                         Button { Task { await start(a) } } label: {
                             HStack {
                                 VStack(alignment: .leading) {
-                                    Text(a.name).font(.headline)
-                                    Text(a.domain).font(.caption).foregroundStyle(.secondary)
+                                    Text(verbatim: a.name).font(.headline)
+                                    Text(verbatim: a.domain).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right").foregroundStyle(.tertiary)
@@ -46,33 +47,39 @@ struct CashSheet: View {
                         }
                         .disabled(busy)
                     }
-                    if anchors.isEmpty { Text("No provider for your country yet.").foregroundStyle(.secondary) }
+                    if anchors.isEmpty {
+                        if loaded { Text(tr("No provider for your country yet.")).foregroundStyle(.secondary) } else { ProgressView() }
+                    }
                 }
                 if let status {
-                    Section("Status") {
-                        LabeledContent("Transfer", value: status.status.replacingOccurrences(of: "_", with: " "))
-                        if let m = status.message { Text(m).font(.footnote) }
+                    Section(tr("Status")) {
+                        LabeledContent(tr("Transfer"), value: status.status.replacingOccurrences(of: "_", with: " "))
+                        if let m = status.message { Text(verbatim: m).font(.footnote) }
                         if !deposit, status.status == "pending_user_transfer_start", let to = status.withdraw_anchor_account, let amount = status.amount_in {
-                            LitePrimaryButton(title: "Send \(amount) \(asset == "native" ? "XLM" : asset) to the provider", busy: busy) {
+                            LitePrimaryButton(title: tr("Send \(amount) \(asset == "native" ? "XLM" : asset) to the provider"), busy: busy) {
                                 Task { await payAnchor(to: to, amount: amount, memo: status.withdraw_memo, memoType: status.withdraw_memo_type) }
                             }
                         }
-                        Button("Refresh") { Task { await refresh() } }
+                        Button(tr("Refresh")) { Task { await refresh() } }
                     }
                 }
-                if let error { Section { Text(error).foregroundStyle(LiteTheme.negative) } }
-                if store.network.name == "testnet" {
-                    Section { Text("Testnet uses the Stellar test anchor: no real money moves.").font(.footnote).foregroundStyle(.secondary) }
+                if let error { Section { LiteInlineError(message: error) } }
+                if store.isTestnet {
+                    Section { LiteParagraph(tr("Testnet uses the Stellar test anchor: no real money moves.")).font(.footnote).foregroundStyle(.secondary) }
                 }
             }
-            .navigationTitle(deposit ? "Add cash" : "Cash out")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .task { anchors = (try? await store.anchors()) ?? [] }
+            .navigationTitle(deposit ? tr("Add cash") : tr("Cash out"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
+            .task {
+                do { anchors = try await store.anchors() } catch { self.error = describe(error) }
+                loaded = true
+            }
             .sheet(item: $web) { page in
                 SafariView(url: page.url).ignoresSafeArea().onDisappear { Task { await refresh() } }
             }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in Task { await refresh() } } }
         }
+        .liteFormSheet()
     }
 
     private func start(_ a: AnchorInfo) async {
@@ -82,9 +89,9 @@ struct CashSheet: View {
         do {
             let client = AnchorClient(domain: a.domain, network: store.network)
             let toml = try await client.toml()
-            let signer = try await store.keys.signer(reason: "Sign in to \(a.name)")
+            let signer = try await store.signer(reason: tr("Sign in to \(a.name)"))
             let jwt = try await client.authenticate(signer: signer, toml: toml)
-            let flow = try await client.interactive(deposit: deposit, assetCode: asset, account: store.keys.address, jwt: jwt, toml: toml)
+            let flow = try await client.interactive(deposit: deposit, assetCode: asset, account: store.address, jwt: jwt, toml: toml)
             tracking = (client, toml, jwt, flow.id)
             await store.trackCash(anchor: a.domain, deposit: deposit, asset: asset, id: flow.id, status: "incomplete", amount: nil)
             web = URL(string: flow.url).map(WebPage.init)
@@ -121,8 +128,8 @@ struct WebPage: Identifiable {
     var id: String { url.absoluteString }
 }
 
-/// Monad ↔ Stellar USDC. Testnet: Circle CCTP. Monad → Stellar is signed by the Pro wallet (the host provides it);
-/// Stellar → Monad burns here and is claimed on Monad by the Pro wallet once Circle attests.
+/// USDC between Monad and Stellar. Testnet: Circle CCTP. Monad → Stellar is signed by the account's Monad wallet (the
+/// host provides it); Stellar → Monad burns here and is claimed on Monad by the Monad wallet once Circle attests.
 struct BridgeSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -139,34 +146,37 @@ struct BridgeSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("", selection: $toStellar) {
-                        Text("Monad → Stellar").tag(true)
-                        Text("Stellar → Monad").tag(false)
+                    Picker(String(), selection: $toStellar) {
+                        // Network names, never translated.
+                        Text(verbatim: "Monad → Stellar").tag(true)
+                        Text(verbatim: "Stellar → Monad").tag(false)
                     }
                     .pickerStyle(.segmented)
                     AmountInput(label: "USDC", text: $amount, code: "USDC", maxUnits: toStellar ? nil : store.account?.balance("USDC"))
                     if !toStellar && store.monad == nil {
-                        TextField("Monad address (0x…)", text: $monadAddress).font(.body.monospaced()).autocorrectionDisabled()
+                        TextField(tr("Monad address (0x…)"), text: $monadAddress).font(.body.monospaced()).autocorrectionDisabled()
                     }
                 } footer: {
-                    Text(toStellar ? "Your Pro wallet sends USDC on Monad; it arrives in Lite in about a minute." : "USDC leaves Lite now; you claim it on Monad with your Pro wallet once Circle confirms (a few minutes).")
+                    LiteParagraph(toStellar
+                        ? tr("Your Monad wallet sends the USDC. It arrives on Stellar in about a minute.")
+                        : tr("The USDC leaves Stellar now. You claim it on Monad with your Monad wallet once Circle confirms, in a few minutes."))
                 }
                 if let status {
-                    Section("Transfer") {
-                        LabeledContent("Status", value: status.status.replacingOccurrences(of: "_", with: " "))
+                    Section(tr("Transfer")) {
+                        LabeledContent(tr("Status"), value: status.status.replacingOccurrences(of: "_", with: " "))
                         if status.claim != nil, store.monad != nil {
-                            LitePrimaryButton(title: "Claim on Monad", busy: busy) { Task { await claim(status) } }
+                            LitePrimaryButton(title: tr("Claim on Monad"), busy: busy) { Task { await claim(status) } }
                         }
-                        Button("Refresh") { Task { await refresh() } }
+                        Button(tr("Refresh")) { Task { await refresh() } }
                     }
                 }
-                if let error { Section { Text(error).foregroundStyle(LiteTheme.negative) } }
+                if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: toStellar ? "Move to Lite" : "Review", busy: busy, enabled: Amount.parse(amount) != nil) { Task { await go() } }.padding()
+                LitePrimaryButton(title: toStellar ? tr("Move to Stellar") : tr("Review"), busy: busy, enabled: Amount.parse(amount) != nil) { Task { await go() } }.padding()
             }
-            .navigationTitle("Monad")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Bridge"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .sheet(item: $prepared) { action in
                 ConfirmSheet(action: action) { results in
                     Task {
@@ -176,6 +186,7 @@ struct BridgeSheet: View {
                 }
             }
         }
+        .liteFormSheet()
     }
 
     private func go() async {

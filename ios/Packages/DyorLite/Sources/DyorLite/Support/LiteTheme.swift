@@ -1,29 +1,76 @@
 import StellarKit
 import SwiftUI
+#if canImport(UIKit)
+import AudioToolbox
+import UIKit
+#endif
 
-/// Lite's look: same DyorHQ type and wordmark, a calmer palette (teal for Stellar instead of Pro's purple), large
-/// numbers, rounded cards. Status colors always come with a word or sign, never color alone.
-public enum LiteTheme {
-    public static let accent = Color(red: 0.05, green: 0.62, blue: 0.56)
-    static let card = Color(uiColorName: "secondarySystemGroupedBackground")
-    static let canvas = Color(uiColorName: "systemGroupedBackground")
-    static let positive = Color.green
-    static let negative = Color.red
-    static let corner: CGFloat = 20
-}
+// The Stellar screens in DyorHQ's own system (design spec §7): monochrome grouped surfaces, the host's brand tint for
+// selection and primary actions, status hues (from `LiteStyle`) only beside a word or a sign, the serif hero figure.
 
 extension Color {
-    /// System colors by name, so the same file compiles where UIKit isn't imported directly.
-    init(uiColorName name: String) {
+    /// The screen's ground (`systemGroupedBackground`).
+    static var liteCanvas: Color { system("systemGroupedBackground") }
+    /// A card's surface (`secondarySystemGroupedBackground`).
+    static var liteCard: Color { system("secondarySystemGroupedBackground") }
+    /// A control's fill: chips, option rows, fields, logo plates (`tertiarySystemFill`).
+    static var liteControl: Color { system("tertiarySystemFill") }
+    /// An unavailable primary button's fill (`systemGray5`).
+    static var liteUnavailable: Color { system("systemGray5") }
+
+    /// The hairline around every coin disc: it edges a white logo on a light card and a near-black one on a dark card,
+    /// and is stronger under Increase Contrast (DyorHQ `Color.logoRing`).
+    static var liteLogoRing: Color {
+        #if canImport(UIKit)
+        Color(uiColor: UIColor { traits in
+            let strong = traits.accessibilityContrast == .high
+            return traits.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: strong ? 0.28 : 0.12) : UIColor(white: 0, alpha: strong ? 0.22 : 0.08)
+        })
+        #else
+        Color.primary.opacity(0.1)
+        #endif
+    }
+
+    /// System colors by name, so the same file compiles where UIKit isn't there (the package also builds for macOS).
+    private static func system(_ name: String) -> Color {
         #if canImport(UIKit)
         switch name {
-        case "secondarySystemGroupedBackground": self = Color(UIColor.secondarySystemGroupedBackground)
-        case "systemGroupedBackground": self = Color(UIColor.systemGroupedBackground)
-        default: self = .primary
+        case "systemGroupedBackground": return Color(UIColor.systemGroupedBackground)
+        case "secondarySystemGroupedBackground": return Color(UIColor.secondarySystemGroupedBackground)
+        case "tertiarySystemFill": return Color(UIColor.tertiarySystemFill)
+        case "systemGray5": return Color(UIColor.systemGray5)
+        default: return .primary
         }
         #else
-        self = name == "systemGroupedBackground" ? Color.gray.opacity(0.08) : Color.gray.opacity(0.16)
+        switch name {
+        case "systemGroupedBackground": return Color.gray.opacity(0.08)
+        case "secondarySystemGroupedBackground": return Color.gray.opacity(0.16)
+        default: return Color.gray.opacity(0.2)
+        }
         #endif
+    }
+}
+
+extension View {
+    /// DyorHQ's grouped card: the card surface with continuous 18 pt corners (`cardBackground()`).
+    func liteCardBackground() -> some View {
+        background(Color.liteCard, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// A figure not read yet: the placeholder shape of one, said by VoiceOver to be loading, never "$0.00".
+    @ViewBuilder func unreadFigure(_ unread: Bool) -> some View {
+        if unread {
+            redacted(reason: .placeholder)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(tr("Loading…"))
+        } else {
+            self
+        }
+    }
+
+    /// A form sheet's ground: opaque grouped, as DyorHQ's form sheets (iOS 26 sheets are otherwise translucent).
+    func liteFormSheet() -> some View {
+        presentationBackground(Color.liteCanvas)
     }
 }
 
@@ -33,101 +80,142 @@ struct LiteCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 12) { content }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(LiteTheme.card, in: RoundedRectangle(cornerRadius: LiteTheme.corner, style: .continuous))
+            .liteCardBackground()
     }
 }
 
+/// Full-width primary action, with DyorHQ `PrimaryButton`'s metrics: a large `.borderedProminent` button in the inherited
+/// tint (a capsule on iOS 26), a semibold label, a spinner while busy, and a solid neutral fill while unavailable.
 struct LitePrimaryButton: View {
     let title: String
+    var systemImage: String?
     var busy = false
     var enabled = true
+    /// The label's colour on the prominent fill: white, which reads on the brand purple in both appearances.
+    var foreground: Color = .white
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack {
-                if busy { ProgressView().tint(.white) }
-                Text(title).font(.headline)
+        let unavailable = !enabled && !busy
+        let button = Button {
+            LiteHaptics.commit()
+            action()
+        } label: {
+            HStack(spacing: 8) {
+                if busy { ProgressView().controlSize(.small).tint(foreground) } else if let systemImage { Image(systemName: systemImage) }
+                Text(title).fontWeight(.semibold)
             }
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .foregroundStyle(unavailable ? Color.secondary : foreground)
         }
-        .buttonStyle(.borderedProminent)
-        .tint(LiteTheme.accent)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .disabled(busy || !enabled)
+        if unavailable {
+            button.buttonStyle(LiteUnavailableButtonStyle()).disabled(true)
+        } else {
+            button
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(busy)
+        }
     }
 }
 
-/// Coin badge: first letters on a tinted circle (Lite has no token logo service on testnet).
+/// `LitePrimaryButton` while it can't be used: the height and shape of a `.large` `.borderedProminent` button on a solid
+/// gray that reads in light and dark (a disabled prominent button all but vanishes on a light ground).
+private struct LiteUnavailableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.vertical, 15)
+            .background(Color.liteUnavailable, in: shape)
+    }
+
+    private var shape: AnyShape {
+        if #available(iOS 26, macOS 26, *) { AnyShape(Capsule()) } else { AnyShape(RoundedRectangle(cornerRadius: 12, style: .continuous)) }
+    }
+}
+
+/// A coin's disc in DyorHQ's logo look: a neutral plate, clipped round, with the faint ring (`LogoDisc`). The host app's
+/// bundled logo of that symbol (`logo-XLM`, `logo-USDC`) when it has one, letters on a colour of their own otherwise.
 struct AssetBadge: View {
     let code: String
     var size: CGFloat = 36
 
     var body: some View {
-        Text(String(code.prefix(code == "USDC" ? 1 : 2)))
-            .font(.system(size: size * 0.38, weight: .bold, design: .rounded))
-            .foregroundStyle(.white)
+        content
             .frame(width: size, height: size)
-            .background(tint, in: Circle())
+            .background(Color.liteControl)
+            .clipShape(Circle())
+            .accessibilityIgnoresInvertColors()
+            .overlay(Circle().strokeBorder(Color.liteLogoRing, lineWidth: 0.5))
             .accessibilityHidden(true)
     }
 
-    private var tint: Color {
-        switch code {
-        case "XLM": return .black
-        case "USDC": return Color(red: 0.16, green: 0.46, blue: 0.85)
-        default:
-            let h = Double(abs(code.hashValue % 360)) / 360
-            return Color(hue: h, saturation: 0.55, brightness: 0.75)
+    @ViewBuilder private var content: some View {
+        #if canImport(UIKit)
+        if let shipped = UIImage(named: "logo-\(code)") {
+            Image(uiImage: shipped).resizable().scaledToFit()
+        } else {
+            monogram
+        }
+        #else
+        monogram
+        #endif
+    }
+
+    /// Letters on a colour derived from the symbol, the same on every launch (DyorHQ `LogoMonogram`).
+    private var monogram: some View {
+        let seed = code.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        let tint = Color(hue: Double(seed % 360) / 360, saturation: 0.5, brightness: 0.62)
+        let letters = String(code.prefix(2)).uppercased()
+        return ZStack {
+            LinearGradient(colors: [tint, tint.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Text(verbatim: letters.isEmpty ? "?" : letters)
+                .font(.system(size: size * 0.4, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.horizontal, size * 0.12)
+                .foregroundStyle(.white)
         }
     }
 }
 
+/// "Testnet", after the name "Stellar" wherever the network is named: DyorHQ `UnverifiedBadge`'s metrics in the
+/// attention colour.
 struct TestnetBadge: View {
+    @Environment(\.liteStyle) private var style
+
     var body: some View {
-        Text("TESTNET")
-            .font(.caption2.weight(.bold))
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Color.orange.opacity(0.18), in: Capsule())
-            .foregroundStyle(.orange)
-            .accessibilityLabel("Test network: balances have no value")
+        Text(tr("Testnet"))
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(style.attention)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(style.attention.opacity(0.14), in: Capsule())
+            .accessibilityLabel(tr("Test network"))
     }
 }
 
-/// The Pro ⇄ Lite switch. Shown only when the host says Lite is available for this account.
-public struct ModePill: View {
-    public let isLite: Bool
-    public let action: () -> Void
+/// An error under a form or in a card: footnote, attention colour, a triangle, wrapping between words in Korean
+/// (DyorHQ `InlineError`). The message is already in the current language, or a server's own words.
+struct LiteInlineError: View {
+    let message: String
+    @Environment(\.liteStyle) private var style
 
-    public init(isLite: Bool, action: @escaping () -> Void) {
-        self.isLite = isLite
-        self.action = action
-    }
-
-    public var body: some View {
-        Button(action: action) {
-            HStack(spacing: 0) {
-                segment("Pro · Monad", active: !isLite, tint: Color(red: 0.51, green: 0.43, blue: 0.98))
-                segment("Lite · Stellar", active: isLite, tint: LiteTheme.accent)
-            }
-            .padding(3)
-            .background(.thinMaterial, in: Capsule())
+    var body: some View {
+        Label {
+            LiteParagraph(message)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isLite ? "Lite mode on Stellar. Double-tap to switch to Pro on Monad." : "Pro mode on Monad. Double-tap to switch to Lite on Stellar.")
-        .sensoryFeedback(.selection, trigger: isLite)
-    }
-
-    private func segment(_ title: String, active: Bool, tint: Color) -> some View {
-        Text(title)
-            .font(.footnote.weight(.semibold))
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .foregroundStyle(active ? .white : .secondary)
-            .background(active ? tint : .clear, in: Capsule())
+        .modifier(LiteParagraphLabel())
+        .font(.footnote)
+        .foregroundStyle(style.attention)
+        .symbolRenderingMode(.hierarchical)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tr("Error: \(message)"))
     }
 }
 
-/// Decimal amount entry bound to base units.
+/// Decimal amount entry bound to base units, in DyorHQ `AmountField`'s type, with a capsule Max button.
 struct AmountInput: View {
     let label: String
     @Binding var text: String
@@ -137,18 +225,21 @@ struct AmountInput: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
-            HStack {
-                TextField("0", text: $text)
-                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+            HStack(spacing: 12) {
+                TextField(String("0"), text: $text)
+                    .font(.title2.weight(.medium))
+                    .monospacedDigit()
+                    .textFieldStyle(.plain)
                     #if os(iOS)
                     .keyboardType(.decimalPad)
                     #endif
-                Text(code).font(.title3.weight(.semibold)).foregroundStyle(.secondary)
-            }
-            if let maxUnits {
-                Button("Max \(Amount.format(maxUnits, maxFraction: 4))") { text = Amount.format(maxUnits, maxFraction: 7).replacingOccurrences(of: ",", with: "") }
-                    .font(.footnote)
-                    .tint(LiteTheme.accent)
+                Text(verbatim: code).font(.headline).foregroundStyle(.secondary)
+                if let maxUnits {
+                    Button(tr("Max")) { text = Amount.format(maxUnits, maxFraction: 7).replacingOccurrences(of: ",", with: "") }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                }
             }
         }
     }
@@ -156,12 +247,58 @@ struct AmountInput: View {
     var units: Int64? { Amount.parse(text) }
 }
 
-func shortAddress(_ a: String) -> String { a.count > 12 ? "\(a.prefix(4))…\(a.suffix(4))" : a }
+/// Tactile feedback, as DyorHQ's `Haptics` gives it.
+enum LiteHaptics {
+    /// A consequential action: a firmer knock and the system's subtle tick.
+    static func commit() {
+        #if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred()
+        AudioServicesPlaySystemSound(1104)
+        #endif
+    }
 
-func usd(_ value: Double) -> String {
-    value.formatted(.currency(code: "USD").precision(.fractionLength(value < 1 && value > 0 ? 4 : 2)))
+    static func selection() {
+        #if canImport(UIKit)
+        let generator = UISelectionFeedbackGenerator()
+        generator.prepare()
+        generator.selectionChanged()
+        #endif
+    }
 }
 
+/// Puts `text` on the pasteboard.
+func copyToPasteboard(_ text: String) {
+    #if canImport(UIKit)
+    UIPasteboard.general.string = text
+    #elseif canImport(AppKit)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    #endif
+}
+
+func shortAddress(_ a: String) -> String { a.count > 12 ? "\(a.prefix(4))…\(a.suffix(4))" : a }
+
+/// Dollars in DyorHQ's one style, the same in every language and region (`PriceFormat.usdValue`): "$" in front, "."
+/// as the decimal point, "," between thousands, 2 decimals, "<$0.01" for dust, "−" for a negative.
+func usd(_ value: Double) -> String {
+    guard value.isFinite else { return "—" }
+    let magnitude = abs(value)
+    if magnitude == 0 { return "$0.00" }
+    let sign = value < 0 ? "−" : ""
+    if magnitude < 0.005 { return sign + "<$0.01" }
+    let parts = String(format: "%.2f", magnitude).split(separator: ".")
+    var whole = String(parts[0])
+    var grouped = ""
+    while whole.count > 3 {
+        grouped = "," + whole.suffix(3) + grouped
+        whole = String(whole.dropLast(3))
+    }
+    return sign + "$" + whole + grouped + "." + parts[1]
+}
+
+/// A rate as a percentage, in the current language's digits ("500%", "4.25%").
 func percent(_ fraction: Double) -> String {
-    (fraction).formatted(.percent.precision(.fractionLength(fraction >= 10 ? 0 : 2)))
+    fraction.formatted(.percent.precision(.fractionLength(fraction >= 10 ? 0 : 2)).locale(LiteL10n.locale))
 }

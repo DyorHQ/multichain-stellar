@@ -14,8 +14,8 @@ public enum LiteAPIError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .server(_, _, let message): return message
-        case .notSignedIn: return "Sign in to DyorHQ Lite to continue."
-        case .transport: return "DyorHQ Lite isn't reachable right now. Check your connection and try again."
+        case .notSignedIn: return "Sign in on Stellar to continue."
+        case .transport: return "DyorHQ on Stellar isn't reachable right now. Check your connection and try again."
         case .decoding(let what): return "Couldn't read \(what) from the server."
         }
     }
@@ -53,15 +53,17 @@ public actor LiteAPI {
     // ---------------------------------------------------------------------------------------------- auth
 
     /// Signs the single-use challenge with the account's Stellar key (SEP-53). A first sign-in needs an invite code.
-    public func signIn(signer: StellarSigner, inviteCode: String? = nil) async throws -> AuthResult {
-        let challenge: AuthChallenge = try await request("POST", "auth/challenge", body: ["address": signer.address], authenticated: false)
+    /// `timeout` bounds each of its two requests (the challenge, then the verification).
+    public func signIn(signer: StellarSigner, inviteCode: String? = nil, timeout: TimeInterval = 60) async throws -> AuthResult {
+        let challenge: AuthChallenge = try await request("POST", "auth/challenge", body: ["address": signer.address], authenticated: false, timeout: timeout)
+        // The challenge's own first line (auth.ts challengeMessage): part of what is signed, so it never changes with the UI.
         let expected = "DyorHQ Lite sign-in\nNetwork: "
         guard challenge.message.hasPrefix(expected), challenge.message.contains("Address: \(signer.address)\n"), challenge.message.contains("Nonce: \(challenge.nonce)\n") else {
             throw LiteAPIError.decoding("the sign-in challenge")
         }
         var body = ["address": signer.address, "nonce": challenge.nonce, "signature": try signer.signMessage(challenge.message)]
         if let inviteCode, !inviteCode.isEmpty { body["inviteCode"] = inviteCode }
-        let result: AuthResult = try await request("POST", "auth/verify", body: body, authenticated: false)
+        let result: AuthResult = try await request("POST", "auth/verify", body: body, authenticated: false, timeout: timeout)
         token = result.token
         tokenExpiry = ISO8601DateFormatter.lite.date(from: result.expiresAt)
         return result
@@ -69,8 +71,9 @@ public actor LiteAPI {
 
     // ---------------------------------------------------------------------------------------------- endpoints
 
-    public func config() async throws -> LiteConfig { try await request("GET", "config", authenticated: false) }
-    public func account() async throws -> AccountView { try await request("GET", "account") }
+    /// `timeout`: how long a request may take before it fails as offline; reads made while someone waits pass less.
+    public func config(timeout: TimeInterval = 60) async throws -> LiteConfig { try await request("GET", "config", authenticated: false, timeout: timeout) }
+    public func account(timeout: TimeInterval = 60) async throws -> AccountView { try await request("GET", "account", timeout: timeout) }
     public func activate() async throws -> ActivationResult { try await request("POST", "account/activate", body: [String: String]()) }
     public func enable(asset: String) async throws -> PlanView { try await request("POST", "account/trust", body: ["asset": asset]) }
     public func faucet() async throws -> AnyJSON { try await request("POST", "account/faucet", body: [String: String]()) }
@@ -239,15 +242,15 @@ public actor LiteAPI {
         let error: Inner
     }
 
-    func request<T: Decodable>(_ method: String, _ path: String, authenticated: Bool = true) async throws -> T {
-        try await request(method, path, body: Optional<[String: String]>.none, authenticated: authenticated)
+    func request<T: Decodable>(_ method: String, _ path: String, authenticated: Bool = true, timeout: TimeInterval = 60) async throws -> T {
+        try await request(method, path, body: Optional<[String: String]>.none, authenticated: authenticated, timeout: timeout)
     }
 
-    func request<T: Decodable, B: Encodable>(_ method: String, _ path: String, body: B?, authenticated: Bool = true) async throws -> T {
+    func request<T: Decodable, B: Encodable>(_ method: String, _ path: String, body: B?, authenticated: Bool = true, timeout: TimeInterval = 60) async throws -> T {
         guard let url = URL(string: "v1/" + path, relativeTo: baseURL.appendingPathComponent("")) else { throw LiteAPIError.decoding("a URL") }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 60
+        req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "accept")
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -263,7 +266,7 @@ public actor LiteAPI {
                 if response.statusCode == 401 { token = nil }
                 throw LiteAPIError.server(status: response.statusCode, code: e.error.code, message: e.error.message)
             }
-            throw LiteAPIError.server(status: response.statusCode, code: "http_\(response.statusCode)", message: "DyorHQ Lite answered \(response.statusCode).")
+            throw LiteAPIError.server(status: response.statusCode, code: "http_\(response.statusCode)", message: "DyorHQ on Stellar answered \(response.statusCode).")
         }
         do {
             return try JSONDecoder().decode(T.self, from: data)

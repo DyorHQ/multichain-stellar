@@ -3,7 +3,7 @@ import PhotosUI
 import StellarKit
 import SwiftUI
 
-/// The Stellar launchpad: same economics as Pro's (1B supply, 1% fee, 10× to graduation), curve-only until it
+/// The Stellar launchpad: same economics as Monad's (1B supply, 1% fee, 10× to graduation), curve-only until it
 /// graduates into Soroswap with its liquidity locked.
 struct LiteLaunchView: View {
     @Environment(LiteStore.self) private var store
@@ -13,25 +13,29 @@ struct LiteLaunchView: View {
     var body: some View {
         NavigationStack {
             List {
-                Picker("Sort", selection: $sort) {
-                    Text("New").tag("new")
-                    Text("Hot").tag("hot")
-                    Text("Graduated").tag("graduated")
+                Picker(tr("Sort"), selection: $sort) {
+                    Text(tr("New")).tag("new")
+                    Text(tr("Hot")).tag("hot")
+                    Text(tr("Graduated")).tag("graduated")
                 }
                 .pickerStyle(.segmented)
                 .listRowBackground(Color.clear)
                 if store.launches.isEmpty {
-                    ContentUnavailableView("No launches yet", systemImage: "flame", description: Text("Be the first: tap + to launch a coin."))
+                    if store.failed.contains(.launches) {
+                        LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
+                    } else if store.loaded.contains(.launches) {
+                        ContentUnavailableView(tr("No launches yet"), systemImage: "flame", description: Text(tr("Be the first: tap + to launch a coin.")))
+                    }
                 }
                 ForEach(store.launches) { launch in
                     NavigationLink(value: launch.token) { LaunchRow(launch: launch) }
                 }
             }
-            .navigationTitle("Launch")
+            .navigationTitle(tr("Launch"))
             .navigationDestination(for: String.self) { LaunchDetailView(token: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel("Launch a coin")
+                    Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("Launch a coin"))
                 }
             }
             .task(id: sort) { await store.refreshLaunches(sort: sort) }
@@ -43,6 +47,7 @@ struct LiteLaunchView: View {
 
 struct LaunchRow: View {
     @Environment(LiteStore.self) private var store
+    @Environment(\.liteStyle) private var style
     let launch: Launch
 
     var body: some View {
@@ -50,17 +55,17 @@ struct LaunchRow: View {
             AssetBadge(code: launch.symbol, size: 44)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(launch.symbol).font(.headline)
-                    if launch.graduated { Text("On Soroswap").font(.caption2.weight(.bold)).foregroundStyle(LiteTheme.accent) }
+                    Text(verbatim: launch.symbol).font(.headline)
+                    if launch.graduated { Text(tr("On Soroswap")).font(.caption2.weight(.bold)).foregroundStyle(style.accent) }
                 }
-                Text(launch.name).font(.caption).foregroundStyle(.secondary)
-                ProgressView(value: launch.progress).tint(LiteTheme.accent)
-                    .accessibilityLabel("\(Int(launch.progress * 100)) percent to graduation")
+                Text(verbatim: launch.name).font(.caption).foregroundStyle(.secondary)
+                ProgressView(value: launch.progress).tint(style.accent)
+                    .accessibilityLabel(tr("\(Int(launch.progress * 100))% to graduation"))
             }
             Spacer()
             VStack(alignment: .trailing) {
-                Text("\(launch.trades) trades").font(.caption).foregroundStyle(.secondary)
-                Text("\(Amount.format(launch.volume, maxFraction: 0)) \(store.asset(launch.quote)?.code ?? "")").font(.caption.monospacedDigit())
+                Text(tr("\(launch.trades) trades")).font(.caption).foregroundStyle(.secondary)
+                Text(verbatim: "\(Amount.format(launch.volume, maxFraction: 0)) \(store.asset(launch.quote)?.code ?? "")").font(.caption.monospacedDigit())
             }
         }
     }
@@ -69,6 +74,7 @@ struct LaunchRow: View {
 @MainActor
 struct LaunchDetailView: View {
     @Environment(LiteStore.self) private var store
+    @Environment(\.liteStyle) private var style
     let token: String
     @State private var detail: LaunchDetail?
     @State private var buying = true
@@ -89,12 +95,14 @@ struct LaunchDetailView: View {
                     trades(d)
                 }
                 .padding(16)
+            } else if let error {
+                LiteInlineError(message: error).padding(40)
             } else {
                 ProgressView().padding(40)
             }
         }
-        .background(LiteTheme.canvas)
-        .navigationTitle(detail?.launch.symbol ?? "")
+        .background(Color.liteCanvas)
+        .navigationTitle(Text(verbatim: detail?.launch.symbol ?? ""))
         .task { await load() }
         .refreshable { await load() }
         .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in Task { await load() } } }
@@ -107,7 +115,10 @@ struct LaunchDetailView: View {
     private func quoteCode(_ d: LaunchDetail) -> String { store.asset(d.launch.quote)?.code ?? "" }
 
     private func load() async {
-        do { detail = try await store.launchDetail(token) } catch { self.error = describe(error) }
+        do {
+            detail = try await store.launchDetail(token)
+            error = nil
+        } catch { self.error = describe(error) }
     }
 
     private func header(_ d: LaunchDetail) -> some View {
@@ -115,17 +126,18 @@ struct LaunchDetailView: View {
             HStack(spacing: 12) {
                 AssetBadge(code: d.launch.symbol, size: 52)
                 VStack(alignment: .leading) {
-                    Text(d.launch.name).font(.title2.bold())
-                    Text("by \(shortAddress(d.launch.creator))").font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: d.launch.name).font(.title2.bold())
+                    Text(tr("by \(shortAddress(d.launch.creator))")).font(.caption).foregroundStyle(.secondary)
                 }
             }
             ProgressView(value: d.launch.progress) {
-                Text(d.launch.graduated ? "Graduated to Soroswap" : "\(Int(d.launch.progress * 100))% to graduation")
+                Text(d.launch.graduated ? tr("Graduated to Soroswap") : tr("\(Int(d.launch.progress * 100))% to graduation"))
                     .font(.caption)
             }
-            .tint(LiteTheme.accent)
+            .tint(style.accent)
             if let price = d.launch.lastPrice, let p = Double(price) {
-                Text("Price \(p.formatted(.number.precision(.significantDigits(4)))) \(quoteCode(d))").font(.subheadline.monospacedDigit())
+                Text(tr("Price \(p.formatted(.number.precision(.significantDigits(4)).locale(LiteL10n.locale))) \(quoteCode(d))"))
+                    .font(.subheadline.monospacedDigit())
             }
         }
     }
@@ -133,41 +145,45 @@ struct LaunchDetailView: View {
     @ViewBuilder
     private func chart(_ d: LaunchDetail) -> some View {
         let points = d.candles.reversed().compactMap { c -> PricePoint? in
-            guard let t = ISO8601DateFormatter.liteUI.date(from: c.t) ?? ISO8601DateFormatter().date(from: c.t), let v = Double(c.c) else { return nil }
+            guard let t = c.t.liteDate, let v = Double(c.c) else { return nil }
             return PricePoint(time: t, price: v)
         }
         if points.count >= 2 {
             LiteCard {
                 Chart(points) { p in
-                    LineMark(x: .value("Time", p.time), y: .value("Price", p.price)).foregroundStyle(LiteTheme.accent)
+                    AreaMark(x: .value(tr("Time"), p.time), y: .value(tr("Price"), p.price))
+                        .foregroundStyle(LinearGradient(colors: [style.accent.opacity(0.12), style.accent.opacity(0)], startPoint: .top, endPoint: .bottom))
+                    LineMark(x: .value(tr("Time"), p.time), y: .value(tr("Price"), p.price)).foregroundStyle(style.accent)
                 }
                 .frame(height: 160)
-                .accessibilityLabel("Price chart")
+                .accessibilityLabel(tr("Price chart"))
             }
         }
     }
 
     private func trade(_ d: LaunchDetail) -> some View {
         LiteCard {
-            Picker("", selection: $buying) {
-                Text("Buy").tag(true)
-                Text("Sell").tag(false)
+            Picker(String(), selection: $buying) {
+                Text(tr("Buy")).tag(true)
+                Text(tr("Sell")).tag(false)
             }
             .pickerStyle(.segmented)
             .onChange(of: buying) { _, _ in preview = nil }
-            AmountInput(label: buying ? "Pay" : "Sell", text: $amount, code: buying ? quoteCode(d) : d.launch.symbol,
+            AmountInput(label: buying ? tr("Pay") : tr("Sell"), text: $amount, code: buying ? quoteCode(d) : d.launch.symbol,
                         maxUnits: buying ? store.account?.balance(quoteID(d)) : store.account?.balance(token))
                 .onChange(of: amount) { _, _ in preview = nil }
             if let q = preview {
                 if buying {
-                    Text("You get about \(Amount.format(q.tokensOut ?? "0")) \(d.launch.symbol)").font(.subheadline)
-                    if let s = q.snipeFee, s != "0" { Text("Opening-seconds anti-snipe fee applies: \(Amount.format(s)) \(quoteCode(d))").font(.caption).foregroundStyle(.orange) }
+                    Text(tr("You get about \(Amount.format(q.tokensOut ?? "0")) \(d.launch.symbol)")).font(.subheadline)
+                    if let s = q.snipeFee, s != "0" {
+                        LiteInlineError(message: tr("Opening-seconds anti-snipe fee applies: \(Amount.format(s)) \(quoteCode(d))"))
+                    }
                 } else {
-                    Text("You get about \(Amount.format(q.quoteOut ?? "0")) \(quoteCode(d))").font(.subheadline)
+                    Text(tr("You get about \(Amount.format(q.quoteOut ?? "0")) \(quoteCode(d))")).font(.subheadline)
                 }
             }
-            if let error { Text(error).font(.footnote).foregroundStyle(LiteTheme.negative) }
-            LitePrimaryButton(title: preview == nil ? "Get price" : "Review", busy: busy, enabled: Amount.parse(amount) != nil) {
+            if let error { LiteInlineError(message: error) }
+            LitePrimaryButton(title: preview == nil ? tr("Get price") : tr("Review"), busy: busy, enabled: Amount.parse(amount) != nil) {
                 Task { await tradeTapped(d) }
             }
         }
@@ -197,8 +213,8 @@ struct LaunchDetailView: View {
 
     private func completed(_ d: LaunchDetail) -> some View {
         LiteCard {
-            Text("This launch hit its target and is moving to Soroswap.").font(.subheadline)
-            LitePrimaryButton(title: "Graduate now (free)", busy: busy) {
+            LiteParagraph(tr("This launch hit its target and is moving to Soroswap.")).font(.subheadline)
+            LitePrimaryButton(title: tr("Graduate now (free)"), busy: busy) {
                 Task {
                     do { prepared = try await store.launchPlan(LiteAPI.LaunchRequest(action: "graduate", token: token), spend: nil) } catch { self.error = describe(error) }
                 }
@@ -208,13 +224,14 @@ struct LaunchDetailView: View {
 
     private func graduated(_ d: LaunchDetail) -> some View {
         LiteCard {
-            Text("Trading on Soroswap. Liquidity is locked forever.").font(.subheadline)
+            LiteParagraph(tr("Trading on Soroswap. Liquidity is locked forever.")).font(.subheadline)
             HStack {
-                Button("Buy") { buying = true; swapping = true }.buttonStyle(.borderedProminent)
-                Button("Sell") { buying = false; swapping = true }.buttonStyle(.bordered)
+                Button(tr("Buy")) { buying = true; swapping = true }.buttonStyle(.borderedProminent)
+                Button(tr("Sell")) { buying = false; swapping = true }.buttonStyle(.bordered)
             }
-            if d.launch.creator == store.keys.address, let fees = d.curve?.creatorFees, fees != "0" {
-                Button("Claim \(Amount.format(fees)) \(quoteCode(d)) creator fees") {
+            .buttonBorderShape(.capsule)
+            if d.launch.creator == store.address, let fees = d.curve?.creatorFees, fees != "0" {
+                Button(tr("Claim \(Amount.format(fees)) \(quoteCode(d)) creator fees")) {
                     Task { prepared = try? await store.launchPlan(LiteAPI.LaunchRequest(action: "claim", token: token), spend: nil) }
                 }
             }
@@ -223,13 +240,15 @@ struct LaunchDetailView: View {
 
     private func trades(_ d: LaunchDetail) -> some View {
         LiteCard {
-            Text("Trades").font(.headline)
+            Text(tr("Trades")).font(.headline)
             ForEach(Array(d.trades.prefix(20).enumerated()), id: \.offset) { _, t in
                 HStack {
-                    Text(t.side == "buy" ? "Buy" : "Sell").foregroundStyle(t.side == "buy" ? LiteTheme.positive : LiteTheme.negative).font(.caption.weight(.bold))
-                    Text(shortAddress(t.trader)).font(.caption.monospaced())
+                    Text(t.side == "buy" ? tr("Buy") : tr("Sell"))
+                        .foregroundStyle(t.side == "buy" ? style.positive : style.negative)
+                        .font(.caption.weight(.bold))
+                    Text(verbatim: shortAddress(t.trader)).font(.caption.monospaced())
                     Spacer()
-                    Text("\(Amount.format(t.quoteAmount)) \(quoteCode(d))").font(.caption.monospacedDigit())
+                    Text(verbatim: "\(Amount.format(t.quoteAmount)) \(quoteCode(d))").font(.caption.monospacedDigit())
                 }
             }
         }
@@ -260,40 +279,41 @@ struct CreateLaunchSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name", text: $name)
-                    TextField("Ticker", text: $symbol)
+                    TextField(tr("Name"), text: $name)
+                    TextField(tr("Ticker"), text: $symbol)
                         #if os(iOS)
                         .textInputAutocapitalization(.characters)
                         #endif
                     PhotosPicker(selection: $photo, matching: .images) {
-                        Label(imageData == nil ? "Add an image" : "Image added", systemImage: "photo")
+                        Label(imageData == nil ? tr("Add an image") : tr("Image added"), systemImage: "photo")
                     }
                 }
                 Section {
-                    Picker("Priced in", selection: $quote) {
-                        Text("XLM").tag("XLM")
-                        Text("USDC").tag("USDC")
+                    Picker(tr("Priced in"), selection: $quote) {
+                        Text(verbatim: "XLM").tag("XLM")
+                        Text(verbatim: "USDC").tag("USDC")
                     }
-                    AmountInput(label: "Your first buy (optional, no anti-snipe fee)", text: $initialBuy, code: quote, maxUnits: store.account?.balance(quote))
+                    AmountInput(label: tr("Your first buy (optional, no anti-snipe fee)"), text: $initialBuy, code: quote, maxUnits: store.account?.balance(quote))
                     VStack(alignment: .leading) {
-                        Text("Creator fee on every trade: \(creatorFee, format: .number.precision(.fractionLength(1)))%")
+                        Text(tr("Creator fee on every trade: \(creatorFee.formatted(.number.precision(.fractionLength(1)).locale(LiteL10n.locale)))%"))
                         Slider(value: $creatorFee, in: 0...10, step: 0.5)
                     }
                 } footer: {
-                    Text("1,000,000,000 coins. Everyone buys on the same curve; at its target it moves to Soroswap with its liquidity locked forever. You also earn half of the 1% trading fee.")
+                    LiteParagraph(tr("1,000,000,000 coins. Everyone buys on the same curve; at its target it moves to Soroswap with its liquidity locked forever. You also earn half of the 1% trading fee."))
                 }
-                if let error { Section { Text(error).foregroundStyle(LiteTheme.negative) } }
+                if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: "Review launch", busy: busy, enabled: !name.isEmpty && !symbol.isEmpty) { Task { await review() } }.padding()
+                LitePrimaryButton(title: tr("Review launch"), busy: busy, enabled: !name.isEmpty && !symbol.isEmpty) { Task { await review() } }.padding()
             }
-            .navigationTitle("Launch a coin")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Launch a coin"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .onChange(of: photo) { _, item in
                 Task { imageData = try? await item?.loadTransferable(type: Data.self) }
             }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in Task { await store.refreshLaunches(sort: "new") }; dismiss() } }
         }
+        .liteFormSheet()
     }
 
     private func review() async {

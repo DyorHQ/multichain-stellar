@@ -3,7 +3,7 @@ import StellarKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Lite Moments: collectible editions of a photo or video, in one SEP-50 collection. 95% of every collect goes to
+/// Moments on Stellar: collectible editions of a photo or video, in one SEP-50 collection. 95% of every collect goes to
 /// the creator. Collected and shown in-app (no Stellar NFT marketplace indexes Soroban NFTs yet).
 struct LiteMomentsView: View {
     @Environment(LiteStore.self) private var store
@@ -16,44 +16,57 @@ struct LiteMomentsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                Picker("", selection: $showMine) {
-                    Text("Discover").tag(false)
-                    Text("My collection").tag(true)
+                Picker(String(), selection: $showMine) {
+                    Text(tr("Discover")).tag(false)
+                    Text(tr("My collection")).tag(true)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 if showMine {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(store.owned) { e in
-                            MomentTile(title: e.title ?? "Moment #\(e.momentId)", mediaUrl: e.mediaUrl, caption: "Edition #\(e.tokenId)")
+                            MomentTile(title: e.title ?? tr("Moment #\(e.momentId)"), mediaUrl: e.mediaUrl, caption: tr("Edition #\(e.tokenId)"))
                         }
                     }
                     .padding(16)
-                    if store.owned.isEmpty { ContentUnavailableView("Nothing collected yet", systemImage: "camera.aperture") }
+                    if store.owned.isEmpty && store.loaded.contains(.moments) {
+                        ContentUnavailableView(tr("Nothing collected yet"), systemImage: "camera.aperture")
+                    }
                 } else {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(store.moments) { m in
                             Button { selected = m } label: {
-                                MomentTile(title: m.title ?? "Moment #\(m.id)", mediaUrl: m.mediaUrl, caption: "\(Amount.format(m.price)) \(store.asset(m.quote)?.code ?? "") · \(m.minted)\(m.maxEditions > 0 ? "/\(m.maxEditions)" : "") collected")
+                                MomentTile(title: m.title ?? tr("Moment #\(m.id)"), mediaUrl: m.mediaUrl, caption: caption(m))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                     .padding(16)
-                    if store.moments.isEmpty { ContentUnavailableView("No Moments yet", systemImage: "camera.aperture", description: Text("Tap + to publish the first one.")) }
+                    if store.moments.isEmpty && store.loaded.contains(.moments) {
+                        ContentUnavailableView(tr("No Moments yet"), systemImage: "camera.aperture", description: Text(tr("Tap + to publish the first one.")))
+                    }
+                }
+                if store.failed.contains(.moments) {
+                    LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again.")).padding(.horizontal, 16)
                 }
             }
-            .background(LiteTheme.canvas)
-            .navigationTitle("Moments")
+            .background(Color.liteCanvas)
+            .navigationTitle(tr("Moments"))
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button { publishing = true } label: { Image(systemName: "plus") }.accessibilityLabel("Publish a Moment")
+                    Button { publishing = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("Publish a Moment"))
                 }
             }
             .refreshable { await store.refreshMoments() }
             .sheet(item: $selected) { MomentSheet(moment: $0) }
             .sheet(isPresented: $publishing) { PublishMomentSheet() }
         }
+    }
+
+    /// "1.5 USDC · 3/100 collected", or "· 3 collected" for an open edition.
+    private func caption(_ m: Moment) -> String {
+        let price = "\(Amount.format(m.price)) \(store.asset(m.quote)?.code ?? "")"
+        return m.maxEditions > 0 ? tr("\(price) · \(m.minted)/\(m.maxEditions) collected") : tr("\(price) · \(m.minted) collected")
     }
 }
 
@@ -70,8 +83,8 @@ struct MomentTile: View {
             .frame(height: 160)
             .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
-            Text(caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Text(verbatim: title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Text(verbatim: caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 }
@@ -85,21 +98,25 @@ struct MomentSheet: View {
     @State private var error: String?
     @State private var prepared: PreparedAction?
 
+    private var code: String { store.asset(moment.quote)?.code ?? "" }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    MomentTile(title: moment.title ?? "Moment #\(moment.id)", mediaUrl: moment.mediaUrl, caption: "by \(shortAddress(moment.creator))")
+                    MomentTile(title: moment.title ?? tr("Moment #\(moment.id)"), mediaUrl: moment.mediaUrl, caption: tr("by \(shortAddress(moment.creator))"))
                     LiteCard {
-                        LabeledContent("Price", value: "\(Amount.format(moment.price)) \(store.asset(moment.quote)?.code ?? "")")
-                        LabeledContent("Collected", value: moment.maxEditions > 0 ? "\(moment.minted) of \(moment.maxEditions)" : "\(moment.minted) (open edition)")
-                        LabeledContent("Closes", value: String(moment.deadline.prefix(16)).replacingOccurrences(of: "T", with: " "))
-                        Text("95% goes to the creator. Your edition carries a 5% creator royalty for future sales.").font(.footnote).foregroundStyle(.secondary)
+                        LabeledContent(tr("Price"), value: "\(Amount.format(moment.price)) \(code)")
+                        LabeledContent(tr("Collected"), value: moment.maxEditions > 0 ? tr("\(moment.minted) of \(moment.maxEditions)") : tr("\(moment.minted) (open edition)"))
+                        LabeledContent(tr("Closes"), value: closes)
+                        LiteParagraph(tr("95% goes to the creator. Your edition carries a 5% creator royalty for future sales."))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                     if moment.open {
-                        Stepper("Editions: \(quantity)", value: $quantity, in: 1...20)
-                        if let error { Text(error).foregroundStyle(LiteTheme.negative) }
-                        LitePrimaryButton(title: "Collect for \(Amount.format((Int64(moment.price) ?? 0) * Int64(quantity))) \(store.asset(moment.quote)?.code ?? "")", busy: busy) {
+                        Stepper(tr("Editions: \(quantity)"), value: $quantity, in: 1...20)
+                        if let error { LiteInlineError(message: error) }
+                        LitePrimaryButton(title: tr("Collect for \(Amount.format((Int64(moment.price) ?? 0) * Int64(quantity))) \(code)"), busy: busy) {
                             Task {
                                 busy = true
                                 defer { busy = false }
@@ -107,15 +124,21 @@ struct MomentSheet: View {
                             }
                         }
                     } else {
-                        Text("This Moment is closed.").foregroundStyle(.secondary)
+                        Text(tr("This Moment is closed.")).foregroundStyle(.secondary)
                     }
                 }
                 .padding(16)
             }
-            .navigationTitle("Moment")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .background(Color.liteCanvas)
+            .navigationTitle(tr("Moment"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in Task { await store.refreshMoments() }; dismiss() } }
         }
+    }
+
+    private var closes: String {
+        guard let date = moment.deadline.liteDate else { return String(moment.deadline.prefix(16)).replacingOccurrences(of: "T", with: " ") }
+        return date.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(LiteL10n.locale))
     }
 }
 
@@ -140,30 +163,30 @@ struct PublishMomentSheet: View {
             Form {
                 Section {
                     PhotosPicker(selection: $item, matching: .any(of: [.images, .videos])) {
-                        Label(media == nil ? "Choose a photo or video" : (isVideo ? "Video ready" : "Photo ready"), systemImage: "photo.on.rectangle")
+                        Label(media == nil ? tr("Choose a photo or video") : (isVideo ? tr("Video ready") : tr("Photo ready")), systemImage: "photo.on.rectangle")
                     }
-                    TextField("Title", text: $title)
-                    TextField("Say something (optional)", text: $description, axis: .vertical)
+                    TextField(tr("Title"), text: $title)
+                    TextField(tr("Say something (optional)"), text: $description, axis: .vertical)
                 }
                 Section {
-                    AmountInput(label: "Price", text: $price, code: quote)
-                    Picker("Priced in", selection: $quote) {
-                        Text("USDC").tag("USDC")
-                        Text("XLM").tag("XLM")
+                    AmountInput(label: tr("Price"), text: $price, code: quote)
+                    Picker(tr("Priced in"), selection: $quote) {
+                        Text(verbatim: "USDC").tag("USDC")
+                        Text(verbatim: "XLM").tag("XLM")
                     }
-                    Stepper("Editions: \(editions == 0 ? "open" : String(editions))", value: $editions, in: 0...10_000, step: 10)
+                    Stepper(editions == 0 ? tr("Editions: open") : tr("Editions: \(editions)"), value: $editions, in: 0...10_000, step: 10)
                     VStack(alignment: .leading) {
-                        Text("Open for \(Int(hours)) hours")
+                        Text(tr("Open for \(Int(hours)) hours"))
                         Slider(value: $hours, in: 1...720, step: 1)
                     }
                 }
-                if let error { Section { Text(error).foregroundStyle(LiteTheme.negative) } }
+                if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: "Review", busy: busy, enabled: media != nil && !title.isEmpty && Amount.parse(price) != nil) { Task { await review() } }.padding()
+                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: media != nil && !title.isEmpty && Amount.parse(price) != nil) { Task { await review() } }.padding()
             }
-            .navigationTitle("Publish a Moment")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Publish a Moment"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .onChange(of: item) { _, newItem in
                 Task {
                     isVideo = newItem?.supportedContentTypes.contains { $0.conforms(to: .movie) } ?? false
@@ -172,6 +195,7 @@ struct PublishMomentSheet: View {
             }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in Task { await store.refreshMoments() }; dismiss() } }
         }
+        .liteFormSheet()
     }
 
     private func review() async {

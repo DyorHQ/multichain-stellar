@@ -34,7 +34,7 @@ final class KeyProviderTests: XCTestCase {
     @MainActor
     func testLimitsMapAssetIdsToContracts() {
         let env = LiteEnvironment(apiURL: URL(string: "https://example.invalid/lite")!, buildNumber: 1)
-        let store = LiteStore(env: env, keys: WatchOnlyKeyProvider(address: address))
+        let store = LiteStore(env: env, api: LiteAPI(baseURL: env.apiURL), address: address, monad: nil, config: nil)
         // Without config, an id passes through unchanged (launch tokens are already contract ids).
         XCTAssertEqual(store.limit("CABC", "10"), ["CABC": 10])
     }

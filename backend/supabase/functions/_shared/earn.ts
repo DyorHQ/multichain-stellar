@@ -99,7 +99,7 @@ export async function buildEarn(user: string, action: "deposit" | "withdraw", po
   const pool = await loadPool(poolId);
   if (!pool.reserves.has(asset)) throw bad("bad_asset", "This pool doesn't have that asset.");
   const reg = assetById(env.network, asset);
-  if (!reg) throw bad("bad_asset", "Lite doesn't support that asset.");
+  if (!reg) throw bad("bad_asset", "DyorHQ doesn't support that asset on Stellar.");
   const steps: { label: string; spec: { kind: string; [k: string]: unknown } }[] = [];
   if (action === "withdraw" && reg) {
     const acct = await accountView(user);

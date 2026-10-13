@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Lite (Internal)</string>
+	<string>Stellar (Internal)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,7 +25,7 @@
 	<key>LITE_API_URL</key>
 	<string>$(LITE_API_URL)</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Face ID confirms Lite transactions.</string>
+	<string>Face ID confirms Stellar transactions.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Pick a photo or video for a Moment or a coin image.</string>
 	<key>UILaunchScreen</key>

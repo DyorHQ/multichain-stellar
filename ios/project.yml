@@ -32,13 +32,13 @@ targets:
     info:
       path: LiteHarness/Info.plist
       properties:
-        CFBundleDisplayName: Lite (Internal)
+        CFBundleDisplayName: Stellar (Internal)
         CFBundleShortVersionString: "0.1"
         CFBundleVersion: "1"
         UILaunchScreen: {}
         ITSAppUsesNonExemptEncryption: false
         LITE_API_URL: $(LITE_API_URL)
-        NSFaceIDUsageDescription: Face ID confirms Lite transactions.
+        NSFaceIDUsageDescription: Face ID confirms Stellar transactions.
         NSPhotoLibraryUsageDescription: Pick a photo or video for a Moment or a coin image.
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
     settings:

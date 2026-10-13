@@ -54,10 +54,10 @@ public struct StoredSeedKeyProvider: LiteKeyProvider {
     }
 }
 
-/// Watch-only: Lite shows balances and refuses every action.
+/// Watch-only: the Stellar screens show balances and refuse every action.
 public struct WatchOnlyKeyProvider: LiteKeyProvider {
     public let address: String
-    public let methodLabel = "Watch only"
+    public var methodLabel: String { tr("Watch only") }
     public let canSign = false
     public let canExportSecret = false
 

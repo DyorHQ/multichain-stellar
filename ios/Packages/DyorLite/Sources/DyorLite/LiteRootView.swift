@@ -1,132 +1,86 @@
 import StellarKit
 import SwiftUI
 
-/// Lite's root: onboarding (invite + activation) until the account is ready, then four tabs.
-/// The host shows it instead of the Pro tabs when the user switches to Lite.
+/// The Stellar screens: Home · Earn · Launch · Moments, in DyorHQ's own look (the host's tokens, header and chip).
+/// The host shows it in place of Monad's tabs while the account is on Stellar, and keeps the selection.
+///
+/// It follows the session: ready → the four tabs with the account's figures; locked → Home with the locked card
+/// (the other tabs say to unlock); unavailable → Home with the paused card. Each time it appears it looks at a session
+/// that isn't ready or mid-run again without a prompt (`resumeAtLaunch()`), and a ready one shows its last figures at
+/// once and reads them again (spec §2.6 rule 6).
 @MainActor
 public struct LiteRootView: View {
-    @State private var store: LiteStore
-    private let onSwitchToPro: () -> Void
+    private let session: LiteSession
+    @Binding private var selection: LiteTab
+    private let style: LiteStyle
+    private let chrome: LiteChrome
 
-    public init(env: LiteEnvironment, keys: LiteKeyProvider, monad: LiteMonadBridge? = nil, onSwitchToPro: @escaping () -> Void) {
-        _store = State(initialValue: LiteStore(env: env, keys: keys, monad: monad))
-        self.onSwitchToPro = onSwitchToPro
+    public init(session: LiteSession, selection: Binding<LiteTab>, style: LiteStyle, chrome: LiteChrome) {
+        self.session = session
+        _selection = selection
+        self.style = style
+        self.chrome = chrome
     }
 
     public var body: some View {
-        Group {
-            switch store.phase {
-            case .starting:
-                ProgressView("Opening Lite…").task { await store.start() }
-            case .needsInvite:
-                InviteView(onSwitchToPro: onSwitchToPro)
-            case .needsActivation:
-                ActivationView(onSwitchToPro: onSwitchToPro)
-            case .unavailable(let why):
-                ContentUnavailableView {
-                    Label("Lite isn't available", systemImage: "moon.zzz")
-                } description: {
-                    Text(why)
-                } actions: {
-                    Button("Try again") { Task { await store.start() } }
-                    Button("Back to Pro", action: onSwitchToPro)
-                }
-            case .ready:
-                LiteTabs(onSwitchToPro: onSwitchToPro)
-            }
+        TabView(selection: $selection) {
+            LiteHomeView(session: session)
+                .tabItem { Label(tr("Home"), systemImage: "house") }
+                .tag(LiteTab.home)
+            tab { LiteEarnView() }
+                .tabItem { Label(tr("Earn"), systemImage: "leaf") }
+                .tag(LiteTab.earn)
+            tab { LiteLaunchView() }
+                .tabItem { Label(tr("Launch"), systemImage: "flame") }
+                .tag(LiteTab.launch)
+            tab { LiteMomentsView() }
+                .tabItem { Label(tr("Moments"), systemImage: "camera.aperture") }
+                .tag(LiteTab.moments)
         }
-        .environment(store)
-        .tint(LiteTheme.accent)
+        .sensoryFeedback(.selection, trigger: selection)
+        .environment(\.liteStyle, style)
+        .environment(\.liteChrome, chrome)
+        .task {
+            await session.resumeAtLaunch()
+            if session.state == .ready { await session.store?.refreshAll() }
+        }
+    }
+
+    /// A tab that needs the account's figures: itself once the session is ready, else what Home's card says.
+    @ViewBuilder
+    private func tab<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if session.home == .ready, let store = session.store {
+            content().environment(store)
+        } else {
+            LiteRestingTab(session: session)
+        }
     }
 }
 
-struct LiteTabs: View {
-    let onSwitchToPro: () -> Void
-    @State private var tab = 0
+/// Earn, Launch or Moments while the session is locked, paused or still opening: what Home's card says, with its
+/// button.
+struct LiteRestingTab: View {
+    let session: LiteSession
+    @Environment(\.liteChrome) private var chrome
 
     var body: some View {
-        TabView(selection: $tab) {
-            LiteHomeView(onSwitchToPro: onSwitchToPro)
-                .tabItem { Label("Home", systemImage: "house") }.tag(0)
-            LiteEarnView()
-                .tabItem { Label("Earn", systemImage: "leaf") }.tag(1)
-            LiteLaunchView()
-                .tabItem { Label("Launch", systemImage: "flame") }.tag(2)
-            LiteMomentsView()
-                .tabItem { Label("Moments", systemImage: "camera.aperture") }.tag(3)
-        }
-        .sensoryFeedback(.selection, trigger: tab)
-    }
-}
-
-/// First Lite sign-in for an account: an invite code binds it to the internal-tester allowlist.
-struct InviteView: View {
-    @Environment(LiteStore.self) private var store
-    let onSwitchToPro: () -> Void
-    @State private var code = ""
-    @State private var busy = false
-    @State private var error: String?
-
-    var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            Image(systemName: "sparkles").font(.system(size: 52)).foregroundStyle(LiteTheme.accent)
-            Text("DyorHQ Lite").font(.largeTitle.bold())
-            Text("Save, earn, swap, launch and collect on Stellar, with no fees to pay. Lite is invite-only while we test it.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            TextField("Invite code", text: $code)
-                .textFieldStyle(.roundedBorder)
-                .font(.title3.monospaced())
-                #if os(iOS)
-                .textInputAutocapitalization(.characters)
-                #endif
-                .autocorrectionDisabled()
-            if let error { Text(error).foregroundStyle(LiteTheme.negative).font(.footnote) }
-            LitePrimaryButton(title: "Join Lite", busy: busy, enabled: code.count >= 8) {
-                Task {
-                    busy = true
-                    defer { busy = false }
-                    do { try await store.signIn(invite: code) } catch { self.error = describe(error) }
-                }
+        switch session.home {
+        case .locked:
+            ContentUnavailableView {
+                Label(tr("Unlock to see your Stellar balance."), systemImage: "lock.fill")
+            } actions: {
+                LitePrimaryButton(title: tr("Unlock with \(LiteBiometrics.promptName)"), busy: session.state == .running, action: chrome.unlock)
+                    .fixedSize()
             }
-            Button("Back to Pro", action: onSwitchToPro).font(.footnote)
-            Spacer()
-        }
-        .padding(24)
-    }
-}
-
-/// Creates the Stellar account (DyorHQ pays) and enables USDC.
-struct ActivationView: View {
-    @Environment(LiteStore.self) private var store
-    let onSwitchToPro: () -> Void
-    @State private var busy = false
-    @State private var error: String?
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "checkmark.seal").font(.system(size: 52)).foregroundStyle(LiteTheme.accent)
-            Text("One tap to set up").font(.title.bold())
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Your Stellar account comes from the same secret as your DyorHQ account.", systemImage: "key")
-                Label("DyorHQ pays the network fees and the account reserve.", systemImage: "gift")
-                if store.network.name == "testnet" { Label("Testnet: you get 10,000 test XLM to try everything.", systemImage: "testtube.2") }
+        case .paused(let failure):
+            ContentUnavailableView {
+                Label(failure.errorDescription ?? "", systemImage: "pause.circle")
+            } actions: {
+                LitePrimaryButton(title: tr("Switch to Monad"), action: chrome.switchToMonad)
+                    .fixedSize()
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            if let error { Text(error).foregroundStyle(LiteTheme.negative).font(.footnote) }
-            LitePrimaryButton(title: "Set up Lite", busy: busy) {
-                Task {
-                    busy = true
-                    defer { busy = false }
-                    do { try await store.activate() } catch { self.error = describe(error) }
-                }
-            }
-            Button("Back to Pro", action: onSwitchToPro).font(.footnote)
-            Spacer()
+        case .loading, .ready:
+            ProgressView()
         }
-        .padding(24)
     }
 }

@@ -1,148 +1,413 @@
 import StellarKit
 import SwiftUI
 
+/// Stellar Home, in Monad Home's frame (design spec §3.3): the host's header, the balance card with the network chip
+/// and the serif figure, five actions, My Holdings and Activity. Locked, the card holds the unlock; paused, it says why
+/// and offers Monad.
 @MainActor
 struct LiteHomeView: View {
-    @Environment(LiteStore.self) private var store
-    let onSwitchToPro: () -> Void
+    let session: LiteSession
+    @Environment(\.liteChrome) private var chrome
+    @Environment(\.liteStyle) private var style
 
-    enum SheetKind: String, Identifiable {
-        case cash, send, receive, swap, bridge, settings
-        var id: String { rawValue }
-    }
+    enum SheetKind: Identifiable {
+        case cash, send, receive, bridge
+        case swap(buy: String?)
 
-    @State private var sheet: SheetKind?
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    ModePill(isLite: true, action: onSwitchToPro)
-                    balanceCard
-                    actions
-                    assets
-                    activity
-                }
-                .padding(16)
-            }
-            .background(LiteTheme.canvas)
-            .refreshable { await store.refreshAll() }
-            .navigationTitle("Lite")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { sheet = .settings } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Lite settings")
-                }
-            }
-            .sheet(item: $sheet) { kind in
-                switch kind {
-                case .cash: CashSheet()
-                case .send: SendSheet()
-                case .receive: ReceiveSheet()
-                case .swap: SwapSheet()
-                case .bridge: BridgeSheet()
-                case .settings: LiteSettingsView(onSwitchToPro: onSwitchToPro)
-                }
+        var id: String {
+            switch self {
+            case .cash: "cash"
+            case .send: "send"
+            case .receive: "receive"
+            case .bridge: "bridge"
+            case .swap(let buy): "swap.\(buy ?? "")"
             }
         }
+    }
+
+    /// A launch page in Home's stack.
+    struct LaunchRoute: Hashable { let token: String }
+
+    @State private var sheet: SheetKind?
+    @State private var showSearch = false
+    /// What the search picked, opened once it has closed.
+    @State private var picked: LiteSearchSheet.Pick?
+    @State private var path: [LaunchRoute] = []
+
+    private var store: LiteStore? { session.store }
+    private var isReady: Bool { session.home == .ready && store != nil }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            ScrollView {
+                VStack(spacing: 16) {
+                    balanceCard
+                    actions
+                    if isReady, let store {
+                        holdings(store)
+                        activity(store)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .background(Color.liteCanvas)
+            .scrollIndicators(.hidden)
+            #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
+            .safeAreaInset(edge: .top, spacing: 0) {
+                chrome.header(LiteHeaderContext(openSearch: { showSearch = true },
+                                                error: isReady ? store?.lastError : nil,
+                                                updatedAt: isReady ? store?.updatedAt : nil))
+            }
+            .refreshable { await session.refreshHome() }
+            .navigationDestination(for: LaunchRoute.self) { route in
+                if let store { LaunchDetailView(token: route.token).environment(store) }
+            }
+            .sheet(item: $sheet) { kind in
+                if let store {
+                    sheetContent(kind).environment(store)
+                }
+            }
+            .sheet(isPresented: $showSearch, onDismiss: openPicked) {
+                LiteSearchSheet(store: isReady ? store : nil) { picked = $0 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ kind: SheetKind) -> some View {
+        switch kind {
+        case .cash: CashSheet()
+        case .send: SendSheet()
+        case .receive: ReceiveSheet(address: session.address ?? "", store: store)
+        case .bridge: BridgeSheet()
+        case .swap(let buy):
+            if let buy {
+                SwapSheet(initialSell: buy == "XLM" ? "USDC" : "XLM", initialBuy: buy)
+            } else {
+                SwapSheet()
+            }
+        }
+    }
+
+    private func openPicked() {
+        guard let pick = picked else { return }
+        picked = nil
+        switch pick {
+        case .holding(let asset): sheet = .swap(buy: asset)
+        case .launch(let token): path.append(LaunchRoute(token: token))
+        }
+    }
+
+    // MARK: Balance card
+
+    /// The chip row as on Monad Home (spec §3.2): the host's chip, a 44 pt row, the card's top padding 10.
+    private var chipRow: some View {
+        HStack {
+            chrome.networkChip()
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 44)
+        .padding(.bottom, -6)
     }
 
     private var balanceCard: some View {
-        LiteCard {
-            HStack {
-                Text("Balance").font(.subheadline).foregroundStyle(.secondary)
-                Spacer()
-                if store.network.name == "testnet" { TestnetBadge() }
+        VStack(alignment: .leading, spacing: 14) {
+            chipRow
+            switch session.home {
+            case .ready, .loading: figure
+            case .locked: locked
+            case .paused(let failure): paused(failure)
             }
-            Text(usd(store.totalUSD))
-                .font(.system(size: 44, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
-            if let p = store.prices { Text(p.reference).font(.caption).foregroundStyle(.secondary) }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liteCardBackground()
+    }
+
+    /// The total in Monad Home's hero style; the placeholder until the balances and prices are read, never "$0.00".
+    private var figure: some View {
+        let total = isReady ? store?.totalValue : nil
+        return VStack(alignment: .leading, spacing: 4) {
+            hero(total ?? 0)
+                .contentTransition(.numericText(value: total ?? 0))
+                .unreadFigure(total == nil)
+            LiteParagraph(caption)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
+
+    private func hero(_ value: Double) -> some View {
+        Text(verbatim: usd(value))
+            .font(.system(size: 40, weight: .semibold, design: .serif))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+    }
+
+    /// Testnet balances are valued at reference prices and say they have no value.
+    private var caption: String {
+        session.env.pinned.network.name == "testnet"
+            ? tr("Valued at reference prices. Testnet assets have no value.")
+            : tr("Valued at reference prices.")
+    }
+
+    /// Locked (the session ended): the placeholder figure, why, and the unlock. The host runs Setup inline.
+    private var locked: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                hero(0).unreadFigure(true)
+                Label {
+                    LiteParagraph(tr("Unlock to see your Stellar balance."))
+                } icon: {
+                    Image(systemName: "lock.fill")
+                }
+                .modifier(LiteParagraphLabel())
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(tr("Stellar balance, locked."))
+            LitePrimaryButton(title: tr("Unlock with \(LiteBiometrics.promptName)"), busy: session.state == .running, action: chrome.unlock)
+        }
+    }
+
+    /// Paused for maintenance, or this build is too old: why, and the way back to Monad, which always works.
+    private func paused(_ failure: LiteSession.Failure) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            LiteInlineError(message: failure.errorDescription ?? "")
+            LitePrimaryButton(title: tr("Switch to Monad"), action: chrome.switchToMonad)
+        }
+    }
+
+    // MARK: Actions
 
     private var actions: some View {
-        HStack(spacing: 10) {
-            action("Add cash", "plus.circle.fill", .cash)
-            action("Send", "arrow.up.circle.fill", .send)
-            action("Receive", "qrcode", .receive)
-            action("Swap", "arrow.left.arrow.right.circle.fill", .swap)
-            action("Monad", "arrow.triangle.swap", .bridge)
-        }
-    }
-
-    private func action(_ title: String, _ icon: String, _ kind: SheetKind) -> some View {
-        Button { sheet = kind } label: {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(.title2)
-                Text(title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                ForEach(LiteHomeAction.all) { tile($0) }
             }
-            .frame(maxWidth: .infinity, minHeight: 64)
-            .background(LiteTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow { ForEach(LiteHomeAction.all.prefix(3)) { tile($0) } }
+                GridRow { ForEach(LiteHomeAction.all.suffix(2)) { tile($0) } }
+            }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(LiteTheme.accent)
+        .disabled(!isReady)
     }
 
-    private var assets: some View {
-        LiteCard {
-            Text("Assets").font(.headline)
-            ForEach(store.account?.balances.filter { $0.enabled || $0.units > 0 } ?? []) { row in
-                HStack(spacing: 12) {
-                    AssetBadge(code: row.code)
-                    VStack(alignment: .leading) {
-                        Text(row.code).font(.body.weight(.semibold))
-                        Text(row.note ?? row.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+    private func tile(_ action: LiteHomeAction) -> some View {
+        LiteHomeTile(action: action) {
+            switch action.id {
+            case .bridge: sheet = .bridge
+            case .deposit: sheet = .receive
+            case .withdraw: sheet = .send
+            case .swap: sheet = .swap(buy: nil)
+            case .cash: sheet = .cash
+            }
+        }
+    }
+
+    // MARK: My Holdings
+
+    private func holdings(_ store: LiteStore) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(tr("My Holdings")).font(.headline)
+            if let account = store.account {
+                let rows = account.balances.filter { $0.enabled || $0.units > 0 }
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        LiteHoldingRow(code: row.code, name: row.note ?? row.name, amount: Amount.format(row.units, maxFraction: 4),
+                                       value: store.value(of: row).map(usd))
+                        if index < rows.count - 1 || !store.positions.isEmpty { Divider().padding(.leading, 44) }
                     }
-                    Spacer()
-                    VStack(alignment: .trailing) {
-                        Text(Amount.format(row.units, maxFraction: 4)).font(.body.monospacedDigit())
-                        if let px = store.prices?.usd[row.asset] ?? store.prices?.usd[row.contract], px > 0 {
-                            Text(usd(Double(row.units) / 1e7 * px)).font(.caption).foregroundStyle(.secondary)
+                    ForEach(Array(store.positions.enumerated()), id: \.element.id) { index, position in
+                        LiteHoldingRow(code: position.code, name: tr("Earning on Blend"), amount: Amount.format(position.supplied, maxFraction: 4), value: nil)
+                        if index < store.positions.count - 1 { Divider().padding(.leading, 44) }
+                    }
+                }
+            } else if store.failed.contains(.account) {
+                retryRow(store.lastError ?? "", store)
+            } else {
+                readingRow(tr("Reading your balances…"))
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liteCardBackground()
+    }
+
+    // MARK: Activity
+
+    private func activity(_ store: LiteStore) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(tr("Activity")).font(.headline)
+            if store.loaded.contains(.activity) {
+                if store.activity.isEmpty {
+                    LiteParagraph(tr("Nothing yet. Add cash or swap to get started."))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(spacing: 0) {
+                        let items = Array(store.activity.prefix(12))
+                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                            LiteActivityRow(item: item)
+                            if index < items.count - 1 { Divider() }
                         }
                     }
                 }
+            } else if store.failed.contains(.activity) {
+                retryRow(store.lastError ?? "", store)
+            } else {
+                readingRow(tr("Reading your activity…"))
             }
-            ForEach(store.positions) { p in
-                HStack(spacing: 12) {
-                    AssetBadge(code: p.code)
-                    VStack(alignment: .leading) {
-                        Text("\(p.code) earning").font(.body.weight(.semibold))
-                        Text("Blend").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(Amount.format(p.supplied, maxFraction: 4)).font(.body.monospacedDigit())
-                }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liteCardBackground()
+    }
+
+    private func readingRow(_ text: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(text).font(.subheadline).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    /// A read that failed, with Retry.
+    private func retryRow(_ message: String, _ store: LiteStore) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            LiteInlineError(message: message)
+            Spacer(minLength: 8)
+            Button(tr("Retry")) { Task { await store.refreshAll() } }
+                .font(.footnote.weight(.semibold))
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+/// One of the five Home actions: the first three are Monad Home's, for the same jobs.
+struct LiteHomeAction: Identifiable {
+    enum Kind { case bridge, deposit, withdraw, swap, cash }
+    let id: Kind
+    let title: String
+    let symbol: String
+
+    static var all: [LiteHomeAction] {
+        [
+            LiteHomeAction(id: .bridge, title: tr("Bridge"), symbol: "point.3.connected.trianglepath.dotted"),
+            LiteHomeAction(id: .deposit, title: tr("Deposit"), symbol: "creditcard"),
+            LiteHomeAction(id: .withdraw, title: tr("Withdraw"), symbol: "arrow.up"),
+            LiteHomeAction(id: .swap, title: tr("Swap"), symbol: "arrow.left.arrow.right"),
+            LiteHomeAction(id: .cash, title: tr("Add cash"), symbol: "banknote"),
+        ]
+    }
+}
+
+/// A Home action tile, with Monad's `HomeAction` metrics: an SF Symbol over a label, filling its share of the row.
+struct LiteHomeTile: View {
+    let action: LiteHomeAction
+    let perform: () -> Void
+    /// One height for every symbol, so the tiles and their labels line up.
+    @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
+    /// Off while the session is locked or paused: drawn faded, so the card above says why.
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: perform) {
+            VStack(spacing: 6) {
+                Image(systemName: action.symbol).font(.body.weight(.semibold)).frame(height: symbolHeight)
+                Text(action.title).font(.caption).fontWeight(.medium).lineLimit(1).minimumScaleFactor(0.8)
             }
+            .opacity(isEnabled ? 1 : 0.4)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(Color.liteCard, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .foregroundStyle(.primary)
+    }
+}
+
+/// A holding: the disc, the code and its name, the amount and its value.
+struct LiteHoldingRow: View {
+    let code: String
+    let name: String
+    let amount: String
+    let value: String?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            AssetBadge(code: code, size: 36)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: code).font(.subheadline.weight(.semibold))
+                Text(verbatim: name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(verbatim: amount).font(.subheadline.weight(.medium)).monospacedDigit()
+                if let value { Text(verbatim: value).font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+            }
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// An activity row: what happened, when, and its status as a word with a symbol.
+struct LiteActivityRow: View {
+    let item: ActivityItem
+    @Environment(\.liteStyle) private var style
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: item.summary).font(.subheadline).lineLimit(2)
+                Text(verbatim: time).font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            status
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var time: String {
+        guard let date = item.at.liteDate else { return String(item.at.prefix(16)).replacingOccurrences(of: "T", with: " ") }
+        return date.formatted(.dateTime.year().month(.abbreviated).day().hour().minute().locale(LiteL10n.locale))
+    }
+
+    @ViewBuilder private var status: some View {
+        // Status words of their own (keys apart from the buttons' "Done"), so a language can word each as a state.
+        switch Self.outcome(item.status) {
+        case .done:
+            Label(LiteL10n.string(LocalizedStringResource("activity.done", defaultValue: "Done", bundle: LiteL10n.lite)), systemImage: "checkmark")
+                .foregroundStyle(.secondary)
+                .font(.caption.weight(.semibold))
+        case .pending:
+            Label(LiteL10n.string(LocalizedStringResource("activity.pending", defaultValue: "Pending", bundle: LiteL10n.lite)), systemImage: "clock")
+                .foregroundStyle(.secondary)
+                .font(.caption.weight(.semibold))
+        case .failed:
+            Label(LiteL10n.string(LocalizedStringResource("activity.failed", defaultValue: "Failed", bundle: LiteL10n.lite)), systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(style.negative)
+                .font(.caption.weight(.semibold))
         }
     }
 
-    private var activity: some View {
-        LiteCard {
-            Text("Activity").font(.headline)
-            if store.activity.isEmpty {
-                Text("Nothing yet. Add cash or swap to get started.").font(.subheadline).foregroundStyle(.secondary)
-            }
-            ForEach(store.activity.prefix(12)) { item in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.summary).font(.subheadline).lineLimit(2)
-                        Text(item.at.prefix(16).replacingOccurrences(of: "T", with: " ")).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(statusWord(item.status))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(item.status == "failed" ? LiteTheme.negative : .secondary)
-                }
-            }
-        }
-    }
+    enum Outcome { case done, pending, failed }
 
-    private func statusWord(_ s: String) -> String {
-        switch s {
-        case "success", "completed": return "Done"
-        case "failed": return "Failed"
-        default: return "Pending"
+    /// The server's statuses (transactions, bridge transfers, anchor transfers) as three words.
+    static func outcome(_ status: String) -> Outcome {
+        switch status {
+        case "success", "completed": .done
+        case "failed", "error", "expired", "refunded": .failed
+        default: .pending
         }
     }
 }
@@ -167,35 +432,35 @@ struct SwapSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Pay with", selection: $sell) { ForEach(choices, id: \.self) { Text(code($0)).tag($0) } }
-                    AmountInput(label: "Amount", text: $amount, code: code(sell), maxUnits: store.account?.balance(sell))
+                    Picker(tr("Pay with"), selection: $sell) { ForEach(choices, id: \.self) { Text(verbatim: code($0)).tag($0) } }
+                    AmountInput(label: tr("Amount"), text: $amount, code: code(sell), maxUnits: store.account?.balance(sell))
                     Button {
                         let s = sell
                         sell = buy
                         buy = s
-                    } label: { Label("Flip", systemImage: "arrow.up.arrow.down") }
-                    Picker("Receive", selection: $buy) { ForEach(choices, id: \.self) { Text(code($0)).tag($0) } }
+                    } label: { Label(tr("Flip"), systemImage: "arrow.up.arrow.down") }
+                    Picker(tr("Receive"), selection: $buy) { ForEach(choices, id: \.self) { Text(verbatim: code($0)).tag($0) } }
                 }
                 if let quote {
-                    Section("Best price") {
-                        LabeledContent("You get about", value: "\(Amount.format(quote.best.amountOut)) \(code(buy))")
-                        LabeledContent("At least", value: "\(Amount.format(quote.best.minOut ?? quote.best.amountOut)) \(code(buy))")
-                        LabeledContent("Route", value: quote.best.venue.capitalized)
+                    Section(tr("Best price")) {
+                        LabeledContent(tr("You get about"), value: "\(Amount.format(quote.best.amountOut)) \(code(buy))")
+                        LabeledContent(tr("At least"), value: "\(Amount.format(quote.best.minOut ?? quote.best.amountOut)) \(code(buy))")
+                        LabeledContent(tr("Route"), value: quote.best.venue.capitalized)
                         ForEach(quote.alternatives, id: \.venue) { alt in
                             LabeledContent(alt.venue.capitalized, value: Amount.format(alt.amountOut)).foregroundStyle(.secondary)
                         }
                     }
                 }
-                if let error { Section { Text(error).foregroundStyle(LiteTheme.negative) } }
+                if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: quote == nil ? "Get price" : "Review swap", busy: busy, enabled: Amount.parse(amount) != nil && sell != buy) {
+                LitePrimaryButton(title: quote == nil ? tr("Get price") : tr("Review swap"), busy: busy, enabled: Amount.parse(amount) != nil && sell != buy) {
                     Task { await next() }
                 }
                 .padding()
             }
-            .navigationTitle("Swap")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Swap"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .onChange(of: amount) { _, _ in quote = nil }
             .onChange(of: sell) { _, _ in quote = nil }
             .onChange(of: buy) { _, _ in quote = nil }
@@ -205,11 +470,12 @@ struct SwapSheet: View {
             }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in dismiss() } }
         }
+        .liteFormSheet()
     }
 
     private var choices: [String] {
         var ids = ["XLM", "USDC"]
-        if store.network.name == "testnet" { ids.append("BUSDC") }
+        if store.isTestnet { ids.append("BUSDC") }
         ids += store.account?.balances.filter { $0.classic == nil }.map(\.asset) ?? []
         for id in [initialSell, initialBuy] where !ids.contains(id) { ids.append(id) }
         return ids
@@ -236,8 +502,9 @@ struct SwapSheet: View {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ send & receive
+// ------------------------------------------------------------------------------------------------ withdraw & deposit
 
+/// Withdraw: sends an asset to another Stellar address (an exchange, an anchor, a friend).
 struct SendSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -252,16 +519,16 @@ struct SendSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker("Asset", selection: $asset) {
-                    ForEach(store.account?.balances.filter { $0.enabled } ?? []) { Text($0.code).tag($0.asset) }
+                Picker(tr("Asset"), selection: $asset) {
+                    ForEach(store.account?.balances.filter { $0.enabled } ?? []) { Text(verbatim: $0.code).tag($0.asset) }
                 }
-                TextField("To (G… address)", text: $to).font(.body.monospaced()).autocorrectionDisabled()
-                AmountInput(label: "Amount", text: $amount, code: store.account?.balances.first { $0.asset == asset }?.code ?? "", maxUnits: store.account?.balance(asset))
-                TextField("Memo (exchanges and anchors may require one)", text: $memo)
-                if let error { Text(error).foregroundStyle(LiteTheme.negative) }
+                TextField(tr("To (G… address)"), text: $to).font(.body.monospaced()).autocorrectionDisabled()
+                AmountInput(label: tr("Amount"), text: $amount, code: store.account?.balances.first { $0.asset == asset }?.code ?? "", maxUnits: store.account?.balance(asset))
+                TextField(tr("Memo (exchanges and anchors may require one)"), text: $memo)
+                if let error { LiteInlineError(message: error) }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: "Review", busy: busy, enabled: StrKey.isValid(.accountID, to) && Amount.parse(amount) != nil) {
+                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: StrKey.isValid(.accountID, to) && Amount.parse(amount) != nil) {
                     Task {
                         busy = true
                         defer { busy = false }
@@ -272,40 +539,62 @@ struct SendSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle("Send")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Withdraw"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .sheet(item: $prepared) { action in ConfirmSheet(action: action) { _ in dismiss() } }
         }
+        .liteFormSheet()
     }
 }
 
+/// Deposit: the account's Stellar address and its QR code. Receiving needs no sign-in, so it shows while the session
+/// is locked too (`store` nil); the test XLM needs one.
 struct ReceiveSheet: View {
-    @Environment(LiteStore.self) private var store
+    let address: String
+    let store: LiteStore?
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var error: String?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                QRCodeView(text: store.keys.address).frame(width: 220, height: 220)
-                Text(store.keys.address).font(.footnote.monospaced()).multilineTextAlignment(.center).textSelection(.enabled)
-                Button(copied ? "Copied" : "Copy address") {
-                    #if canImport(UIKit)
-                    UIPasteboard.general.string = store.keys.address
-                    #endif
-                    copied = true
+            ScrollView {
+                VStack(spacing: 20) {
+                    QRCodeView(text: address).frame(width: 220, height: 220)
+                    Text(verbatim: address)
+                        .font(.footnote.monospaced())
+                        .multilineTextAlignment(.center)
+                        .textSelection(.enabled)
+                        .speechSpellsOutCharacters()
+                    Button(copied ? tr("Copied") : tr("Copy address")) {
+                        copyToPasteboard(address)
+                        copied = true
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                    LiteParagraph(tr("Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home."))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    if let store, store.isTestnet {
+                        Button(tr("Get \(Self.faucetAmount) test XLM")) {
+                            Task {
+                                do { try await store.faucet() } catch { self.error = describe(error) }
+                            }
+                        }
+                        .font(.footnote)
+                    }
+                    if let error { LiteInlineError(message: error) }
                 }
-                .buttonStyle(.bordered)
-                Text("Send only Stellar assets to this address. To move USDC from Monad, use Monad on the Home screen.")
-                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                if store.network.name == "testnet" {
-                    Button("Get 10,000 test XLM") { Task { try? await store.faucet() } }.font(.footnote)
-                }
+                .padding(24)
             }
-            .padding(24)
-            .navigationTitle("Receive")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            .navigationTitle(tr("Deposit"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+        .liteFormSheet()
     }
+
+    /// The testnet faucet's 10,000 XLM, in the current language's digits.
+    static var faucetAmount: String { 10_000.formatted(.number.locale(LiteL10n.locale)) }
 }

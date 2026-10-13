@@ -34,6 +34,12 @@ public enum StellarKeychain {
         return (token, exp)
     }
 
+    /// The session token alone (signing out of Stellar on this iPhone): the stored seed stays, so the account unlocks
+    /// and signs in again without its secret being entered again.
+    public static func eraseSession(account: String, network: String) {
+        delete(key: "session.\(network).\(account)")
+    }
+
     /// Everything Lite stored for `account` (sign-out, account deletion, "erase this device").
     public static func erase(account: String) {
         for network in ["testnet", "mainnet"] {
