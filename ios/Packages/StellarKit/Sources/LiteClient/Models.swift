@@ -308,10 +308,29 @@ public struct ActivityItem: Codable, Equatable, Sendable, Identifiable {
     public let type: String
     public let id: String
     public let kind: String
+    /// The server's own words, in English: what the app shows when it can't word the item itself.
     public let summary: String
     public let status: String
     public let at: String
     public let amount: String?
+    /// A transaction's intent display fields, or a cash transfer's asset: what the app words the item from. Absent from
+    /// older servers' payloads.
+    public let display: [String: JSONValue]?
+}
+
+extension ActivityItem {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(String.self, forKey: .kind)
+        summary = try c.decode(String.self, forKey: .summary)
+        status = try c.decode(String.self, forKey: .status)
+        at = try c.decode(String.self, forKey: .at)
+        amount = try c.decodeIfPresent(String.self, forKey: .amount)
+        // Words, not money: a display the app can't read only costs it its own wording, never the whole list.
+        display = (try? c.decodeIfPresent([String: JSONValue].self, forKey: .display)) ?? nil
+    }
 }
 
 public struct Prices: Codable, Equatable, Sendable {

@@ -247,6 +247,44 @@ struct AmountInput: View {
     var units: Int64? { Amount.parse(text) }
 }
 
+/// A sheet's header where the sheet has no navigation bar (DyorHQ `SheetHeader`): a bold title on the left and a round
+/// close button in a 44 pt target. Opaque, so content scrolling under it stays legible.
+struct LiteSheetHeader: View {
+    let title: String
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack {
+            Text(title).font(.title2.weight(.bold))
+            Spacer()
+            Button(action: onClose) {
+                Image(systemName: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32).background(Color.liteControl, in: Circle())
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(tr("Close"))
+        }
+        .padding(.top, 20).padding(.horizontal, 20).padding(.bottom, 8)
+        .background(Color.liteCanvas)
+    }
+}
+
+/// When a sheet sized to its content stops being: past 85% of the screen it opens `.large` and its content scrolls
+/// (as the app's network sheet does).
+@MainActor
+enum LiteSheetHeight {
+    static func fits(_ height: CGFloat) -> Bool { height <= screenHeight * 0.85 }
+
+    private static var screenHeight: CGFloat {
+        #if canImport(UIKit)
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?.screen.bounds.height ?? 800
+        #else
+        800
+        #endif
+    }
+}
+
 /// Tactile feedback, as DyorHQ's `Haptics` gives it.
 enum LiteHaptics {
     /// A consequential action: a firmer knock and the system's subtle tick.

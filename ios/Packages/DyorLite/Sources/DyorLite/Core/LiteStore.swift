@@ -60,8 +60,9 @@ public final class LiteStore {
 
     @ObservationIgnored private var refreshing: Task<Void, Never>?
 
+    /// Reads everything again, in place: what was read stays on screen until a new read replaces it, and the header's
+    /// warning goes only once a whole round has gone through (a poll never makes it blink).
     private func readAll() async {
-        lastError = nil
         async let c: Void = refreshConfig()
         async let a: Void = refreshAccount()
         async let t: Void = refreshActivity()
@@ -69,6 +70,7 @@ public final class LiteStore {
         async let l: Void = refreshLaunches(sort: "new")
         async let d: Void = refreshMoments()
         _ = await (c, a, t, b, l, d)
+        if failed.isEmpty { lastError = nil }
     }
 
     func refreshConfig() async {
@@ -192,7 +194,10 @@ public final class LiteStore {
 
     public func swapPlan(_ quote: SwapQuote) async throws -> PreparedAction {
         let plan = try await api.buildSwap(quoteId: quote.quoteId)
-        return PreparedAction(plan: plan, limits: limit(quote.sell, quote.amountIn), title: tr("Swap"))
+        let buy = code(quote.buy)
+        let swap = LiteTitles.intent(kind: "swap", display: ["amountIn": .string(quote.amountIn), "sell": .string(code(quote.sell)), "buy": .string(buy)])
+        return PreparedAction(plan: plan, limits: limit(quote.sell, quote.amountIn), title: tr("Swap"),
+                              titles: Self.unbuilt(plan, main: swap, before: LiteTitles.intent(kind: "trust", display: ["asset": .string(buy)])))
     }
 
     public func sendPlan(asset: String, to: String, amount: Int64, memo: String?, memoType: String?) async throws -> PreparedAction {
@@ -202,7 +207,9 @@ public final class LiteStore {
 
     public func earnPlan(deposit: Bool, market: EarnMarket, amount: Int64) async throws -> PreparedAction {
         let plan = try await api.buildEarn(deposit: deposit, pool: market.pool, asset: market.asset, amount: amount)
-        return PreparedAction(plan: plan, limits: deposit ? [market.asset: amount] : [:], title: deposit ? tr("Deposit") : tr("Withdraw"))
+        let main = LiteTitles.intent(kind: deposit ? "earn_deposit" : "earn_withdraw", display: ["amount": .string(String(amount)), "asset": .string(market.code)])
+        return PreparedAction(plan: plan, limits: deposit ? [market.asset: amount] : [:], title: deposit ? tr("Deposit") : tr("Withdraw"),
+                              titles: Self.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string(market.code)])))
     }
 
     public func launchPlan(_ req: LiteAPI.LaunchRequest, spend: (asset: String, amount: Int64)?) async throws -> PreparedAction {
@@ -250,7 +257,9 @@ public final class LiteStore {
     public func bridgeOut(amount: Int64, monadAddress: String) async throws -> (PreparedAction, BridgeTransfer) {
         let start = try await api.bridgeStart(toStellar: false, amount: String(amount), monadAddress: monadAddress)
         guard let plan = start.plan else { throw LiteAPIError.decoding("the bridge plan") }
-        return (PreparedAction(plan: plan, limits: limit("USDC", String(amount)), title: tr("Send to Monad")), start.transfer)
+        let send = LiteTitles.intent(kind: "bridge_out", display: ["amount": .string(String(amount))])
+        return (PreparedAction(plan: plan, limits: limit("USDC", String(amount)), title: tr("Send to Monad"), titles: Self.unbuilt(plan, main: send, before: nil)),
+                start.transfer)
     }
 
     public func bridgeIn(amount6: Int64) async throws -> BridgeTransfer {
@@ -299,6 +308,22 @@ public final class LiteStore {
         let contract = config?.asset(asset)?.contract ?? asset
         return [contract: Int64(amount) ?? 0]
     }
+
+    /// An asset's code (XLM, USDC, a launch's symbol) by its id or contract.
+    func code(_ id: String) -> String {
+        account?.balances.first { $0.asset == id }?.code ?? asset(id)?.code ?? launches.first { $0.token == id }?.symbol ?? shortAddress(id)
+    }
+
+    /// The phone's titles for the steps the server hasn't built yet: they come with an English label only (the server
+    /// builds a plan's first step at once and the others as they come up). The plan's main step is its last; the steps
+    /// before it enable the asset it needs.
+    nonisolated static func unbuilt(_ plan: PlanView, main: String?, before: String?) -> [String: String] {
+        var titles: [String: String] = [:]
+        for (index, step) in plan.steps.enumerated() where step.intent == nil {
+            titles[step.id] = index == plan.steps.count - 1 ? main : before
+        }
+        return titles
+    }
 }
 
 /// A plan plus the limits the user is confirming, ready for the confirmation sheet.
@@ -306,6 +331,8 @@ public struct PreparedAction: Identifiable, Equatable {
     public let plan: PlanView
     public let limits: [String: Int64]
     public let title: String
+    /// Titles for steps that arrive without their intent (`LiteStore.unbuilt`), by step id.
+    var titles: [String: String] = [:]
     public var id: String { plan.planId }
 }
 

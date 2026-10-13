@@ -41,7 +41,7 @@ struct LiteSearchSheet: View {
                 if !holdings.isEmpty {
                     Section(tr("My Holdings")) {
                         ForEach(holdings) { row in
-                            pickRow(code: row.code, name: row.note ?? row.name,
+                            pickRow(code: row.code, name: LiteTitles.assetName(id: row.asset, name: row.name),
                                     trailing: Amount.format(row.units, maxFraction: 4)) { .holding(asset: row.asset) }
                         }
                     }

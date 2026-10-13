@@ -2,7 +2,8 @@ import StellarKit
 import SwiftUI
 
 /// Every Stellar transaction goes through here: what will happen, in words built on the phone from the plan (not from
-/// server text), "Network fee: Paid by DyorHQ", then one confirmation that runs every step with live progress.
+/// server text), "Network fee: Paid by DyorHQ", then one confirmation that runs every step with live progress. A step's
+/// headline is the same title Activity gives the transaction once it is sent (`LiteTitles`).
 struct ConfirmSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -25,7 +26,7 @@ struct ConfirmSheet: View {
                         HStack(alignment: .top, spacing: 12) {
                             stepIcon(step.id)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(verbatim: step.label).font(.headline)
+                                Text(verbatim: headline(step)).font(.headline)
                                 if let intent = step.intent { IntentLines(intent: intent) }
                                 if let p = progress[step.id] { Text(label(p)).font(.footnote).foregroundStyle(.secondary) }
                             }
@@ -74,6 +75,12 @@ struct ConfirmSheet: View {
         }
         .interactiveDismissDisabled(running)
         .liteFormSheet()
+    }
+
+    /// The step's title from its intent; for a step the server hasn't built yet, the title the store wrote for it; the
+    /// server's label only when neither knows what it is.
+    private func headline(_ step: PlanStep) -> String {
+        step.intent.flatMap { LiteTitles.intent(kind: $0.kind, display: $0.display) } ?? action.titles[step.id] ?? step.label
     }
 
     private func label(_ p: Progress) -> String {
@@ -140,7 +147,7 @@ struct IntentLines: View {
         for (asset, units) in (intent.receive ?? [:]).sorted(by: { $0.key < $1.key }) where units != "0" {
             out.append(tr("You receive at least \(Amount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
         }
-        if let venue = intent.display?["venue"]?.text { out.append(tr("Route: \(venue)")) }
+        if let venue = intent.display?["venue"]?.text { out.append(tr("Route: \(LiteTitles.venue(venue))")) }
         if let to = intent.display?["to"]?.text { out.append(tr("To \(shortAddress(to))")) }
         if let memo = intent.display?["memo"]?.text, !memo.isEmpty { out.append(tr("Memo \(memo)")) }
         if intent.spend.isEmpty && (intent.receive ?? [:]).isEmpty { out.append(neutralLine) }

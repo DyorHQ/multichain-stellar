@@ -112,14 +112,45 @@ enum LiteWordWrap {
     }
 }
 
+/// A Stellar address as people read and check it: in groups of four, a line breaking only between groups, never
+/// inside one (no hyphen). The gaps are only drawn: copying and VoiceOver use the address itself, spelled out. Font and
+/// alignment come from around it.
+struct LiteAddressText: View {
+    let address: String
+    @Environment(\.multilineTextAlignment) private var alignment
+    @Environment(\.lineSpacing) private var lineSpacing
+
+    var body: some View {
+        LiteWordFlow(alignment: alignment, lineSpacing: lineSpacing) {
+            // The two probes: their difference in width is one gap.
+            Text(verbatim: "0 0").hidden()
+            Text(verbatim: "00").hidden()
+            ForEach(Array(Self.groups(address).enumerated()), id: \.offset) { _, group in
+                Text(verbatim: group)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: address).speechSpellsOutCharacters())
+    }
+
+    /// The address in groups of four characters (the last may be shorter).
+    static func groups(_ address: String) -> [String] {
+        stride(from: 0, to: address.count, by: 4).map { start in
+            let from = address.index(address.startIndex, offsetBy: start)
+            let to = address.index(from, offsetBy: 4, limitedBy: address.endIndex) ?? address.endIndex
+            return String(address[from..<to])
+        }
+    }
+}
+
 /// Whether a word starts a line of its own: the first word after a newline.
 private struct LiteStartsLine: LayoutValueKey {
     static let defaultValue = false
 }
 
 /// Lays out words as `Text` lays out a paragraph, breaking only between words. The first two subviews are the probes
-/// `LiteParagraph` measures a space with.
-private struct LiteWordFlow: Layout {
+/// the caller measures a space with (`LiteParagraph`, `LiteAddressText`).
+struct LiteWordFlow: Layout {
     let alignment: TextAlignment
     let lineSpacing: CGFloat
 

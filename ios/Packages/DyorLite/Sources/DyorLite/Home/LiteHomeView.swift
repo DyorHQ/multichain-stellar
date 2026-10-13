@@ -9,6 +9,7 @@ struct LiteHomeView: View {
     let session: LiteSession
     @Environment(\.liteChrome) private var chrome
     @Environment(\.liteStyle) private var style
+    @Environment(\.scenePhase) private var scenePhase
 
     enum SheetKind: Identifiable {
         case cash, send, receive, bridge
@@ -27,6 +28,9 @@ struct LiteHomeView: View {
 
     /// A launch page in Home's stack.
     struct LaunchRoute: Hashable { let token: String }
+
+    /// How often Home reads the account again while it is on screen (Monad Home's rhythm).
+    static let pollInterval: Duration = .seconds(30)
 
     @State private var sheet: SheetKind?
     @State private var showSearch = false
@@ -62,6 +66,16 @@ struct LiteHomeView: View {
                                                 updatedAt: isReady ? store?.updatedAt : nil))
             }
             .refreshable { await session.refreshHome() }
+            // Read again every 30 s while Home is on screen, the session ready and the app in front, as Monad Home does:
+            // in place (what was read stays until the new read replaces it), never a prompt.
+            .task(id: isReady && scenePhase == .active) {
+                guard isReady, scenePhase == .active else { return }
+                while true {
+                    try? await Task.sleep(for: Self.pollInterval)
+                    guard !Task.isCancelled, session.home == .ready, let store else { return }
+                    await store.refreshAll()
+                }
+            }
             .navigationDestination(for: LaunchRoute.self) { route in
                 if let store { LaunchDetailView(token: route.token).environment(store) }
             }
@@ -103,14 +117,12 @@ struct LiteHomeView: View {
 
     // MARK: Balance card
 
-    /// The chip row as on Monad Home (spec §3.2): the host's chip, a 44 pt row, the card's top padding 10.
+    /// The chip row as on Monad Home (spec §3.2): the host's chip with the whole row to itself (a spacer beside it
+    /// would take half, and the Testnet badge would wrap), a 44 pt row, the card's top padding 10.
     private var chipRow: some View {
-        HStack {
-            chrome.networkChip()
-            Spacer(minLength: 0)
-        }
-        .frame(minHeight: 44)
-        .padding(.bottom, -6)
+        chrome.networkChip()
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.bottom, -6)
     }
 
     private var balanceCard: some View {
@@ -221,7 +233,7 @@ struct LiteHomeView: View {
                 let rows = account.balances.filter { $0.enabled || $0.units > 0 }
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        LiteHoldingRow(code: row.code, name: row.note ?? row.name, amount: Amount.format(row.units, maxFraction: 4),
+                        LiteHoldingRow(code: row.code, name: LiteTitles.assetName(id: row.asset, name: row.name), amount: Amount.format(row.units, maxFraction: 4),
                                        value: store.value(of: row).map(usd))
                         if index < rows.count - 1 || !store.positions.isEmpty { Divider().padding(.leading, 44) }
                     }
@@ -367,7 +379,7 @@ struct LiteActivityRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: item.summary).font(.subheadline).lineLimit(2)
+                Text(verbatim: LiteTitles.activity(item) ?? item.summary).font(.subheadline).lineLimit(2)
                 Text(verbatim: time).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -432,22 +444,22 @@ struct SwapSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker(tr("Pay with"), selection: $sell) { ForEach(choices, id: \.self) { Text(verbatim: code($0)).tag($0) } }
+                    Picker(tr("Pay with"), selection: $sell) { ForEach(choices, id: \.self) { Text(verbatim: choiceName($0)).tag($0) } }
                     AmountInput(label: tr("Amount"), text: $amount, code: code(sell), maxUnits: store.account?.balance(sell))
                     Button {
                         let s = sell
                         sell = buy
                         buy = s
                     } label: { Label(tr("Flip"), systemImage: "arrow.up.arrow.down") }
-                    Picker(tr("Receive"), selection: $buy) { ForEach(choices, id: \.self) { Text(verbatim: code($0)).tag($0) } }
+                    Picker(tr("Receive"), selection: $buy) { ForEach(choices, id: \.self) { Text(verbatim: choiceName($0)).tag($0) } }
                 }
                 if let quote {
                     Section(tr("Best price")) {
                         LabeledContent(tr("You get about"), value: "\(Amount.format(quote.best.amountOut)) \(code(buy))")
                         LabeledContent(tr("At least"), value: "\(Amount.format(quote.best.minOut ?? quote.best.amountOut)) \(code(buy))")
-                        LabeledContent(tr("Route"), value: quote.best.venue.capitalized)
+                        LabeledContent(tr("Route"), value: LiteTitles.venue(quote.best.venue))
                         ForEach(quote.alternatives, id: \.venue) { alt in
-                            LabeledContent(alt.venue.capitalized, value: Amount.format(alt.amountOut)).foregroundStyle(.secondary)
+                            LabeledContent(LiteTitles.venue(alt.venue), value: "\(Amount.format(alt.amountOut)) \(code(buy))").foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -481,8 +493,14 @@ struct SwapSheet: View {
         return ids
     }
 
-    private func code(_ id: String) -> String {
-        store.account?.balances.first { $0.asset == id }?.code ?? store.asset(id)?.code ?? store.launches.first { $0.token == id }?.symbol ?? shortAddress(id)
+    private func code(_ id: String) -> String { store.code(id) }
+
+    /// A choice's name in the pickers: its code, and its name as well when another choice has the same code (Blend's
+    /// test USDC beside the wallet's USDC).
+    private func choiceName(_ id: String) -> String {
+        let code = code(id)
+        guard choices.filter({ self.code($0) == code }).count > 1 else { return code }
+        return "\(code) · \(LiteTitles.assetName(id: id, name: store.asset(id)?.name ?? code))"
     }
 
     private func next() async {
@@ -519,13 +537,17 @@ struct SendSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker(tr("Asset"), selection: $asset) {
-                    ForEach(store.account?.balances.filter { $0.enabled } ?? []) { Text(verbatim: $0.code).tag($0.asset) }
+                Section {
+                    Picker(tr("Asset"), selection: $asset) {
+                        ForEach(store.account?.balances.filter { $0.enabled } ?? []) { Text(verbatim: $0.code).tag($0.asset) }
+                    }
+                    TextField(tr("To (G… address)"), text: $to).font(.body.monospaced()).autocorrectionDisabled()
+                    AmountInput(label: tr("Amount"), text: $amount, code: store.account?.balances.first { $0.asset == asset }?.code ?? "", maxUnits: store.account?.balance(asset))
+                    TextField(tr("Memo (optional)"), text: $memo)
+                } footer: {
+                    LiteParagraph(tr("Some exchanges and cash providers need a memo. Use the one they give you."))
                 }
-                TextField(tr("To (G… address)"), text: $to).font(.body.monospaced()).autocorrectionDisabled()
-                AmountInput(label: tr("Amount"), text: $amount, code: store.account?.balances.first { $0.asset == asset }?.code ?? "", maxUnits: store.account?.balance(asset))
-                TextField(tr("Memo (exchanges and anchors may require one)"), text: $memo)
-                if let error { LiteInlineError(message: error) }
+                if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
                 LitePrimaryButton(title: tr("Review"), busy: busy, enabled: StrKey.isValid(.accountID, to) && Amount.parse(amount) != nil) {
@@ -555,44 +577,59 @@ struct ReceiveSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
     @State private var error: String?
+    @State private var headerHeight: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var bottomInset: CGFloat = 0
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    QRCodeView(text: address).frame(width: 220, height: 220)
-                    Text(verbatim: address)
-                        .font(.footnote.monospaced())
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                        .speechSpellsOutCharacters()
-                    Button(copied ? tr("Copied") : tr("Copy address")) {
-                        copyToPasteboard(address)
-                        copied = true
-                    }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
-                    LiteParagraph(tr("Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home."))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    if let store, store.isTestnet {
-                        Button(tr("Get \(Self.faucetAmount) test XLM")) {
-                            Task {
-                                do { try await store.faucet() } catch { self.error = describe(error) }
-                            }
-                        }
-                        .font(.footnote)
-                    }
-                    if let error { LiteInlineError(message: error) }
+        ScrollView {
+            VStack(spacing: 20) {
+                QRCodeView(text: address).frame(width: 220, height: 220)
+                LiteAddressText(address: address)
+                    .font(.footnote.monospaced())
+                    .multilineTextAlignment(.center)
+                Button(copied ? tr("Copied") : tr("Copy address")) {
+                    copyToPasteboard(address)
+                    copied = true
                 }
-                .padding(24)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                LiteParagraph(tr("Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home."))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if let store, store.isTestnet {
+                    Button(tr("Get \(Self.faucetAmount) test XLM")) {
+                        Task {
+                            do { try await store.faucet() } catch { self.error = describe(error) }
+                        }
+                    }
+                    .font(.footnote)
+                }
+                if let error { LiteInlineError(message: error) }
             }
-            .navigationTitle(tr("Deposit"))
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
-        .presentationDetents([.medium, .large])
+        .scrollBounceBehavior(.basedOnSize)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            LiteSheetHeader(title: tr("Deposit")) { dismiss() }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.safeAreaInsets.bottom } action: { bottomInset = $0 }
+        // Sized to its content, as the app's network sheet is: nothing cut off, and `.large` with the content scrolling
+        // once it outgrows 85% of the screen (accessibility sizes).
+        .presentationDetents(LiteSheetHeight.fits(fitted) ? [.height(fitted)] : [.large])
+        .presentationDragIndicator(.visible)
         .liteFormSheet()
+    }
+
+    /// The header, the content and the home indicator's inset; about 560 until measured.
+    private var fitted: CGFloat {
+        contentHeight > 0 ? headerHeight + contentHeight + bottomInset : 560
     }
 
     /// The testnet faucet's 10,000 XLM, in the current language's digits.

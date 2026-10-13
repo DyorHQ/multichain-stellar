@@ -16,6 +16,15 @@ public struct LiteAccountView: View {
 
     public init(session: LiteSession) { self.session = session }
 
+    /// What DyorHQ's reserves for the account hold, in XLM. Horizon's `num_sponsored` (the server's `sponsoredByDyorHQ`,
+    /// backend _shared/stellar.ts) counts base reserves: 2 for an account, 1 for each trustline or other entry. A base
+    /// reserve is 0.5 XLM (Stellar's network setting).
+    static func reserveXLM(_ baseReserves: Int) -> String {
+        "\(Amount.format(Int64(max(0, baseReserves)) * baseReserveStroops, maxFraction: 7)) XLM"
+    }
+
+    static let baseReserveStroops: Int64 = 5_000_000
+
     private var store: LiteStore? { session.home == .ready ? session.store : nil }
     private var isTestnet: Bool { session.env.pinned.network.name == "testnet" }
 
@@ -23,25 +32,25 @@ public struct LiteAccountView: View {
         Form {
             Section {
                 if let address = session.address {
-                    Button {
-                        copyToPasteboard(address)
-                        copied = true
-                    } label: {
-                        LabeledContent {
-                            HStack(spacing: 6) {
-                                Text(verbatim: shortAddress(address))
-                                    .font(.body.monospaced())
-                                    .speechSpellsOutCharacters()
-                                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                    .font(.footnote)
-                                    .accessibilityHidden(true)
+                    // A row, not a button: its label stays in the text colour, and only the copy icon takes the tint.
+                    LabeledContent {
+                        HStack(spacing: 10) {
+                            Text(verbatim: shortAddress(address))
+                                .font(.body.monospaced())
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel(Text(verbatim: address).speechSpellsOutCharacters())
+                            Button {
+                                copyToPasteboard(address)
+                                copied = true
+                            } label: {
+                                Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.footnote.weight(.semibold))
                             }
-                            .foregroundStyle(.secondary)
-                        } label: {
-                            Text(tr("Stellar address")).foregroundStyle(.primary)
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(copied ? tr("Copied") : tr("Copy address"))
                         }
+                    } label: {
+                        Text(tr("Stellar address"))
                     }
-                    .accessibilityHint(copied ? tr("Copied") : tr("Copies the address."))
                 }
                 if let method = session.keys?.methodLabel, !method.isEmpty {
                     LabeledContent(tr("Secured by"), value: method)
@@ -53,7 +62,7 @@ public struct LiteAccountView: View {
                     }
                 }
                 if let reserves = store?.account?.reserves {
-                    LabeledContent(tr("Reserves paid by DyorHQ"), value: reserves.sponsoredByDyorHQ.formatted(.number.locale(LiteL10n.locale)))
+                    LabeledContent(tr("Reserves paid by DyorHQ"), value: Self.reserveXLM(reserves.sponsoredByDyorHQ))
                 }
             }
             if session.keys?.canExportSecret == true {

@@ -12,25 +12,31 @@ struct LiteLaunchView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            // Laid out as Moments is: the switch and the card on the screen's 16 pt margins, the card fully rounded.
+            ScrollView {
                 Picker(tr("Sort"), selection: $sort) {
                     Text(tr("New")).tag("new")
                     Text(tr("Hot")).tag("hot")
                     Text(tr("Graduated")).tag("graduated")
                 }
                 .pickerStyle(.segmented)
-                .listRowBackground(Color.clear)
-                if store.launches.isEmpty {
-                    if store.failed.contains(.launches) {
-                        LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
-                    } else if store.loaded.contains(.launches) {
-                        ContentUnavailableView(tr("No launches yet"), systemImage: "flame", description: Text(tr("Be the first: tap + to launch a coin.")))
+                .padding(.horizontal, 16)
+                Group {
+                    if store.launches.isEmpty {
+                        if store.failed.contains(.launches) {
+                            LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
+                        } else if store.loaded.contains(.launches) {
+                            ContentUnavailableView(tr("No launches yet"), systemImage: "flame", description: Text(tr("Be the first: tap + to launch a coin.")))
+                        } else {
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
+                        }
+                    } else {
+                        launchList
                     }
                 }
-                ForEach(store.launches) { launch in
-                    NavigationLink(value: launch.token) { LaunchRow(launch: launch) }
-                }
+                .padding(16)
             }
+            .background(Color.liteCanvas)
             .navigationTitle(tr("Launch"))
             .navigationDestination(for: String.self) { LaunchDetailView(token: $0) }
             .toolbar {
@@ -42,6 +48,25 @@ struct LiteLaunchView: View {
             .refreshable { await store.refreshLaunches(sort: sort) }
             .sheet(isPresented: $creating) { CreateLaunchSheet() }
         }
+    }
+
+    private var launchList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(store.launches.enumerated()), id: \.element.id) { index, launch in
+                NavigationLink(value: launch.token) {
+                    HStack(spacing: 8) {
+                        LaunchRow(launch: launch)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if index < store.launches.count - 1 { Divider().padding(.leading, 56) }
+            }
+        }
+        .padding(.horizontal, 16)
+        .liteCardBackground()
     }
 }
 

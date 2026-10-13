@@ -28,7 +28,7 @@ struct LiteEarnView: View {
                                 AssetBadge(code: m.code)
                                 VStack(alignment: .leading) {
                                     Text(verbatim: m.code).font(.headline)
-                                    Text(verbatim: m.note ?? m.poolName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    Text(verbatim: Self.name(of: m, in: store)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 2) {
@@ -60,6 +60,20 @@ struct LiteEarnView: View {
             .task { if store.markets.isEmpty { await store.refreshEarn() } }
             .sheet(item: $selected) { EarnMarketSheet(market: $0) }
         }
+    }
+
+    /// A market's asset as rows name it (`LiteTitles.assetName`), by its registry id: Blend's testnet pool lends its own
+    /// test USDC (BUSDC), not the wallet's USDC.
+    static func name(of market: EarnMarket, in store: LiteStore) -> String {
+        let info = store.asset(market.asset)
+        return LiteTitles.assetName(id: info?.id ?? market.asset, name: info?.name ?? market.code)
+    }
+
+    /// Whether another asset DyorHQ lists has the market's code under another id (Blend's test USDC beside the wallet's
+    /// USDC on testnet): the market's sheet then says which one it is.
+    static func sharesCode(_ market: EarnMarket, in store: LiteStore) -> Bool {
+        let id = store.asset(market.asset)?.id ?? market.asset
+        return store.config?.assets.contains { $0.code == market.code && $0.id != id } ?? false
     }
 
     /// What the account has supplied, per asset, or "Nothing yet".
@@ -97,6 +111,12 @@ struct EarnMarketSheet: View {
                     LabeledContent(tr("Pool utilization"), value: percent(market.utilization))
                     LabeledContent(tr("In this pool"), value: "\(market.totalSupplied.formatted(.number.precision(.fractionLength(0)).locale(LiteL10n.locale))) \(market.code)")
                     if let position { LabeledContent(tr("Yours"), value: "\(Amount.format(position.supplied)) \(market.code)") }
+                } header: {
+                    Text(verbatim: LiteEarnView.name(of: market, in: store))
+                } footer: {
+                    if LiteEarnView.sharesCode(market, in: store) {
+                        LiteParagraph(tr("On testnet, Blend's pool uses its own test \(market.code), not the \(market.code) in your wallet. Mainnet has one \(market.code)."))
+                    }
                 }
                 Section {
                     Picker(String(), selection: $deposit) {

@@ -88,6 +88,77 @@
         }
       }
     },
+    "%lld editions" : {
+      "comment" : "A number of a Moment's editions, inside “Collect %@ for %@ %@”.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld edition"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld editions"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld edición"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld ediciones"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld édition"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld éditions"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션 %lld개"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 份"
+          }
+        }
+      }
+    },
     "%lld of %lld" : {
       "comment" : "Editions of a Moment collected out of the most there can be (“3 of 100”).",
       "localizations" : {
@@ -362,6 +433,64 @@
         }
       }
     },
+    "Add %@" : {
+      "comment" : "Activity: money added through a cash provider; %@ is the asset (USDC, XLM). A title, imperative like the others.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recargar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recharger %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 충전"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入金 %@"
+          }
+        }
+      }
+    },
+    "Add %@ %@" : {
+      "comment" : "Activity: money added through a cash provider; %@ %@ is the amount and its asset (“50 USDC”).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recargar %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recharger %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@ 충전"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入金 %@ %@"
+          }
+        }
+      }
+    },
     "Add an image" : {
       "comment" : "A button in the form for launching a coin: pick the coin's picture.",
       "localizations" : {
@@ -416,6 +545,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "入金"
+          }
+        }
+      }
+    },
+    "Allow Circle's bridge to move %@ USDC" : {
+      "comment" : "A transaction's title: the allowance the bridge to Monad needs first. Circle issues USDC; %@ is an amount.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir que el puente de Circle mueva %@ USDC"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Autoriser le bridge de Circle à transférer %@ USDC"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Circle 브리지가 %@ USDC를 옮기도록 허용"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "允许 Circle 跨链桥转移 %@ USDC"
           }
         }
       }
@@ -623,6 +781,35 @@
         }
       }
     },
+    "Blend test USDC" : {
+      "comment" : "An asset's name in rows: the test USDC Blend's testnet lending pool uses, not the USDC in the wallet. Blend is a lending protocol's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC de prueba de Blend"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC de test de Blend"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 테스트 USDC"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 测试 USDC"
+          }
+        }
+      }
+    },
     "Bridge" : {
       "comment" : "[tight] A noun: the Stellar Home action that moves USDC between Monad and Stellar, and its sheet's title.",
       "localizations" : {
@@ -681,6 +868,35 @@
         }
       }
     },
+    "Buy %@ with %@ %@" : {
+      "comment" : "A transaction's title: %1$@ is a launch's coin; %2$@ %3$@ is the amount paid and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comprar %@ con %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acheter %@ avec %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 매수 (%2$@ %3$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 %2$@ %3$@ 买入 %1$@"
+          }
+        }
+      }
+    },
     "Cancel" : {
       "comment" : "Closes a sheet without doing anything (a verb).",
       "localizations" : {
@@ -735,6 +951,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "出金"
+          }
+        }
+      }
+    },
+    "Cash out %@" : {
+      "comment" : "Activity: money taken out through a cash provider; %@ is the asset. A title, imperative.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaisser %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 현금화"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出金 %@"
+          }
+        }
+      }
+    },
+    "Cash out %@ %@" : {
+      "comment" : "Activity: money taken out through a cash provider; %@ %@ is the amount and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirar %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encaisser %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@ 현금화"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出金 %@ %@"
           }
         }
       }
@@ -884,6 +1158,35 @@
         }
       }
     },
+    "Claim your creator fees" : {
+      "comment" : "A transaction's title: a launch's creator takes the fees their coin earned.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclamar tus comisiones del creador"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réclamer vos frais du créateur"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터 수수료 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取你的创作者费用"
+          }
+        }
+      }
+    },
     "Close" : {
       "comment" : "Closes this screen or sheet (a verb).",
       "localizations" : {
@@ -967,6 +1270,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "收藏"
+          }
+        }
+      }
+    },
+    "Collect %@ for %@ %@" : {
+      "comment" : "A transaction's title: %1$@ is a number of editions (“3 editions”), %2$@ %3$@ the total price and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coleccionar %@ por %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collecter %@ pour %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 수집 (%2$@ %3$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以 %2$@ %3$@ 收藏 %1$@"
           }
         }
       }
@@ -1116,35 +1448,6 @@
         }
       }
     },
-    "Copies the address." : {
-      "comment" : "VoiceOver hint for the Stellar address row.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Copia la dirección."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Copie l'adresse."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "주소를 복사합니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "复制地址。"
-          }
-        }
-      }
-    },
     "Copy address" : {
       "comment" : "A button (a verb).",
       "localizations" : {
@@ -1199,6 +1502,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法设置你的 Stellar 账户。未花费任何资金。"
+          }
+        }
+      }
+    },
+    "Create your Stellar account" : {
+      "comment" : "A transaction's title: DyorHQ creates the account on Stellar and pays for it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crear tu cuenta de Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Créer votre compte Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 계정 만들기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建你的 Stellar 账户"
           }
         }
       }
@@ -1286,6 +1618,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "充值"
+          }
+        }
+      }
+    },
+    "Deposit %@ %@ to earn" : {
+      "comment" : "A transaction's title: lend an amount on Earn (Blend); %@ %@ is the amount and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depositar %@ %@ para generar rendimientos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Déposer %@ %@ pour obtenir un rendement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@ 예치"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存入 %@ %@ 赚取收益"
           }
         }
       }
@@ -1383,13 +1744,13 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ganar"
+            "value" : "Rendimientos"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Épargne"
+            "value" : "Rendement"
           }
         },
         "ko" : {
@@ -1547,6 +1908,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "份数：不限"
+          }
+        }
+      }
+    },
+    "Enable %@" : {
+      "comment" : "A transaction's title: turn on an asset in the account (a Stellar trustline); %@ is its code. DyorHQ pays the reserve.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 사용 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 %@"
           }
         }
       }
@@ -1986,6 +2376,64 @@
         }
       }
     },
+    "Launch %@" : {
+      "comment" : "A transaction's title: create a coin on the launchpad; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lanzar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lancer %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 런칭"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射 %@"
+          }
+        }
+      }
+    },
+    "Launch %@ and buy with %@ %@" : {
+      "comment" : "A transaction's title: create a coin and make its first buy; %1$@ is the ticker, %2$@ %3$@ the amount and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lanzar %@ y comprar con %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lancer %@ et acheter avec %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 런칭 후 매수 (%2$@ %3$@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射 %1$@ 并用 %2$@ %3$@ 买入"
+          }
+        }
+      }
+    },
     "Launch a coin" : {
       "comment" : "The launch form's title, its button's VoiceOver label and a transaction's title.",
       "localizations" : {
@@ -2160,31 +2608,31 @@
         }
       }
     },
-    "Memo (exchanges and anchors may require one)" : {
-      "comment" : "Withdraw: the memo field's placeholder. Anchors are the providers that turn crypto into money.",
+    "Memo (optional)" : {
+      "comment" : "Withdraw: the memo field's placeholder. A memo tells an exchange or provider whose payment it is.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Memo (los exchanges y anchors pueden exigirlo)"
+            "value" : "Memo (opcional)"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mémo (les plateformes d'échange et les anchors peuvent l'exiger)"
+            "value" : "Mémo (facultatif)"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "메모 (거래소와 앵커에서 요구할 수 있음)"
+            "value" : "메모 (선택)"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备注（交易所和锚点可能需要）"
+            "value" : "备注（可选）"
           }
         }
       }
@@ -2334,6 +2782,64 @@
         }
       }
     },
+    "Move %@ USDC from Monad" : {
+      "comment" : "Activity: USDC bridged from Monad to Stellar; %@ is an amount. Monad is a network's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover %@ USDC desde Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transférer %@ USDC depuis Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 %@ USDC 옮기기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Monad 转入 %@ USDC"
+          }
+        }
+      }
+    },
+    "Move USDC from Monad" : {
+      "comment" : "Activity: USDC bridged from Monad to Stellar, when the amount isn't known.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover USDC desde Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transférer des USDC depuis Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 USDC 옮기기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Monad 转入 USDC"
+          }
+        }
+      }
+    },
     "Move funds from Monad inside DyorHQ." : {
       "comment" : "An error: the bridge from Monad needs DyorHQ's Monad wallet.",
       "localizations" : {
@@ -2359,6 +2865,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 DyorHQ 内从 Monad 转入资金。"
+          }
+        }
+      }
+    },
+    "Move this launch to Soroswap" : {
+      "comment" : "A transaction's title: graduate a launch's coin to Soroswap (an exchange's name).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Llevar este lanzamiento a Soroswap"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transférer ce lancement sur Soroswap"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 런칭을 Soroswap으로 옮기기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将此发射迁移到 Soroswap"
           }
         }
       }
@@ -2852,6 +3387,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已上 Soroswap"
+          }
+        }
+      }
+    },
+    "On testnet, Blend's pool uses its own test %@, not the %@ in your wallet. Mainnet has one %@." : {
+      "comment" : "An Earn market's note, when two assets share a code: each %@ is that code (USDC). Blend is a lending protocol's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En testnet, el pool de Blend usa su propio %1$@ de prueba, no el %2$@ de tu billetera. En mainnet hay un solo %3$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur le testnet, le pool de Blend utilise son propre %1$@ de test, pas le %2$@ de votre portefeuille. Le mainnet n'a qu'un seul %3$@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트넷에서 Blend 풀은 지갑에 있는 %2$@가 아닌 자체 테스트 %1$@를 사용해요. 메인넷에는 %3$@가 하나뿐이에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在测试网上，Blend 的池子使用它自己的测试 %1$@，而不是你钱包里的 %2$@。主网上只有一种 %3$@。"
           }
         }
       }
@@ -3362,6 +3926,35 @@
         }
       }
     },
+    "Publish a Moment at %@ %@" : {
+      "comment" : "A transaction's title: %@ %@ is the price per edition and its asset. “Moment” is a feature's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publicar un Moment a %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publier un Moment à %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment 게시 (%@ %@)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以 %@ %@ 发布 Moment"
+          }
+        }
+      }
+    },
     "Publishes your Moment. Spends nothing." : {
       "comment" : "The review sheet: what a step does.",
       "localizations" : {
@@ -3826,6 +4419,35 @@
         }
       }
     },
+    "Sell %@ %@" : {
+      "comment" : "A transaction's title: %1$@ is an amount, %2$@ a launch's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vender %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vendre %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@ 매도"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "卖出 %@ %@"
+          }
+        }
+      }
+    },
     "Send" : {
       "comment" : "A transaction's title: send an asset to another address (a verb).",
       "localizations" : {
@@ -3855,6 +4477,35 @@
         }
       }
     },
+    "Send %@ %@" : {
+      "comment" : "A transaction's title: send an amount to another address; %@ %@ is the amount and its asset.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar %@ %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer %@ %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ %@ 보내기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送 %@ %@"
+          }
+        }
+      }
+    },
     "Send %@ %@ to the provider" : {
       "comment" : "Cash out: pay the provider (anchor). %@ %@ is the amount and its asset.",
       "localizations" : {
@@ -3880,6 +4531,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "向服务商发送 %@ %@"
+          }
+        }
+      }
+    },
+    "Send %@ USDC to Monad" : {
+      "comment" : "A transaction's title and Activity: USDC bridged from Stellar to Monad; %@ is an amount. Monad is a network's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar %@ USDC a Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer %@ USDC vers Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad로 %@ USDC 보내기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送 %@ USDC 到 Monad"
+          }
+        }
+      }
+    },
+    "Send USDC to Monad" : {
+      "comment" : "Activity: USDC bridged from Stellar to Monad, when the amount isn't known.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar USDC a Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer des USDC vers Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad로 USDC 보내기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送 USDC 到 Monad"
           }
         }
       }
@@ -4203,6 +4912,35 @@
         }
       }
     },
+    "Some exchanges and cash providers need a memo. Use the one they give you." : {
+      "comment" : "Withdraw: under the form. A memo tells an exchange or a cash provider whose payment it is.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos exchanges y proveedores de efectivo necesitan un memo. Usa el que te den."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certaines plateformes d'échange et certains prestataires demandent un mémo. Utilisez celui qu'ils vous donnent."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "일부 거래소와 현금 제공업체는 메모가 필요해요. 그쪽에서 알려 준 메모를 사용하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部分交易所和法币服务商需要填写备注。使用他们提供的备注。"
+          }
+        }
+      }
+    },
     "Sort" : {
       "comment" : "VoiceOver label of the launchpad's sort control.",
       "localizations" : {
@@ -4431,6 +5169,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "兑换"
+          }
+        }
+      }
+    },
+    "Swap %@ %@ for %@" : {
+      "comment" : "A transaction's title: %1$@ %2$@ is the amount sold and its asset, %3$@ the asset bought.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambiar %@ %@ por %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échanger %@ %@ contre %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ → %3$@ 스왑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将 %1$@ %2$@ 兑换为 %3$@"
           }
         }
       }
@@ -5359,6 +6126,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "提取"
+          }
+        }
+      }
+    },
+    "Withdraw %@ %@ from Earn" : {
+      "comment" : "A transaction's title: take an amount back from Earn (Blend lending); %@ %@ is the amount and its asset. “Earn” is the tab's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirar %@ %@ de Rendimientos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirer %@ %@ du placement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치금 %@ %@ 출금"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从理财中提取 %@ %@"
           }
         }
       }

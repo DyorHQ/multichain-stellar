@@ -86,14 +86,36 @@ The live Swift journey (`LiteJourneyTests`) does six things:
 5. Runs the swap at the confirmed limit.
 6. Completes SEP-10 and SEP-24 with testanchor.
 
+## The network switch in the app (2026-10-13)
+
+IOS-app branch `lite/network-switch` (build 24 on build 23, see INTEGRATION-ios.md) ran in the internal project on an
+iPhone 17 simulator (iOS 26, Xcode 26.6), against the local stack on Stellar testnet:
+
+- **First switch, new wallet:**
+  - the account starts on Monad;
+  - chip → Stellar → Next → Confirm → Switch to Stellar runs the Setup checklist: one Face ID prompt to unlock, the
+    invite, sign-in, and account setup;
+  - it lands on Stellar Home with 10,000 test XLM and USDC enabled.
+- **Background drop:** sending the app to the background in the middle of Setup dropped the signer. The checklist then
+  said "Unlock again to continue", and Join asked for Face ID again.
+- **Switching back:** Stellar → Monad is instant, with no prompt. A cold launch on Stellar doesn't prompt either.
+- **A swap on testnet:** 10 XLM → USDC through Aquarius, with one Face ID prompt. Activity said "Swap 10 XLM for
+  USDC · Done", and the balances followed within one refresh.
+- **Sign-out** removed the account's network, Stellar activation and keys, and the next account started on Monad.
+- **Screens:**
+  - English and Spanish, light and dark;
+  - the screens checked were Earn, Launch, Moments, Deposit, Withdraw, Add cash, Profile's Network section and the
+    Stellar account page.
+- **App Store target unchanged:**
+  - every changed app file, with its `STELLAR_LITE` branches removed, is byte-identical to `d387a64`;
+  - every `Lite/` file compiles to nothing without the flag.
+
 ## Not yet verified
 
-- **DyorLite and LiteHarness against a live API.** Both build in Xcode and DyorLite's unit tests pass, but no
-  screen has been run against a deployed `lite` API yet.
-- **Main-app integration at runtime** (`ios/Integration/`). On 2026-10-13 the drop-in files and hooks were applied to a
-  throwaway copy of the app (`origin/main` 5bcd812). The app built with `STELLAR_LITE` after three compile fixes, now
-  in this repo, and still built without it in Debug and Release. Not yet built: the separate internal target that keeps
-  Lite out of the App Store binary (INTEGRATION-ios.md §1). Not yet run: any of it on a device or simulator.
+- **The app against the hosted API.** Everything above ran against the local stack (INTEGRATION-ios.md §7). The
+  Supabase deployment is staged, not applied.
+- **On a device**, and in TestFlight. The internal project has no Xcode Cloud workflow yet.
+- **A passkey (Mera) or email account through the switch.** The run used imported phrase wallets.
 - **The Supabase-hosted runtime.** Everything ran on Deno 2.9 with Postgres 16 locally. Storage uploads, `pg_cron` and
   `pg_net` run only in the real project.
 - **Mainnet anything.** The values are described and typed but not enabled. The Aquarius mainnet router id must be

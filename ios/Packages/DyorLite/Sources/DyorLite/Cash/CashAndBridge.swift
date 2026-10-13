@@ -37,14 +37,17 @@ struct CashSheet: View {
                     ForEach(anchors) { a in
                         Button { Task { await start(a) } } label: {
                             HStack {
-                                VStack(alignment: .leading) {
-                                    Text(verbatim: a.name).font(.headline)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(verbatim: a.name).font(.headline).foregroundStyle(.primary)
                                     Text(verbatim: a.domain).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                             }
+                            .contentShape(Rectangle())
                         }
+                        // A row that opens the provider, not a tinted button.
+                        .buttonStyle(.plain)
                         .disabled(busy)
                     }
                     if anchors.isEmpty {

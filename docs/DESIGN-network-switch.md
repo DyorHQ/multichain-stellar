@@ -3,8 +3,8 @@
 Design spec for the DyorHQ iPhone app · 2026-10-13 · for SwiftUI implementation
 
 - **Base:** build 23, branch `release/23`, commit `d387a64`. App code is cited as `file:line` at d387a64.
-- **Stellar side:** `DyorHQ/multichain-stellar` @ 6733959 (iOS unchanged since 4792050): the `DyorLite` package and the
-  integration drop-ins (`ios/Integration/*.swift`, already copied to `ios/DyorHQ/Lite/` on branch `lite/network-switch`).
+- **Stellar side:** `DyorHQ/multichain-stellar`: the `DyorLite` package, reworked for this design at 28b273d. The app
+  side is IOS-app branch `lite/network-switch`. How it is wired and checked: `docs/INTEGRATION-ios.md`.
 - **Owner direction (2026-10-13):** no "Pro", "Lite" or "mode" anywhere the user can see. The app shows its network,
   Monad. The user taps it, picks Stellar, and the screens change with the network. Header and side menu stay the same.
 - **Reference:** the Miracle recording (scratchpad `miracle-video/`), venue switch only. Its mode card is not used.
@@ -33,8 +33,11 @@ Design spec for the DyorHQ iPhone app · 2026-10-13 · for SwiftUI implementatio
    `#if STELLAR_LITE`. So instead of §8.1's two unflagged refactors:
    - `SheetHeader` is a new view in `ios/DyorHQ/Lite/` with the same metrics as Perps' `sheetHeader`; Perps is untouched.
    - Stellar Home uses `HomeHeader` as it is: the host passes a `Binding` whose setter calls the Stellar search.
-   The only shared, unflagged changes are the two already on the branch: `RemoteFlags.stellarLite` in DyorKit (default
-   off) and `AppEnvironment.stellarLiteEnabled`.
+   There are no shared, unflagged changes:
+   - the remote flag is read by the Lite-only `StellarRemoteFlag.swift`, so DyorKit's `RemoteFlags` and
+     `AppEnvironment` stay build 23's;
+   - Lite's strings are in the internal-only `Internal/Resources/Lite.xcstrings`, so the shared catalog stays build
+     23's too.
 2. **Owner questions (§9), decided on the designer's recommendations; the owner can still change them:** Confirm only on
    the first switch to Stellar (1); one unlock per setup run (2), with the signer also dropped when the app goes to the
    background; the chip shows for accounts that can't use Stellar, with the reason (3); Profile's Wallet section

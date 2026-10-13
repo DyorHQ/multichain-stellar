@@ -4,7 +4,7 @@ Each entry is short: the decision, why, and what would change it.
 
 1. **Lite is a mode of the same app, not a second app** (owner, 2026-10-11). One account, one secret, a pill that
    swaps Pro (Monad) for Lite (Stellar). Lite = save, earn, swap, launch, collect, cash in/out. Pro keeps perps,
-   memecoins and Moments coins.
+   memecoins and Moments coins. (One app and one account stand; the pill and the mode are superseded by #18.)
 2. **Perps become Earn (Blend v2).** Stellar has no perps venue with Perpl's depth. Lending gives Lite a yield
    product with no leverage or liquidation for the user.
 3. **Moments on Stellar are in-app SEP-50 editions without coins.** OpenSea does not support Stellar, and no
@@ -37,7 +37,7 @@ Each entry is short: the decision, why, and what would change it.
     reserves (both are implemented). Trustlines are always sponsored.
 14. **Bridge.** Testnet uses CCTP v2: Monad testnet (15) ↔ Stellar testnet (27), verified registered both ways.
     Mainnet uses NEAR Intents 1Click. For Stellar → Monad, the burn needs an `approve` first, and Iris indexes the
-    fee-bump hash. Claims run through the Pro wallet.
+    fee-bump hash. Claims run through the account's Monad wallet.
 15. **A separate Supabase project with RLS deny-all** (the separate project is superseded by #17; RLS deny-all
     stands). The client talks only to the `lite` function, so PostgREST exposes nothing.
 16. **Invite-only.**
@@ -50,3 +50,15 @@ Each entry is short: the decision, why, and what would change it.
     and their npm dependencies also receive the project's `SUPABASE_DB_URL` (which can read Vault), service-role key
     and the app's function secrets, and the testnet sponsor key sits next to the app's secrets. What would change it:
     mainnet, where the sponsor holds real XLM, reopens this decision.
+18. **The app shows its network, not a mode** (owner, 2026-10-13; supersedes #1's pill). No "Pro", "Lite" or "mode"
+    anywhere the user can see. Home's balance card starts with a network chip ("◉ Monad ⌄"). It opens a sheet that
+    switches to Stellar, and the screens change with the network. The pattern is Miracle's venue switch: same header and
+    side menu, the other network's Home and tabs. The first switch explains itself and runs a setup checklist. Switching
+    back to Monad is instant. "Pro" and "Lite" survive only as code names (DyorLite, LiteStore). Spec:
+    `docs/DESIGN-network-switch.md`.
+19. **The App Store build stays build 23; Stellar ships only in a generated internal project** (owner, 2026-10-13: build
+    27 retired, build 23 is the base, the next build is 24). Every change to an existing app file sits inside
+    `#if STELLAR_LITE`, new code lives in `ios/DyorHQ/Lite/`, and `ios/Internal/generate.py` makes `DyorHQInternal.xcodeproj`,
+    the only project that references the packages. Why: a compile flag can't unlink a package, and Xcode Cloud and
+    public clones of IOS-app don't have this repository. What would change it: shipping Stellar to the App Store, which
+    needs the packages in the main project and this repository reachable from Xcode Cloud.

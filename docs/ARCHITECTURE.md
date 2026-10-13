@@ -42,22 +42,23 @@ checked against live endpoints or primary docs on 2026-10-11.
 ## 2. Product shape
 
 ```
-┌─────────────── DyorHQ (one app, one account) ───────────────┐
-│  [ Pro · Monad ]  ⇄  [ Lite · Stellar ]   (mode pill on Home) │
-│                                                               │
-│  Pro (unchanged)            Lite (new)                        │
-│  Home · Launch · Trade ·    Home · Earn · Launch · Moments     │
-│  Moments                    (Swap, Send, Receive, Add cash,    │
-│  perps, memecoins,          Cash out and Move from Monad are   │
-│  Moments coins              actions on Home)                   │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────── DyorHQ (one app, one account) ────────────────┐
+│  Home's balance card:  [ ◉ Monad ⌄ ]  ⇄  [ ◉ Stellar ⌄ ]        │
+│                                                                 │
+│  Monad (unchanged)            Stellar (new, testnet)            │
+│  Home · Launch · Trade ·      Home · Earn · Launch · Moments    │
+│  Moments                      (Bridge, Deposit, Withdraw, Swap  │
+│  perps, memecoins,            and Add cash are actions on Home) │
+│  Moments coins                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-The toggle exists only when all three gates are open: the build has the `STELLAR_LITE` compile flag (internal
-TestFlight group only), the server flag `lite.enabled` is on, and the signed-in Stellar address is an active row in
-`lite.testers` (bound with a single-use invite code). External testers' builds do not contain the Lite code at all:
-only a separate internal target links the Lite packages, because a compile flag can't unlink a package
-(INTEGRATION-ios.md §0).
+The app shows its network, not a mode (DECISIONS #18). The network chip exists only in the internal build (the
+`STELLAR_LITE` compile flag, internal TestFlight group only) with the app's `stellarLite` remote flag on. Switching
+then needs the Lite API's own flag (`lite.enabled`) and an active row for the account's Stellar address in
+`lite.testers`, joined with a single-use invite during Setup. App Store and external testers' builds don't contain the
+Stellar code at all: only the generated internal project links the packages, because a compile flag can't unlink a
+package (INTEGRATION-ios.md §0).
 
 ## 3. System architecture
 
@@ -303,7 +304,7 @@ active tester. Rate limits per address and per IP.
 | POST | `/moments/metadata` | `{title, description, mediaUrl, mediaType}` → metadata JSON written by the API → URI |
 | POST | `/moments/build` | `{action: publish|collect, …}` → plan |
 | POST | `/bridge/quote` | `{direction, amount}` → route (CCTP testnet / 1Click mainnet), fee, time |
-| POST | `/bridge/start` | Monad → Stellar: EVM steps for the Pro wallet to sign. Stellar → Monad: a plan (approve, then `deposit_for_burn`) |
+| POST | `/bridge/start` | Monad → Stellar: EVM steps for the account's Monad wallet to sign. Stellar → Monad: a plan (approve, then `deposit_for_burn`) |
 | POST | `/bridge/{id}/source` | `{txHash}`: the burn's hash (Iris indexes Stellar burns by the fee-bump hash) |
 | POST | `/bridge/{id}/claimed` | `{txHash}`: the Monad claim was sent |
 | GET | `/bridge/{id}` | Status. Monad → Stellar: the API relays `mint_and_forward`. Stellar → Monad: a `receiveMessage` claim step |
@@ -314,8 +315,9 @@ active tester. Rate limits per address and per IP.
 
 ## 6. iOS
 
-Three Swift packages and one harness app inside this repo. After Oct 13 the main app adds a separate internal target
-that links the two packages, a remote flag and one switch (`docs/INTEGRATION-ios.md`).
+Three Swift packages and one harness app inside this repo. The DyorHQ app links the two packages only in a generated
+internal project, where Stellar is a network next to Monad, picked from a chip on Home (`docs/INTEGRATION-ios.md`,
+`docs/DESIGN-network-switch.md`). The App Store project stays build 23.
 
 **`StellarKit`** is a Swift package with no UI and three targets. It doesn't use the Soneso SDK (see DECISIONS #8).
 
@@ -339,37 +341,45 @@ that links the two packages, a remote flag and one switch (`docs/INTEGRATION-ios
 - the email or imported account, through a stored seed behind Face ID;
 - watch-only.
 
-It also takes an optional `LiteMonadBridge`, the Pro wallet that signs the Monad side.
+It also takes an optional `LiteMonadBridge`, the account's Monad wallet, which signs the Monad side. The host app draws
+part of the Stellar screens through `LiteChrome`: its Home header, the network chip and the locked card's unlock.
+`LiteStyle` passes its colours, so DyorHQ's Brand purple is the only accent.
 
 **`LiteHarness`** (XcodeGen app) runs Lite alone for internal testing with its own test phrase.
 
-**`ios/Integration/`** holds the drop-in files that put the Pro ⇄ Lite pill into the DyorHQ app after Oct 13.
+**`ios/Integration/`** holds the app side as a patch of IOS-app's `lite/network-switch` branch, for re-applying it to
+another base (see its README).
 
 ### 6.1 UI structure
 
 ```
-LiteRootView (TabView, Lite theme: light, rounded, large numbers)
-├── Home
-│   ├── ModePill (Pro · Monad ⇄ Lite · Stellar)
-│   ├── BalanceCard (total in USD, XLM + USDC)
-│   ├── ActionRow: Add cash · Send · Receive · Swap · Move from Monad
-│   ├── AssetList (XLM, USDC, launch tokens, Earn positions)
-│   └── ActivityList → ActivityDetail
-├── Earn
-│   ├── EarnSummary (supplied, earned, blended APY)
-│   ├── MarketList (Blend reserves: APY, utilization)
-│   └── MarketDetail → Deposit / Withdraw sheets → ConfirmSheet
-├── Launch
-│   ├── LaunchList (New · Hot · Graduated)
-│   ├── LaunchDetail (price chart, curve progress, trades, Buy / Sell)
-│   └── CreateLaunch (name, ticker, image, quote, initial buy) → ConfirmSheet
-├── Moments
-│   ├── MomentsFeed (grid)
-│   ├── MomentDetail (media, editions left, time left, Collect)
-│   ├── PublishMoment (photo/video, title, price, editions, window)
-│   └── MyCollection
-└── Sheets: SwapSheet · SendSheet · ReceiveSheet (QR) · CashSheet (SEP-24 web flow) · BridgeSheet ·
-    ConfirmSheet (intent summary, fee "Paid by DyorHQ", Face ID) · LiteSettings (network, tester, export key)
+NetworkRoot (app): the account's network, remembered per account; a new account starts on Monad
+├── Monad: build 23's MainTabView (Home · Launch · Trade · Moments); Home's balance card starts with the chip
+└── Stellar: LiteRootView (Home · Earn · Launch · Moments), in DyorHQ's tokens (LiteStyle.dyorHQ)
+    ├── Home
+    │   ├── The app's HomeHeader (menu · search · bell · avatar); search finds assets and launches
+    │   ├── BalanceCard: network chip "◉ Stellar [Testnet] ⌄", total in USD at reference prices
+    │   ├── Actions: Bridge · Deposit · Withdraw · Swap · Add cash
+    │   ├── My Holdings (XLM, USDC, launch tokens, Earn positions)
+    │   └── Activity
+    ├── Earn
+    │   ├── Earning summary
+    │   ├── Markets (Blend reserves: supply APY, Testnet badge)
+    │   └── Market sheet: Deposit / Withdraw → ConfirmSheet
+    ├── Launch
+    │   ├── New · Hot · Graduated
+    │   ├── LaunchDetail (price, curve progress, trades, Buy / Sell)
+    │   └── CreateLaunch (name, ticker, image, quote, initial buy) → ConfirmSheet
+    ├── Moments
+    │   ├── Discover (grid) · My collection
+    │   ├── MomentDetail (media, editions left, time left, Collect)
+    │   └── PublishMoment (photo/video, title, price, editions, window)
+    └── Sheets: SwapSheet · SendSheet (Withdraw) · ReceiveSheet (Deposit, QR) · CashSheet (SEP-24) · BridgeSheet ·
+        ConfirmSheet (steps in words built on the phone, "Network fee: Paid by DyorHQ", one confirmation)
+
+Network sheet (app): Select → Confirm (first switch to Stellar only) → Setup checklist (unlock, invite, sign in,
+account setup); Monad is one tap back, with no prompt
+Profile (app): Network section (the chip, the chain, Stellar account → LiteAccountView); Wallet follows the network
 ```
 
 ## 7. Environments
