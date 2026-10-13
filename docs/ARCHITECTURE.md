@@ -55,7 +55,9 @@ checked against live endpoints or primary docs on 2026-10-11.
 
 The toggle exists only when all three gates are open: the build has the `STELLAR_LITE` compile flag (internal
 TestFlight group only), the server flag `lite.enabled` is on, and the signed-in Stellar address is an active row in
-`lite.testers` (bound with a single-use invite code). External testers' builds do not contain the Lite code at all.
+`lite.testers` (bound with a single-use invite code). External testers' builds do not contain the Lite code at all:
+only a separate internal target links the Lite packages, because a compile flag can't unlink a package
+(INTEGRATION-ios.md §0).
 
 ## 3. System architecture
 
@@ -312,8 +314,8 @@ active tester. Rate limits per address and per IP.
 
 ## 6. iOS
 
-Three Swift packages and one harness app inside this repo; the main app adds two package dependencies and one
-switch after Oct 13 (`docs/INTEGRATION-ios.md`).
+Three Swift packages and one harness app inside this repo. After Oct 13 the main app adds a separate internal target
+that links the two packages, a remote flag and one switch (`docs/INTEGRATION-ios.md`).
 
 **`StellarKit`** is a Swift package with no UI and three targets. It doesn't use the Soneso SDK (see DECISIONS #8).
 

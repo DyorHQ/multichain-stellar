@@ -31,7 +31,9 @@ struct ProLiteRoot: View {
             }
         }
         .animation(.snappy, value: mode)
-        .task(id: session.address) {
+        // Re-run when the remote flag arrives (after the first appearance, from UpdateGate's read) or goes off.
+        .task(id: "\(session.address?.description ?? "")|\(liteAvailable)") {
+            keys = nil
             mode = liteAvailable ? AppMode.current(for: session.address) : .pro
             if mode == .lite { keys = await DyorHQLiteKeys.provider(session: session) }
             if keys == nil { mode = .pro }

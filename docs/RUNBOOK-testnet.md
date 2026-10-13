@@ -1,7 +1,7 @@
 # Runbook: Lite on Stellar testnet
 
-Everything below runs against `dyorhq-stellar-testnet`, a separate Supabase project. Never point any of it at
-production (`fmnjqrguvopusfufmirs`).
+Lite's backend lives in the DyorHQ Supabase project (`fmnjqrguvopusfufmirs`), next to the Pro app (DECISIONS #17).
+Lite writes only its own schema (`lite`), role (`lite_api`), functions, cron job, Vault entries and bucket.
 
 ## 1. Accounts and keys
 
@@ -46,29 +46,55 @@ The deploy script does six things:
 `gen-pinned.ts` then regenerates the contract allowlist the app pins. Commit both files: an app build refuses any
 contract that isn't pinned.
 
-## 3. Supabase project
+## 3. Supabase (the DyorHQ project, schema `lite`)
 
-1. Create the project `dyorhq-stellar-testnet`. It costs money, so the owner creates it.
-2. Apply the migrations: `supabase link --project-ref <ref> && supabase db push`. This creates the schema, the cron
-   job and the `lite-media` bucket.
-3. Set the function secrets from the file §1 wrote, so no value goes through the shell history:
+Every step writes to the DyorHQ project, so the owner approves the run first, and an agent session also needs the
+owner to open its 30-minute production-write window. Keep this order: the cron job comes last, because it calls the
+indexer every minute and fails until the function and the Vault entries exist. Status on 2026-10-13: every file below
+is ready, and none of these steps has run yet.
+
+1. **Schema, role, bucket.** Apply migrations 1, 4 and 3 (`lite_schema`, `lite_api_role`, `lite_storage`) the way the
+   DyorHQ project's other migrations are applied (the Supabase MCP's `apply_migration`, or the SQL editor). Don't run
+   `supabase db push` from `backend/`: the project's migration history belongs to the app.
+2. **The `lite_api` credential.** It adds `LITE_DB_URL` to `.secrets/testnet-functions.env` and writes the password as
+   a SCRAM verifier, because `log_statement = ddl` would log a plain `ALTER ROLE … PASSWORD`. Link a scratch
+   directory, so nothing in this repo is linked to the project:
    ```bash
-   supabase secrets set --project-ref <ref> --env-file .secrets/testnet-functions.env
+   deno run -A --config backend/supabase/functions/deno.json backend/scripts/new-testnet-secrets.ts --db-role fmnjqrguvopusfufmirs aws-1-eu-west-1.pooler.supabase.com
+   supabase link --project-ref fmnjqrguvopusfufmirs --workdir "$SCRATCH"
+   supabase db query --linked --workdir "$SCRATCH" --file .secrets/lite-api-role.sql && rm .secrets/lite-api-role.sql
+   ```
+3. **Function secrets** (six: `LITE_NETWORK`, `LITE_MIN_BUILD`, `SPONSOR_SECRET`, `LITE_JWT_SECRET`,
+   `LITE_CRON_SECRET`, `LITE_DB_URL`), from the file, so no value goes through the shell history:
+   ```bash
+   supabase secrets set --project-ref fmnjqrguvopusfufmirs --env-file .secrets/testnet-functions.env
    # optional: add SOROSWAP_API_KEY=sk_… to that file first (without it, Soroswap is quoted through its router)
    ```
-4. Create the cron Vault entries. The value of `lite_cron_secret` must equal `LITE_CRON_SECRET`:
-   ```sql
-   select vault.create_secret('https://<ref>.supabase.co/functions/v1/lite-indexer', 'lite_indexer_url');
-   select vault.create_secret('<same as LITE_CRON_SECRET>', 'lite_cron_secret');
+4. **Functions.** `verify_jwt = false` comes from `backend/supabase/config.toml`. Never run `supabase config push`
+   from `backend/`: it would overwrite the DyorHQ project's API and storage settings with Lite's file.
+   ```bash
+   supabase functions deploy lite lite-indexer --project-ref fmnjqrguvopusfufmirs --workdir backend --use-api
    ```
-5. Deploy: `supabase functions deploy lite lite-indexer` (`verify_jwt = false` comes from `config.toml`).
-6. Check: `curl https://<ref>.supabase.co/functions/v1/lite/v1/config` should return the network, the pinned
-   contracts and the sponsor.
+5. **Vault entries** for the cron job (`lite_indexer_url`, and `lite_cron_secret` equal to `LITE_CRON_SECRET`):
+   ```bash
+   deno run -A --config backend/supabase/functions/deno.json backend/scripts/new-testnet-secrets.ts --vault-sql fmnjqrguvopusfufmirs
+   supabase db query --linked --workdir "$SCRATCH" --file .secrets/testnet-vault.sql && rm .secrets/testnet-vault.sql
+   ```
+6. **The cron job:** migration 2 (`lite_cron`).
+7. **Check.**
+   - `curl https://fmnjqrguvopusfufmirs.supabase.co/functions/v1/lite/v1/config` returns the network, the pinned
+     contracts and the sponsor.
+   - `select status, return_message from cron.job_run_details where jobid = (select jobid from cron.job where
+     jobname = 'lite-indexer') order by start_time desc limit 5;` shows succeeded runs.
+   - The `lite-indexer` logs report each run.
+
+Then move `.secrets/testnet-functions.env` to the password manager and delete it.
 
 ## 4. Testers
 
 ```bash
-LITE_DB_URL=<testnet project DB URL> deno run -A --config backend/supabase/functions/deno.json backend/scripts/invite-tester.ts "Ama iPhone" 1 14
+deno run -A --env-file=.secrets/testnet-functions.env --config backend/supabase/functions/deno.json \
+  backend/scripts/invite-tester.ts "Ama iPhone" 1 14
 ```
 
 This prints a single-use code that expires in 14 days. The tester enters it once; it binds to their Stellar
@@ -81,8 +107,9 @@ address.
 
 - **LiteHarness:** set `LITE_API_URL` in `ios/Config/Lite.local.xcconfig`, then archive. Upload to the **internal**
   group only (no Beta App Review, App Store Connect users only).
-- **The DyorHQ app** (after Oct 13): build the Internal configuration with `STELLAR_LITE`
-  (see INTEGRATION-ios.md). External groups get builds without the flag, so the Lite code isn't in their binary at all.
+- **The DyorHQ app** (after Oct 13): archive the `DyorHQ Internal` target, which links Lite and sets `STELLAR_LITE`
+  (INTEGRATION-ios.md §1). External groups and the App Store get the `DyorHQ` target, which doesn't link the Lite
+  packages, so the Lite code isn't in their binary at all. The flag alone wouldn't keep it out.
 
 ## 6. Testnet reset (next: 2026-12-16)
 

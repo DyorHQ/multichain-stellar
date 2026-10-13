@@ -43,7 +43,9 @@ enum DyorHQLiteKeys {
         default:
             throw Failure.unsupported
         }
-        return make(session: session, method: account.method, evm: account.address, stellar: storedAddress(account.address)!)
+        guard let stellar = storedAddress(account.address),
+              let provider = make(session: session, method: account.method, evm: account.address, stellar: stellar) else { throw Failure.unsupported }
+        return provider
     }
 
     @MainActor
@@ -65,8 +67,9 @@ enum DyorHQLiteKeys {
     }
 }
 
-/// Hooks for the two sign-in paths that hold their secret only briefly. One line each (docs/INTEGRATION-ios.md):
-/// `Session.commitPasswordWallet` and the import flow call these while they still have the secret.
+/// Hooks for the two sign-in paths that hold their secret only briefly (docs/INTEGRATION-ios.md §4): the email v2 log-in
+/// and bind (`Session.logInWithPassword` / `bindEmailPassword`, where seed and pepper are in hand) and the import flow
+/// (`ImportWalletView.runImport`, which still has the phrase or key) call these while they still have the secret.
 enum LiteKeyBootstrap {
     static func didDeriveEmailWallet(seed: Data, pepper: Data, evm: Address) {
         guard let signer = try? StellarDerivation.emailV2(seed: [UInt8](seed), pepper: [UInt8](pepper)) else { return }
@@ -79,13 +82,25 @@ enum LiteKeyBootstrap {
     }
 
     static func didImport(phrase: String, evm: Address) {
-        guard let signer = try? StellarDerivation.sep5(mnemonic: phrase) else { return }
+        // The words exactly as DyorKit's WalletImport reads them (lowercased, any whitespace), so the Stellar key comes
+        // from the same BIP-39 seed as the imported Monad key.
+        let words = phrase.lowercased().split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" })
+        guard let signer = try? StellarDerivation.sep5(mnemonic: words.joined(separator: " ")) else { return }
         save(signer, evm: evm)
+    }
+
+    /// Sign-out and erase: the Stellar seed and Lite session stored for `evm`, and the remembered address and mode.
+    /// Call before UserDefaults is wiped (it holds the Stellar address the Keychain items are filed under).
+    static func forget(evm: Address) {
+        if let stellar = UserDefaults.standard.string(forKey: "lite.stellar.\(evm)") { StellarKeychain.erase(account: stellar) }
+        UserDefaults.standard.removeObject(forKey: "lite.stellar.\(evm)")
+        UserDefaults.standard.removeObject(forKey: "lite.mode.\(evm)")
     }
 
     private static func save(_ signer: StellarSigner, evm: Address) {
         guard let seed = try? StrKey.decode(.seed, signer.secret) else { return }
-        try? StellarKeychain.saveSeed(seed, account: signer.address, network: "testnet")
+        // Remember the address only once the seed is in the Keychain: an address without its seed can't sign.
+        guard (try? StellarKeychain.saveSeed(seed, account: signer.address, network: "testnet")) != nil else { return }
         UserDefaults.standard.set(signer.address, forKey: "lite.stellar.\(evm)")
     }
 }

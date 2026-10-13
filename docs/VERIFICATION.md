@@ -85,8 +85,10 @@ The live Swift journey (`LiteJourneyTests`) does six things:
 
 - **DyorLite and LiteHarness against a live API.** Both build in Xcode and DyorLite's unit tests pass, but no
   screen has been run against a deployed `lite` API yet.
-- **Main-app integration** (`ios/Integration/`). It is written against DyorKit's actual APIs (`MeraSession.revealPhrase`,
-  `TransactionSender`, `TransactionStep.call`), but it compiles only inside the DyorHQ target, after Oct 13.
+- **Main-app integration at runtime** (`ios/Integration/`). On 2026-10-13 the drop-in files and hooks were applied to a
+  throwaway copy of the app (`origin/main` 5bcd812). The app built with `STELLAR_LITE` after three compile fixes, now
+  in this repo, and still built without it in Debug and Release. Not yet built: the separate internal target that keeps
+  Lite out of the App Store binary (INTEGRATION-ios.md §1). Not yet run: any of it on a device or simulator.
 - **The Supabase-hosted runtime.** Everything ran on Deno 2.9 with Postgres 16 locally. Storage uploads, `pg_cron` and
   `pg_net` run only in the real project.
 - **Mainnet anything.** The values are described and typed but not enabled. The Aquarius mainnet router id must be
