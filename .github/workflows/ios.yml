@@ -1,9 +1,9 @@
 name: ios
 on:
   push:
-    paths: ["ios/**", ".github/workflows/ios.yml"]
+    paths: ["ios/**", "app/ios/**", ".github/workflows/ios.yml"]
   pull_request:
-    paths: ["ios/**"]
+    paths: ["ios/**", "app/ios/**"]
 # An explicit `shell: bash` runs with -o pipefail (the default shell does not), so `xcodebuild … | tail` fails when
 # xcodebuild fails instead of reporting tail's success.
 defaults:
@@ -51,4 +51,45 @@ jobs:
           xcodegen generate
           xcodebuild -project LiteHarness.xcodeproj -scheme LiteHarness -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO build > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { grep -E ": error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u; tail -30 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
+          tail -3 "$RUNNER_TEMP/xcodebuild.log"
+
+  app-internal:
+    # The app copy (app/ios): its App Store build is still the public app's (check-build23.py against the upstream
+    # snapshot, the latest "Squashed 'app/' …" commit), and the internal project (the app with the Stellar section)
+    # generates and builds for the simulator. Locally, scripts/agent/verify-app.sh runs the whole gate.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The guards find the snapshot in the history.
+          fetch-depth: 0
+      - name: Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app || sudo xcode-select -s /Applications/Xcode_26.5.app
+          xcodebuild -version
+      - name: The App Store build is the snapshot's (check-build23.py, check-copies.py)
+        working-directory: app/ios
+        run: |
+          python3 -I Internal/check-build23.py
+          python3 -I Internal/check-copies.py
+      - name: Generate the internal project (a CI spec with Secrets.example.xcconfig)
+        working-directory: app/ios
+        run: |
+          brew install xcodegen
+          cat >project.ci.yml <<'YAML'
+          include:
+            - path: project.yml
+              relativePaths: true
+          configFiles:
+            Debug: DyorHQ/Config/Secrets.example.xcconfig
+            Release: DyorHQ/Config/Secrets.example.xcconfig
+          YAML
+          python3 -I Internal/generate.py --spec project.ci.yml
+      - name: The internal project builds for the simulator
+        working-directory: app/ios
+        run: |
+          xcodebuild -project DyorHQInternal.xcodeproj -scheme DyorHQ -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build \
+            > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || { grep -E ": error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u; tail -30 "$RUNNER_TEMP/xcodebuild.log"; exit 1; }
           tail -3 "$RUNNER_TEMP/xcodebuild.log"
