@@ -1,27 +1,40 @@
 #!/usr/bin/env bash
-# fetch-fixtures.sh <rpc-url> [name=]<contract-id>...
+# STELLAR_RPC_URL=<rpc-url> fetch-fixtures.sh [name=]<contract-id>...
+# fetch-fixtures.sh [name=]<contract-id>... < <file holding the RPC URL on its first line>
 #
 # Downloads the WASM behind each contract into contracts/testdata/<name>.wasm and records it in
 # contracts/testdata/fixtures.json (DESIGN-stellar-contracts-v2 §18.3): {file, contract_id, wasm_hash, sha256,
-# network, fetched_at, ledger, notes}. The file is created when missing; other entries and keys are kept, and so are
-# an entry's notes while its contract id stays the same.
+# network, fetched_at, ledger, notes}. The file is created when missing, and other entries are kept. A re-fetch of
+# a contract id already recorded under that file merges the new fields over the old entry, so the keys added by hand
+# (notes, role, the venue records) survive; a new contract id replaces the entry and starts with empty notes.
 #
 # Read-only and keyless: two getLedgerEntries calls through the given RPC, one for the contracts' instances and one
 # for the code entries their WASM hashes name. Nothing is signed or submitted.
 #
-#   contracts/tools/fetch-fixtures.sh https://soroban-testnet.stellar.org \
+#   STELLAR_RPC_URL=https://soroban-testnet.stellar.org contracts/tools/fetch-fixtures.sh \
 #     aquarius_router=CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD
 #
 # <name> is [A-Za-z0-9_]{1,64} and defaults to the contract id. FIXTURES_DIR overrides the output directory.
-# The RPC URL is never printed or recorded, so a keyed provider URL can't reach a log or a committed file. It must be
-# https, or http on localhost.
+# The RPC URL comes from STELLAR_RPC_URL or, when that is unset, from the first line of stdin; never from an
+# argument, so it doesn't appear in the process list. It is never printed or recorded either (curl's errors are
+# reduced to their kind), so a keyed provider URL can't reach a log or a committed file. It must be https, or http on
+# localhost.
 set -euo pipefail
 
-if [ "$#" -lt 2 ]; then
+if [ "$#" -lt 1 ]; then
   sed -n '2,3p' "$0" | sed 's/^# //' >&2
   exit 2
 fi
 command -v curl >/dev/null || { echo "fetch-fixtures: curl is required" >&2; exit 1; }
+
+if [ -z "${STELLAR_RPC_URL:-}" ]; then
+  if [ -t 0 ]; then
+    echo "fetch-fixtures: set STELLAR_RPC_URL or pass the RPC URL on stdin" >&2
+    exit 2
+  fi
+  IFS= read -r STELLAR_RPC_URL || true
+fi
+export STELLAR_RPC_URL
 
 FIXTURES_DIR=${FIXTURES_DIR:-"$(cd "$(dirname "$0")/.." && pwd)/testdata"}
 export FIXTURES_DIR
@@ -69,8 +82,7 @@ def rpc(url, method, params=None):
     r = subprocess.run(["curl", "-sS", "--fail", "--max-time", "60", "--config", "-"],
                        input=config.encode(), capture_output=True)
     if r.returncode != 0:
-        detail = r.stderr.decode(errors="replace").replace(url, "<rpc>").strip()
-        die(f"{method}: request failed ({detail or 'curl exit ' + str(r.returncode)})")
+        die(f"{method}: request failed ({curl_failure(r.returncode, r.stderr)})")
     try:
         resp = json.loads(r.stdout)
     except ValueError:
@@ -78,6 +90,26 @@ def rpc(url, method, params=None):
     if "error" in resp:
         die(f"{method}: {resp['error'].get('message', resp['error'])}")
     return resp["result"]
+
+
+# curl's messages name the host, the port or the URL (resolve, connect, TLS), so only the kind of failure is shown.
+CURL_FAILURES = {
+    5: "could not resolve the proxy",
+    6: "could not resolve the RPC host",
+    7: "could not connect to the RPC",
+    28: "timed out",
+    35: "TLS handshake failed",
+    52: "empty reply",
+    56: "connection reset",
+    60: "TLS certificate not trusted",
+}
+
+
+def curl_failure(code, stderr):
+    if code == 22:
+        status = re.search(r"error: (\d{3})", stderr.decode(errors="replace"))
+        return f"HTTP {status.group(1)}" if status else "HTTP error"
+    return CURL_FAILURES.get(code, f"curl exit {code}")
 
 
 def crc16_xmodem(data):
@@ -193,8 +225,12 @@ def write_atomically(path, data):
     os.replace(tmp, path)
 
 
-def main(argv):
-    url, specs = argv[0], argv[1:]
+def main(specs):
+    url = os.environ.pop("STELLAR_RPC_URL", "").strip()
+    if not url:
+        die("no RPC URL: set STELLAR_RPC_URL or pass it on stdin")
+    if re.search(r"[\s\x00-\x1f\x7f]", url):
+        die("the RPC URL holds whitespace or a control character")
     if not (url.startswith("https://") or re.match(r"http://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(/|$)", url)):
         die("the RPC URL must be https (or http on localhost)")
     targets = []
@@ -239,8 +275,10 @@ def main(argv):
             "network": network,
             "fetched_at": fetched_at,
             "ledger": ledger,
-            "notes": old.get("notes", "") if old and old.get("contract_id") == cid else "",
         }
+        if old is not None and old.get("contract_id") == cid:
+            record = {**old, **record}
+        record.setdefault("notes", "")
         if old is None:
             fixtures.append(record)
         else:
