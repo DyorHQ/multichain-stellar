@@ -10,6 +10,11 @@ export const bad = (code: string, message: string, detail?: unknown) => new ApiE
 export const unauthorized = (message = "Sign in again.") => new ApiError(401, "unauthorized", message);
 export const forbidden = (code: string, message: string) => new ApiError(403, code, message);
 export const notFound = (what: string) => new ApiError(404, "not_found", `${what} not found.`);
+/** A route that is registered in its final place but not written yet. */
+export const notImplemented = () => new ApiError(501, "not_implemented", "This isn't available yet.");
+
+/** Public reads (config, fees, markets) may be cached for 30 s (docs/DESIGN-stellar-parity.md §6.0). */
+export const PUBLIC_CACHE = { "cache-control": "public, max-age=30" };
 
 export function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body, (_k, v) => (typeof v === "bigint" ? v.toString() : v)), {
@@ -39,51 +44,91 @@ export async function readJson<T = Record<string, unknown>>(req: Request): Promi
 
 export type Handler = (ctx: { req: Request; params: Record<string, string>; url: URL }) => Promise<Response>;
 
+/** Runs after a request matched `route` ("GET /v1/account") and before its handler. Throwing answers the request. */
+export type Guard = (req: Request, route: string) => Promise<void>;
+
 interface Route {
+  spec: string;
   method: string;
   parts: string[];
   handler: Handler;
 }
 
-/** Routes like "GET /v1/launches/:token". The path is matched from its "/v1/" segment, so the same table works
- *  behind Supabase's /functions/v1/<name>/ prefix and when served locally. */
+export interface Match {
+  spec: string;
+  params: Record<string, string>;
+  handler: Handler;
+}
+
+/** Routes like "GET /v1/launches/:token". A last segment "*name" takes the rest of the path, one segment or more. The
+ *  path is matched from its "/v1/" segment, so the same table works behind Supabase's /functions/v1/<name>/ prefix
+ *  and when served locally. The first route registered that matches wins. */
 export class Router {
   private routes: Route[] = [];
+  private guard: Guard | null = null;
 
   on(spec: string, handler: Handler): this {
     const [method, path] = spec.split(" ");
-    this.routes.push({ method, parts: path.split("/").filter(Boolean), handler });
+    this.routes.push({ spec, method, parts: path.split("/").filter(Boolean), handler });
     return this;
   }
 
-  async handle(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    const all = url.pathname.split("/").filter(Boolean);
+  /** Checks every request a route matched before the route's handler runs. */
+  before(guard: Guard): this {
+    this.guard = guard;
+    return this;
+  }
+
+  /** Every route, in the order they match. */
+  get specs(): string[] {
+    return this.routes.map((r) => r.spec);
+  }
+
+  /** The route a request for `pathname` reaches, or null. */
+  match(method: string, pathname: string): Match | null {
+    const all = pathname.split("/").filter(Boolean);
     // Supabase serves this function under /functions/v1/<name>/ (or /<name>/ inside the runtime): the API's own
     // "v1" is the last one.
     const start = all.lastIndexOf("v1");
     const parts = start >= 0 ? all.slice(start) : all;
     for (const r of this.routes) {
-      if (r.method !== req.method || r.parts.length !== parts.length) continue;
-      const params: Record<string, string> = {};
-      let ok = true;
-      for (let i = 0; i < parts.length; i++) {
-        if (r.parts[i].startsWith(":")) params[r.parts[i].slice(1)] = decodeURIComponent(parts[i]);
-        else if (r.parts[i] !== parts[i]) {
-          ok = false;
-          break;
-        }
-      }
-      if (ok) {
-        try {
-          return await r.handler({ req, params, url });
-        } catch (err) {
-          return errorResponse(err);
-        }
-      }
+      if (r.method !== method) continue;
+      const params = matchParts(r.parts, parts);
+      if (params) return { spec: r.spec, params, handler: r.handler };
     }
-    return errorResponse(new ApiError(404, "no_route", `No route for ${req.method} ${url.pathname}`));
+    return null;
   }
+
+  async handle(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const m = this.match(req.method, url.pathname);
+    if (!m) return errorResponse(new ApiError(404, "no_route", `No route for ${req.method} ${url.pathname}`));
+    try {
+      if (this.guard) await this.guard(req, m.spec);
+      return await m.handler({ req, params: m.params, url });
+    } catch (err) {
+      return errorResponse(err);
+    }
+  }
+}
+
+function matchParts(pattern: string[], parts: string[]): Record<string, string> | null {
+  const rest = pattern.length > 0 && pattern[pattern.length - 1].startsWith("*");
+  if (rest ? parts.length < pattern.length : parts.length !== pattern.length) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < pattern.length; i++) {
+    const p = pattern[i];
+    if (p.startsWith("*")) {
+      // The rest, segment by segment: none may decode to a separator or step out of the directory.
+      const segments = parts.slice(i).map(decodeURIComponent);
+      if (segments.some((s) => s.includes("/") || s === "." || s === "..")) return null;
+      params[p.slice(1)] = segments.join("/");
+      break;
+    }
+    if (p.startsWith(":")) params[p.slice(1)] = decodeURIComponent(parts[i]);
+    else if (p !== parts[i]) return null;
+  }
+  return params;
 }
 
 /** Token bucket per key, per isolate. Best effort: Edge Function isolates are short-lived, so the database budget
