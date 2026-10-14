@@ -1,6 +1,8 @@
 #!/bin/bash
-# V-BE of docs/DESIGN-stellar-parity.md §12.3 for one multichain-stellar work package: the type check, the Deno unit
-# tests and the SQL tests on the package's own Postgres port (55NN). It stops at the first failure.
+# V-BE of docs/DESIGN-stellar-parity.md §12.3 for one multichain-stellar work package, as CI runs it
+# (.github/workflows/backend.yml): the type check of every entry point, the Deno unit tests, the API contract's checks
+# (each fixture against _shared/contract.ts, and the phone's copies of the fixtures) and the SQL tests on the package's
+# own Postgres port (55NN). It stops at the first failure.
 #
 #   scripts/agent/verify-backend.sh <S> <NN>     NN: the package's two digits (WP-NN also works)
 #
@@ -55,8 +57,12 @@ say "logs in $LOGS"
 # The globs expand in S, as the commands in §12.3 do after `cd $S`.
 cd "$S"
 step "deno check" "$DENO" check --config "$C" backend/supabase/functions/lite/index.ts \
-  backend/supabase/functions/lite-indexer/index.ts backend/scripts/*.ts backend/tests/e2e/lite_e2e.ts
+  backend/supabase/functions/lite-indexer/index.ts backend/supabase/functions/_shared/contract.ts \
+  backend/scripts/*.ts backend/scripts/local/*.ts backend/tests/e2e/lite_e2e.ts backend/tests/e2e/phases/*.ts \
+  backend/tests/vectors/gen-vectors.ts
 step "deno test" "$DENO" test -A --config "$C" backend/tests/unit/
+step "deno test (fixtures)" "$DENO" test --allow-read --allow-run --config "$C" backend/tests/fixtures/
+step "fixtures sync.sh --check" backend/tests/fixtures/sync.sh --check
 step "schema-test.sh 55$NN" backend/scripts/schema-test.sh "55$NN"
 
 say "ok: V-BE passed (Postgres port 55$NN)"

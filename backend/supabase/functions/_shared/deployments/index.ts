@@ -1,6 +1,6 @@
 // Contract deployments by name (docs/DESIGN-stellar-parity.md §6.16): the live testnet one, a QA one where the owner
-// allowed it (testnet-qa.json, read when present) and none on mainnet yet. LITE_DEPLOYMENT picks one and defaults to
-// the network's name. deploy-contracts.ts writes the files; gen-pinned.ts pins the app to one of them.
+// allowed it (testnet-qa.json, read when it is first selected) and none on mainnet yet. LITE_DEPLOYMENT picks one and
+// defaults to the network's name. deploy-contracts.ts writes the files; gen-pinned.ts pins the app to one of them.
 import testnet from "./testnet.json" with { type: "json" };
 
 export interface Deployment {
@@ -47,27 +47,48 @@ function load(id: string, raw: Record<string, unknown>): Deployment {
   };
 }
 
-/** A deployment file that exists only where it was made: no hosted function has testnet-qa.json. */
-function ifPresent(file: string): Record<string, unknown> | null {
-  let text: string;
-  try {
-    text = Deno.readTextFileSync(new URL(file, import.meta.url));
-  } catch {
-    return null;
-  }
-  return JSON.parse(text);
-}
-
-const testnetQa = ifPresent("./testnet-qa.json");
-
 export const DEPLOYMENTS: Record<string, Deployment | null> = {
   testnet: load("testnet", testnet),
-  ...(testnetQa ? { "testnet-qa": load("testnet-qa", testnetQa) } : {}),
   mainnet: null,
 };
 
+const QA = "testnet-qa";
+let testnetQa: Deployment | null | undefined;
+
+/** The QA deployment, read on first use: its file exists only where it was made (no hosted function has
+ *  testnet-qa.json). Null when there is no file. A malformed one throws here, when testnet-qa is selected, and never
+ *  while importing this module, so it can't break networks.ts and the main deployment. */
+function qaDeployment(): Deployment | null {
+  if (testnetQa === undefined) {
+    let text: string;
+    try {
+      text = Deno.readTextFileSync(new URL(`./${QA}.json`, import.meta.url));
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) throw e;
+      testnetQa = null;
+      return null;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (e) {
+      throw new Error(`deployments/${QA}.json is not valid JSON: ${(e as Error).message}`);
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error(`deployments/${QA}.json is not an object`);
+    }
+    testnetQa = load(QA, raw as Record<string, unknown>);
+  }
+  return testnetQa;
+}
+
 /** The deployment called `name`; null where the network has none yet. Throws on a name nobody deployed. */
 export function deploymentByName(name: string): Deployment | null {
-  if (!Object.hasOwn(DEPLOYMENTS, name)) throw new Error(`Unknown deployment "${name}" (LITE_DEPLOYMENT): ${Object.keys(DEPLOYMENTS).join(", ")}`);
-  return DEPLOYMENTS[name];
+  if (Object.hasOwn(DEPLOYMENTS, name)) return DEPLOYMENTS[name];
+  if (name === QA) {
+    const qa = qaDeployment();
+    if (qa) return qa;
+    throw new Error(`No deployments/${QA}.json here (LITE_DEPLOYMENT): it exists only where it was made`);
+  }
+  throw new Error(`Unknown deployment "${name}" (LITE_DEPLOYMENT): ${[...Object.keys(DEPLOYMENTS), QA].join(", ")}`);
 }

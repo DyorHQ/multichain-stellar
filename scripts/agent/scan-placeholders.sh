@@ -1,17 +1,19 @@
 #!/bin/bash
 # The placeholder scan of docs/DESIGN-stellar-parity.md §9: text that stands in for real data must not reach the new
-# app code or the backend. It greps the files (tracked, and new ones not added yet; ignored ones aside) of
-#   A, the IOS-app worktree:            ios/DyorHQ/Lite, ios/Internal, and the #if STELLAR_LITE blocks of its other
-#                                       Swift files (the network switch's hooks in build-23 files, §3.1)
-#   S, the multichain-stellar worktree: backend, ios/Packages
+# app code or the backend. It greps the files (tracked, and new ones not added yet; ignored ones aside) of S, a
+# worktree of this repository, and its app copy A = S/app:
+#   A: app/ios/DyorHQ/Lite, app/ios/Internal, and the #if STELLAR_LITE blocks of app/ios's other Swift files (the
+#      network switch's hooks in the snapshot's files, §3.1)
+#   S: backend, ios/Packages
 # for each pattern below, and fails on any hit that the allow list doesn't name. It never reads a secret file.
 #
-#   scripts/agent/scan-placeholders.sh [--allow FILE] <A> <S>     FILE defaults to scripts/agent/scan-allow.txt
+#   scripts/agent/scan-placeholders.sh [--allow FILE] <S>        FILE defaults to scripts/agent/scan-allow.txt
+#   scripts/agent/scan-placeholders.sh [--allow FILE] <A> <S>    the same, as §12.3's V-SCAN writes it (A must be S/app)
 #
 # Patterns are fixed strings, matched case-sensitively anywhere in a line. An allow-list line reads
 #   <path glob> <pattern> # reason
-# The path is relative to its repository (the scanned folders of A and S don't overlap) and `*` matches across
-# folders. The pattern is one of PATTERNS, written exactly. The reason is required.
+# The path is relative to S (app/… for the app copy) and `*` matches across folders. The pattern is one of PATTERNS,
+# written exactly. The reason is required.
 #
 # Exit status: 0 when no hit is left over, 1 when some are, 2 for a usage or allow-list error.
 set -euo pipefail
@@ -22,7 +24,7 @@ set -euo pipefail
 PATTERNS=('"TOKEN"' 'example.invalid' 'USDC: 1' 'BUSDC: 1' 'Paid by DyorHQ' 'pays the Stellar network fees'
   'Reserves paid by DyorHQ' '10,000 test' '10000 test' 'Lorem'
   'pays the network fees' 'number(10_000)' '10_000.formatted')
-APP_PATHS=(ios/DyorHQ/Lite ios/Internal)
+APP_PATHS=(app/ios/DyorHQ/Lite app/ios/Internal)
 LITE_PATHS=(backend ios/Packages)
 # Every grep leaves these out, tracked or not.
 NO_SECRETS=(':(exclude,glob)**/.env*' ':(exclude,glob)**/Secrets.xcconfig' ':(exclude,glob)**/.secrets'
@@ -34,7 +36,7 @@ die() {
   exit 2
 }
 usage() {
-  sed -n '8p' "$0" | sed 's/^# //' >&2
+  sed -n '10,11p' "$0" | sed 's/^# //' >&2
   exit 2
 }
 trim() { # leading and trailing blanks
@@ -49,11 +51,13 @@ if [ "${1:-}" = "--allow" ]; then
   ALLOW="$2"
   shift 2
 fi
-[ $# -eq 2 ] || usage
-A="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || die "$1 is not a git checkout"
-S="$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" || die "$2 is not a git checkout"
-[ -d "$A/ios/DyorHQ" ] || die "$A doesn't look like IOS-app (no ios/DyorHQ)"
+[ $# -eq 1 ] || [ $# -eq 2 ] || usage
+S="$(git -C "${!#}" rev-parse --show-toplevel 2>/dev/null)" || die "${!#} is not a git checkout"
+[ -d "$S/app/ios/DyorHQ" ] || die "$S has no app copy (no app/ios/DyorHQ)"
 [ -d "$S/backend" ] && [ -d "$S/ios/Packages" ] || die "$S doesn't look like multichain-stellar (no backend, ios/Packages)"
+if [ $# -eq 2 ]; then
+  [ "$(cd "$1" 2>/dev/null && pwd -P)" = "$(cd "$S/app" && pwd -P)" ] || die "A must be S's app copy, $S/app"
+fi
 [ -f "$ALLOW" ] || die "no allow list at $ALLOW"
 
 # ------------------------------------------------------------------------------------------------ allow list
@@ -151,12 +155,12 @@ function lite_cond(s) { gsub(/![[:space:]]*STELLAR_LITE/, "", s); return s ~ /ST
 { for (i = 1; i <= d; i++) if (lite[i]) { print ENVIRON["SCAN_PATH"] ":" NR ":" $0; next } }
 '
 
-# A's Swift files outside APP_PATHS hold build-23 code, and the network switch's hooks inside #if STELLAR_LITE (§3.1):
-# only those blocks are scanned.
+# The app's Swift files outside APP_PATHS hold the snapshot's code, and the network switch's hooks inside
+# #if STELLAR_LITE (§3.1): only those blocks are scanned.
 scan_blocks() { # label repo
   local label="$1" repo="$2" files path lines="" pattern
-  files="$(grep_repo "$repo" -l -F -e STELLAR_LITE -- 'ios/*.swift' ':(exclude)ios/DyorHQ/Lite' \
-    ':(exclude)ios/Internal' "${NO_SECRETS[@]}")"
+  files="$(grep_repo "$repo" -l -F -e STELLAR_LITE -- 'app/ios/*.swift' ':(exclude)app/ios/DyorHQ/Lite' \
+    ':(exclude)app/ios/Internal' "${NO_SECRETS[@]}")"
   [ -n "$files" ] || return 0
   while IFS= read -r path; do
     lines="$lines$(SCAN_PATH="$path" awk "$LITE_LINES" "$repo/$path")"$'\n'
@@ -168,9 +172,9 @@ scan_blocks() { # label repo
   done
 }
 
-say "A = $A (${APP_PATHS[*]}, and #if STELLAR_LITE blocks elsewhere in ios); S = $S (${LITE_PATHS[*]})"
-scan A "$A" "${APP_PATHS[@]}"
-scan_blocks A "$A"
+say "S = $S: ${APP_PATHS[*]} and #if STELLAR_LITE blocks elsewhere in app/ios; ${LITE_PATHS[*]}"
+scan A "$S" "${APP_PATHS[@]}"
+scan_blocks A "$S"
 scan S "$S" "${LITE_PATHS[@]}"
 # By repository, file and line, the same order in every locale.
 [ -z "$REPORT" ] || printf '%s' "$REPORT" | LC_ALL=C sort -t: -k1,1 -k2,2n

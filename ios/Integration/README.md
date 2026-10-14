@@ -1,23 +1,28 @@
 # ios/Integration
 
-The app side of the network switch lives in `DyorHQ/IOS-app`, branch `lite/network-switch`, on top of `release/23`
-(`d387a64`, build 23). This folder keeps it as one patch, for two reasons:
+The app side of the Stellar network switch no longer lives here as a patch. Since the owner's decision of 2026-10-14,
+this repository holds a copy of the public DyorHQ app under [`app/`](../../app) (a git subtree of DyorHQ/IOS-app,
+squashed), and the Stellar code is committed there directly:
 
-- the work survives in this private repository while that branch is unpushed (IOS-app is public);
-- the patch can be re-applied to another base.
+- `app/ios/DyorHQ/Lite/`: the Stellar screens, every file wholly inside `#if STELLAR_LITE`;
+- the `#if STELLAR_LITE` hooks in the app's existing files (`docs/INTEGRATION-ios.md` §2 lists them);
+- `app/ios/Internal/`: the internal project (`generate.py`, which finds the packages in this repository's
+  `ios/Packages`), its resources and the checks that keep the App Store build equal to the public app
+  (`check-build23.py`, `check-lite-strings.py`, `check-copies.py`; their README is
+  [`app/ios/Internal/README.md`](../../app/ios/Internal/README.md)).
 
+Nothing from the app copy is pushed to the public repository.
+
+## Taking a newer public app
+
+```sh
+scripts/app-subtree-pull.sh <public app checkout> <branch>     # e.g. a checkout of DyorHQ/IOS-app, release/25
 ```
-cd <IOS-app checkout>
-git switch -c lite/network-switch <base>
-git am --3way <this repository>/ios/Integration/network-switch.patch
-```
 
-`network-switch.patch` is `git format-patch --binary --stdout d387a64..lite/network-switch`. Regenerate it after the
-branch changes; the first lines of each commit in it name the commit it came from.
+It runs `git subtree pull --prefix=app --squash` on a clean working tree and prints only the conflicts, if there are
+any. Conflicts can only be in the hooked files, around their `#if STELLAR_LITE` blocks; `Lite/` and `Internal/` aren't
+in the public app. After the merge it runs `check-build23.py` against the new snapshot and `check-copies.py`, which
+names every Stellar copy whose Monad source changed upstream and needs re-syncing.
 
-On a base other than build 23, any conflicts are in the `#if STELLAR_LITE` hooks of the seven existing files listed in
-`docs/INTEGRATION-ios.md` §2. The `ios/DyorHQ/Lite/` and `ios/Internal/` files are new and apply cleanly. Then run the
-checks in §8 of that page.
-
-The four drop-in files that used to be here (`ProLiteRoot.swift` and friends) drove the old Pro ⇄ Lite pill
-(superseded by DECISIONS #18). Their successors are in the patch.
+The patch that used to be here (`network-switch.patch`, the commits of IOS-app's `lite/network-switch` on build 23)
+is gone: the same commits are in `app/`, and git's history keeps the file.

@@ -8,14 +8,16 @@ The internal build writes what each source looks up, and in which table, to a .s
      ios/Internal/Resources/<table>.xcstrings, or isn't translated into every language the app ships;
   2. a translation changes a name that is never translated (Stellar, Monad, XLM, Freighter, …);
   3. a key of the default table (Text("…") or LocalizedStringResource("…") without a table) isn't one of the base's
-     ios/DyorHQ/Resources/Localizable.xcstrings: the App Store catalog never gains a key, so new text names its table;
+     ios/DyorHQ/Resources/Localizable.xcstrings: the App Store catalog never gains a key, so new text names its table.
+     The base is the app copy's upstream snapshot, as for check-build23.py (the latest "Squashed 'app/' …" commit);
   4. a source uses any other table;
   5. with --enforce, a Lite or Stellar* table holds a key the Lite code doesn't use (listed, without failing,
      otherwise).
 
-From ios/, after building DyorHQInternal.xcodeproj into <DerivedData>, with Python's isolated mode:
-    python3 -I Internal/check-lite-strings.py --derived <DerivedData> --base d387a64
-    python3 -I Internal/check-lite-strings.py --derived <DerivedData> --base d387a64 --enforce
+From app/ios/, after building DyorHQInternal.xcodeproj into <DerivedData>, with Python's isolated mode:
+    python3 -I Internal/check-lite-strings.py --derived <DerivedData>
+    python3 -I Internal/check-lite-strings.py --derived <DerivedData> --enforce
+    python3 -I Internal/check-lite-strings.py --derived <DerivedData> --base <rev>   # another snapshot of the app
 
 Prints tables, keys and paths, never anything secret: catalogs hold UI text only. Exits 0 when clean, 1 on any
 finding, 2 when it can't run (no build of the current sources, no base).
@@ -71,12 +73,20 @@ def units(localization):
     return out
 
 
+def check_build23():
+    """check-build23.py as a module: its stripping, its base resolution and the repository's layout."""
+    spec = importlib.util.spec_from_file_location("check_build23", Path(__file__).with_name("check-build23.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+build23 = check_build23()
+
+
 def lite_code():
     """{source: the lines of it only the internal build compiles, or None for all}: every source under ios/DyorHQ/Lite,
     and the #if STELLAR_LITE blocks of the app's other sources, as check-build23.py strips them."""
-    spec = importlib.util.spec_from_file_location("check_build23", Path(__file__).with_name("check-build23.py"))
-    build23 = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(build23)
     code = {}
     for path in sorted((IOS / "DyorHQ").rglob("*.swift")):
         if LITE in path.parents:
@@ -88,7 +98,7 @@ def lite_code():
         try:
             _, kept = build23.strip(text)
         except build23.Unsupported as error:
-            fail(f"{path.relative_to(IOS.parent)}:{error.line}", str(error))
+            fail(f"{path.relative_to(build23.ROOT)}:{error.line}", str(error))
             continue
         code[path] = set(range(1, text.count("\n") + 2)) - set(kept)
     return code
@@ -111,7 +121,7 @@ def used_keys(derived):
 
     used, stale = {}, []
     for source in sorted(sources.values()):
-        where = source.relative_to(IOS.parent)
+        where = source.relative_to(build23.ROOT)
         fresh = [tables for data, tables in found.get(source, []) if data.stat().st_mtime >= source.stat().st_mtime]
         if not fresh:
             stale.append(str(where))
@@ -160,18 +170,23 @@ def check_lite_key(table, key, entry, where, shipped):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--derived", required=True, type=Path, help="the -derivedDataPath of an internal build")
-    ap.add_argument("--base", required=True, help="build 23's commit, d387a64, whose Localizable keys the app keeps")
+    ap.add_argument("--base", help="the snapshot whose Localizable keys the app keeps (default: the latest \"Squashed "
+                                   f"'{build23.PREFIX}/' …\" commit, as for check-build23.py)")
     ap.add_argument("--enforce", action="store_true", help="also fail on keys of the Lite tables no source uses")
     args = ap.parse_args()
 
-    base = subprocess.run(["git", "show", f"{args.base}:ios/DyorHQ/Resources/Localizable.xcstrings"], cwd=IOS,
+    try:
+        rev, label = build23.resolve_base(args.base)
+    except LookupError as error:
+        stop(str(error))
+    base = subprocess.run(["git", "show", f"{rev}:ios/DyorHQ/Resources/Localizable.xcstrings"], cwd=IOS,
                           capture_output=True)
     if base.returncode:
-        stop(f"no ios/DyorHQ/Resources/Localizable.xcstrings at {args.base}")
+        stop(f"no ios/DyorHQ/Resources/Localizable.xcstrings at {label}")
     try:
         base_keys = set(json.loads(base.stdout).get("strings") or {})
     except ValueError:
-        stop(f"the Localizable.xcstrings at {args.base} is not a readable String Catalog")
+        stop(f"the Localizable.xcstrings at {label} is not a readable String Catalog")
     if not args.derived.is_dir():
         stop(f"no {args.derived}: build DyorHQInternal.xcodeproj with -derivedDataPath {args.derived} first")
     shipped = shipped_languages()
@@ -181,11 +196,11 @@ def main():
         if table == DEFAULT_TABLE:
             for key, where in sorted(keys.items()):
                 if key not in base_keys:
-                    fail(f"{where}: {key!r}", "not a key of build 23's Localizable: name its table (Stellar…)")
+                    fail(f"{where}: {key!r}", "not a key of the snapshot's Localizable: name its table (Stellar…)")
         elif LITE_TABLE.fullmatch(table):
             path = TABLES / f"{table}.xcstrings"
             if not path.is_file():
-                fail(f"{table} ({', '.join(sorted(set(keys.values())))})", f"no {path.relative_to(IOS.parent)}")
+                fail(f"{table} ({', '.join(sorted(set(keys.values())))})", f"no {path.relative_to(build23.ROOT)}")
                 continue
             catalog = load_catalog(path)
             for key, where in sorted(keys.items()):
