@@ -1,0 +1,8 @@
+# Hits that scripts/agent/scan-placeholders.sh allows (docs/DESIGN-stellar-parity.md §9). One per line:
+#   <path glob> <pattern> # reason
+# The path is relative to its repository (IOS-app or multichain-stellar) and `*` matches across folders. The pattern is
+# one of the scan's, written exactly. Every line needs a reason. A placeholder gets fixed, not listed here.
+
+ios/DyorHQ/Lite/*/StellarConfirmationSheet.swift Paid by DyorHQ # the value of a verified sponsored step's row (§4.3, §4.6)
+ios/Internal/Resources/Stellar*.xcstrings Paid by DyorHQ # that row's key and its translations
+ios/Packages/DyorLite/Tests/DyorLiteTests/DyorLiteTests.swift example.invalid # a never-called test host (RFC 2606); beyond §9: lead to confirm
