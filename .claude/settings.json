@@ -1,0 +1,67 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.production)",
+      "Read(**/.env.production.local)",
+      "Read(**/.env.development)",
+      "Read(**/.env.development.local)",
+      "Read(**/.env.staging)",
+      "Read(**/.env.test)",
+      "Read(**/.dev.vars)",
+      "Read(**/Secrets.xcconfig)",
+      "Read(**/*.p8)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/*.mobileprovision)",
+      "Read(**/*.keystore)",
+      "Read(**/*.jks)",
+      "Edit(**/.env)",
+      "Edit(**/.env.local)",
+      "Edit(**/.env.production)",
+      "Edit(**/.env.production.local)",
+      "Edit(**/.env.development)",
+      "Edit(**/.env.development.local)",
+      "Edit(**/.env.staging)",
+      "Edit(**/.env.test)",
+      "Edit(**/.dev.vars)",
+      "Edit(**/Secrets.xcconfig)",
+      "Edit(**/*.p8)",
+      "Edit(**/*.p12)",
+      "Edit(**/*.pfx)",
+      "Edit(**/*.pem)",
+      "Edit(**/*.key)",
+      "Edit(**/*.mobileprovision)",
+      "Edit(**/*.keystore)",
+      "Edit(**/*.jks)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"$CLAUDE_PROJECT_DIR/scripts/dev/install-hooks.sh\" --quiet 2>&1 || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=\"$CLAUDE_PROJECT_DIR/.claude/hooks/secret-guard.py\"; [ ! -f \"$f\" ] || python3 \"$f\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

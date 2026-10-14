@@ -1,0 +1,8 @@
+{
+  "about": "The keeper signers (build 17 K4): one key per signing unit, each pinned here by a reviewed commit. A unit may send only when its keystore (a Fly secret) derives exactly this public address; while an address is empty the unit runs dry runs only. The owner creates the keys with ops/make-keeper-secrets.sh and sends the printed public addresses to engineering. MON amounts: fund = the top-up target, minBalance = the warning floor (run-keeper.sh --min-balance), maxSpendPerDay = the daily cap (run-keeper.sh --max-spend-per-day); ops.test.mjs keeps them equal to run-keeper.sh.",
+  "units": {
+    "grad": { "address": "", "fund": "30", "minBalance": "10", "maxSpendPerDay": "20" },
+    "buybacks": { "address": "", "fund": "10", "minBalance": "3", "maxSpendPerDay": "10" },
+    "sweeps": { "address": "", "fund": "5", "minBalance": "1", "maxSpendPerDay": "3" }
+  }
+}

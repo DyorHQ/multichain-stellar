@@ -1,0 +1,8 @@
+#!/bin/bash
+# dyorhq-leak-guard commit-msg hook (tracked in .githooks/, set up by scripts/dev/install-hooks.sh).
+# Blocks a commit message that holds a secret (scripts/dev/secret-scan.sh --commit-msg: .env / Secrets.xcconfig values,
+# key and token patterns, seed phrases), the internal-document marker, or, in a public repository (.leakguard
+# @public), an internal audit finding ID. Locations and names only, never values; a missing checker blocks the commit.
+top=$(git rev-parse --show-toplevel) || exit 1
+# A traced or BASH_ENV-injected shell could print the values the scanner holds.
+env -u BASH_ENV -u SHELLOPTS /bin/bash "$top/scripts/dev/secret-scan.sh" --commit-msg "$1"

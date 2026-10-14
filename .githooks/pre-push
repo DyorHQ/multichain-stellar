@@ -1,0 +1,28 @@
+#!/bin/bash
+# dyorhq-leak-guard pre-push hook (tracked in .githooks/, set up by scripts/dev/install-hooks.sh).
+# Checks every commit the remote does not have yet (git passes the remote's name and URL, and the refs on stdin) for
+# forbidden paths and secrets, in their changes and their messages, and the message of a pushed annotated tag. That
+# also covers what the commit hooks never saw: rebases, cherry-picks, `git am`, commits made with --no-verify or in a
+# clone without the hooks. It refuses a remote that .leakguard's @push-url lines do not list. Locations and names only,
+# never values; a missing checker blocks the push too.
+top=$(git rev-parse --show-toplevel) || exit 1
+refs=$(cat)
+# A traced or BASH_ENV-injected shell could print the values the scanner holds.
+run() { env -u BASH_ENV -u SHELLOPTS /bin/bash "$top/scripts/dev/$1" "${@:2}"; }
+status=0
+printf '%s\n' "$refs" | run forbidden-paths.sh --pre-push "$@" || status=1
+printf '%s\n' "$refs" | run secret-scan.sh --pre-push "$@" || status=1
+# gitleaks (v8.19+) over the same commits, with the committed .gitleaks.toml, when this machine has it.
+if command -v gitleaks >/dev/null 2>&1 && gitleaks version 2>/dev/null | grep -qE '^v?8\.(19|[2-9][0-9])\.'; then
+  cfg=$(mktemp "${TMPDIR:-/tmp}/gitleaks.XXXXXX") || exit 1
+  args=(); git show HEAD:.gitleaks.toml > "$cfg" 2>/dev/null && args=(--config "$cfg")
+  while read -r lref lsha rref rsha; do
+    case "$lsha" in *[!0]*) ;; *) continue ;; esac
+    opts="$lsha --not"
+    git config --get "remote.$1.url" >/dev/null 2>&1 && opts="$opts --remotes=$1/*"
+    case "$rsha" in *[!0]*) git rev-parse -q --verify "$rsha^{commit}" >/dev/null && opts="$opts $rsha" ;; esac
+    gitleaks git --log-opts="$opts" --redact --no-banner "${args[@]}" "$top" || status=1
+  done <<< "$refs"
+  rm -f "$cfg"
+fi
+exit $status

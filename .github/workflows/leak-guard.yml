@@ -1,0 +1,250 @@
+# Leak guard: fails when a push or pull request adds a forbidden path (env files, keys, signing material, internal
+# documents) or a secret, in its changes or its commit and tag messages. The same checks as the local hooks
+# (scripts/dev/install-hooks.sh), plus gitleaks, for pushes that never ran the hooks: cloud sessions, other clones, the
+# GitHub web editor, --no-verify.
+# Every check runs the DEFAULT BRANCH's copy of the guard (scripts, .leakguard, .gitleaks.toml), never the pushed one,
+# so a push cannot switch off its own check; a push that changes the guard fails the "Guard changes" step until the
+# change has been reviewed (expected, once, for a reviewed change to the guard).
+# A nightly run, which GitHub always takes from the default branch, scans every branch and tag since .leakguard's
+# @history-base commits, so editing this file on a branch hides nothing from it; when it fails it opens an issue.
+# IOS-app is private on the GitHub Free plan, so this cannot be made a required check: a failed run is the alert.
+name: leak-guard
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # gitleaks v8.30.1 (ghcr.io/gitleaks/gitleaks), pinned by digest. The Docker image, not gitleaks-action, which
+  # needs a paid licence for organisation repositories.
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  # The files of the guard that CI takes from the default branch.
+  GUARD_FILES: .leakguard .gitleaks.toml scripts/dev/secret-scan.sh scripts/dev/forbidden-paths.sh scripts/dev/bip39-english.txt
+  # Changes to these need review: they are the guard itself, its hooks, and the agents' secret-file guard.
+  GUARD_PATHS: .leakguard .gitleaks.toml .githooks scripts/dev/secret-scan.sh scripts/dev/forbidden-paths.sh scripts/dev/install-hooks.sh scripts/dev/bip39-english.txt .github/workflows .claude/settings.json .claude/hooks
+
+jobs:
+  leak-guard:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # bsdtar reads zip, 7z and compressed tar (GNU tar cannot read zip); zstd for .zst files.
+      - name: Install the unpackers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libarchive-tools zstd unzip
+
+      - name: Load the guard from the default branch
+        id: guard
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          G="$RUNNER_TEMP/leak-guard"
+          src="refs/remotes/origin/$DEFAULT_BRANCH"
+          # Until the default branch has this version of the guard (both checkers, --config), the pushed copy runs.
+          git show "$src:scripts/dev/secret-scan.sh" > "$RUNNER_TEMP/scanner-probe" 2>/dev/null || : > "$RUNNER_TEMP/scanner-probe"
+          if ! git cat-file -e "$src:scripts/dev/forbidden-paths.sh" 2>/dev/null ||
+             ! grep -q -- '--config FILE' "$RUNNER_TEMP/scanner-probe"; then
+            src=HEAD
+            echo "::warning::$DEFAULT_BRANCH has no current leak guard yet: this run uses the pushed copy (the Guard changes step flags it)."
+          fi
+          for f in $GUARD_FILES; do
+            mkdir -p "$G/$(dirname "$f")"
+            if git cat-file -e "$src:$f" 2>/dev/null; then git show "$src:$f" > "$G/$f"; fi
+          done
+          [ -f "$G/.leakguard" ] || : > "$G/.leakguard"
+          [ -f "$G/.gitleaks.toml" ] || printf '[extend]\nuseDefault = true\n' > "$G/.gitleaks.toml"
+          echo "dir=$G" >> "$GITHUB_OUTPUT"
+
+      - name: Work out the commit range
+        id: range
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          base="refs/remotes/origin/$DEFAULT_BRANCH"
+          # Commits reachable from .leakguard's @history-base lines were checked when the guard was added.
+          hist=
+          for b in $(sed -n 's/^[[:space:]]*@history-base[[:space:]][[:space:]]*\([0-9a-fA-F]*\)[[:space:]]*$/\1/p' "$G/.leakguard"); do
+            if git cat-file -e "$b^{commit}" 2>/dev/null; then hist="$hist ^$b"; else echo "::warning::@history-base $b is not in this clone."; fi
+          done
+          if [ "$EVENT" = pull_request ]; then
+            range="$PR_BASE..$PR_HEAD"
+          elif [ -n "${BEFORE//0/}" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$AFTER"
+          elif [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ] && git rev-parse -q --verify "$base" >/dev/null; then
+            range="$base..$AFTER" # a new branch or tag: the commits the default branch lacks (none at its tip)
+          else
+            range="$AFTER$hist" # the default branch's first push, or a rewrite of it: everything since the guard came
+          fi
+          case "$REF" in refs/tags/*) [ "$(git cat-file -t "$REF")" = tag ] && range="$range $REF" ;; esac # its message
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "Commits to check: $range ($(git rev-list --count $range) commits)"
+
+      - name: Guard changes (review required)
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -euo pipefail
+          changed=$(git log --format= --name-only $RANGE -- $GUARD_PATHS | sort -u)
+          if [ -n "$changed" ]; then
+            echo "::error::These commits change the leak guard. This run used the default branch's copy; review the change before it merges:"
+            printf '  %s\n' $changed
+            exit 1
+          fi
+          echo "No change to the leak guard."
+
+      - name: Forbidden paths in the tree
+        if: ${{ !cancelled() && steps.guard.outputs.dir != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+        run: /bin/bash "$G/scripts/dev/forbidden-paths.sh" --config "$G/.leakguard"
+
+      - name: Forbidden paths in the pushed commits
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash "$G/scripts/dev/forbidden-paths.sh" --config "$G/.leakguard" --history $RANGE
+
+      # Pattern mode: CI has no .env or Secrets.xcconfig, so only the patterns and heuristics apply here.
+      - name: Secret patterns in the tree
+        if: ${{ !cancelled() && steps.guard.outputs.dir != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+        run: /bin/bash "$G/scripts/dev/secret-scan.sh" --config "$G/.leakguard" --all
+
+      - name: Secret patterns in the pushed commits and their messages
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash "$G/scripts/dev/secret-scan.sh" --config "$G/.leakguard" --history $RANGE
+
+      # --max-decode-depth: also looks inside base64, hex and percent-encoded text.
+      - name: gitleaks on the pushed commits
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$GITHUB_WORKSPACE:/repo" -v "$G:/guard:ro" \
+            "$GITLEAKS_IMAGE" git /repo --config /guard/.gitleaks.toml --log-opts="$RANGE" --max-decode-depth=2 \
+            --redact --no-banner --verbose --exit-code 1
+
+      - name: Leak guard and Claude secret guard self-tests (the pushed copies)
+        if: ${{ !cancelled() }}
+        run: node --test tests/leak-guard.test.mjs tests/secret-guard.test.mjs
+
+  history:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out every branch and tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the unpackers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libarchive-tools zstd unzip
+
+      - name: Load the guard from the default branch
+        id: guard
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          G="$RUNNER_TEMP/leak-guard"
+          src="refs/remotes/origin/$DEFAULT_BRANCH"
+          for f in $GUARD_FILES; do
+            mkdir -p "$G/$(dirname "$f")"
+            if git cat-file -e "$src:$f" 2>/dev/null; then git show "$src:$f" > "$G/$f"; fi
+          done
+          [ -f "$G/scripts/dev/secret-scan.sh" ] || { echo "::error::$DEFAULT_BRANCH has no leak guard."; exit 1; }
+          [ -f "$G/.leakguard" ] || : > "$G/.leakguard"
+          [ -f "$G/.gitleaks.toml" ] || printf '[extend]\nuseDefault = true\n' > "$G/.gitleaks.toml"
+          echo "dir=$G" >> "$GITHUB_OUTPUT"
+
+      - name: Work out the commits (every branch and tag since @history-base)
+        id: range
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+        run: |
+          set -euo pipefail
+          range=--all
+          for b in $(sed -n 's/^[[:space:]]*@history-base[[:space:]][[:space:]]*\([0-9a-fA-F]*\)[[:space:]]*$/\1/p' "$G/.leakguard"); do
+            if git cat-file -e "$b^{commit}" 2>/dev/null; then range="$range ^$b"; else echo "::warning::@history-base $b is not in this clone."; fi
+          done
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "Commits to check: $range ($(git rev-list --count $range) commits)"
+
+      - name: Forbidden paths in every branch and tag
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash "$G/scripts/dev/forbidden-paths.sh" --config "$G/.leakguard" --history $RANGE
+
+      - name: Secret patterns in every branch and tag, with their messages
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: /bin/bash "$G/scripts/dev/secret-scan.sh" --config "$G/.leakguard" --history $RANGE
+
+      - name: gitleaks on every branch and tag
+        if: ${{ !cancelled() && steps.range.outputs.range != '' }}
+        env:
+          G: ${{ steps.guard.outputs.dir }}
+          RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$GITHUB_WORKSPACE:/repo" -v "$G:/guard:ro" \
+            "$GITLEAKS_IMAGE" git /repo --config /guard/.gitleaks.toml --log-opts="$RANGE" --max-decode-depth=2 \
+            --redact --no-banner --verbose --exit-code 1
+
+  report:
+    needs: history
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Leak guard: the nightly scan failed"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --body "The nightly leak-guard scan of every branch and tag failed: $RUN_URL (locations and finding names only, never values)."
+          fi

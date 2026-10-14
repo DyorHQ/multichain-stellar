@@ -1,0 +1,39 @@
+# Supabase CLI settings for this repository — Edge Function gateway settings only (security audit 2026-09-26, SB-9).
+#
+# `supabase functions deploy <name>` reads [functions.<name>] below, so a deploy can no longer silently flip a
+# function's JWT gate. The values match the live project as read on 2026-09-26 (list_edge_functions), plus waitlist:
+#   verify_jwt = true   the gateway admits only a valid Supabase JWT (the app's wallet-auth session); the function
+#                       then also requires role authenticated and a wallet_address claim.
+#   verify_jwt = false  the caller has no Supabase session (sign-in, the pepper, the website form, the history-indexer's
+#                       pg_cron tick) or presents a Privy token; each function authenticates the request itself.
+#
+# Every other section is the CLI's default, NOT the live project's configuration: never run `supabase config push`
+# from this file — it would overwrite the project's auth, API and storage settings with those defaults.
+project_id = "dyorhq"
+
+[functions.wallet-auth]
+verify_jwt = false
+
+[functions.email-pepper]
+verify_jwt = false
+
+[functions.email-rebind]
+verify_jwt = false
+
+[functions.delete-account]
+verify_jwt = false
+
+[functions.waitlist]
+verify_jwt = false
+
+[functions.pin-media]
+verify_jwt = true
+
+[functions.aurora-proxy]
+verify_jwt = true
+
+# Called only by pg_cron → pg_net every 30 s (migrations-deferred/33_history_indexer_schedule.sql), with no Supabase
+# session: the function checks the x-history-cron header itself, in constant time, against the Vault secret
+# history_cron_secret's SHA-256 (history_cron_digest(), migration 32) or the optional Edge secret HISTORY_CRON_SECRET.
+[functions.history-indexer]
+verify_jwt = false

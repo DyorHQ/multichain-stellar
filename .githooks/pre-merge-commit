@@ -1,0 +1,13 @@
+#!/bin/bash
+# dyorhq-leak-guard pre-merge-commit hook (tracked in .githooks/, set up by scripts/dev/install-hooks.sh).
+# Blocks a merge commit that adds a forbidden path (scripts/dev/forbidden-paths.sh with .leakguard: env and key files,
+# internal documents, pinned files) or a secret (scripts/dev/secret-scan.sh: .env / Secrets.xcconfig values, key and
+# token patterns, seed phrases). Both print locations and names only, never values; a missing checker blocks the
+# merge too. A false positive is fixed in .leakguard (committed on its own), never with --no-verify.
+top=$(git rev-parse --show-toplevel) || exit 1
+# A traced or BASH_ENV-injected shell could print the values the scanner holds.
+run() { env -u BASH_ENV -u SHELLOPTS /bin/bash "$top/scripts/dev/$1" "${@:2}"; }
+status=0
+run forbidden-paths.sh --staged || status=1
+run secret-scan.sh --staged || status=1
+exit $status

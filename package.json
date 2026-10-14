@@ -1,0 +1,18 @@
+{
+  "name": "dyorhq",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/leak-guard.test.mjs tests/secret-guard.test.mjs",
+    "test:leak-guard": "node --test tests/leak-guard.test.mjs",
+    "test:secret-guard": "node --test tests/secret-guard.test.mjs",
+    "keepers:test": "node --test contracts/keepers/test/abis.test.mjs contracts/keepers/test/decide.test.mjs contracts/keepers/test/jobs.test.mjs contracts/keepers/test/send.test.mjs contracts/keepers/test/receipt.test.mjs contracts/keepers/test/state.test.mjs contracts/keepers/test/run.test.mjs contracts/keepers/test/anvil.test.mjs contracts/keepers/test/cursor.test.mjs contracts/keepers/test/rpc.test.mjs contracts/keepers/test/notify.test.mjs contracts/keepers/test/budget.test.mjs contracts/keepers/test/ops.test.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.56.3"
+  }
+}
