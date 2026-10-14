@@ -26,6 +26,7 @@ let package = Package(
         .target(name: "LiteClient", dependencies: ["StellarCore"]),
         .target(name: "StellarKit", dependencies: ["StellarCore", "LiteClient"]),
         .testTarget(name: "StellarCoreTests", dependencies: ["StellarCore"], resources: [.copy("Vectors")]),
-        .testTarget(name: "LiteClientTests", dependencies: ["LiteClient", "StellarCore"]),
+        // The API fixtures are read from the source tree (#filePath), so they are no resources of the target.
+        .testTarget(name: "LiteClientTests", dependencies: ["LiteClient", "StellarCore"], exclude: ["Fixtures"]),
     ]
 )
