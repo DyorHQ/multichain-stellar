@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "refresh_reused",
+    "message": "This session was already renewed, so it was ended. Sign in again.",
+    "detail": null
+  }
+}

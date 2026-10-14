@@ -33,14 +33,36 @@ optional in Swift.
 - **Periods** use the app's `VolumePeriod` raw values: `day | week | month | all` (`VolumePeriodKey` in Swift).
 - **Assets** are named by id: a registry id (`XLM`, `USDC`, `BUSDC`), a token's contract id (C…), or for a trustline
   outside the registry `CODE:G…`. `spend` and `receive` maps in intents are keyed by contract id.
-- **Auth.** Every route needs the Lite session token (`authorization: Bearer <token>`, from §2) **except** `auth/*`,
-  `config`, `fees` and `markets*`. Those public routes read only the database and in-isolate caches, answer with
-  `Cache-Control: public, max-age=30`, and the phone calls them without the token, so they work while the session is
-  locked. Every other answer is `no-store`. The local media stand-in (§12, local stack only) takes no session token
-  either: its upload carries a signed token of its own, and its reads are the Debug build's media base.
-- **Limits.** Per isolate, best effort: 20 requests a minute per IP on `auth/*`, 120 a minute per account, 20 submits
-  and 10 upload tickets a minute per account. Over the limit: 429 `rate_limited`. Anything that costs DyorHQ money is
-  limited in Postgres, never only in memory.
+- **Auth: three route classes** (the `auth` of each route in `contract.ts`). Viewing never needs a session; DyorHQ's
+  own history and every write do.
+  - **public**: no token, and nothing about any account: `auth/*`, `config`, `fees`, `markets*`, `prices`,
+    `economics`, `earn/markets`, `earn/history` and the local media stand-in's reads. They read only the database,
+    the in-isolate caches and cached contract views, and answer with `Cache-Control: public, max-age=30`. They
+    ignore an `Authorization` header, never refuse it. The phone sends them no token, except `prices`, `economics`,
+    `earn/markets` and `earn/history` while it holds one: until WP-13, WP-14 and WP-15 serve those without a session,
+    today's server still asks for it there.
+  - **viewer**: a session is optional: `GET /v1/account`, `/v1/holdings`, `/v1/earn/positions`, `/v1/moments/owned`,
+    `/v1/launches`, `/v1/launches/:token`, `/v1/moments`, `/v1/moments/:id` and `/v1/assets`. With a valid
+    `authorization: Bearer <token>` (§2): the **owner view** of the token's account, `"view": "owner"`. With no
+    `Authorization` header: the **public view** for `?address=G…`, `"view": "public"`: on-chain facts only, every
+    field from DyorHQ's own history `null` (§2, "Public views"), `Cache-Control: public, max-age=15`. A route about an
+    account (`account`, `holdings`, `earn/positions`, `moments/owned`) answers 400 `address_required` with neither
+    (the phone doesn't ask it then: `LiteAPIError.notSignedIn`); the boards, a launch and a Moment answer without
+    `?address=`, with no `you`. A token that is present but invalid or expired gets 401, never the public view, so the
+    phone renews instead of silently getting less. The public view never checks the tester list and answers every
+    valid G… alike.
+  - **session**: the token is required: DyorHQ's history (`portfolio`, `activity`, `launchpad/me`, `moments/mine`,
+    `tx/:hash`) and every write, quote or plan (`account/activate|trust|faucet`, `recipient`, `send`, `plans/*`,
+    `tx/submit`, `swap/*`, `earn/build`, the `launches/*` writes and quotes, the `moments/*` writes, `media/*`,
+    `bridge/*`, `cash/*`). Without it: 401 `unauthorized`.
+
+  Answers other than the public ones and the public views are `no-store`. The local media stand-in (§12, local stack
+  only) takes no session token either: its upload carries a signed token of its own, and its reads are the Debug
+  build's media base.
+- **Limits.** Per isolate, best effort: 300 requests a minute per IP across the public routes, and within that 20 on
+  `auth/challenge`, `auth/verify` and `auth/signout` and 30 on `auth/refresh`; 120 a minute per IP for public views;
+  120 a minute per account, 20 submits and 10 upload tickets a minute per account. Over the limit: 429
+  `rate_limited`. Anything that costs DyorHQ money is limited in Postgres, never only in memory.
 - **New fields.** A field added to an existing answer is optional for the phone (`decodeIfPresent`), so an older
   server's answer still decodes. A server never removes a field without a new contract.
 
@@ -54,77 +76,82 @@ optional in Swift.
 `message` is plain English. The phone words known codes itself, in the user's language (§16), and shows `message`
 verbatim otherwise. `detail` holds every value a code's copy shows (§16). When a contract refused, `code` is
 `simulation_failed` and `detail.contractCode` names the reason; `LiteAPI` then reports
-`LiteAPIError.server(status:code:message:)` with the contract's code (`launch.slippage`, …) as its `code`. A contract's
-code is always `<area>.<reason>` and the API's codes never hold a dot, so the two can't be confused.
+`LiteAPIError.server(status:code:message:detail:)` with the contract's code (`launch.slippage`, …) as its `code`. Every
+refusal's `detail` reaches the app in that `detail`, as text. A contract's code is always `<area>.<reason>` and the
+API's codes never hold a dot, so the two can't be confused.
 
 ---
 
 ## 1. Routes at a glance
 
-"Public" routes take no token. *Owner* is the package that serves the parity form.
+*Auth* is the route's class (§0): **public** routes take no token, **viewer** routes answer the public view without
+one, **session** routes need one. *Owner* is the package that serves the parity form.
 
 | Route | Auth | Request | Answer (`contract.ts`) | Fixture | Owner |
 |---|---|---|---|---|---|
 | `POST /v1/auth/challenge` | public | `{address}` | `AuthChallenge` | `auth-challenge` | — |
-| `POST /v1/auth/verify` | public | `{address, nonce, signature, inviteCode?}` | `AuthResult` | `auth-verify` | — |
+| `POST /v1/auth/verify` | public | `{address, nonce, signature, inviteCode?}` | `AuthResult` | `auth-verify`, `auth-verify.legacy` | WP-02b |
+| `POST /v1/auth/refresh` *added* | public | `{address, refreshToken}` | `AuthResult` | `auth-refresh`, `error-refresh-reused` | WP-02b |
+| `POST /v1/auth/signout` *added* | public | `{refreshToken}` | 204, no body | — | WP-02b |
 | `GET /v1/config` | public | | `LiteConfig` | `config`, `config.legacy` | WP-02 |
 | `GET /v1/fees` *added* | public | | `Fees` | `fees` | WP-10 |
-| `GET /v1/account` | JWT | | `AccountView` | `account`, `account.legacy`, `account.missing` | WP-10 |
-| `POST /v1/account/activate` | JWT | `{}` | `ActivationResult` | `plan`, `account-activate` | WP-10 |
-| `POST /v1/account/trust` | JWT | `{asset}` | `PlanView` | `plan` | WP-10 |
-| `POST /v1/account/faucet` | JWT | `{}` | `{hash}` | `account-faucet` | WP-10 |
-| `GET /v1/recipient/:address?asset=` *added* | JWT | | `Recipient` | `recipient` | WP-10 |
-| `POST /v1/send` | JWT | `SendRequest` | `PlanView` | `plan-send` | WP-10 |
-| `POST /v1/plans/:plan/steps/:step/build` | JWT | `{}` | `PlanView` | `plan`, `plan.legacy` | WP-10 |
-| `POST /v1/tx/submit` | JWT | `{planId, stepId, signedXdr}` | `Submitted` | `tx-submit` | WP-10 |
-| `GET /v1/tx/:hash` | JWT | | `TxStatus` | `tx-status`, `tx-status.legacy` | WP-10 |
-| `POST /v1/swap/quote` | JWT | `{sell, buy, amount, slippageBps?}` | `SwapQuote` | `swap-quote`, `swap-quote.legacy` | WP-10 |
-| `POST /v1/swap/build` | JWT | `{quoteId, venue?}` | `PlanView` | `plan` | WP-10 |
+| `GET /v1/account[?address=]` | viewer | | `AccountView` | `account`, `account.legacy`, `account.missing`, `account.public` | WP-10 |
+| `POST /v1/account/activate` | session | `{}` | `ActivationResult` | `plan`, `account-activate` | WP-10 |
+| `POST /v1/account/trust` | session | `{asset}` | `PlanView` | `plan` | WP-10 |
+| `POST /v1/account/faucet` | session | `{}` | `{hash}` | `account-faucet` | WP-10 |
+| `GET /v1/recipient/:address?asset=` *added* | session | | `Recipient` | `recipient` | WP-10 |
+| `POST /v1/send` | session | `SendRequest` | `PlanView` | `plan-send` | WP-10 |
+| `POST /v1/plans/:plan/steps/:step/build` | session | `{}` | `PlanView` | `plan`, `plan.legacy` | WP-10 |
+| `POST /v1/tx/submit` | session | `{planId, stepId, signedXdr}` | `Submitted` | `tx-submit` | WP-10 |
+| `GET /v1/tx/:hash` | session | | `TxStatus` | `tx-status`, `tx-status.legacy` | WP-10 |
+| `POST /v1/swap/quote` | session | `{sell, buy, amount, slippageBps?}` | `SwapQuote` | `swap-quote`, `swap-quote.legacy` | WP-10 |
+| `POST /v1/swap/build` | session | `{quoteId, venue?}` | `PlanView` | `plan` | WP-10 |
 | `GET /v1/markets` *added* | public | | `Markets` | `markets` | WP-13 |
 | `GET /v1/markets/:id` *added* | public | | `MarketDetail` | `market` | WP-13 |
 | `GET /v1/markets/:id/history?range=` *added* | public | | `PriceHistory` | `market-history` | WP-13 |
-| `GET /v1/prices` | JWT | | `Prices` | `prices` | WP-13 |
-| `GET /v1/assets?q=` *added* | JWT | | `AssetSearch` | `assets` | WP-18 |
-| `GET /v1/holdings` *added* | JWT | | `Holdings` | `holdings`, `holdings.partial` | WP-18 |
-| `GET /v1/portfolio?period=` *added* | JWT | | `Portfolio` | `portfolio` | WP-18 |
-| `GET /v1/activity?section=&kind=&period=&market=&limit=` | JWT | | `Activity` | `activity`, `activity.legacy` | WP-18 |
-| `GET /v1/launches?section=&sort=&q=&limit=&cursor=` | JWT | | `LaunchBoard` | `launches`, `launches.legacy` | WP-14 |
-| `GET /v1/launches/:token?candles=` | JWT | | `LaunchDetail` | `launch`, `launch.legacy` | WP-14 |
-| `POST /v1/launches/:token/quote` | JWT | `{side, amount}` | `TradeQuote` | `launch-quote`, `launch-quote.legacy`, `launch-quote-sell.legacy` | WP-14 |
-| `POST /v1/launches/metadata` *added* | JWT | `LaunchMetadataRequest` | `{uri}` | `launch-metadata` | WP-14 |
-| `POST /v1/launches/build` | JWT | `LaunchBuildRequest` | `PlanView` | `plan` | WP-14 |
-| `GET /v1/economics` *added* | JWT | | `Economics` | `economics` | WP-14 |
-| `GET /v1/launchpad/me` *added* | JWT | | `MyLaunchpad` | `launchpad-me` | WP-14 |
-| `GET /v1/moments?filter=&limit=` | JWT | | `MomentFeed` | `moments`, `moments.legacy` | WP-16 |
-| `GET /v1/moments/owned` | JWT | | `OwnedEditions` | `moments-owned`, `moments-owned.legacy` | WP-16 |
-| `GET /v1/moments/mine` *added* | JWT | | `MyMoments` | `moments-mine` | WP-16 |
-| `GET /v1/moments/:id` | JWT | | `MomentDetail` | `moment`, `moment.legacy` | WP-16 |
-| `POST /v1/moments/metadata` | JWT | `MomentMetadataRequest` | `MomentMetadata` | `moment-metadata`, `moment-metadata.legacy` | WP-16 |
-| `POST /v1/moments/build` | JWT | `MomentBuildRequest` | `PlanView` | `plan` | WP-16 |
-| `POST /v1/media/upload-url` | JWT | `{contentType, bytes}` | `UploadTicket` | `media-upload-url` | WP-16 |
+| `GET /v1/prices` | public | | `Prices` | `prices` | WP-13 |
+| `GET /v1/assets?q=[&address=]` *added* | viewer | | `AssetSearch` | `assets` | WP-18 |
+| `GET /v1/holdings[?address=]` *added* | viewer | | `Holdings` | `holdings`, `holdings.partial`, `holdings.public` | WP-18 |
+| `GET /v1/portfolio?period=` *added* | session | | `Portfolio` | `portfolio` | WP-18 |
+| `GET /v1/activity?section=&kind=&period=&market=&limit=` | session | | `Activity` | `activity`, `activity.legacy` | WP-18 |
+| `GET /v1/launches?section=&sort=&q=&limit=&cursor=[&address=]` | viewer | | `LaunchBoard` | `launches`, `launches.legacy` | WP-14 |
+| `GET /v1/launches/:token?candles=[&address=]` | viewer | | `LaunchDetail` | `launch`, `launch.legacy`, `launch.public` | WP-14 |
+| `POST /v1/launches/:token/quote` | session | `{side, amount}` | `TradeQuote` | `launch-quote`, `launch-quote.legacy`, `launch-quote-sell.legacy` | WP-14 |
+| `POST /v1/launches/metadata` *added* | session | `LaunchMetadataRequest` | `{uri}` | `launch-metadata` | WP-14 |
+| `POST /v1/launches/build` | session | `LaunchBuildRequest` | `PlanView` | `plan` | WP-14 |
+| `GET /v1/economics` *added* | public | | `Economics` | `economics` | WP-14 |
+| `GET /v1/launchpad/me` *added* | session | | `MyLaunchpad` | `launchpad-me` | WP-14 |
+| `GET /v1/moments?filter=&limit=[&address=]` | viewer | | `MomentFeed` | `moments`, `moments.legacy` | WP-16 |
+| `GET /v1/moments/owned[?address=]` | viewer | | `OwnedEditions` | `moments-owned`, `moments-owned.legacy`, `moments-owned.public` | WP-16 |
+| `GET /v1/moments/mine` *added* | session | | `MyMoments` | `moments-mine` | WP-16 |
+| `GET /v1/moments/:id[?address=]` | viewer | | `MomentDetail` | `moment`, `moment.legacy`, `moment.public` | WP-16 |
+| `POST /v1/moments/metadata` | session | `MomentMetadataRequest` | `MomentMetadata` | `moment-metadata`, `moment-metadata.legacy` | WP-16 |
+| `POST /v1/moments/build` | session | `MomentBuildRequest` | `PlanView` | `plan` | WP-16 |
+| `POST /v1/media/upload-url` | session | `{contentType, bytes}` | `UploadTicket` | `media-upload-url` | WP-16 |
 | `PUT /v1/local-media/upload/:token` *added*, local stack | signed token | the file's bytes | 204, no body | — (not JSON) | WP-16 |
 | `GET /v1/local-media/lite-media/<path>` *added*, local stack | public | | the file's bytes (`MediaBytes`) | — (not JSON) | WP-16 |
-| `GET /v1/earn/markets` | JWT | | `EarnMarkets` | `earn-markets`, `earn-markets.legacy` | WP-15 |
-| `GET /v1/earn/positions` | JWT | | `EarnPositions` | `earn-positions`, `earn-positions.legacy` | WP-15 |
-| `GET /v1/earn/history?pool=&asset=&range=` *added* | JWT | | `EarnHistory` | `earn-history` | WP-15 |
-| `POST /v1/earn/build` | JWT | `{action, pool, asset, amount}` | `PlanView` | `plan` | WP-15 |
-| `POST /v1/bridge/quote` | JWT | `{direction, amount}` | `BridgeQuote` | `bridge-quote`, `bridge-quote.legacy` | WP-17 |
-| `POST /v1/bridge/start` | JWT | `{direction, amount, monadAddress}` | `BridgeStart` | `bridge-start-in`, `bridge-start-out` | WP-17 |
-| `POST /v1/bridge/:id/source` | JWT | `{txHash}` | `{id, status}` | `bridge-source` | WP-17 |
-| `POST /v1/bridge/:id/claimed` | JWT | `{txHash}` | `{id, status}` | `bridge-claimed` | WP-17 |
-| `GET /v1/bridge/:id` | JWT | | `BridgeStatus` | `bridge-status` | WP-17 |
-| `GET /v1/cash/anchors?country=` | JWT | | `CashAnchors` | `cash-anchors` | WP-17 |
-| `POST /v1/cash/track` | JWT | `CashTrackRequest` | `{id}` | `cash-track` | WP-17 |
+| `GET /v1/earn/markets` | public | | `EarnMarkets` | `earn-markets`, `earn-markets.legacy` | WP-15 |
+| `GET /v1/earn/positions[?address=]` | viewer | | `EarnPositions` | `earn-positions`, `earn-positions.legacy`, `earn-positions.public` | WP-15 |
+| `GET /v1/earn/history?pool=&asset=&range=` *added* | public | | `EarnHistory` | `earn-history` | WP-15 |
+| `POST /v1/earn/build` | session | `{action, pool, asset, amount}` | `PlanView` | `plan` | WP-15 |
+| `POST /v1/bridge/quote` | session | `{direction, amount}` | `BridgeQuote` | `bridge-quote`, `bridge-quote.legacy` | WP-17 |
+| `POST /v1/bridge/start` | session | `{direction, amount, monadAddress}` | `BridgeStart` | `bridge-start-in`, `bridge-start-out` | WP-17 |
+| `POST /v1/bridge/:id/source` | session | `{txHash}` | `{id, status}` | `bridge-source` | WP-17 |
+| `POST /v1/bridge/:id/claimed` | session | `{txHash}` | `{id, status}` | `bridge-claimed` | WP-17 |
+| `GET /v1/bridge/:id` | session | | `BridgeStatus` | `bridge-status` | WP-17 |
+| `GET /v1/cash/anchors?country=` | session | | `CashAnchors` | `cash-anchors` | WP-17 |
+| `POST /v1/cash/track` | session | `CashTrackRequest` | `{id}` | `cash-track` | WP-17 |
 
-Error bodies: `error`, `error-contract`, `error.legacy`. `/v1/moments/owned` and `/v1/moments/mine` are registered
-before `/v1/moments/:id`, so they never reach it.
+Error bodies: `error`, `error-contract`, `error.legacy`, `error-refresh-reused`, `error-address-required`.
+`/v1/moments/owned` and `/v1/moments/mine` are registered before `/v1/moments/:id`, so they never reach it.
 
 ---
 
 ## 2. Auth (public)
 
-**`POST /v1/auth/challenge`** `{address: "G…"}` → `{nonce, message, expiresAt}`. The nonce is single-use and lives 5
-minutes. `message` is the exact text the phone signs, one fact per line:
+**`POST /v1/auth/challenge`** `{address: "G…"}` → `{nonce, message, expiresAt}`. The nonce is single use, lives 5
+minutes and is 16 to 64 of `A–Z a–z 0–9 _ -`. `message` is the exact text the phone signs: at most 512 bytes, five
+lines joined by `\n`, nothing before, after or between them:
 
 ```
 DyorHQ Lite sign-in
@@ -134,10 +161,62 @@ Nonce: …
 Issued: 2026-10-14T09:41:00.000Z
 ```
 
-**`POST /v1/auth/verify`** `{address, nonce, signature, inviteCode?}` → `{token, expiresAt, tester: {address, label}}`.
-`signature` is the base64 ed25519 signature of the SEP-53 digest of `message`. A first sign-in needs `inviteCode`.
-Refusals: 401 `unauthorized` (nonce used or expired, signature wrong), 403 `not_invited`, `bad_invite`,
-`access_revoked`.
+A seed account signs it without a prompt, so the phone signs only this shape (DESIGN-stellar-parity §5.8): the network
+it has pinned, its own address, the answer's own `nonce` and an ISO 8601 time, which isn't compared with the phone's
+clock. Anything else (another network, address or nonce, a line more or less, `\r\n`) is refused before any key is
+read: `LiteAPIError.decoding("the sign-in challenge")`. The phone then checks its own signature as SEP-53 over that
+message with the account's key, and sends nothing signed any other way. These five lines are part of the contract: a
+server that changes them breaks sign-in on every phone.
+
+**`POST /v1/auth/verify`** `{address, nonce, signature, inviteCode?}` → `AuthResult` `{token, expiresAt, tester:
+{address, label}, refreshToken, refreshExpiresAt}` (the last two *added*). `signature` is the base64 ed25519 signature
+of the SEP-53 digest of `message`: sha256 of `"Stellar Signed Message:\n" + message`. `token` is the access token, a
+JWT valid for **1 hour** (it was 12 hours before refresh tokens). A first sign-in needs `inviteCode` where
+`config.inviteRequired` is true (mainnet); testnet needs none. An existing tester's `inviteCode` is ignored, not
+consumed, so the phone may send one whenever it has one. Refusals: 401 `unauthorized` (nonce used or expired, signature
+wrong), 403 `not_invited`, `bad_invite`, `access_revoked`.
+
+**Refresh tokens** *added*. `refreshToken` is `lrt_` and 32 random bytes in base64url; the server keeps only its
+SHA-256. Each sign-in starts a **family**. A refresh token:
+
+- lives 30 days from issue, and each refresh issues a successor with 30 days of its own (a sliding lifetime);
+- is **single use**: a refresh rotates it;
+- presented a second time revokes its whole family, since a copy is in use somewhere else: 401 `refresh_reused`;
+- is kept on the phone with the access token, in a Keychain item for this device only (never synced or backed up).
+
+**`POST /v1/auth/refresh`** *added* `{address, refreshToken}` → `AuthResult`, as verify answers: a new access token and
+the refresh token's successor, in the same family. Refusals: 401 `refresh_invalid` (unknown, expired or revoked), 401
+`refresh_reused` (already used: the family is revoked), 403 `access_revoked` (the tester was turned off: the family is
+revoked too).
+
+**`POST /v1/auth/signout`** *added* `{refreshToken}` → 204, no body. Revokes the token's family. An unknown token gets
+204 too, so the answer says nothing about which tokens exist. The phone calls it, best effort within 3 seconds, when the
+user signs out of Stellar or of the app, or erases this iPhone.
+
+**What the phone does.** It renews the session before the access token ends (10 minutes before `expiresAt` while the
+app is active). On a 401 to a request that carried the token, `LiteAPI` runs one renewal, shared by every request
+refused meanwhile, and tries each of them once more. A renewal is `auth/refresh` with the stored refresh token, then,
+for a seed account, the silent sign-in above. The phone never presents a refresh token twice (that would revoke its
+own family): refreshes of one token at the same time share one request, and a token it already rotated is replaced by
+its successor. When neither works, a viewer request is answered with the public view and a session request reports
+that the user needs to sign in. None of this asks for Face ID, the passcode or a passkey.
+
+**Public views** (viewer routes without a token, §0): the owner view's shape with `"view": "public"`. On-chain facts
+stay; DyorHQ's own history is `null`:
+
+| Route | `null` in the public view | Notes |
+|---|---|---|
+| `GET /v1/account?address=` | `firstFunding.starterSwap`, `firstFunding.faucet.usedToday` | `needsXlm` and `suggestXlm` stay: they follow from the ledger. Launch balances are the indexed ones. |
+| `GET /v1/holdings?address=` | `earn[].deposited`, `withdrawn` and `earned` (with `earnedComplete: false`); `launch[].costBasisUsd` and `pnlUsd` | Balances, Earn `supplied`, editions, prices, totals and `change24h` stay. Launch balances are the indexed ones, with no live `balance()` read (`stale: false`). Cached 15 s per address. |
+| `GET /v1/earn/positions?address=` | `deposited`, `withdrawn` and `earned` (with `earnedComplete: false`) | |
+| `GET /v1/moments/owned?address=` | — | The address's editions. |
+| `GET /v1/launches/:token[?address=]` | `you.costBasisQuote`, `you.pnlQuote` | `you` is `{balance, costBasisQuote, pnlQuote, isCreator}` for `?address=` (the indexed balance), `null` without it. |
+| `GET /v1/moments/:id[?address=]` | `you.spent` | `you` is `{editions, spent}` for `?address=`, `null` without it. |
+| `GET /v1/launches`, `GET /v1/moments` | — | The same boards. |
+| `GET /v1/assets?q=[&address=]` | — | `held` is about `?address=`, and false without it. |
+
+Fixtures: `account.public`, `holdings.public`, `earn-positions.public`, `moments-owned.public`, `launch.public`,
+`moment.public`.
 
 ---
 
@@ -165,6 +244,7 @@ media base, the RPC and explorer links).
 | `faucet` *added* | `{amount}` or null | Testnet's faucet, in XLM ("10000"). Null off testnet. |
 | `limits` *added* | `{momentMaxEditions, momentWindowSecs: [min, max], collectMax, launchName: [min, max], launchSymbol: [min, max], uriMax, uploadBytes}` | What the server accepts. `launchName` is UTF-8 bytes. |
 | `pricing` *added* | `Pricing` | §8. |
+| `inviteRequired` *added* | boolean | Whether a first sign-in needs an invite code (§2): false on testnet, true on mainnet. Older servers send none and always ask for one. |
 
 ---
 
@@ -204,7 +284,8 @@ spendable  = max(0, balance − minBalance − sellingLiabilities)
 
 The phone recomputes `spendable` from these parts. `firstFunding`: `needsXlm` when spendable < `fees.fundingFloor`
 (0.1 XLM); `suggestXlm` is 2 XLM for a missing account, otherwise 1 XLM plus any reserve the account lacks;
-`starterSwap` is `available | used | unavailable`; `faucet` is `{amount, usedToday}` on testnet, null elsewhere.
+`starterSwap` is `available | used | unavailable`; `faucet` is `{amount, usedToday}` on testnet, null elsewhere. The
+public view (§2) leaves `starterSwap` and `usedToday` null.
 
 **`POST /v1/account/activate`** `{}` → a `PlanView` to run, or `{status: "active", account}` when there is nothing to
 do.
@@ -339,12 +420,12 @@ complete, points: [{t, usd}]}`, oldest first. Registry assets: reference candles
 `month` 3600 s, `all` 86,400 s. Launch tokens: curve and pool candles × the quote's USD price, forward-filled from
 creation, `source: "curve+pool"`.
 
-**`GET /v1/assets?q=`** (JWT, so `held` can be set, *added*) → `{results: [{id, kind, code, name, contract, classic,
+**`GET /v1/assets?q=`** (viewer, so `held` can be set, *added*) → `{results: [{id, kind, code, name, contract, classic,
 verified, held}]}`. `kind`: `registry | launch | classic | contract`. At most 30, matched on code and name, or exactly on
 a C… id or `CODE:G…`. A pasted C… that isn't a launch is read live (`symbol()`, `name()`, `decimals()`) and answered as
 `kind: contract, verified: false`.
 
-**`GET /v1/prices`** (JWT) → `{usd: {id: number}, reference, at}`, kept for older clients. Values come from the
+**`GET /v1/prices`** (public) → `{usd: {id: number}, reference, at}`, kept for older clients. Values come from the
 reference cache (BUSDC as USDC); an unknown price is left out, never 1.
 
 ---
@@ -428,8 +509,9 @@ clients and answers `{launches}`.
 - `candles[]`: `{t, o, h, l, c, v}`, prices in the quote asset, at most 300.
 - *Added:* `stats {volume24hQuote, volume24hUsd, holders, holdersComplete, marketCapQuote, marketCapUsd, priceQuote,
   priceUsd, change24h}`, `creatorFees {unclaimed, claimed, quote, unclaimedUsd, claimedUsd}`, `you {balance,
-  costBasisQuote, pnlQuote, isCreator}` (cost basis and P&L null for coins received by transfer), `economics {feeBps,
-  protocolShareBps, creatorFeeBps, supply, phantom, threshold}` and `pricePoints [{t, price}]` (at most 300).
+  costBasisQuote, pnlQuote, isCreator}` (cost basis and P&L null for coins received by transfer, and in the public
+  view), `economics {feeBps, protocolShareBps, creatorFeeBps, supply, phantom, threshold}` and `pricePoints [{t,
+  price}]` (at most 300).
 
 **`POST /v1/launches/:token/quote`** `{side: "buy" | "sell", amount}` → buy `{side, used, tokensOut, fees, snipeFee}`,
 sell `{side, quoteOut, fees}`; *added* `baseFee`, `creatorFee` and `refund` (the part of a buy a full curve returns).
@@ -483,8 +565,8 @@ collectors, state` (`collecting | sold_out | closed`), `platformBps, royaltyBps,
 covers sold out and window closed.
 
 **`GET /v1/moments/:id`** → `{moment, collectors: [{collector, quantity, firstTokenId, ts}]}`, plus *added*
-`collectorsSummary {count, largest: {address, editions} | null}`, `you {editions: [token ids still owned], spent}` and
-`creatorEarned` (base units of the quote).
+`collectorsSummary {count, largest: {address, editions} | null}`, `you {editions: [token ids still owned], spent}`
+(`spent` null in the public view) and `creatorEarned` (base units of the quote).
 
 **`GET /v1/moments/owned`** → `{editions: [Edition]}`. **`Edition`**: `{tokenId, momentId, title, mediaUrl}`, plus
 *added* `posterUrl, mediaType, contract`. Read from indexed ownership.
@@ -615,6 +697,9 @@ The codes the phone words, and the HTTP status each comes with. Copy is in the S
 | 429 `upload_budget` | the daily upload budget | You've uploaded a lot today. Try again tomorrow. |
 | 429 `bridge_relay_limit` | the daily relayed-bridge cap | You've bridged in many times today. Try again tomorrow. |
 | 422 `tx_rejected` | any other send error (`detail.code` is Stellar's result code) | the server's message, verbatim |
+| 401 `unauthorized` | a Bearer token that is invalid or expired | none: the phone renews and retries once (§2) |
+| 401 `refresh_invalid` / `refresh_reused` | a refresh token that is unknown, expired or revoked / already used (its family is revoked) | none: a silent sign-in (seed accounts) or the public view (passkey accounts) |
+| 400 `address_required` | a viewer route about an account, with neither a token nor `?address=` | none (a phone bug) |
 
 Every %@ is in the error's `detail`, so a refusal can be worded from the error alone:
 
@@ -626,21 +711,18 @@ Every %@ is in the error's `detail`, so a refusal can be worded from the error a
 | `recipient_missing`, `recipient_no_trust`, `trust.missing` | `assetCode`; also `asset` (its id) |
 | `moment.price_too_low` | `minPrice` (base units of the quote) and `quoteCode` |
 
-**Open (lead decision, for WP-12).** The phone can't use these yet. `LiteAPI` decodes `detail`, but
-`LiteAPIError.server(status:code:message:)` keeps only the status, the code and the message, and the design (§7.2)
-gives `LiteErrorText.describe(_ error: Error)` nothing else to read. Either the error carries `detail` (a fourth
-value on `server`, so DyorLite's matches on it change too), or `describe` also takes the values the screen holds (the
-review's fee, the asset, the account's minimum balance, the Moments policy). Until then those copies have no value to
-show.
+The phone reads them from the error: `LiteAPIError.server(status:code:message:detail:)` carries `detail` as text
+(strings as sent, numbers and booleans written out, nested values left out), so `LiteErrorText.describe(_:)` can fill
+a copy's %@ from the error alone.
 
 Other codes, shown as the server's message: 400 `bad_json`, `too_large`, `bad_arg`, `bad_amount`, `bad_address`,
 `bad_asset`, `bad_memo`, `too_small`, `bad_xdr`, `unsigned`, `empty_plan`, `same_asset`, `bad_slippage`, `bad_pool`,
 `bad_action`, `bad_request_type`, `bad_side`, `bad_quote`, `bad_name`, `bad_symbol`, `bad_fee`, `bad_uri`, `bad_title`,
 `bad_media`, `bad_moment`, `bad_quantity`, `bad_editions`, `bad_window`, `bad_type`, `bad_direction`, `bad_hash`,
-`bad_spender`, `bad_anchor`, `bad_kind`, `testnet_only`, `no_friendbot`; 401 `unauthorized`; 403 `not_invited`,
-`bad_invite`, `access_revoked`; 404 `not_found`, `no_route`; 409 `account_inactive`, `needs_usdc`, `needs_restore`,
-`not_ready`, `not_built`, `already_sent`, `stale_step`, `recipient_inactive`, `recipient_cannot_receive`,
-`already_uploaded`; 410 `plan_expired`, `quote_expired`; 429 `rate_limited`, `faucet_used`; 500 `self_check_failed`,
+`bad_spender`, `bad_anchor`, `bad_kind`, `testnet_only`, `no_friendbot`; 403 `not_invited`, `bad_invite`,
+`access_revoked`; 404 `not_found`, `no_route`; 409 `account_inactive`, `needs_usdc`, `needs_restore`, `not_ready`,
+`not_built`, `already_sent`, `stale_step`, `recipient_inactive`, `recipient_cannot_receive`, `already_uploaded`; 410
+`plan_expired`, `quote_expired`; 429 `rate_limited`, `faucet_used`; 500 `self_check_failed`,
 `internal`; 501 `mainnet_route`; 502 `friendbot_failed`, `rpc_unavailable`, `storage_error`, `bridge_quote_failed`;
 503 `not_deployed`, `network_busy`, `storage_unavailable`; 504 `friendbot_slow`. Today's 429 `budget_exhausted` goes
 with the daily sponsored-fee budget when users start paying their own fees.
@@ -650,8 +732,9 @@ with the daily sponsored-fee budget when users start paying their own fees.
 ## 17. Fixtures
 
 `backend/tests/fixtures/api/<name>.json` holds one example of each answer: `<name>.json` in the parity form and
-`<name>.legacy.json` for today's form where it differs (`account.missing`, `holdings.partial` and the `error*` bodies
-are further cases). They are written for testnet with synthetic addresses.
+`<name>.legacy.json` for today's form where it differs (`auth-verify.legacy` is a sign-in answer without a refresh
+token). `<name>.public.json` is a viewer route's public view (§2); `account.missing`, `holdings.partial` and the
+`error*` bodies are further cases. They are written for testnet with synthetic addresses.
 
 - **`backend/tests/fixtures/fixtures.test.ts`** type-checks each fixture exactly as its `contract.ts` type: it writes
   every fixture into one module as a literal and runs `deno run --check` on it, so a field `contract.ts` lacks, a
@@ -663,7 +746,11 @@ are further cases). They are written for testnet with synthetic addresses.
 - **`LiteClientTests`** decode every fixture with the model the client uses (`testDecodesApiFixtures`), and fail when
   a model drops a field the fixture carries (each model is encoded back and compared), so a misspelt optional can't
   read as nil. `LiteAPIRouteTests` serve them from a stub server to check each `LiteAPI` method's route, its token
-  (none on the public routes) and its error codes.
+  (none on the public routes but the four still guarded; `?address=` on the viewer routes without one, and no request
+  about an account without a viewer) and its error codes and details. `LiteSessionAPITests` check the sign-in (a
+  challenge of any other shape is never signed, a signature that isn't SEP-53 is never sent), the refresh (one request
+  for refreshes of one token at once, never a rotated token again) and the renewal (one for concurrent 401s, then one
+  retry, then the public view or `notSignedIn`). `SavedSessionTests` check the Keychain item's format.
 - **Backend packages** add `<area>_fixtures.test.ts`, which produce their answers from seeded data and compare them
   with these files. A deliberate change to an answer changes its fixture, the Swift model and `contract.ts` together:
   a fixture field missing from `contract.ts` fails `fixtures.test.ts`, one the Swift model drops fails

@@ -40,5 +40,6 @@
       "verified": false,
       "held": false
     }
-  ]
+  ],
+  "view": "owner"
 }

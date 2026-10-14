@@ -155,7 +155,7 @@ public final class LiteStore {
         guard let api = error as? LiteAPIError else { return }
         switch api {
         case .notSignedIn: session?.lostSession()
-        case let .server(status, code, _):
+        case let .server(status, code, _, _):
             if code == "access_revoked" { session?.lostAccess() } else if status == 401 { session?.lostSession() }
         default: break
         }

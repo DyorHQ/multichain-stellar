@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "address_required",
+    "message": "Sign in, or name the account with ?address=G….",
+    "detail": null
+  }
+}

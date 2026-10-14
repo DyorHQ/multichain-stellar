@@ -53,5 +53,6 @@
     ],
     "spent": "10000000"
   },
-  "creatorEarned": "28500000"
+  "creatorEarned": "28500000",
+  "view": "owner"
 }

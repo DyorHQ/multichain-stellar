@@ -26,6 +26,9 @@ export interface Job {
   every?: number;
   /** Starts only in the run's first LATE_MS. */
   late?: boolean;
+  /** Signs with the keeper's or the sponsor's key: skipped while LITE_KEEPER=off, so a package's local stack never
+   *  races the shared keys (§6.17). */
+  keeper?: boolean;
 }
 
 export const JOBS: Job[] = [
@@ -33,9 +36,9 @@ export const JOBS: Job[] = [
   { name: "watch", run: watch },
   { name: "refprices", run: refprices },
   { name: "settle", run: settlePending },
-  { name: "graduate", run: graduate },
-  { name: "bridges", run: bridges },
-  { name: "ttl", run: ttl, late: true },
+  { name: "graduate", run: graduate, keeper: true },
+  { name: "bridges", run: bridges, keeper: true },
+  { name: "ttl", run: ttl, late: true, keeper: true },
   { name: "reconcile", run: reconcile, every: 10 * MINUTE, late: true },
   { name: "earn", run: earn, every: 10 * MINUTE, late: true },
   { name: "ops", run: ops, every: 10 * MINUTE, late: true },
@@ -46,13 +49,19 @@ export const JOBS: Job[] = [
 export const BUDGET_MS = 45_000;
 export const LATE_MS = 40_000;
 
-/** Runs every job that is due, in order. Answers each job's result (or its error, or why it was skipped) by name. */
+/** Runs every job that is due, in order, but the keeper's while LITE_KEEPER=off. Answers each job's result (or its
+ *  error, or why it was skipped) by name. */
 export async function runJobs(jobs: Job[] = JOBS, now: () => number = Date.now): Promise<Record<string, unknown>> {
   const started = now();
   const out: Record<string, unknown> = {};
   const recording = await tableExists("lite.job_runs").catch(() => false);
+  const keeper = env.keeperEnabled;
   for (const job of jobs) {
     if (!job.run) continue;
+    if (job.keeper && !keeper) {
+      out[job.name] = { skipped: "LITE_KEEPER=off" };
+      continue;
+    }
     const elapsed = now() - started;
     if (elapsed >= BUDGET_MS || (job.late && elapsed >= LATE_MS)) {
       out[job.name] = { skipped: `out of time after ${Math.round(elapsed / 1000)} s` };

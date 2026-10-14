@@ -103,5 +103,6 @@
   "counts": {
     "explore": 12,
     "graduated": 3
-  }
+  },
+  "view": "owner"
 }

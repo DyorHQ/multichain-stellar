@@ -41,6 +41,27 @@ function localOnly(name: string): string | undefined {
 }
 
 let keeperWarned = false;
+const ignoredWarned = new Set<string>();
+
+/** A QA override, which only testnet takes: off testnet it is ignored, with one warning per variable. */
+function testnetOverride(name: string): string | undefined {
+  const v = read(name);
+  if (v === undefined || networkName() === "testnet") return v;
+  if (!ignoredWarned.has(name)) {
+    ignoredWarned.add(name);
+    console.warn(`${name} is set but ignored: it applies on testnet only.`);
+  }
+  return undefined;
+}
+
+/** A session lifetime in seconds: `fallback`, or on testnet `name` when set, which must be at least `min`. */
+function lifetime(name: string, fallback: number, min: number): number {
+  const v = testnetOverride(name);
+  if (v === undefined) return fallback;
+  const n = Number(v);
+  if (!Number.isSafeInteger(n) || n < min) throw new Error(`${name} must be a whole number of seconds, at least ${min}`);
+  return n;
+}
 
 /** Lazy, so importing a module never needs secrets that its code path doesn't use (tests, scripts). */
 export const env = {
@@ -62,6 +83,32 @@ export const env = {
   },
   get jwtSecret(): string {
     return required("LITE_JWT_SECRET");
+  },
+  /** The access token's lifetime: an hour (§5.9). LITE_JWT_TTL_S shortens it on testnet, for QA of renewal
+   *  (local-stack.sh --short-sessions): at least 60 s. */
+  get jwtTtlS(): number {
+    return lifetime("LITE_JWT_TTL_S", 3600, 60);
+  },
+  /** A refresh token's lifetime: 30 days from issue, a refresh's successor 30 days of its own (§5.9).
+   *  LITE_REFRESH_TTL_S shortens it on testnet: at least 120 s. */
+  get refreshTtlS(): number {
+    return lifetime("LITE_REFRESH_TTL_S", 30 * 86_400, 120);
+  },
+  /** Whether a first sign-in needs an invite code: never on testnet (owner decision 2026-10-14), always on mainnet.
+   *  LITE_INVITE_REQUIRED (1 or 0) sets it on testnet, for QA of either mode. */
+  get inviteRequired(): boolean {
+    const v = testnetOverride("LITE_INVITE_REQUIRED");
+    if (v === undefined) return networkName() !== "testnet";
+    if (v === "1" || v === "true") return true;
+    if (v === "0" || v === "false") return false;
+    throw new Error("LITE_INVITE_REQUIRED is 1 or 0");
+  },
+  /** LITE_KEEPER (on, the default, or off): off, the indexer skips every job that signs with the keeper's or the
+   *  sponsor's key, so a package's local stack never races the shared keys (§6.17). */
+  get keeperEnabled(): boolean {
+    const v = read("LITE_KEEPER") ?? "on";
+    if (v !== "on" && v !== "off") throw new Error("LITE_KEEPER is on or off");
+    return v === "on";
   },
   get sponsorSecret(): string {
     return required("SPONSOR_SECRET");

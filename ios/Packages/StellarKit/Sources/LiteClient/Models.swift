@@ -111,6 +111,9 @@ public struct LiteConfig: Codable, Equatable, Sendable {
     public let faucet: Faucet?
     public let limits: Limits?
     public let pricing: StellarPricing?
+    /// Whether a first sign-in needs an invite code: false on testnet, true on mainnet. Nil from older servers, which
+    /// always ask for one.
+    public let inviteRequired: Bool?
 
     public func asset(_ id: String) -> AssetInfo? { assets.first { $0.id == id || $0.contract == id } }
 }
@@ -145,6 +148,9 @@ public struct AccountView: Codable, Equatable, Sendable {
     /// The account's XLM and what it must keep; nil while the account doesn't exist.
     public let xlm: StellarXLMPosition?
     public let firstFunding: StellarFirstFunding?
+    /// "owner" (the session's own account) or "public" (the viewer's account, without a session: on-chain facts only).
+    /// Nil from older servers.
+    public let view: String?
 
     public func balance(_ asset: String) -> Int64 { balances.first { $0.asset == asset }?.units ?? 0 }
 }
@@ -427,6 +433,8 @@ public struct StellarLaunchDetail: Codable, Equatable, Sendable {
     public let economics: Economics?
     /// At most 300 prices in the quote asset, oldest first.
     public let pricePoints: [Point]?
+    /// "owner" or "public" (no session: `you` has no cost basis or P&L, and is nil without a viewer).
+    public let view: String?
 }
 
 public struct TradeQuote: Codable, Equatable, Sendable {
@@ -482,6 +490,8 @@ public struct StellarMomentDetail: Codable, Equatable, Sendable {
     public let you: You?
     /// What the creator has been paid, in base units of the Moment's quote asset.
     public let creatorEarned: String?
+    /// "owner" or "public" (no session: `you.spent` is nil, and `you` is nil without a viewer).
+    public let view: String?
 }
 
 /// A Moment edition (an NFT) in the user's account.
@@ -611,9 +621,50 @@ public struct AuthChallenge: Codable, Equatable, Sendable {
     public let expiresAt: String
 }
 
+/// `auth/verify` and `auth/refresh`: a session.
 public struct AuthResult: Codable, Equatable, Sendable {
     public struct Tester: Codable, Equatable, Sendable { public let address: String; public let label: String? }
+    /// The access token (an hour), sent as `authorization: Bearer …`.
     public let token: String
     public let expiresAt: String
     public let tester: Tester
+    /// Renews the session once (`LiteAPI.refresh`); each use hands out its successor. Lapses 30 days after it was
+    /// issued. Nil from older servers.
+    public let refreshToken: String?
+    public let refreshExpiresAt: String?
+}
+
+/// A session as the phone keeps it between launches (`StellarKeychain.saveSession`): the access token and the refresh
+/// token that renews it, each with when it ends. The item is one JSON object of strings, times in ISO 8601 to the
+/// second, so an item saved before refresh tokens (`token` and `expiresAt` alone) still reads, an older build still
+/// finds those two in a newer item, and a refresh token is kept even when its answer gave no expiry.
+public struct LiteSavedSession: Equatable, Sendable {
+    public let token: String
+    public let expiresAt: Date
+    public let refreshToken: String?
+    public let refreshExpiresAt: Date?
+
+    public init(token: String, expiresAt: Date, refreshToken: String? = nil, refreshExpiresAt: Date? = nil) {
+        self.token = token
+        self.expiresAt = expiresAt
+        self.refreshToken = refreshToken
+        self.refreshExpiresAt = refreshExpiresAt
+    }
+
+    /// An item read back; nil when it isn't a session.
+    public init?(data: Data) {
+        let time = ISO8601DateFormatter()
+        guard let fields = try? JSONDecoder().decode([String: String].self, from: data),
+              let token = fields["token"], let expiresAt = fields["expiresAt"].flatMap(time.date(from:)) else { return nil }
+        self.init(token: token, expiresAt: expiresAt, refreshToken: fields["refreshToken"], refreshExpiresAt: fields["refreshExpiresAt"].flatMap(time.date(from:)))
+    }
+
+    /// The item's bytes.
+    public func data() throws -> Data {
+        let time = ISO8601DateFormatter()
+        var fields = ["token": token, "expiresAt": time.string(from: expiresAt)]
+        fields["refreshToken"] = refreshToken
+        fields["refreshExpiresAt"] = refreshExpiresAt.map(time.string(from:))
+        return try JSONEncoder().encode(fields)
+    }
 }

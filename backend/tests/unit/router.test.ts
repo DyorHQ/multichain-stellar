@@ -1,6 +1,9 @@
 // The Lite API's routes (lite/index.ts and lite/routes/*.ts):
 // - ROUTES lists every route in the order they match, each with a path that must reach it and no other;
-// - only sign-in, config, fees, market data and the local media stand-in skip the session check;
+// - three classes (docs/DESIGN-stellar-parity.md §6.0, §6.18), as the API contract gives them: public routes (sign-in,
+//   config, fees, market data, economics, Earn's markets and history, the local media stand-in) skip the session
+//   check; viewer routes pass it without an Authorization header (the public view, rate-limited per IP) and are checked
+//   as a session when one is sent, so a bad or expired token gets 401; every other route needs the JWT;
 // - GET /v1/config serves every field of docs/DESIGN-stellar-parity.md §6.2;
 // - routes answer as they did before they moved from lite/index.ts into lite/routes/: the answers recorded then are
 //   in backend/tests/fixtures/routes/<name>.json, and every request must get the same status, headers and body bytes
@@ -8,15 +11,20 @@
 // A package that adds a route adds it to ROUTES. One that changes a route's answer on purpose records them again, and
 // the diff shows what changed:
 //   ROUTES_RECORD=1 deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/router.test.ts
-import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import testnetDeployment from "../../supabase/functions/_shared/deployments/testnet.json" with { type: "json" };
-import { fakeSql, fixtureUrl, goOffline, record, RecordedRoute, ROUTE_REQUESTS, routeRows, send, setTestEnv, SPONSOR, TOKEN, userToken } from "../fixtures/routes/harness.ts";
+import { fakeSql, fixtureUrl, goOffline, OTHER, record, RecordedRoute, ROUTE_REQUESTS, routeRows, send, setTestEnv, SPONSOR, TOKEN, USER, userToken } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
+// The session settings' defaults (testnet: no invite gate, an hour's access token), whatever this shell exports.
+for (const name of ["LITE_INVITE_REQUIRED", "LITE_JWT_TTL_S", "LITE_REFRESH_TTL_S"]) Deno.env.delete(name);
 goOffline();
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 replaceSql(fakeSql(routeRows));
-const { handle, isPublic, router } = await import("../../supabase/functions/lite/index.ts");
+const { guard, handle, isPublic, isViewer, router } = await import("../../supabase/functions/lite/index.ts");
+const { accountViewer, viewer } = await import("../../supabase/functions/lite/routes/auth.ts");
+const { ApiError, json, Router } = await import("../../supabase/functions/_shared/http.ts");
+const { signJwt } = await import("../../supabase/functions/_shared/auth.ts");
 
 const ID = "3f1c2a9e-0000-4000-8000-000000000002";
 
@@ -24,6 +32,8 @@ const ID = "3f1c2a9e-0000-4000-8000-000000000002";
 const ROUTES: [string, string, boolean][] = [
   ["POST /v1/auth/challenge", "/v1/auth/challenge", true],
   ["POST /v1/auth/verify", "/v1/auth/verify", true],
+  ["POST /v1/auth/refresh", "/v1/auth/refresh", true],
+  ["POST /v1/auth/signout", "/v1/auth/signout", true],
   ["GET /v1/config", "/v1/config", true],
   ["GET /v1/account", "/v1/account", false],
   ["POST /v1/account/activate", "/v1/account/activate", false],
@@ -36,7 +46,8 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/tx/:hash", `/v1/tx/${"ab".repeat(32)}`, false],
   ["POST /v1/swap/quote", "/v1/swap/quote", false],
   ["POST /v1/swap/build", "/v1/swap/build", false],
-  // Public once it reads the reference cache (§6.6); until then its handler signs in.
+  // Public once it reads the reference cache (§6.6); until then its handler signs in. So do economics (WP-14) and
+  // Earn's markets and history (WP-15) until those packages serve them without a session.
   ["GET /v1/prices", "/v1/prices", false],
   ["GET /v1/launches", "/v1/launches", false],
   ["GET /v1/launches/:token", `/v1/launches/${TOKEN}`, false],
@@ -138,23 +149,146 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals([mine.status, (await mine.json()).error.code], [501, "not_implemented"]);
   });
 
-  Deno.test("config, fees and markets need no session; the rest do", () => {
-    for (const r of ["GET /v1/config", "GET /v1/fees", "GET /v1/markets", "GET /v1/markets/:id", "GET /v1/markets/:id/history", "POST /v1/auth/verify"]) {
-      assert(isPublic(r), r);
-    }
-    for (const r of ["GET /v1/assets", "GET /v1/holdings", "GET /v1/portfolio", "GET /v1/feesx", "GET /v1/marketsx", "GET /v1/configs", "GET /v1/account"]) {
+  Deno.test("public: sign-in, config, fees, market data, economics, Earn's markets and history; nothing else", () => {
+    const open = [
+      "POST /v1/auth/verify",
+      "POST /v1/auth/refresh",
+      "POST /v1/auth/signout",
+      "GET /v1/config",
+      "GET /v1/fees",
+      "GET /v1/markets",
+      "GET /v1/markets/:id",
+      "GET /v1/markets/:id/history",
+      "GET /v1/prices",
+      "GET /v1/economics",
+      "GET /v1/earn/markets",
+      "GET /v1/earn/history",
+    ];
+    for (const r of open) assert(isPublic(r) && !isViewer(r), r);
+    const closed = ["GET /v1/assets", "GET /v1/holdings", "GET /v1/portfolio", "GET /v1/feesx", "GET /v1/marketsx", "GET /v1/configs", "GET /v1/account"];
+    for (const r of [...closed, "GET /v1/economicsx", "GET /v1/earn/positions", "POST /v1/earn/build", "GET /v1/earn/historyx", "GET /v1/earn/markets/x"]) {
       assert(!isPublic(r), r);
     }
     for (const [spec, , open] of ROUTES) if (open) assert(isPublic(spec), spec);
   });
 
+  Deno.test("viewer: the on-chain reads, GET only; history, writes and quotes stay session routes", () => {
+    const viewers = [
+      "GET /v1/account",
+      "GET /v1/holdings",
+      "GET /v1/earn/positions",
+      "GET /v1/moments/owned",
+      "GET /v1/launches",
+      "GET /v1/launches/:token",
+      "GET /v1/moments",
+      "GET /v1/moments/:id",
+      "GET /v1/assets",
+    ];
+    for (const r of viewers) assert(isViewer(r) && !isPublic(r), r);
+    const sessions = [
+      "GET /v1/portfolio",
+      "GET /v1/activity",
+      "GET /v1/launchpad/me",
+      "GET /v1/moments/mine",
+      "GET /v1/tx/:hash",
+      "POST /v1/account/activate",
+      "POST /v1/launches/:token/quote",
+      "POST /v1/launches/build",
+      "POST /v1/moments/build",
+      "POST /v1/account",
+      "GET /v1/accounts",
+      "GET /v1/account/x",
+      "GET /v1/launches/:token/x",
+    ];
+    for (const r of sessions) assert(!isViewer(r) && !isPublic(r), r);
+  });
+
+  Deno.test("every route's class is the API contract's (_shared/contract.ts Routes)", async () => {
+    const source = await Deno.readTextFile(new URL("../../supabase/functions/_shared/contract.ts", import.meta.url));
+    const contract = new Map([...source.matchAll(/"([A-Z]+ \/v1\/[^"]+)":\s*\{\s*auth:\s*"(\w+)"/g)].map((m) => [m[1], m[2]]));
+    assert(contract.size > 50, `${contract.size} routes in the contract`);
+    const classOf = (spec: string) => (isPublic(spec) ? "public" : isViewer(spec) ? "viewer" : "session");
+    for (const [spec, auth] of contract) {
+      // The local media stand-in's upload carries its own signed token: public, as far as the session check goes.
+      assertEquals(classOf(spec), auth === "upload" ? "public" : auth, spec);
+    }
+    // Every route served is in the contract (the media stand-in's path under its own parameter names).
+    for (const spec of router.specs) {
+      const named = spec.replace("lite-media/*path", "lite-media/:folder/:owner/:file");
+      assert(contract.has(named), `${spec} isn't in the contract`);
+    }
+  });
+
+  // Viewer routes pass the guard without a header, but until their packages serve the public view (WP-10, WP-14,
+  // WP-15, WP-16, WP-18) their handlers still ask for a session, as before.
   Deno.test("without a session, every route answers 401 but the open ones", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
-      const body = await res.json();
+      const text = await res.text();
       if (open) assertNotEquals(res.status, 401, spec);
-      else assertEquals([res.status, body.error.message], [401, "Sign in on Stellar to continue."], spec);
+      else assertEquals([res.status, JSON.parse(text).error.message], [401, "Sign in on Stellar to continue."], spec);
     }
+  });
+
+  Deno.test("the guard lets a viewer route through without an Authorization header, and checks one that is sent", async () => {
+    const expired = await signJwt({ sub: USER.publicKey(), net: "testnet", aud: "dyorhq-lite", iss: "dyorhq-lite", exp: 1_760_400_060, iat: 1_760_400_000 });
+    for (const spec of ROUTES.map(([s]) => s).filter(isViewer)) {
+      const [, path] = ROUTES.find(([s]) => s === spec)!;
+      // A stand-in handler shows whether the request got past the guard.
+      const r = new Router().before(guard).on(spec, () => Promise.resolve(json({ reached: true })));
+      const ask = (authorization?: string) =>
+        r.handle(new Request(`http://127.0.0.1/functions/v1/lite${path}?address=${USER.publicKey()}`, { headers: authorization ? { authorization } : {} }));
+      const anonymous = await ask();
+      assertEquals([anonymous.status, await anonymous.json()], [200, { reached: true }], spec);
+      const signedIn = await ask(`Bearer ${token}`);
+      assertEquals([signedIn.status, await signedIn.json()], [200, { reached: true }], spec);
+      for (const [authorization, message] of [["Bearer not-a-token", "Sign in again."], [`Bearer ${expired}`, "Your session expired. Sign in again."], ["Basic dXNlcg==", "Sign in on Stellar to continue."]]) {
+        const refused = await ask(authorization);
+        assertEquals([refused.status, (await refused.json()).error], [401, { code: "unauthorized", message, detail: null }], `${spec} ${authorization}`);
+      }
+    }
+    // Session routes still need the JWT, whatever the query names.
+    for (const spec of ["GET /v1/activity", "GET /v1/portfolio", "GET /v1/moments/mine", "POST /v1/send"]) {
+      await assertRejects(() => guard(new Request(`http://127.0.0.1/lite/v1/x?address=${USER.publicKey()}`), spec), ApiError, "Sign in on Stellar to continue.");
+    }
+  });
+
+  Deno.test("viewer routes: a bad or expired token gets 401 from the API, never the public view", async () => {
+    const expired = await signJwt({ sub: USER.publicKey(), net: "testnet", aud: "dyorhq-lite", iss: "dyorhq-lite", exp: 1_760_400_060, iat: 1_760_400_000 });
+    for (const [spec, path] of ROUTES.filter(([s]) => isViewer(s))) {
+      for (const bad of ["not-a-token", expired]) {
+        const res = await handle(request(spec, `${path}?address=${USER.publicKey()}`, bad));
+        assertEquals([res.status, (await res.json()).error.code], [401, "unauthorized"], spec);
+      }
+    }
+  });
+
+  Deno.test("header-less viewer reads are limited to 120 a minute per IP", async () => {
+    const r = new Router().before(guard).on("GET /v1/account", () => Promise.resolve(json({ reached: true })));
+    const ask = () => r.handle(new Request("http://127.0.0.1/lite/v1/account", { headers: { "x-forwarded-for": "198.51.100.120" } }));
+    for (let i = 0; i < 120; i++) assertEquals((await ask()).status, 200, `request ${i + 1}`);
+    const over = await ask();
+    assertEquals([over.status, (await over.json()).error.code], [429, "rate_limited"]);
+  });
+
+  Deno.test("viewer(): the token's account, or the public view of ?address=; accountViewer() needs one of them", async () => {
+    const at = (query: string, authorization?: string) =>
+      new Request(`http://127.0.0.1/functions/v1/lite/v1/account${query}`, { headers: authorization ? { authorization } : {} });
+    const me = USER.publicKey();
+    const other = OTHER.publicKey();
+    assertEquals(await viewer(at(`?address=${other}`)), { address: other, scope: "public" });
+    assertEquals(await viewer(at("")), { address: null, scope: "public" });
+    // With a token, the token's account, whatever ?address= names.
+    assertEquals(await viewer(at(`?address=${other}`, `Bearer ${token}`)), { address: me, scope: "owner" });
+    await assertRejects(() => viewer(at("", "Bearer not-a-token")), ApiError, "Sign in again.");
+    const badAddress = await viewer(at("?address=GNOPE")).catch((e) => e);
+    assertEquals([badAddress.status, badAddress.code], [400, "bad_address"]);
+    assertEquals(await accountViewer(at(`?address=${other}`)), { address: other, scope: "public" });
+    assertEquals(await accountViewer(at("", `Bearer ${token}`)), { address: me, scope: "owner" });
+    const missing = await accountViewer(at("")).catch((e) => e);
+    const fixture = JSON.parse(await Deno.readTextFile(new URL("../fixtures/api/error-address-required.json", import.meta.url)));
+    assertEquals({ error: { code: missing.code, message: missing.message, detail: null } }, fixture);
+    assertEquals(missing.status, 400);
   });
 
   Deno.test("routes not written yet answer 501, after the session check", async () => {
@@ -189,6 +323,7 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "bridge",
       "flags",
       "minBuild",
+      "inviteRequired",
     ]);
     assertEquals(c.network, "testnet");
     assertEquals(c.passphrase, "Test SDF Network ; September 2015");
@@ -207,6 +342,16 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals(c.contracts.launchpad, testnetDeployment.launchpad);
     assertEquals(c.flags, { enabled: true, maintenance: false });
     assertEquals(c.minBuild, 1);
+    assertEquals(c.inviteRequired, false);
+  });
+
+  Deno.test("GET /v1/config: inviteRequired follows LITE_INVITE_REQUIRED on testnet, for QA", async () => {
+    Deno.env.set("LITE_INVITE_REQUIRED", "1");
+    try {
+      assertEquals((await (await handle(request("GET /v1/config", "/v1/config", null))).json()).inviteRequired, true);
+    } finally {
+      Deno.env.delete("LITE_INVITE_REQUIRED");
+    }
   });
 
   Deno.test("GET /v1/config: where activation is sponsored, the starter swap is offered", async () => {

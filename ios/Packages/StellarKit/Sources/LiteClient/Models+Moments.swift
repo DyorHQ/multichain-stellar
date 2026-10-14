@@ -15,11 +15,12 @@ extension StellarMomentDetail {
         public let largest: Largest?
     }
 
-    /// The signed-in user's side of the Moment.
+    /// The user's side of the Moment: the session's account, or the viewer's in the public view.
     public struct You: Codable, Equatable, Sendable {
         /// Token ids of the editions the user still owns.
         public let editions: [Int]
-        public let spent: String
+        /// What the user paid, in base units of the quote asset; nil in the public view (DyorHQ's history).
+        public let spent: String?
     }
 }
 

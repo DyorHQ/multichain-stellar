@@ -22,6 +22,7 @@ import moments from "./phases/moments.ts";
 import portfolio from "./phases/portfolio.ts";
 import prices from "./phases/prices.ts";
 import send from "./phases/send.ts";
+import session from "./phases/session.ts";
 import starter from "./phases/starter.ts";
 import swap from "./phases/swap.ts";
 
@@ -46,6 +47,7 @@ export type Phase = (t: E2E) => Promise<string | null>;
 
 export const PHASES: [string, Phase][] = [
   ["auth", auth],
+  ["session", session],
   ["fees", fees],
   ["starter", starter],
   ["send", send],
@@ -65,14 +67,17 @@ export const PHASES: [string, Phase][] = [
 const API = Deno.env.get("LITE_API") ?? "http://127.0.0.1:8000/lite";
 
 /** LITE_DB_URL, or the local stack's database behind a loopback LITE_API (§6.17): the default stack's Postgres is on
- *  54329 (API on 8000); a stack started with PORT_BASE has it on PORT_BASE + 2 (API on PORT_BASE). */
+ *  54329 (API on 8000); a stack started with PORT_BASE has it on PORT_BASE + 2 (API on PORT_BASE). A derived URL is
+ *  set as LITE_DB_URL too, so the indexer jobs this test runs in-process (indexer()) use the same database. */
 function dbUrl(): string {
   const set = Deno.env.get("LITE_DB_URL");
   if (set) return set;
   const api = new URL(API);
   if (api.hostname !== "127.0.0.1" && api.hostname !== "localhost") throw new Error("set LITE_DB_URL: the test writes its invite into the API's database");
   const port = Number(api.port);
-  return `postgresql://lite_api@127.0.0.1:${port === 8000 ? 54329 : port + 2}/lite`;
+  const url = `postgresql://lite_api@127.0.0.1:${port === 8000 ? 54329 : port + 2}/lite`;
+  Deno.env.set("LITE_DB_URL", url);
+  return url;
 }
 
 const only = Deno.args.length ? new Set(Deno.args) : null;
