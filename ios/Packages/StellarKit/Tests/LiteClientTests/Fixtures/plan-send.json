@@ -1,0 +1,46 @@
+{
+  "planId": "647e7a41-adef-4b9d-a81a-c96fcd55b14f",
+  "kind": "payment",
+  "expiresAt": "2026-10-14T09:56:00.000Z",
+  "steps": [
+    {
+      "id": "s1",
+      "label": "Send",
+      "status": "built",
+      "intent": {
+        "kind": "payment",
+        "summary": "Send 12.5 USDC",
+        "spend": {
+          "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA": "125000000"
+        },
+        "ops": [
+          "payment"
+        ],
+        "display": {
+          "asset": "USDC",
+          "amount": "12.5",
+          "to": "GCRUXQPSZ5FJCMOQXCLEAWYD5AQ265VPQPG66IMLPCGC7RJ4XTOTIFDY",
+          "memo": "invoice 42"
+        },
+        "to": "GCRUXQPSZ5FJCMOQXCLEAWYD5AQ265VPQPG66IMLPCGC7RJ4XTOTIFDY",
+        "memo": {
+          "type": "text",
+          "value": "invoice 42"
+        }
+      },
+      "xdr": "AAAAAgAAAACWkx+5IqHDdKtQ/Z773xUBaGRNzFg8rllQIi8Zjpt54AAAJxAAToEGAAAAAwAAAAEAAAAAas9OLAAAAABqz1CEAAAAAQAAAAppbnZvaWNlIDQyAAAAAAABAAAAAAAAAAEAAAAAo0vB8s9KkTHQuJZAWwPoIa92r4PN7yGLeIwvxTy83TQAAAABVVNEQwAAAABCPn0F8uyvv+wZKyFaPxvpau242OcCVKvjQT4CB95WsgAAAAAHc1lAAAAAAAAAAAA=",
+      "hash": "a43b8240e798a425f63b57f9f2073d4858f4bd2953ce42df1853b9e7df3e1c3d",
+      "builtAt": "2026-10-14T09:41:00.000Z",
+      "stepKind": "payment",
+      "maxFee": "10000",
+      "feePayer": "user",
+      "sponsorReason": null,
+      "reserveDelta": 0
+    }
+  ],
+  "fees": {
+    "userMax": "10000",
+    "sponsored": false,
+    "newReserves": 0
+  }
+}

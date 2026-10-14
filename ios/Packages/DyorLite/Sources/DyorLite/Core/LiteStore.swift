@@ -17,13 +17,13 @@ public final class LiteStore {
 
     public internal(set) var config: LiteConfig?
     public private(set) var account: AccountView?
-    public private(set) var prices: Prices?
-    public private(set) var activity: [ActivityItem] = []
+    public private(set) var prices: StellarPrices?
+    public private(set) var activity: [StellarActivityItem] = []
     public private(set) var markets: [EarnMarket] = []
     public private(set) var positions: [EarnPosition] = []
-    public private(set) var launches: [Launch] = []
-    public private(set) var moments: [Moment] = []
-    public private(set) var owned: [OwnedEdition] = []
+    public private(set) var launches: [StellarLaunch] = []
+    public private(set) var moments: [StellarMoment] = []
+    public private(set) var owned: [StellarEdition] = []
     /// The last read's failure, in the current language; nil once a refresh goes through.
     public internal(set) var lastError: String?
     /// When the balances were last read.
@@ -127,7 +127,7 @@ public final class LiteStore {
         }
     }
 
-    public func launchDetail(_ token: String) async throws -> LaunchDetail { try await api.launch(token) }
+    public func launchDetail(_ token: String) async throws -> StellarLaunchDetail { try await api.launch(token) }
 
     public func refreshMoments() async {
         do {
@@ -141,7 +141,7 @@ public final class LiteStore {
         }
     }
 
-    public func momentDetail(_ id: Int) async throws -> MomentDetail { try await api.moment(id) }
+    public func momentDetail(_ id: Int) async throws -> StellarMomentDetail { try await api.moment(id) }
 
     func adopt(account: AccountView) {
         self.account = account
@@ -248,7 +248,7 @@ public final class LiteStore {
         return ticket.publicUrl
     }
 
-    public func collectPlan(_ moment: Moment, quantity: Int) async throws -> PreparedAction {
+    public func collectPlan(_ moment: StellarMoment, quantity: Int) async throws -> PreparedAction {
         let plan = try await api.buildCollect(momentId: moment.id, quantity: quantity)
         let total = (Int64(moment.price) ?? 0) * Int64(quantity)
         return PreparedAction(plan: plan, limits: [moment.quote: total], title: tr("Collect"))

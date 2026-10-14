@@ -1,0 +1,9 @@
+{
+  "route": "cctp",
+  "direction": "monad_to_stellar",
+  "amountIn": "12500000",
+  "amountOut": "125000000",
+  "fee": "0",
+  "etaSeconds": 60,
+  "note": "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar."
+}

@@ -6,7 +6,7 @@ enum SHA256Bridge {
 }
 
 /// Base-unit amounts (7 decimals for Stellar assets), kept as Int64 end to end; strings at the API boundary.
-public enum Amount {
+public enum StellarAmount {
     /// "12.5" → 125000000 (rounds toward zero past `decimals`). Nil for anything that isn't a plain decimal.
     public static func parse(_ text: String, decimals: Int = 7) -> Int64? {
         let t = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")

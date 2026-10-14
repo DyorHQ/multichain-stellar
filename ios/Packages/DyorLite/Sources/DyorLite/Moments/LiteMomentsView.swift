@@ -9,7 +9,7 @@ struct LiteMomentsView: View {
     @Environment(LiteStore.self) private var store
     @State private var showMine = false
     @State private var publishing = false
-    @State private var selected: Moment?
+    @State private var selected: StellarMoment?
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -64,8 +64,8 @@ struct LiteMomentsView: View {
     }
 
     /// "1.5 USDC · 3/100 collected", or "· 3 collected" for an open edition.
-    private func caption(_ m: Moment) -> String {
-        let price = "\(Amount.format(m.price)) \(store.asset(m.quote)?.code ?? "")"
+    private func caption(_ m: StellarMoment) -> String {
+        let price = "\(StellarAmount.format(m.price)) \(store.asset(m.quote)?.code ?? "")"
         return m.maxEditions > 0 ? tr("\(price) · \(m.minted)/\(m.maxEditions) collected") : tr("\(price) · \(m.minted) collected")
     }
 }
@@ -92,7 +92,7 @@ struct MomentTile: View {
 struct MomentSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    let moment: Moment
+    let moment: StellarMoment
     @State private var quantity = 1
     @State private var busy = false
     @State private var error: String?
@@ -106,7 +106,7 @@ struct MomentSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     MomentTile(title: moment.title ?? tr("Moment #\(moment.id)"), mediaUrl: moment.mediaUrl, caption: tr("by \(shortAddress(moment.creator))"))
                     LiteCard {
-                        LabeledContent(tr("Price"), value: "\(Amount.format(moment.price)) \(code)")
+                        LabeledContent(tr("Price"), value: "\(StellarAmount.format(moment.price)) \(code)")
                         LabeledContent(tr("Collected"), value: moment.maxEditions > 0 ? tr("\(moment.minted) of \(moment.maxEditions)") : tr("\(moment.minted) (open edition)"))
                         LabeledContent(tr("Closes"), value: closes)
                         LiteParagraph(tr("95% goes to the creator. Your edition carries a 5% creator royalty for future sales."))
@@ -116,7 +116,7 @@ struct MomentSheet: View {
                     if moment.open {
                         Stepper(tr("Editions: \(quantity)"), value: $quantity, in: 1...20)
                         if let error { LiteInlineError(message: error) }
-                        LitePrimaryButton(title: tr("Collect for \(Amount.format((Int64(moment.price) ?? 0) * Int64(quantity))) \(code)"), busy: busy) {
+                        LitePrimaryButton(title: tr("Collect for \(StellarAmount.format((Int64(moment.price) ?? 0) * Int64(quantity))) \(code)"), busy: busy) {
                             Task {
                                 busy = true
                                 defer { busy = false }
@@ -183,7 +183,7 @@ struct PublishMomentSheet: View {
                 if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: media != nil && !title.isEmpty && Amount.parse(price) != nil) { Task { await review() } }.padding()
+                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: media != nil && !title.isEmpty && StellarAmount.parse(price) != nil) { Task { await review() } }.padding()
             }
             .navigationTitle(tr("Publish a Moment"))
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
@@ -205,7 +205,7 @@ struct PublishMomentSheet: View {
         error = nil
         do {
             let (data, type) = isVideo ? (media, "video/mp4") : (jpeg(media), "image/jpeg")
-            prepared = try await store.publishPlan(media: data, contentType: type, title: title, description: description, price: Amount.parse(price) ?? 0, quote: quote, editions: editions, windowSecs: Int(hours) * 3600)
+            prepared = try await store.publishPlan(media: data, contentType: type, title: title, description: description, price: StellarAmount.parse(price) ?? 0, quote: quote, editions: editions, windowSecs: Int(hours) * 3600)
         } catch {
             self.error = describe(error)
         }

@@ -115,7 +115,7 @@ struct CashSheet: View {
     }
 
     private func payAnchor(to: String, amount: String, memo: String?, memoType: String?) async {
-        guard let units = Amount.parse(amount) else { return }
+        guard let units = StellarAmount.parse(amount) else { return }
         busy = true
         defer { busy = false }
         do {
@@ -176,7 +176,7 @@ struct BridgeSheet: View {
                 if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: toStellar ? tr("Move to Stellar") : tr("Review"), busy: busy, enabled: Amount.parse(amount) != nil) { Task { await go() } }.padding()
+                LitePrimaryButton(title: toStellar ? tr("Move to Stellar") : tr("Review"), busy: busy, enabled: StellarAmount.parse(amount) != nil) { Task { await go() } }.padding()
             }
             .navigationTitle(tr("Bridge"))
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
@@ -193,7 +193,7 @@ struct BridgeSheet: View {
     }
 
     private func go() async {
-        guard let units7 = Amount.parse(amount) else { return }
+        guard let units7 = StellarAmount.parse(amount) else { return }
         busy = true
         defer { busy = false }
         error = nil

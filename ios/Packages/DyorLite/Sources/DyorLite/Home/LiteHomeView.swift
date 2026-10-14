@@ -233,12 +233,12 @@ struct LiteHomeView: View {
                 let rows = account.balances.filter { $0.enabled || $0.units > 0 }
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        LiteHoldingRow(code: row.code, name: LiteTitles.assetName(id: row.asset, name: row.name), amount: Amount.format(row.units, maxFraction: 4),
+                        LiteHoldingRow(code: row.code, name: LiteTitles.assetName(id: row.asset, name: row.name), amount: StellarAmount.format(row.units, maxFraction: 4),
                                        value: store.value(of: row).map(usd))
                         if index < rows.count - 1 || !store.positions.isEmpty { Divider().padding(.leading, 44) }
                     }
                     ForEach(Array(store.positions.enumerated()), id: \.element.id) { index, position in
-                        LiteHoldingRow(code: position.code, name: tr("Earning on Blend"), amount: Amount.format(position.supplied, maxFraction: 4), value: nil)
+                        LiteHoldingRow(code: position.code, name: tr("Earning on Blend"), amount: StellarAmount.format(position.supplied, maxFraction: 4), value: nil)
                         if index < store.positions.count - 1 { Divider().padding(.leading, 44) }
                     }
                 }
@@ -373,7 +373,7 @@ struct LiteHoldingRow: View {
 
 /// An activity row: what happened, when, and its status as a word with a symbol.
 struct LiteActivityRow: View {
-    let item: ActivityItem
+    let item: StellarActivityItem
     @Environment(\.liteStyle) private var style
 
     var body: some View {
@@ -455,18 +455,18 @@ struct SwapSheet: View {
                 }
                 if let quote {
                     Section(tr("Best price")) {
-                        LabeledContent(tr("You get about"), value: "\(Amount.format(quote.best.amountOut)) \(code(buy))")
-                        LabeledContent(tr("At least"), value: "\(Amount.format(quote.best.minOut ?? quote.best.amountOut)) \(code(buy))")
+                        LabeledContent(tr("You get about"), value: "\(StellarAmount.format(quote.best.amountOut)) \(code(buy))")
+                        LabeledContent(tr("At least"), value: "\(StellarAmount.format(quote.best.minOut ?? quote.best.amountOut)) \(code(buy))")
                         LabeledContent(tr("Route"), value: LiteTitles.venue(quote.best.venue))
                         ForEach(quote.alternatives, id: \.venue) { alt in
-                            LabeledContent(LiteTitles.venue(alt.venue), value: "\(Amount.format(alt.amountOut)) \(code(buy))").foregroundStyle(.secondary)
+                            LabeledContent(LiteTitles.venue(alt.venue), value: "\(StellarAmount.format(alt.amountOut)) \(code(buy))").foregroundStyle(.secondary)
                         }
                     }
                 }
                 if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: quote == nil ? tr("Get price") : tr("Review swap"), busy: busy, enabled: Amount.parse(amount) != nil && sell != buy) {
+                LitePrimaryButton(title: quote == nil ? tr("Get price") : tr("Review swap"), busy: busy, enabled: StellarAmount.parse(amount) != nil && sell != buy) {
                     Task { await next() }
                 }
                 .padding()
@@ -504,7 +504,7 @@ struct SwapSheet: View {
     }
 
     private func next() async {
-        guard let units = Amount.parse(amount) else { return }
+        guard let units = StellarAmount.parse(amount) else { return }
         busy = true
         defer { busy = false }
         error = nil
@@ -550,12 +550,12 @@ struct SendSheet: View {
                 if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: StrKey.isValid(.accountID, to) && Amount.parse(amount) != nil) {
+                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: StrKey.isValid(.accountID, to) && StellarAmount.parse(amount) != nil) {
                     Task {
                         busy = true
                         defer { busy = false }
                         do {
-                            prepared = try await store.sendPlan(asset: asset, to: to, amount: Amount.parse(amount) ?? 0, memo: memo.isEmpty ? nil : memo, memoType: memo.allSatisfy(\.isNumber) && !memo.isEmpty ? "id" : "text")
+                            prepared = try await store.sendPlan(asset: asset, to: to, amount: StellarAmount.parse(amount) ?? 0, memo: memo.isEmpty ? nil : memo, memoType: memo.allSatisfy(\.isNumber) && !memo.isEmpty ? "id" : "text")
                         } catch { self.error = describe(error) }
                     }
                 }

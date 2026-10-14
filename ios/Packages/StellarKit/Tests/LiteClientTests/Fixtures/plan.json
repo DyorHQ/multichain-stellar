@@ -1,0 +1,49 @@
+{
+  "planId": "663d917b-54c2-401b-a524-a372f42299d9",
+  "kind": "swap",
+  "expiresAt": "2026-10-14T09:56:00.000Z",
+  "steps": [
+    {
+      "id": "s1",
+      "label": "Enable USDC",
+      "status": "built",
+      "intent": {
+        "kind": "trust",
+        "summary": "Enable USDC",
+        "spend": {},
+        "ops": [
+          "changeTrust"
+        ],
+        "trust": [
+          "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        ],
+        "display": {
+          "asset": "USDC"
+        }
+      },
+      "xdr": "AAAAAgAAAACWkx+5IqHDdKtQ/Z773xUBaGRNzFg8rllQIi8Zjpt54AAAJxAAToEGAAAAAQAAAAEAAAAAas9OLAAAAABqz1CEAAAAAAAAAAEAAAAAAAAABgAAAAFVU0RDAAAAAEI+fQXy7K+/7BkrIVo/G+lq7bjY5wJUq+NBPgIH3layf/////////8AAAAAAAAAAA==",
+      "hash": "6d42d713ddbed1c51d1fb0b50d0e122602f712527ce8ee9d16ae981298525519",
+      "builtAt": "2026-10-14T09:41:00.000Z",
+      "stepKind": "trust",
+      "maxFee": "10000",
+      "feePayer": "user",
+      "sponsorReason": null,
+      "reserveDelta": 1
+    },
+    {
+      "id": "s2",
+      "label": "Swap",
+      "status": "pending",
+      "stepKind": "swap_soroswap",
+      "maxFee": "500000",
+      "feePayer": "user",
+      "sponsorReason": null,
+      "reserveDelta": 0
+    }
+  ],
+  "fees": {
+    "userMax": "510000",
+    "sponsored": false,
+    "newReserves": 1
+  }
+}
