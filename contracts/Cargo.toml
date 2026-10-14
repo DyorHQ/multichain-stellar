@@ -1,6 +1,25 @@
 [workspace]
 resolver = "2"
-members = ["launch-token", "launchpad", "moments"]
+# v1 (deployed, frozen as the record of what is live): launch-token, launchpad, moments.
+# v2 (DESIGN-stellar-contracts-v2 §3.1): the shared crate, the ten v2 contracts and the test-only integration suite.
+# No contract crate depends on another contract crate; v2 crates share code only through dyor-common.
+members = [
+    "launch-token",
+    "launchpad",
+    "moments",
+    "common",
+    "launchpad-v2",
+    "launch-token-v2",
+    "exec-soroswap",
+    "exec-aquarius",
+    "qa-exec-fail",
+    "lp-locker",
+    "moments-v2",
+    "moment-nft",
+    "moment-coin",
+    "moments-graduator",
+    "integration-tests",
+]
 exclude = ["tools"]
 
 [workspace.package]
@@ -15,6 +34,9 @@ rust-version = "1.91"
 # protocol 29 (testnet, 2026-10-11).
 soroban-sdk = "=26.1.1"
 stellar-tokens = "=0.7.2"
+dyor-common = { path = "common" }
+# Host tests only (§18.2); never part of a WASM.
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = "z"

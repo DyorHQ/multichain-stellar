@@ -1,0 +1,22 @@
+[package]
+name = "dyor-common"
+description = "Types, durations, client traits, error namespaces and maths shared by the DyorHQ v2 contracts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+# Spec shaking v2 markers for the shared #[contracttype]s, so every v2 WASM keeps the spec entries it uses
+# whatever else is built with it (build.sh, tools/spec-shake).
+soroban-sdk = { workspace = true, features = ["experimental_spec_shaking_v2"] }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["experimental_spec_shaking_v2", "testutils"] }
+proptest = { workspace = true }
+# Independent 256-bit reference for the U256 maths tests (already in the lock through soroban-env-common).
+ethnum = "=1.5.3"
