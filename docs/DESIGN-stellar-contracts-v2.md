@@ -925,7 +925,7 @@ guards: kind is Soroswap, or Aquarius when AQUARIUS_VENUE_OK (else UnsupportedKi
 (r_b, r_q) = reserves as (base, quote) ; total = lp_token.total_supply()
 current = isqrt(r_b·r_q)·lp/total ; growth = current − principal ; require growth > 0              (NothingToHarvest)
 take = min(growth·harvest_bps/BPS, current·MAX_HARVEST_ROUND_BPS/BPS)                           (0.5% per round, as MomentLocker.sol:48)
-dl = take·total/isqrt(r_b·r_q) ; require dl > 0
+dl = take·total/(isqrt(r_b·r_q) + 1) ; require dl > 0
 Soroswap: pair.transfer(this, pair, dl) ; (a0, a1) = pair.withdraw(this)          Aquarius: router withdraw by shares (fixture-gated)
 lp −= dl ; Tracked −= dl ; last_harvest = now
 principal = min(principal + mul_div_up(take, BPS − harvest_bps, harvest_bps), current − take)     (F7: the compounded part
@@ -943,6 +943,7 @@ emit harvested{pool, lp_burned: dl, base_out, quote_out, growth, take, compounde
 ```
 
 - **Principal invariant (I-K1).** The locked position's √k value never falls below its seed value. Harvests take only fee growth. If the cap binds, the rest of the growth stays above the principal and is harvested in later rounds.
+- **The burn rounds down (lead ruling after CT-04, 2026-10-14).** `dl` divides by `isqrt(r_b·r_q) + 1`, so a harvest never withdraws more √k value than `take`: rounding favours the locked position, by at most about one LP unit per round. I-K1 holds with the plain `isqrt` divisor too (the CT-04 reviewer proved it, and the property test passes with either), so this is a rounding choice, not an invariant fix. CT-10's models and CT-13's backlog and residual arithmetic (V7) use this form.
 - **The compounding fix (F7).** The first revision ratcheted `principal += growth·(BPS − hb)/BPS` whatever was taken. When the 0.5% cap bound, it still locked away a full third of the whole growth, so Moments compounded more than a third and harvested less than two thirds. The ratchet is now proportional to what was taken. For launches (`hb = BPS`) it adds 0, so all growth stays harvestable. The `min` keeps the principal at or below the position's remaining value after rounding.
 - **Soroswap protocol fee.** If Soroswap ever turns on its protocol fee (`fees_enabled` is false today; Inv2 §4.1), per-LP value can fall slightly, and `harvest` simply returns `NothingToHarvest`.
 - **Harvest rates.** Launches use `harvest_bps = 10000`: all growth is split, both sides 50/50 by the launch's pinned `protocol_share_bps` (O1, F1, V1). Moments use 6667: compounded : harvested = (BPS − hb) : hb = 3,333 : 6,667, which is Monad's 1 : 2 to within 0.005% of fee value (§9.1, §14.4, V3).
@@ -1025,7 +1026,7 @@ There is no `MomentCount` (L15, B6). The indexer numbers Moments for display.
 
 | Function | Auth | Effect | Events | Errors |
 |---|---|---|---|---|
-| `publish(creator, p, expected: MomentsTerms) -> Address` | creator | Neither pause on; terms equal; price ≥ minimum and ≤ ceil(T·BPS/reserve) (Monad v2 ceiling, MomentsFactory.sol:242); allocation ≤ policy maximum; window between `min_window` and `max_window`; name 1–32, symbol 2–10, URI 1–256, place ≤ 64, date ≤ 32. NFT salt `sha256("dyorhq/moment-nft/v2" ‖ creator.to_xdr() ‖ nonce_be)` (L15); `Moment(nft)` must not exist. Deploys the NFT. `coin = graduator.coin_address(nft)`. Rate from the bundle rate (MomentsFactory.sol:280-283). Snapshots `Moment`. Returns the NFT address. | `publish` | `PublishingPaused`, `TermsChanged`, `PriceTooLow`, `PriceTooHigh`, `AllocTooHigh`, `InvalidWindow`, `InvalidString`, `NonceUsed` |
+| `publish(creator, p, expected: MomentsTerms) -> Address` | creator | Neither pause on; terms equal; price ≥ minimum and ≤ ceil(T·BPS/reserve) (Monad v2 ceiling, MomentsFactory.sol:242); allocation ≤ policy maximum; window between `min_window` and `max_window`; name 1–32, symbol 2–10, URI 1–256, place ≤ 64, date ≤ 32. NFT salt `sha256("dyorhq/moment-nft/v2" ‖ creator.to_xdr() ‖ nonce_be)` (L15); `Moment(nft)` must not exist. Deploys the NFT. `coin = graduator.coin_address(nft)`. Rate from the bundle rate (MomentsFactory.sol:280-283). Snapshots `Moment`. Returns the NFT address. | `publish` (its data carries `metadata_uri`, so the indexer and the app can show a Moment before its first edition exists: `token_uri` needs an existing edition, ruling after CT-06) | `PublishingPaused`, `TermsChanged`, `PriceTooLow`, `PriceTooHigh`, `AllocTooHigh`, `InvalidWindow`, `InvalidString`, `NonceUsed` |
 | `collect(collector, nft, qty, max_total) -> CollectResult{first_rank, editions, gross, entitlement}` | collector | Monad's `_prepare` / `_book` / `_deliver` (MomentCollect.sol:124-172), **without** the graduation attempt | `collect`, and `complete` on the terminal collect | `UnknownMoment`, `NotCollecting`, `WindowClosed`, `BadQuantity`, `MaxTotalExceeded` |
 | `graduate(nft) -> GraduationOutcome` | anyone (the keeper, L3; also the creator or any collector) | §9.3. Never reverts on a recoverable failure; a recoverable failure, including a result the graduator rejects, is recorded (`stuck_since` on the first one). | `grad_ok` or `grad_fail` | `WrongState`, `GraduationInvalid` |
 | `expire(nft)` | anyone | Collecting with `now ≥ deadline`. Or GraduationPending with `now ≥ deadline` and either (a) `stuck_since ≠ 0` (set only by a recorded failed attempt) and `now ≥ stuck_since + stuck_expiry`, or (b) the backstop: `now ≥ completed_at + pending_backstop` (30 d, at least 4 × `stuck_expiry`, V11). Then reserve × `expiry_creator_bps` → `creator_claimable`, the rest → `treasury_claimable`; state Expired; `nft.close()`. | `expired` (with `backstop: bool`) | `NotExpirable`, `WrongState` |
@@ -1129,6 +1130,8 @@ Local codes; on chain each is `ERR_BASE + 7·100 + n` (§4, V10).
 
 There is no burn and no admin. Errors (on chain `ERR_BASE + 8·100 + n`, §4): 1 NotMinter, 2 Closed, 3 BadQuantity, 4 AlreadyClosed.
 
+As built (CT-06): `edition_size() -> Option<u32>`, `None` while open (a Moment nobody collected closes at 0); the `closed` event's data is the edition size alone; `provenance()` is one view. The per-call limit `MAX_MINT` = 20 must equal moments-v2's batch limit (§14.2), which CT-10 asserts. New owner entries start at the network's minimum TTL and are bumped only when touched (§13).
+
 ## 11. `moment-coin`
 
 **Constructor:** `(minter, name, symbol, cap, initial_to, initial_amount)`. Decimals 7. Initial amount ≤ cap.
@@ -1139,7 +1142,7 @@ There is no burn and no admin. Errors (on chain `ERR_BASE + 8·100 + n`, §4): 1
 | SEP-41 + `burn`, `burn_from` | as SEP-41 | — |
 | Views | — | `minter`, `cap` |
 
-There is no admin, pause or tax. Errors (on chain `ERR_BASE + 9·100 + n`, §4): 1 NotMinter, 2 ZeroAmount; the cap is enforced by OZ's `ExceededCap`, which keeps OZ's own code (origin 0 if it ever reaches a `try_`).
+The cap counts coins in circulation (OZ `check_cap` compares `total_supply + amount` with the cap), so a burn frees room under it. Lifetime mints are bounded by moments-v2's vesting ledger (`Σ minted_by_vesting ≤ alloc + entitlements`, §9.2, I-M3), which matters because the Moments harvest burns the coin side. There is no admin, pause or tax. Errors (on chain `ERR_BASE + 9·100 + n`, §4): 1 NotMinter, 2 ZeroAmount; the cap is enforced by OZ's `ExceededCap`, which keeps OZ's own code (origin 0 if it ever reaches a `try_`).
 
 ## 12. `moments-graduator`
 
@@ -1358,7 +1361,7 @@ v1 on testnet is launchpad `CDZD53…5I6I` and Moments `CCWP4L…2YIR` (S:backen
 
 1. **Build and test.** CT-00…CT-10.
 2. **Scripts and backend.** CT-11…CT-18. The backend packages start only after the parity program's I1 merge (§22).
-3. **Gate: CT-19.** No deployment of any kind, testnet-qa or testnet, before the internal review exits (L16). CT-19 reviews the contracts, the scripts, the backend and the e2e script (CT-18). Its exit records the reviewed WASM hashes in `contracts/review/reviewed-wasm.sha256`: the exact lines of `contracts/dist/SHA256SUMS` it reviewed and the commit they were built from; hashes only, never finding text. **`deploy-contracts-v2.ts` refuses to upload any WASM whose sha256 differs from that file, or to run when the file is missing, for testnet-qa and the owner's testnet alike** (F13). A fix after the review means a rebuilt `dist` (CT-10), a re-review and a new file.
+3. **Gate: CT-19.** No deployment of any kind, testnet-qa or testnet, before the internal review exits (L16). **Lead change 2026-10-14 (deploy track; the owner asked for parallel work):** CT-11a builds the owner's deployment kit early (`backend/scripts/owner-v2.ts keys|trust|check|sign`, `deploy-contracts-v2.ts`, `admin-v2.ts`), and CT-11 binds it to the merged contracts after CT-10. The review is split: CT-19 covers the contracts, dist and the kit, writes `reviewed-wasm.sha256` and gates every deployment; CT-19b covers the backend (CT-12…CT-18) and the e2e script and gates the backend serving v2, the app shipping v2 and the v1 cutover. CT-20 (testnet-qa deploy and a direct-call smoke) rehearses the owner's deploy right after CT-19; CT-20b runs the backend e2e after CT-19b. So the owner's deploy (step 5) waits for CT-19 and CT-20 only, and the cutover (step 6) waits for CT-19b and the app. CT-19 reviews the contracts, the scripts, the backend and the e2e script (CT-18). Its exit records the reviewed WASM hashes in `contracts/review/reviewed-wasm.sha256`: the exact lines of `contracts/dist/SHA256SUMS` it reviewed and the commit they were built from; hashes only, never finding text. **`deploy-contracts-v2.ts` refuses to upload any WASM whose sha256 differs from that file, or to run when the file is missing, for testnet-qa and the owner's testnet alike** (F13). A fix after the review means a rebuilt `dist` (CT-10), a re-review and a new file.
 4. **testnet-qa (CT-20, O3).** `deploy-contracts-v2.ts --deployment testnet-qa`:
    - checks the WASM hashes against the reviewed list;
    - generates throwaway QA keys (deployer, admin, guardian, governance, Moments guardian, treasury, the QA asset's issuer, the `qa-exec-fail` admin) into `.secrets/testnet-qa-v2.env`, which is git-ignored and mode 600. No agent reads or prints it; the scripts read it themselves;
@@ -1641,7 +1644,7 @@ New `lite-indexer/v2_events.ts` and `v2_keeper.ts`. Launches are keyed by token 
 
 | Event | Indexer action |
 |---|---|
-| `publish` | Insert with nft, nonce, coin, rate, threshold, durations |
+| `publish` | Insert with nft, nonce, coin, rate, threshold, durations, metadata_uri |
 | `collect` | Ledger and position |
 | `complete` | State |
 | `grad_ok`, `grad_fail` | State, pool, failure `origin` and `code` (named from `_shared/v2_errors.ts`, V10) and `stuck_since` |
@@ -1879,7 +1882,7 @@ None of these blocks testnet work (O4). The mainnet program takes them up before
 4. **External audit.** Recommended before real funds (§19.2); or a waiver with a bug-bounty contact.
 5. **Mainnet thresholds.** XLM phantom sized in USD at deploy; USDC launch phantom 2,000 (threshold 4,324.555320); Moments threshold 771.4285714 USDC.
 6. **Keeper harvest floor** (at least the keeper's fee ÷ the protocol's share) and the keeper's budget.
-7. **TTL policy** (proposed: threshold 30 d, extend to 120 d).
+7. **TTL policy** (proposed: threshold 30 d, extend to 120 d). The lp-locker bumps its entries with `dyor_common::TESTNET_TTL_POLICY`, compiled in (CT-04); a mainnet policy needs a constructor argument or a rebuild.
 8. **Throughput.** Whether each curve's quote (and each Moment's USDC) should be held outside the shared launchpad and moments balances, so trades in one asset stop serializing under parallel apply (§3.5, B7).
 9. **Phoenix.** Whether to ask Phoenix to whitelist an executor.
 10. **Holder sharing rent.** Whether the app default stays on with about 0.043 XLM of rent per new holder.
