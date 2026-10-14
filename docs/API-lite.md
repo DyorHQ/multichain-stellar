@@ -8,9 +8,9 @@ The same contract exists in three other forms, kept in step with this page:
 
 | Form | Where | Checked by |
 |---|---|---|
-| TypeScript types | `backend/supabase/functions/_shared/contract.ts` (`Routes` maps every route to its auth, body and answer) | `deno check` |
-| Swift models | `ios/Packages/StellarKit/Sources/LiteClient/Models.swift` and `Models+*.swift` | `swift test` |
-| Fixtures, one per response | `backend/tests/fixtures/api/*.json` (§17) | both of the above |
+| TypeScript types | `backend/supabase/functions/_shared/contract.ts` (`Routes` maps every route to its auth, body and answer) | `deno check` of `contract.ts` |
+| Swift models | `ios/Packages/StellarKit/Sources/LiteClient/Models.swift` and `Models+*.swift` | `swift test` in StellarKit |
+| Fixtures, one per response | `backend/tests/fixtures/api/*.json` (§17) | `deno test` of `backend/tests/fixtures/`, `sync.sh --check` and `swift test` (§17) |
 
 **Status.** Routes and fields marked *added* are part of the contract now; the package named in §1 makes the server
 answer them. Until it lands, the server sends today's payload, and the phone decodes that too: every added field is
@@ -36,7 +36,8 @@ optional in Swift.
 - **Auth.** Every route needs the Lite session token (`authorization: Bearer <token>`, from §2) **except** `auth/*`,
   `config`, `fees` and `markets*`. Those public routes read only the database and in-isolate caches, answer with
   `Cache-Control: public, max-age=30`, and the phone calls them without the token, so they work while the session is
-  locked. Every other answer is `no-store`.
+  locked. Every other answer is `no-store`. The local media stand-in (§12, local stack only) takes no session token
+  either: its upload carries a signed token of its own, and its reads are the Debug build's media base.
 - **Limits.** Per isolate, best effort: 20 requests a minute per IP on `auth/*`, 120 a minute per account, 20 submits
   and 10 upload tickets a minute per account. Over the limit: 429 `rate_limited`. Anything that costs DyorHQ money is
   limited in Postgres, never only in memory.
@@ -51,9 +52,10 @@ optional in Swift.
 ```
 
 `message` is plain English. The phone words known codes itself, in the user's language (§16), and shows `message`
-verbatim otherwise. When a contract refused, `code` is `simulation_failed` and `detail.contractCode` names the reason;
-`LiteAPI` then reports `LiteAPIError.server(status:code:message:)` with the contract's code (`launch.slippage`, …) as
-its `code`.
+verbatim otherwise. `detail` holds every value a code's copy shows (§16). When a contract refused, `code` is
+`simulation_failed` and `detail.contractCode` names the reason; `LiteAPI` then reports
+`LiteAPIError.server(status:code:message:)` with the contract's code (`launch.slippage`, …) as its `code`. A contract's
+code is always `<area>.<reason>` and the API's codes never hold a dot, so the two can't be confused.
 
 ---
 
@@ -100,6 +102,8 @@ its `code`.
 | `POST /v1/moments/metadata` | JWT | `MomentMetadataRequest` | `MomentMetadata` | `moment-metadata`, `moment-metadata.legacy` | WP-16 |
 | `POST /v1/moments/build` | JWT | `MomentBuildRequest` | `PlanView` | `plan` | WP-16 |
 | `POST /v1/media/upload-url` | JWT | `{contentType, bytes}` | `UploadTicket` | `media-upload-url` | WP-16 |
+| `PUT /v1/local-media/upload/:token` *added*, local stack | signed token | the file's bytes | 204, no body | — (not JSON) | WP-16 |
+| `GET /v1/local-media/lite-media/<path>` *added*, local stack | public | | the file's bytes (`MediaBytes`) | — (not JSON) | WP-16 |
 | `GET /v1/earn/markets` | JWT | | `EarnMarkets` | `earn-markets`, `earn-markets.legacy` | WP-15 |
 | `GET /v1/earn/positions` | JWT | | `EarnPositions` | `earn-positions`, `earn-positions.legacy` | WP-15 |
 | `GET /v1/earn/history?pool=&asset=&range=` *added* | JWT | | `EarnHistory` | `earn-history` | WP-15 |
@@ -506,6 +510,22 @@ intent's `display`, and adds a user-paid `trust` step when the price is in USDC 
 file there. `uploads/<user>/<uuid>.<ext>`, write-once. Images are jpeg, png, webp or gif; videos mp4 or quicktime; at
 most `limits.uploadBytes` (25 MB). A daily budget of 50 uploads and 200 MB per user: 429 `upload_budget`.
 
+**Local media stand-in** *added* (WP-16). The local stack has no Supabase Storage, so the API stores media itself. It
+answers only on testnet with `LITE_LOCAL_STORAGE_DIR` set (it and `LITE_PUBLIC_BASE` are refused on mainnet);
+anywhere else both routes answer 404 `not_found`. `POST /v1/media/upload-url` then hands out these URLs, built from `LITE_PUBLIC_BASE`:
+`uploadUrl` on the first route, `publicUrl` on the second, which is the Debug build's pinned media base
+(`http://127.0.0.1:8000/lite/v1/local-media/lite-media/` on the default ports). The metadata calls store their JSON the
+same way.
+
+- **`PUT /v1/local-media/upload/:token`**, no session token. The body is the file's bytes, `content-type` the ticket's
+  type. `:token` is the object's path and expiry, signed with HMAC-SHA256 under `LITE_JWT_SECRET`, valid 10 minutes →
+  204, no body. Write-once: a path takes one upload (409 `already_uploaded`). A token that is wrong or expired: 401
+  `unauthorized`; a content type that isn't the path's: 400 `bad_type`; more bytes than the type allows: 400
+  `too_large`.
+- **`GET /v1/local-media/lite-media/<path>`**, public. `<path>` is `<folder>/<owner>/<file>`: `uploads/G…/<uuid>.<ext>`,
+  or `launches/G…/<uuid>.json` and `moments/G…/<uuid>.json` for metadata → the stored bytes, with the content type they
+  were stored with. Nothing stored there, or a path that would leave the storage directory: 404 `not_found`.
+
 ---
 
 ## 13. Earn (Blend)
@@ -596,8 +616,22 @@ The codes the phone words, and the HTTP status each comes with. Copy is in the S
 | 429 `bridge_relay_limit` | the daily relayed-bridge cap | You've bridged in many times today. Try again tomorrow. |
 | 422 `tx_rejected` | any other send error (`detail.code` is Stellar's result code) | the server's message, verbatim |
 
-The %@ values come from what the screen already holds (the review's fee, the asset, the account's minimum balance,
-the Moments policy). `detail` may repeat them (`need`, `spendable`, `asset`, `minPrice`) for logs.
+Every %@ is in the error's `detail`, so a refusal can be worded from the error alone:
+
+| Code | `detail` |
+|---|---|
+| `not_enough_xlm` | `minBalance`: what stays in the account (stroops); also `need`, `spendable` |
+| `not_enough_xlm_for_fee`, `not_enough_xlm_for_reserve` | `need`, `spendable` (stroops) |
+| `fee_too_high` | `fee`: the built fee (stroops); also `max` |
+| `recipient_missing`, `recipient_no_trust`, `trust.missing` | `assetCode`; also `asset` (its id) |
+| `moment.price_too_low` | `minPrice` (base units of the quote) and `quoteCode` |
+
+**Open (lead decision, for WP-12).** The phone can't use these yet. `LiteAPI` decodes `detail`, but
+`LiteAPIError.server(status:code:message:)` keeps only the status, the code and the message, and the design (§7.2)
+gives `LiteErrorText.describe(_ error: Error)` nothing else to read. Either the error carries `detail` (a fourth
+value on `server`, so DyorLite's matches on it change too), or `describe` also takes the values the screen holds (the
+review's fee, the asset, the account's minimum balance, the Moments policy). Until then those copies have no value to
+show.
 
 Other codes, shown as the server's message: 400 `bad_json`, `too_large`, `bad_arg`, `bad_amount`, `bad_address`,
 `bad_asset`, `bad_memo`, `too_small`, `bad_xdr`, `unsigned`, `empty_plan`, `same_asset`, `bad_slippage`, `bad_pool`,
@@ -605,11 +639,11 @@ Other codes, shown as the server's message: 400 `bad_json`, `too_large`, `bad_ar
 `bad_media`, `bad_moment`, `bad_quantity`, `bad_editions`, `bad_window`, `bad_type`, `bad_direction`, `bad_hash`,
 `bad_spender`, `bad_anchor`, `bad_kind`, `testnet_only`, `no_friendbot`; 401 `unauthorized`; 403 `not_invited`,
 `bad_invite`, `access_revoked`; 404 `not_found`, `no_route`; 409 `account_inactive`, `needs_usdc`, `needs_restore`,
-`not_ready`, `not_built`, `already_sent`, `stale_step`, `recipient_inactive`, `recipient_cannot_receive`; 410
-`plan_expired`, `quote_expired`; 429 `rate_limited`, `faucet_used`; 500 `self_check_failed`, `internal`; 501
-`mainnet_route`; 502 `friendbot_failed`, `rpc_unavailable`, `storage_error`, `bridge_quote_failed`; 503
-`not_deployed`, `network_busy`, `storage_unavailable`; 504 `friendbot_slow`. Today's 429 `budget_exhausted` goes with
-the daily sponsored-fee budget when users start paying their own fees.
+`not_ready`, `not_built`, `already_sent`, `stale_step`, `recipient_inactive`, `recipient_cannot_receive`,
+`already_uploaded`; 410 `plan_expired`, `quote_expired`; 429 `rate_limited`, `faucet_used`; 500 `self_check_failed`,
+`internal`; 501 `mainnet_route`; 502 `friendbot_failed`, `rpc_unavailable`, `storage_error`, `bridge_quote_failed`;
+503 `not_deployed`, `network_busy`, `storage_unavailable`; 504 `friendbot_slow`. Today's 429 `budget_exhausted` goes
+with the daily sponsored-fee budget when users start paying their own fees.
 
 ---
 
@@ -619,9 +653,11 @@ the daily sponsored-fee budget when users start paying their own fees.
 `<name>.legacy.json` for today's form where it differs (`account.missing`, `holdings.partial` and the `error*` bodies
 are further cases). They are written for testnet with synthetic addresses.
 
-- **`backend/tests/fixtures/fixtures.test.ts`** type-checks each fixture against its `contract.ts` type and fails when a
-  fixture isn't listed:
-  `deno test --allow-read --config backend/supabase/functions/deno.json backend/tests/fixtures/`.
+- **`backend/tests/fixtures/fixtures.test.ts`** type-checks each fixture exactly as its `contract.ts` type: it writes
+  every fixture into one module as a literal and runs `deno run --check` on it, so a field `contract.ts` lacks, a
+  missing required field or a value outside a literal union fails and names the fixture. (Importing the JSON instead
+  would let unknown fields and wrong union values through.) It also fails when a fixture isn't listed:
+  `deno test --allow-read --allow-run --config backend/supabase/functions/deno.json backend/tests/fixtures/`.
 - **`backend/tests/fixtures/sync.sh`** copies them to `ios/Packages/StellarKit/Tests/LiteClientTests/Fixtures/`
   (`--check` only compares). Both copies are committed.
 - **`LiteClientTests`** decode every fixture with the model the client uses (`testDecodesApiFixtures`), and fail when
@@ -629,4 +665,6 @@ are further cases). They are written for testnet with synthetic addresses.
   read as nil. `LiteAPIRouteTests` serve them from a stub server to check each `LiteAPI` method's route, its token
   (none on the public routes) and its error codes.
 - **Backend packages** add `<area>_fixtures.test.ts`, which produce their answers from seeded data and compare them
-  with these files. A deliberate change to an answer changes its fixture, the Swift model and `contract.ts` together.
+  with these files. A deliberate change to an answer changes its fixture, the Swift model and `contract.ts` together:
+  a fixture field missing from `contract.ts` fails `fixtures.test.ts`, one the Swift model drops fails
+  `LiteClientTests`, and a phone copy left behind fails `sync.sh --check`.

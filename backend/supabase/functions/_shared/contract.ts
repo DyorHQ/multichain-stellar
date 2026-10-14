@@ -156,9 +156,12 @@ export type ErrorCode =
   | "recipient_missing"
   | "recipient_no_trust"
   | "upload_budget"
-  | "bridge_relay_limit";
+  | "bridge_relay_limit"
+  // added: the local media stand-in's second upload to one path
+  | "already_uploaded";
 
-/** A contract's own refusal, named in `simulation_failed`'s detail. Stable across contract versions. */
+/** A contract's own refusal, named in `simulation_failed`'s detail. Stable across contract versions, and always
+ *  `<area>.<reason>`: an ErrorCode never holds a dot, so the two can't be confused. */
 export type ContractErrorCode =
   | "launch.slippage"
   | "launch.closed"
@@ -169,24 +172,29 @@ export type ContractErrorCode =
   | "moment.price_too_low"
   | "trust.missing";
 
-/** Facts an error carries. Informational except `contractCode`, which the phone words. */
+/** Facts an error carries. `contractCode` names a contract's refusal; every value a code's app copy shows (its %@)
+ *  is here too, so a refusal can be worded from the error alone (docs/API-lite.md "Errors"). */
 export interface ErrorDetail {
   /** `simulation_failed` only, when a contract refused for a known reason. */
   contractCode?: ContractErrorCode;
   /** `simulation_failed` / `rpc_unavailable`: the start of the raw error, for logs. */
   raw?: string;
-  /** `fee_too_high`: the declared fee and the cap, in stroops. */
+  /** `fee_too_high`: the declared fee (the copy's %@) and the cap, in stroops. */
   fee?: Stroops;
   max?: Stroops;
   /** `tx_rejected`: Stellar's result code. */
   code?: string;
-  /** `not_enough_xlm*`: what the action needs and what the account can spend, in stroops. */
+  /** `not_enough_xlm*`: what the action needs, what the account can spend, and what stays in it (its minimum balance,
+   *  `not_enough_xlm`'s %@), in stroops. */
   need?: Stroops;
   spendable?: Stroops;
-  /** `recipient_*`, `unsupported_asset`, `trust.missing`: the asset concerned. */
+  minBalance?: Stroops;
+  /** `recipient_*`, `unsupported_asset`, `trust.missing`: the asset concerned, and its code (the copy's %@). */
   asset?: AssetId;
-  /** `moment.price_too_low`: the lowest price, in base units. */
+  assetCode?: string;
+  /** `moment.price_too_low`: the lowest price, in base units of the quote, and the quote's code. */
   minPrice?: Units;
+  quoteCode?: string;
   [extra: string]: unknown;
 }
 
@@ -1042,6 +1050,11 @@ export interface UploadTicket {
   path: string;
 }
 
+/** A file's bytes, not JSON: what an upload to the local media stand-in sends, with the ticket's content type, and what
+ *  a read of it answers, with the content type it was stored with. Local stack only (testnet, LITE_LOCAL_STORAGE_DIR);
+ *  it stands in for Supabase Storage, and its URLs are the ones `UploadTicket` hands out there. */
+export type MediaBytes = Uint8Array;
+
 // ------------------------------------------------------------------------------------------------ earn
 
 export interface EarnMarket {
@@ -1220,7 +1233,8 @@ export interface CashTracked {
 
 // ------------------------------------------------------------------------------------------------ routes
 
-/** Every route: its auth ("public" routes take no token and are cacheable), query, body and answer. */
+/** Every route: its auth ("public" routes take no token and are cacheable; "upload" takes no session token, only the
+ *  signed token in its own path), query, body and answer. */
 export interface Routes {
   "POST /v1/auth/challenge": { auth: "public"; body: ChallengeRequest; response: AuthChallenge };
   "POST /v1/auth/verify": { auth: "public"; body: VerifyRequest; response: AuthResult };
@@ -1272,6 +1286,11 @@ export interface Routes {
   "POST /v1/moments/metadata": { auth: "jwt"; body: MomentMetadataRequest; response: MomentMetadata };
   "POST /v1/moments/build": { auth: "jwt"; body: MomentBuildRequest; response: PlanView };
   "POST /v1/media/upload-url": { auth: "jwt"; body: UploadRequest; response: UploadTicket };
+  /** The local media stand-in. The token is the object's path and expiry (10 minutes), signed with HMAC-SHA256 under
+   *  LITE_JWT_SECRET; a path takes one upload. 204, no body. */
+  "PUT /v1/local-media/upload/:token": { auth: "upload"; body: MediaBytes; response: void };
+  /** `<folder>/<owner>/<file>`: `uploads/G…/<uuid>.<ext>`, or a metadata JSON under `launches/` or `moments/`. */
+  "GET /v1/local-media/lite-media/:folder/:owner/:file": { auth: "public"; response: MediaBytes };
   "GET /v1/activity": {
     auth: "jwt";
     query: { section?: Section; kind?: string; period?: Period; market?: string; limit?: number };
@@ -1288,5 +1307,5 @@ export interface Routes {
 
 export type RouteKey = keyof Routes;
 export type ResponseOf<K extends RouteKey> = Routes[K]["response"];
-/** The routes that take no token. */
+/** The routes that take no token at all. */
 export type PublicRoute = { [K in RouteKey]: Routes[K]["auth"] extends "public" ? K : never }[RouteKey];

@@ -314,6 +314,27 @@ final class LiteAPIRouteTests: XCTestCase {
         }
         try await expect("GET", "/v1/prices", fixture: "prices") { _ = try await $0.prices() }
         try await expect("GET", "/v1/tx/abc", fixture: "tx-status") { _ = try await $0.txStatus("abc") }
+        try await expect("GET", "/v1/launches/CTOKEN", fixture: "launch") { _ = try await $0.launch("CTOKEN", candles: nil) }
+        try await expect("GET", "/v1/cash/anchors?country=GH", fixture: "cash-anchors") { _ = try await $0.anchors(country: "GH") }
+    }
+
+    /// A pasted value stays one path segment: it can't add a query, a fragment or a route of its own.
+    func testPathValuesAreEscaped() async throws {
+        try await expect("GET", "/v1/recipient/GABC%3Fasset%3DXLM?asset=USDC", fixture: "recipient") {
+            _ = try await $0.recipient("GABC?asset=XLM", asset: "USDC")
+        }
+        try await expect("GET", "/v1/markets/XLM%23top", token: false, fixture: "market") { _ = try await $0.market("XLM#top") }
+        try await expect("GET", "/v1/markets/GABC%2F..%2F..%2Faccount/history?range=day", token: false, fixture: "market-history") {
+            _ = try await $0.marketHistory("GABC/../../account", range: .day)
+        }
+        for id in ["", ".", ".."] {
+            StubServer.serve(try ApiFixtures.data("market"))
+            do {
+                _ = try await api.market(id)
+                XCTFail("\"\(id)\" didn't throw")
+            } catch LiteAPIError.decoding {}
+            XCTAssertNil(StubServer.taken(), "\"\(id)\" was sent")
+        }
     }
 
     func testActions() async throws {

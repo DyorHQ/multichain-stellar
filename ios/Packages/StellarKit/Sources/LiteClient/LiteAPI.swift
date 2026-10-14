@@ -95,18 +95,18 @@ public actor LiteAPI {
 
     /// Whether `address` can receive `asset` (a registry id or token contract) before a send is reviewed.
     public func recipient(_ address: String, asset: String) async throws -> StellarRecipient {
-        try await request("GET", Self.path("recipient/\(address)", ["asset": asset]))
+        try await request("GET", Self.path("recipient/\(Self.segment(address))", ["asset": asset]))
     }
 
     public func buildStep(planId: String, stepId: String) async throws -> PlanView {
-        try await request("POST", "plans/\(planId)/steps/\(stepId)/build", body: [String: String]())
+        try await request("POST", "plans/\(Self.segment(planId))/steps/\(Self.segment(stepId))/build", body: [String: String]())
     }
 
     public func submit(planId: String, stepId: String, signedXdr: String) async throws -> TxStatus {
         try await request("POST", "tx/submit", body: ["planId": planId, "stepId": stepId, "signedXdr": signedXdr])
     }
 
-    public func txStatus(_ hash: String) async throws -> TxStatus { try await request("GET", "tx/\(hash)") }
+    public func txStatus(_ hash: String) async throws -> TxStatus { try await request("GET", "tx/\(Self.segment(hash))") }
 
     public func quoteSwap(sell: String, buy: String, amount: Int64, slippageBps: Int) async throws -> SwapQuote {
         struct Body: Encodable { let sell: String; let buy: String; let amount: String; let slippageBps: Int }
@@ -126,11 +126,11 @@ public actor LiteAPI {
     }
 
     /// A token page: a registry id ("XLM") or a launch token's contract. Public.
-    public func market(_ id: String) async throws -> StellarMarketDetail { try await request("GET", "markets/\(id)", authenticated: false) }
+    public func market(_ id: String) async throws -> StellarMarketDetail { try await request("GET", "markets/\(Self.segment(id))", authenticated: false) }
 
     /// A token's USD price over a period. Public.
     public func marketHistory(_ id: String, range: VolumePeriodKey) async throws -> StellarPriceHistory {
-        try await request("GET", Self.path("markets/\(id)/history", ["range": range.rawValue]), authenticated: false)
+        try await request("GET", Self.path("markets/\(Self.segment(id))/history", ["range": range.rawValue]), authenticated: false)
     }
 
     /// Search by code or name, or exactly by a C… id or `CODE:G…`. Signed in, so results say what the user holds.
@@ -167,7 +167,7 @@ public actor LiteAPI {
 
     public func launches(sort: String) async throws -> [StellarLaunch] {
         struct R: Decodable { let launches: [StellarLaunch] }
-        let r: R = try await request("GET", "launches?sort=\(sort)")
+        let r: R = try await request("GET", Self.path("launches", ["sort": sort]))
         return r.launches
     }
 
@@ -178,11 +178,11 @@ public actor LiteAPI {
     }
 
     public func launch(_ token: String, candles: String? = "5m") async throws -> StellarLaunchDetail {
-        try await request("GET", "launches/\(token)" + (candles.map { "?candles=\($0)" } ?? ""))
+        try await request("GET", Self.path("launches/\(Self.segment(token))", ["candles": candles]))
     }
 
     public func quoteTrade(token: String, buy: Bool, amount: Int64) async throws -> TradeQuote {
-        try await request("POST", "launches/\(token)/quote", body: ["side": buy ? "buy" : "sell", "amount": String(amount)])
+        try await request("POST", "launches/\(Self.segment(token))/quote", body: ["side": buy ? "buy" : "sell", "amount": String(amount)])
     }
 
     public struct LaunchRequest: Encodable, Sendable {
@@ -291,13 +291,13 @@ public actor LiteAPI {
         try await request("POST", "bridge/start", body: ["direction": toStellar ? "monad_to_stellar" : "stellar_to_monad", "amount": amount, "monadAddress": monadAddress])
     }
 
-    public func bridgeSource(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(id)/source", body: ["txHash": txHash]) }
-    public func bridgeClaimed(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(id)/claimed", body: ["txHash": txHash]) }
-    public func bridgeStatus(id: String) async throws -> BridgeStatus { try await request("GET", "bridge/\(id)") }
+    public func bridgeSource(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/source", body: ["txHash": txHash]) }
+    public func bridgeClaimed(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/claimed", body: ["txHash": txHash]) }
+    public func bridgeStatus(id: String) async throws -> BridgeStatus { try await request("GET", "bridge/\(Self.segment(id))") }
 
     public func anchors(country: String) async throws -> [AnchorInfo] {
         struct R: Decodable { let anchors: [AnchorInfo] }
-        let r: R = try await request("GET", "cash/anchors?country=\(country)")
+        let r: R = try await request("GET", Self.path("cash/anchors", ["country": country]))
         return r.anchors
     }
 
@@ -344,6 +344,17 @@ public actor LiteAPI {
         }
         return items.isEmpty ? path : path + "?" + items.joined(separator: "&")
     }
+
+    /// A value as one path segment: everything but ASCII letters, digits and `-._~` escaped, so a pasted address can't
+    /// add a query, a fragment or segments of its own. Empty, or dots alone, it would name the route above, so it throws.
+    static func segment(_ value: String) throws -> String {
+        guard value.contains(where: { $0 != "." }), let escaped = value.addingPercentEncoding(withAllowedCharacters: unreserved) else {
+            throw LiteAPIError.decoding("a URL")
+        }
+        return escaped
+    }
+
+    private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     func request<T: Decodable>(_ method: String, _ path: String, authenticated: Bool = true, timeout: TimeInterval = 60) async throws -> T {
         try await request(method, path, body: Optional<[String: String]>.none, authenticated: authenticated, timeout: timeout)
