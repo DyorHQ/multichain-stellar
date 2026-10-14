@@ -1,0 +1,93 @@
+{
+  "status": "active",
+  "account": {
+    "address": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+    "exists": true,
+    "network": "testnet",
+    "activation": "friendbot",
+    "balances": [
+      {
+        "asset": "XLM",
+        "code": "XLM",
+        "name": "Stellar Lumens",
+        "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "classic": "native",
+        "decimals": 7,
+        "balance": "100000000000",
+        "enabled": true,
+        "note": "Test XLM",
+        "kind": "native",
+        "verified": true,
+        "logo": "XLM"
+      },
+      {
+        "asset": "USDC",
+        "code": "USDC",
+        "name": "USD Coin",
+        "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+        "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+        "decimals": 7,
+        "balance": "52300000",
+        "enabled": true,
+        "note": "Circle test USDC (testanchor, CCTP)",
+        "kind": "classic",
+        "verified": true,
+        "logo": "USDC"
+      },
+      {
+        "asset": "BUSDC",
+        "code": "USDC",
+        "name": "Blend test USDC",
+        "contract": "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
+        "classic": "USDC:GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+        "decimals": 7,
+        "balance": "0",
+        "enabled": false,
+        "note": "Only Blend's testnet pool uses it; mainnet has one USDC",
+        "kind": "classic",
+        "verified": true,
+        "logo": null
+      },
+      {
+        "asset": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+        "code": "ECAT",
+        "name": "E2E Cat",
+        "contract": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+        "classic": null,
+        "decimals": 7,
+        "balance": "12000000000000",
+        "enabled": true,
+        "kind": "launch",
+        "verified": true,
+        "logo": null
+      }
+    ],
+    "reserves": {
+      "subentries": 1,
+      "sponsoredByDyorHQ": 0
+    },
+    "sponsor": "GABOYJKI4Q55R4E64YTIKKFRLBFF4QJJ7QZQUA6I2DNYXDQ65HCH5HDY",
+    "xlm": {
+      "balance": "100000000000",
+      "minBalance": "15000000",
+      "sellingLiabilities": "0",
+      "spendable": "99985000000",
+      "baseReserve": "5000000",
+      "reserves": {
+        "base": 2,
+        "subentries": 1,
+        "sponsoring": 0,
+        "sponsored": 0
+      }
+    },
+    "firstFunding": {
+      "needsXlm": false,
+      "suggestXlm": "10000000",
+      "starterSwap": "unavailable",
+      "faucet": {
+        "amount": "10000",
+        "usedToday": false
+      }
+    }
+  }
+}

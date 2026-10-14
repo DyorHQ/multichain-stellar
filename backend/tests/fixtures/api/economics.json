@@ -1,0 +1,53 @@
+{
+  "launchpad": {
+    "contract": "CCWEPM467PSZKFFIQGIPI56R6F5SIRRJ7GJUVB6CSPX2PODKTSWNKGER",
+    "launchesEnabled": true,
+    "supply": "10000000000000000",
+    "feeBps": 100,
+    "protocolShareBps": 5000,
+    "maxCreatorFeeBps": 1000,
+    "snipeSchedule": [
+      9800,
+      2500,
+      300,
+      30
+    ],
+    "quotes": [
+      {
+        "asset": "XLM",
+        "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "phantom": "250000000000",
+        "threshold": "93000000000",
+        "enabled": true
+      },
+      {
+        "asset": "USDC",
+        "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+        "phantom": "50000000000",
+        "threshold": "18000000000",
+        "enabled": true
+      }
+    ]
+  },
+  "moments": {
+    "contract": "CDOYEDV4D3XQ7IP6R2SQXR5IIQYQRYLIVV53XSPTFKSNHUE22QKQ2JFT",
+    "platformBps": 500,
+    "royaltyBps": 500,
+    "publishingEnabled": true,
+    "treasury": "GBRDSEV2HF6WFNUVFLASEBHDMZ2BBQCMQ44ZBN622QYJ4CAXBJRKQ3DE",
+    "maxPerCollect": 20,
+    "maxEditions": 100000,
+    "quotes": [
+      {
+        "asset": "XLM",
+        "minPrice": "1000000",
+        "enabled": true
+      },
+      {
+        "asset": "USDC",
+        "minPrice": "100000",
+        "enabled": true
+      }
+    ]
+  }
+}

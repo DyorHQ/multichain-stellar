@@ -1,0 +1,111 @@
+{
+  "network": "testnet",
+  "passphrase": "Test SDF Network ; September 2015",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "horizonUrl": "https://horizon-testnet.stellar.org",
+  "activation": "friendbot",
+  "sponsor": "GABOYJKI4Q55R4E64YTIKKFRLBFF4QJJ7QZQUA6I2DNYXDQ65HCH5HDY",
+  "assets": [
+    {
+      "id": "XLM",
+      "code": "XLM",
+      "name": "Stellar Lumens",
+      "decimals": 7,
+      "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "classic": "native",
+      "note": "Test XLM"
+    },
+    {
+      "id": "USDC",
+      "code": "USDC",
+      "name": "USD Coin",
+      "decimals": 7,
+      "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      "note": "Circle test USDC (testanchor, CCTP)"
+    },
+    {
+      "id": "BUSDC",
+      "code": "USDC",
+      "name": "Blend test USDC",
+      "decimals": 7,
+      "contract": "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
+      "classic": "USDC:GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+      "note": "Only Blend's testnet pool uses it; mainnet has one USDC"
+    }
+  ],
+  "contracts": {
+    "launchpad": "CCWEPM467PSZKFFIQGIPI56R6F5SIRRJ7GJUVB6CSPX2PODKTSWNKGER",
+    "moments": "CDOYEDV4D3XQ7IP6R2SQXR5IIQYQRYLIVV53XSPTFKSNHUE22QKQ2JFT",
+    "soroswapRouter": "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD",
+    "soroswapFactory": "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY",
+    "aquariusRouter": "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD",
+    "blendPools": [
+      {
+        "id": "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF",
+        "name": "Blend TestnetV2"
+      }
+    ],
+    "cctp": {
+      "tokenMessengerMinter": "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP",
+      "messageTransmitter": "CBJ6MTCKKZG73PMDZCJMSFRD7DQEMI4FKDH7CGDSV4W6FHCRBCQAVVJY",
+      "forwarder": "CA66Q2WFBND6V4UEB7RD4SAXSVIWMD6RA4X3U32ELVFGXV5PJK4T4VSZ",
+      "domain": 27
+    }
+  },
+  "allowlist": {
+    "launchpad": [
+      "CCWEPM467PSZKFFIQGIPI56R6F5SIRRJ7GJUVB6CSPX2PODKTSWNKGER"
+    ],
+    "moments": [
+      "CDOYEDV4D3XQ7IP6R2SQXR5IIQYQRYLIVV53XSPTFKSNHUE22QKQ2JFT"
+    ],
+    "soroswapRouter": [
+      "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD"
+    ],
+    "aquariusRouter": [
+      "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD"
+    ],
+    "blendPool": [
+      "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF"
+    ],
+    "cctpTokenMessenger": [
+      "CDNG7HXAPBWICI2E3AUBP3YZWZELJLYSB6F5CC7WLDTLTHVM74SLRTHP"
+    ],
+    "token": [
+      "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU"
+    ]
+  },
+  "anchors": [
+    {
+      "domain": "testanchor.stellar.org",
+      "name": "Stellar Test Anchor",
+      "assets": [
+        "USDC",
+        "XLM"
+      ],
+      "countries": [
+        "*"
+      ],
+      "kinds": [
+        "deposit",
+        "withdraw"
+      ]
+    }
+  ],
+  "bridge": {
+    "routes": [
+      "cctp"
+    ],
+    "monad": {
+      "chainId": 10143,
+      "usdc": "0x534b2f3A21130d7a60830c2Df862319e593943A3"
+    }
+  },
+  "flags": {
+    "enabled": true
+  },
+  "minBuild": 1
+}

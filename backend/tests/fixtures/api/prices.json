@@ -1,0 +1,10 @@
+{
+  "usd": {
+    "XLM": 0.1901,
+    "USDC": 0.9999,
+    "BUSDC": 0.9999,
+    "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V": 0.0000079
+  },
+  "reference": "Mainnet reference prices; testnet assets have no value.",
+  "at": "2026-10-14T09:41:00.000Z"
+}

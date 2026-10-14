@@ -1,0 +1,36 @@
+{
+  "network": "testnet",
+  "baseReserve": "5000000",
+  "baseFee": "100",
+  "inclusionFee": {
+    "classic": "100",
+    "soroban": "150"
+  },
+  "estimates": {
+    "payment": "10000",
+    "payment_token": "300000",
+    "trust": "10000",
+    "restore": "500000",
+    "swap_sdex": "10000",
+    "swap_soroswap": "500000",
+    "swap_aquarius": "500000",
+    "blend_submit_deposit": "5000000",
+    "blend_submit_withdraw": "500000",
+    "launch_create": "10000000",
+    "launch_buy": "500000",
+    "launch_sell": "500000",
+    "launch_graduate": "15000000",
+    "launch_claim": "500000",
+    "moment_publish": "3000000",
+    "moment_collect": "10000000",
+    "token_approve": "300000",
+    "cctp_burn": "500000"
+  },
+  "estimateBasis": {
+    "swap_soroswap": "history",
+    "launch_buy": "history",
+    "trust": "history",
+    "launch_create": "default"
+  },
+  "updatedAt": "2026-10-14T09:40:00.000Z"
+}

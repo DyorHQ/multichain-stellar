@@ -1,0 +1,35 @@
+{
+  "row": {
+    "id": "XLM",
+    "kind": "registry",
+    "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "classic": "native",
+    "code": "XLM",
+    "name": "Stellar Lumens",
+    "decimals": 7,
+    "logo": "XLM",
+    "image": null,
+    "verified": true,
+    "badges": [],
+    "note": "Test XLM",
+    "priceUsd": 0.1901,
+    "change24h": -0.0123,
+    "isNew": false,
+    "volume24hUsd": 3712345.2,
+    "marketCapUsd": null,
+    "priceSource": {
+      "kind": "reference",
+      "market": "Kraken XLM/USD",
+      "at": "2026-10-14T09:40:00.000Z"
+    },
+    "stale": false,
+    "launch": null
+  },
+  "about": {
+    "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "classic": "native",
+    "issuer": null,
+    "decimals": 7,
+    "homeDomain": null
+  }
+}
