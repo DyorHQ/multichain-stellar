@@ -3,14 +3,17 @@
 
 A Monad piece that is private or EVM-typed is copied into ios/DyorHQ/Lite with a Stellar name, and the copy starts with
 a header naming its source declaration and that declaration's hash at the base:
-    // Stellar copy of ios/DyorHQ/Home/HomeView.swift HomeAction (d387a64 sha256:<first 12 hex>)
-This script finds every such header under ios/DyorHQ/Lite, finds the declaration in the base's file, brace-matched from
-its declaration line, and compares the hash. A mismatch names the copy to re-sync with its source.
+    // Stellar copy of ios/DyorHQ/Home/HomeView.swift HomeAction (42cd8c7 sha256:<first 12 hex>)
+This script finds every such header under app/ios/DyorHQ/Lite, finds the declaration in the base's file, brace-matched
+from its declaration line, and compares the hash. A mismatch names the copy to re-sync with its source. The base is the
+app copy's upstream snapshot, as for check-build23.py: the latest "Squashed 'app/' …" commit, whose tree is the public
+app at its root, so a header's path is the app's own (ios/…).
 
-From ios/, with Python's isolated mode:
-    python3 -I Internal/check-copies.py --base d387a64                   # check every copy
-    python3 -I Internal/check-copies.py --base d387a64 --header ios/DyorHQ/Home/HomeView.swift HomeAction
-                                                                          # print the header for a new copy
+From app/ios/, with Python's isolated mode:
+    python3 -I Internal/check-copies.py                   # check every copy against the snapshot
+    python3 -I Internal/check-copies.py --header ios/DyorHQ/Home/HomeView.swift HomeAction
+                                                          # print the header for a new copy
+    python3 -I Internal/check-copies.py --base <rev>      # against another snapshot of the public app
 
 The symbol is a declaration's name (a type, func, var or let). When the name is declared more than once in the file,
 qualify it with its enclosing type: HomeView.heroCard. The hash covers the declaration's lines, from the one with its
@@ -21,6 +24,7 @@ any finding, 2 when it can't run.
 """
 import argparse
 import hashlib
+import importlib.util
 import re
 import subprocess
 import sys
@@ -34,8 +38,9 @@ MODIFIER = (r"(?:public|private|fileprivate|internal|package|open|final|static|c
 DECLARATION = re.compile(r"^[ \t]*(?:@[\w.]+(?:\([^)\n]*\))?[ \t]+)*(?:" + MODIFIER + r"[ \t]+)*"
                          r"(?P<kind>struct|class|enum|actor|protocol|extension|func|var|let|typealias)[ \t]+"
                          r"(?P<name>[\w.]+)", re.M)
-# What may end a line in the middle of a declaration's signature, or start the line that carries it on.
-CONTINUES_LINE = tuple(",:=&|.?<(")
+# What may end a line in the middle of a declaration's signature, or start the line that carries it on. Not "?": a line
+# that ends with an optional type (`var presented: PresentedScreen?`) is a whole declaration.
+CONTINUES_LINE = tuple(",:=&|.<(")
 CONTINUATION = re.compile(r"\s*(\{|where\b|->|throws\b|rethrows\b|async\b|:|=|\.|&&|\|\|)")
 
 findings = []
@@ -53,6 +58,17 @@ def stop(message):
 def git(*args):
     result = subprocess.run(["git", *args], cwd=IOS, capture_output=True)
     return result.stdout if result.returncode == 0 else None
+
+
+def check_build23():
+    """check-build23.py as a module: the base resolution and the repository's layout are its."""
+    spec = importlib.util.spec_from_file_location("check_build23", Path(__file__).with_name("check-build23.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+build23 = check_build23()
 
 
 # Reading Swift
@@ -215,7 +231,7 @@ def base_text(base, path):
 def check(base):
     copies = 0
     for file in sorted(LITE.rglob("*.swift")) if LITE.is_dir() else []:
-        where = file.relative_to(IOS.parent)
+        where = file.relative_to(build23.ROOT)
         for number, line in enumerate(file.read_text(encoding="utf-8", errors="replace").split("\n"), 1):
             if "Stellar copy of" not in line or not line.lstrip().startswith("//"):
                 continue
@@ -241,15 +257,16 @@ def check(base):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--base", required=True, help="the base the copies are checked against, d387a64")
+    ap.add_argument("--base", help="the snapshot the copies are checked against (default: the latest \"Squashed "
+                                   f"'{build23.PREFIX}/' …\" commit, as for check-build23.py)")
     ap.add_argument("--header", nargs=2, metavar=("PATH", "SYMBOL"), help="print the header for a copy of SYMBOL in "
-                    "PATH (relative to the repository root)")
+                    "PATH (the app's own path, ios/…)")
     args = ap.parse_args()
 
-    resolved = git("rev-parse", "--verify", "--quiet", "--short", f"{args.base}^{{commit}}")
-    if resolved is None:
-        stop(f"no commit {args.base} in this repository")
-    base = resolved.decode().strip()
+    try:
+        _, base = build23.resolve_base(args.base)
+    except LookupError as error:
+        stop(str(error))
 
     if args.header:
         path, symbol = args.header
@@ -265,10 +282,11 @@ def main():
     copies = check(base)
     for finding in findings:
         print(f"check-copies: {finding}")
+    lite = LITE.relative_to(build23.ROOT)
     if copies == 0 and not findings:
-        print("check-copies: no copies under ios/DyorHQ/Lite")
+        print(f"check-copies: no copies under {lite}")
         return 0
-    print(f"check-copies: {copies} cop{'ies' if copies != 1 else 'y'} under ios/DyorHQ/Lite against {args.base}: "
+    print(f"check-copies: {copies} cop{'ies' if copies != 1 else 'y'} under {lite} against the snapshot {base}: "
           f"{len(findings)} finding{'s' if len(findings) != 1 else ''}")
     return 1 if findings else 0
 
