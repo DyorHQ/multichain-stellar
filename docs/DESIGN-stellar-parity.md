@@ -9,8 +9,14 @@ private multichain-stellar repository and is never copied into DyorHQ/IOS-app.
 
 | Id | Repository | Branch and head | Checkout |
 |---|---|---|---|
-| A | DyorHQ/IOS-app (PUBLIC) | `lite/network-switch` at c2ee50e (build 23 d387a64, then c9ae994 and 4e7e89b, then the committed tagline c2ee50e) | `~/Hackathon-b17/netswitch` |
+| A | The app copy inside S: `S:app/` (a subtree of DyorHQ/IOS-app `release/24`; owner decision 2026-10-14). The design was read on DyorHQ/IOS-app `lite/network-switch` at c2ee50e (build 23 d387a64, then c9ae994 and 4e7e89b, then the committed tagline c2ee50e). | S `main`, under `app/` | `$S/app` (each package: its own S worktree's `app/`) |
 | S | DyorHQ/multichain-stellar (private) | `main` at 651918e | `~/Hackathon-b17/multichain-stellar` |
+
+**Where the app code lives (owner decision 2026-10-14).** The app code now lives in the private repository's app copy,
+`S:app/`, a subtree of the public app's `release/24`, instead of the public DyorHQ/IOS-app repository. So **A is
+`$S/app`**: an A path `ios/…` in this document is `S:app/ios/…`; each package works in one worktree of the private
+repository (§13.4); and nothing in this program is pushed to the public repository (§13.6, O-3). The build-23 rules
+(I1, I2, §12.1) still compare the app against d387a64. Q2 (§14) is answered by this decision.
 
 "Monad X.swift:n" is a build-23 file in A. "Research" is `research-2026-10-14.md` (six reports). Facts this document
 relies on were re-checked in the code on 2026-10-14. The ones that changed a decision are cited where they are used.
@@ -47,6 +53,27 @@ screen-by-screen spec. §9 to §12 cover placeholders, strings, accessibility an
 4. **Stellar tabs: Home · Launch · Earn · Moments.** Earn sits exactly in Monad's Trade slot.
 5. The tagline change is handled separately. Here it matters only because it is already committed (c2ee50e), and the
    build-23 check must allow it (§12.1).
+6. **No access gating.** "Users should be able to access the app, no need for gating it since it's on Testnet."
+   Viewing the Stellar section never asks for Face ID, the passcode or a passkey, and never shows a locked screen:
+   not after a relaunch, not after 12 hours or more, not after the app was in the background. Signing follows Monad
+   exactly: Face ID or the passcode only when the user's App Lock setting applies (`settings.appLockApplies(to:)`,
+   Profile › Security), once per confirmed action; a passkey (Mera) account gets its passkey prompt only, never App
+   Lock on top. This supersedes the 12-hour session lock, the setup run's "Unlock your Stellar key" step for seed
+   accounts, the locked Home and resting cards, the locked sheet, "Unlock again to continue", and
+   `GatedSeedKeyProvider`'s prompt on every signature. How:
+   - **Seed accounts** (imported phrase or key, email & password v2: the Stellar seed is in this iPhone's Keychain)
+     sign the SEP-53 sign-in challenge silently. It is a message signature, domain-separated from every transaction
+     signature, and the phone signs only a challenge of the exact expected shape (§5.8).
+   - **Every account** gets a rotating refresh token at sign-in (30 days, single use, this device only), so sessions
+     renew silently before they end and on a 401 (§6.18). Passkey accounts therefore never prompt just to view after
+     their setup.
+   - **On-chain reads need no session at all** (balances, positions, editions, boards, markets: "viewer" routes,
+     §6.0). DyorHQ's own history (Portfolio, Recent Activity, My Launchpad, My Moments) stays behind a session.
+   - **Secrets hygiene stays:** no seed or signer is kept in memory longer than one signing operation that never
+     waits on the user (§7.2).
+
+   Scope: this decision is about the device lock and session expiry. The server-side invite code at a first sign-in
+   and the tester revocation are not device gates and stay until the owner says otherwise (Q6, §14).
 
 ### 1.2 Lead defaults adopted
 
@@ -73,6 +100,8 @@ The Stellar section is Monad's section on another network:
   Activity. The review sheet, notifications and saved figures all behave as on Monad.
 - **Fees.** Hybrid fees work end to end on testnet, user-paid except Friendbot setup. The sponsored mainnet paths are
   rehearsed on a local stack only.
+- **No access gate** (decision 6). Opening and browsing Stellar never prompts and never locks; signing prompts as on
+  Monad (App Lock when it applies, or the passkey).
 - **No placeholders anywhere** (§9). The App Store build is still build 23 apart from the build number and the
   tagline (§12.1).
 
@@ -127,6 +156,7 @@ The Stellar section is Monad's section on another network:
 | R28 | Sponsorship ledger (`sponsorships` vs `sponsored_actions`) | The backend's `lite.sponsorships` with `reserve_sponsorship()` and its abuse caps (§6.15). |
 | R29 | App test target | Add a hosted `DyorHQInternalTests` target for the app-side glue. Pure logic stays in DyorLite/StellarKit tests (§12.2). |
 | R30 | LiteHarness deleted vs kept | **Kept as a session/data harness**, because it is the private CI's only iOS compile check (§13, WP-50). |
+| R31 | The 12-hour Lite JWT, the setup run's unlock, the signer's 120 s idle and background drop, the locked Home/resting cards and `GatedSeedKeyProvider`'s prompt per signature vs owner decision 6 | **Decision 6 wins.** Silent SEP-53 sign-in for seed accounts (§5.8), rotating refresh tokens for every account (§6.18), viewer routes that need no session (§6.0), App Lock once per confirmed action through `LiteKeyProvider.beginSigning` (§7.2), no locked state anywhere (§8). Access tokens drop to 1 hour, because they now renew silently and a leaked one is useful for less time. Follow-up packages WP-02b and WP-03b adjust what M0 committed. |
 
 ### 2.2 Dropped as infeasible
 
@@ -205,32 +235,35 @@ Each row names the gap and the section that closes it.
 | I7 | **Nothing depends on today's admin or treasury.** Contract ids come from `PinnedContracts`/config, which `gen-pinned.ts` regenerates. Economics are read live from the contracts. | grep (§12.1); WP-04 acceptance |
 | I8 | **No placeholder data** (§9). Before the backend serves a figure, the screen shows Monad's reading, empty or error state. | review and simulator QA |
 | I9 | **Security-relevant values are pinned in the build, never served:** fee caps, the media base, the phone RPC, bridge contracts and explorer links. | §5 |
+| I10 | **No access gate (decision 6).** Viewing Stellar never prompts and never shows a locked state; a prompt appears only to sign: App Lock (seed accounts, only when it applies, once per confirmed action) or the passkey (passkey accounts). No seed or signer outlives one signing operation that doesn't wait on the user. | LiteSessionTests with a counting fake provider (§12.2); QA F04, F04b, F19 (Appendix A) |
 
 ### 3.2 Layers and repositories
 
 ```
-DyorHQ/IOS-app (A, PUBLIC)                         DyorHQ/multichain-stellar (S, private)
-ios/DyorHQ/Lite/**   Stellar screens (SwiftUI)  →  ios/Packages/DyorLite    session, store, plan running, titles,
-   uses the app's components, Router,                                       errors, pure helpers (no views after WP-50)
-   NotificationHub, SavedScreens (DyorKit)          ios/Packages/StellarKit  StellarCore (XDR, keys, TxVerifier,
-ios/Internal/**      internal project, checks,                               PinnedContracts, XLMReserve)
-                     Stellar string tables, tests                            LiteClient (LiteAPI, models, PlanRunner,
-                                                                             PlanFees, anchors)
-                                                    backend/                 Deno lite API, lite-indexer, migrations
-                                                    contracts/               unchanged
+DyorHQ/multichain-stellar (S, private)
+app/ (A: the app copy, a subtree of DyorHQ/IOS-app release/24)
+  app/ios/DyorHQ/Lite/**   Stellar screens (SwiftUI)  →  ios/Packages/DyorLite    session, store, plan running, titles,
+     uses the app's components, Router,                                         errors, pure helpers (no views after WP-50)
+     NotificationHub, SavedScreens (DyorKit)              ios/Packages/StellarKit  StellarCore (XDR, keys, TxVerifier,
+  app/ios/Internal/**      internal project, checks,                               PinnedContracts, XLMReserve)
+                           Stellar string tables, tests                            LiteClient (LiteAPI, models, PlanRunner,
+                                                                                   PlanFees, anchors)
+                                                          backend/                 Deno lite API, lite-indexer, migrations
+                                                          contracts/               unchanged
 ```
 
 - **StellarKit** stays pure Swift. It re-exports LiteClient and StellarCore (`@_exported`, StellarKeychain.swift:2-3).
 - **App imports.** App files import StellarKit and DyorLite only under `Lite/`. A non-Lite file never imports them.
 - **Concurrency.** DyorLite types are `@MainActor @Observable` where they hold UI state, as today.
 
-### 3.3 File tree (A)
+### 3.3 File tree (A = `S:app/`)
 
 Every file below is new unless marked (existing), and is wholly inside `#if STELLAR_LITE`. Basenames never repeat an
 app file's basename, because `.o` and `.stringsdata` files are named by basename; the `Stellar` prefix guarantees it.
+Paths are under `S:app/`; the rest of this document writes them from `ios/` on.
 
 ```
-ios/DyorHQ/Lite/
+S:app/ios/DyorHQ/Lite/
   (existing glue) AppCovers, AppNetwork, DyorHQLiteKeys, LiteMode, LiteText, MonadBridgeAdapter, NetworkChip,
                   NetworkRoot, NetworkSheet, StellarProfile, StellarRemoteFlag
   Core/      StellarRootView (tab bar, resting tabs), StellarRouting (Router extension, StellarDestination,
@@ -239,9 +272,9 @@ ios/DyorHQ/Lite/
   Design/    StellarTokenLogo (+ StellarLogoDisc, StellarLogoMonogram), StellarArtwork (launch art),
              StellarMomentArtwork, StellarMomentStateBadge, StellarAmountField, StellarTokenBadge (+ imitation,
              test-asset, new badges), StellarAddressText, StellarAddressRow, StellarNetworkLine, StellarActivityRow,
-             StellarTransactionProgress
+             StellarTransactionProgress, StellarSignInRow (a history part with no session, §8)
   Wallet/    StellarConfirmationSheet, StellarReceiveSheet, StellarSendSheet, StellarCashSheet, StellarCashTracker,
-             StellarTransferSheet, StellarLockedSheet
+             StellarTransferSheet (no locked sheet: decision 6)
   Home/      StellarHomeView, StellarHomeModel, StellarHomeRows, StellarAddFundsCard, StellarTokenDetailView,
              StellarSearchSheet
   Trade/     StellarTradeView (+ StellarTradeModeSwitcher), StellarSwapView, StellarSwapModel, StellarSwapHistory,
@@ -254,7 +287,7 @@ ios/DyorHQ/Lite/
   Portfolio/ StellarPortfolioView, StellarPortfolioModel
   Profile/   StellarAccountView, StellarRecentActivityView
   Alerts/    StellarPriceAlerts (M4)
-ios/Internal/
+S:app/ios/Internal/
   generate.py (existing), Info.plist (existing, regenerated), README.md
   check-build23.py, check-lite-strings.py, check-copies.py, unflagged-changes.txt
   Resources/ Lite.xcstrings (existing), logo-XLM.png (existing), Stellar<Area>.xcstrings (one per area, §10)
@@ -375,11 +408,11 @@ read whole (MomentsSpeedTests), and the body of `open(route:reference:)` (LocalN
 
   The bar adds `.sensoryFeedback(.selection, trigger: router.stellarTab)`.
 - **Resting tabs.** A tab other than Home shows `StellarRestingTab` until `session.home == .ready`:
-  - locked: Unlock with `BiometricGate.promptName`;
   - paused: the reason, plus Switch to Monad;
   - loading: a spinner.
 
-  These use the app's `PrimaryButton`.
+  These use the app's `PrimaryButton`. There is no locked state (decision 6): an account that finished setup is
+  `.ready` at once on a cold launch, with or without a session (§7.2).
 - **`StellarTab`** (AppNetwork.swift) becomes `home, launch, earn, moments`. The `LiteTab` bridge is deleted.
 - **Summary.** `AppNetwork.summary` for Stellar is "Launch, swap, earn and collect".
 
@@ -416,7 +449,7 @@ No Monad reference starts with `stellar:`, and a test proves `init?(reference:)`
 
 | Function | Behaviour |
 |---|---|
-| `ensureStellar() -> Bool` | When `stellarAvailable` (set by `NetworkRoot.follow()`: availability offered and a session exists): sets `network = .stellar`, with no sheet and no prompt. A locked session shows its locked card, as on a cold launch. Otherwise sets `linkNotice` ("Stellar isn't available for this account.") and returns false. |
+| `ensureStellar() -> Bool` | When `stellarAvailable` (set by `NetworkRoot.follow()`: availability offered and a session object exists): sets `network = .stellar`, with no sheet and no prompt, as on a cold launch. Otherwise sets `linkNotice` ("Stellar isn't available for this account.") and returns false. |
 | `openStellar(_ destination:)` | Sets `presented = nil` and `menuOpen = false`, then sets `stellarTab`, `stellarTradeMode` and `pendingStellar`. |
 | `openStellar(reference:) -> Bool` | True when the reference is Stellar's. It handles the reference whether or not Stellar is available. |
 | `openStellarSwap(sell:buy:starter:)` | The single route for every Stellar swap entry: Home search pick, token page Swap, graduated launch Buy/Sell, side-menu Spot and the add-funds card. |
@@ -447,8 +480,10 @@ Monad destinations keep `ensureMonad()`.
 components never reference area types:
 - `addFunds()` opens Receive;
 - `openSwap(_:)`;
-- `unlock()`;
+- `signIn()`: `session.signIn()`, for `StellarSignInRow` only (a passkey account's history part with no session; §8);
 - `switchToMonad()`.
+
+There is no `unlock()` (decision 6).
 
 ### 3.8 Images
 
@@ -593,7 +628,9 @@ and regenerated into the pins in one commit.
 - daily count and fee caps per kind;
 - a daily cap per hashed IP: `HMAC-SHA256(LITE_JWT_SECRET, ip + "|" + utcDay)`. Raw IPs are never stored.
 
-Invite-only sign-in still gates everything.
+Invite-only sign-in still gates every session, so every transaction and every sponsorship needs an invited, unrevoked
+tester. Viewer routes in their public view (§6.0) need no session; they show only on-chain facts and never sponsor
+anything.
 
 **What the phone believes.** The phone never trusts the server's word that DyorHQ pays. "Paid by DyorHQ" is shown
 for a step only when the phone can verify it:
@@ -718,6 +755,13 @@ exceeds the balance, or for XLM exceeds `maxSend`.
 
 The add-funds card and these errors ship in the same milestone as the fee change, so the testnet experience never
 regresses (§15, RK24).
+
+**Prompts (decision 6).** Reading fees, the preview, Max and the add-funds card never prompts and needs no unlock:
+`/v1/fees` and `/v1/config` are public, and the account's XLM position comes from the viewer `/v1/account` (§6.0).
+Confirm is the only prompt point, and it follows Monad's ConfirmationSheet (TransactionRun.swift:403-408): Face ID or
+the passcode once per confirmed action when `settings.appLockApplies(to: account)`, nothing when App Lock is off, and
+the passkey for each signed step on a passkey account (§8.7). When App Lock applies and the device has no passcode,
+Confirm refuses with Monad's "App Lock needs a device passcode. Set one in iOS Settings, then try again." (key).
 
 ### 4.7 Keeper key
 
@@ -867,6 +911,45 @@ phone from the pinned network through `StellarExplorer`, so server `explorerUrl`
   Up to %@ MON".
 - **Mainnet.** Chain 143 values sit in `StellarBridgePins`, disabled. Enabling them is the mainnet program's job.
 
+### 5.8 Silent sign-in signs only a sign-in (decision 6)
+
+Seed accounts sign the sign-in challenge with no prompt, so the phone must make sure that signature can't be anything
+else. Three bindings, all in StellarKit (WP-03b) and the app's key provider (WP-20):
+
+1. **Domain separation (SEP-53).** The provider never exposes a raw signing call for sign-in: it answers
+   `signInSignature(for: message)`, which is `StellarSigner.signMessage(_:)`, an ed25519 signature over
+   `sha256("Stellar Signed Message:\n" + message)`. A transaction signature is over
+   `sha256(networkId ‖ ENVELOPE_TYPE_TX ‖ tx)`, whose first 32 bytes are the network's passphrase hash, never the 24
+   ASCII bytes of the SEP-53 prefix, so one can't stand for the other (short of a SHA-256 second preimage).
+2. **Shape check before signing.** `LiteAPI.signIn` asks the provider to sign only when the challenge is exactly five
+   lines and at most 512 bytes:
+   `DyorHQ Lite sign-in` / `Network: <pinned network name>` / `Address: <this account's G…>` /
+   `Nonce: <the response's nonce, [A-Za-z0-9_-]{16,64}>` / `Issued: <an ISO-8601 time>`.
+   Anything else (another network, another address, a nonce that differs, an extra line) is refused before any key
+   is read. The Issued time isn't compared with the phone's clock, so a wrong clock never blocks sign-in.
+3. **Self-check after signing.** Before `auth/verify` is sent, LiteAPI verifies the returned signature as SEP-53 over
+   that exact message with the account's public key (`StellarSigner.verifyMessage`). A provider that signed without
+   the prefix, or signed something else, is caught on the phone.
+
+The seed is read from the Keychain for that one signature and dropped (the item stays
+`WhenUnlockedThisDeviceOnly`, never synced). The resulting session can read and build plans but can't sign: every
+transaction still needs the seed under the App Lock rule, or the passkey.
+
+### 5.9 Refresh tokens
+
+- **What.** 32 random bytes, base64url with an `lrt_` prefix, issued by `auth/verify` and by every refresh. The
+  server stores only `sha256(token)` (`lite.auth_refresh`, §6.15 migration 12).
+- **Lifetime.** 30 days from issue, renewed on every use (sliding). Single use: a refresh rotates it. Each sign-in
+  starts a family; presenting a token that was already used revokes the whole family (theft signal), and the phone
+  falls back to a silent sign-in (seed accounts) or the public view (passkey accounts, §6.18).
+- **On the phone.** Kept with the access token in the Keychain item `session.<network>.<G…>`
+  (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, not synchronizable, so never in a backup or on another device).
+  Erased by Sign out of Stellar, by app sign-out and by erase-this-device (`DyorHQLiteKeys.forget`), each of which
+  also asks the server to revoke the family (best effort, 3 s).
+- **Access tokens** drop from 12 hours to 1 hour (`JWT_TTL_S`): they renew silently now, and a leaked one (it can
+  read history and build plans, never sign) is useful for less time. Revoking a tester still takes effect at once
+  (`requireUser` checks `lite.testers` on every request).
+
 ---
 
 ## 6. Backend, API and migrations
@@ -879,9 +962,22 @@ phone from the pinned network through `StellarExplorer`, so server `explorerUrl`
 - **Changes and rates** are **fractions** (0.0123 = +1.23%). DyorLite exposes `…Percent` accessors (R24).
 - **Times** are ISO-8601 UTC with milliseconds.
 - **Periods** use the app's `VolumePeriod` raw values: `day | week | month | all`.
-- **Auth.** Every route needs the Lite JWT except `auth/*`, `config`, `fees` and `markets*`. Those public routes read
-  only the database and the in-isolate caches, are cacheable (`Cache-Control: public, max-age=30`), and are covered by
-  the per-isolate rate limit.
+- **Auth: three route classes** (decision 6; details in §6.18).
+  - **public** (no token, nothing about any account): `auth/*`, `config`, `fees`, `markets*`, `prices`,
+    `economics`, `earn/markets`, `earn/history`, `local-media/*`. They read only the database, the in-isolate caches
+    and cached contract views, are cacheable (`Cache-Control: public, max-age=30`), and are covered by the
+    per-isolate rate limit.
+  - **viewer** (a session is optional): `GET /v1/account`, `/v1/holdings`, `/v1/earn/positions`, `/v1/moments/owned`,
+    `/v1/launches`, `/v1/launches/:token`, `/v1/moments`, `/v1/moments/:id`, `/v1/assets`. With a valid Bearer token:
+    the **owner view** of the token's address, as specified in each section. With no `Authorization` header: the
+    **public view** for `?address=G…` (required where the answer is about an account; 400 `address_required`
+    otherwise): only on-chain facts, every DyorHQ-history field `null`, `"view": "public"`, `Cache-Control: public,
+    max-age=15`. A token that is present but invalid or expired gets 401, so the phone renews instead of silently
+    getting less. The public view never checks the tester list and answers every valid G… alike.
+  - **session** (JWT required): everything else: DyorHQ's history (`portfolio`, `activity`, `launchpad/me`,
+    `moments/mine`, `tx/:hash`) and every write or plan (`account/activate|trust|faucet`, `recipient`, `send`,
+    `plans/*`, `tx/submit`, `swap/*`, `earn/build`, `launches/*` writes and quotes, `moments/*` writes, `media/*`,
+    `bridge/*`, `cash/*`).
 - **New optional fields** decode older payloads in Swift (`decodeIfPresent`).
 - **Fixtures.** Every new or changed payload has a fixture in `backend/tests/fixtures/api/<name>.json` (WP-03).
   Deno tests produce the payloads from seeded data and compare them with these. Swift decodes the same files
@@ -894,7 +990,7 @@ phone from the pinned network through `StellarExplorer`, so server `explorerUrl`
 
 | Module | Routes | Owner after WP-02 |
 |---|---|---|
-| auth | `/v1/auth/*` | WP-02 |
+| auth | `/v1/auth/*` (challenge, verify; refresh and signout from WP-02b) | WP-02, then WP-02b |
 | config | `GET /v1/config` | WP-02 |
 | fees | `GET /v1/fees` | WP-10 |
 | account | `/v1/account`, `/activate`, `/trust`, `/faucet`, `POST /v1/send`, `GET /v1/recipient/:address` | WP-10 |
@@ -909,7 +1005,8 @@ phone from the pinned network through `StellarExplorer`, so server `explorerUrl`
 | holdings, portfolio, activity | `GET /v1/holdings`, `GET /v1/portfolio`, `GET /v1/activity` | WP-18 |
 
 WP-02 creates every route module above, existing routes moved verbatim and new ones as empty `register()`
-functions, so `index.ts` never changes after M0. It also adds three transitional exports to `_shared/launchpad.ts`
+functions. WP-02b (M0) then adds the viewer class to `index.ts`'s guard and `viewer(req)` to `routes/auth.ts`
+(§6.18), so `index.ts` never changes after M0. It also adds three transitional exports to `_shared/launchpad.ts`
 that WP-14 implements: `launchMarketRows()`, `launchHistory(token, range)` and `launchSearch(q)`, which return `[]`
 until then. Launch rows are therefore absent from Top Tokens until WP-14 lands. Nothing fake is shown; the list is
 simply shorter.
@@ -1003,6 +1100,10 @@ These fields are added:
 
 - **Balances.** Every Horizon trustline, except liquidity-pool shares, plus held launch tokens.
 - **`BalanceRow`** gains `kind` (`native|classic|sac|launch`), `verified` and `logo`.
+- **Viewer route** (§6.0). The public view (`?address=`) has the same shape with `"view": "public"`;
+  `firstFunding.starterSwap` and `firstFunding.faucet.usedToday` are `null` (server state, not on-chain facts), and
+  launch balances are the indexed ones, with no live `balance()` call. `needsXlm` and `suggestXlm` stay: they follow
+  from the ledger.
 
 **`GET /v1/recipient/:address?asset=`** (WP-10) returns `{ "kind": "account|contract", "exists": bool, "trusts":
 bool|null }`. It refuses M… addresses with 400 `muxed_unsupported`. Muxed recipients are out of scope; the copy tells
@@ -1044,6 +1145,12 @@ Feeds Home's balance card, My Holdings, the allocation ring and Portfolio's asse
 **Launch balances** come from `lite.token_balances`, confirmed by a live `balance()` view (at most 50 in parallel).
 On an RPC failure, the indexed value is shown with `stale: true`.
 
+**Public view** (viewer route, §6.0): the same shape with `"view": "public"`. Balances, Earn `supplied`, editions,
+prices, totals and `change24h` are on-chain facts and stay. These are DyorHQ history and are `null`: `earn[].deposited`,
+`withdrawn`, `earned` (with `earnedComplete: false`), `launch[].costBasisUsd` and `pnlUsd`. Launch balances are the
+indexed ones with no live `balance()` call (no RPC fan-out for an unauthenticated caller), and each answer is cached
+15 s per address.
+
 **Asset directory.** On a miss, Horizon `/assets` gives `_links.toml`. The server fetches that toml (https only, 3 s,
 at most 100 KB) and reads `[[CURRENCIES]]` for `name` and `image`, keeping https images only. The result is cached
 for 7 days. The directory's name is shown. Its logo is **not** shown in v1, because the phone's media policy
@@ -1082,7 +1189,7 @@ The phone derives the other tabs exactly as `HomeModel.topTokens` does (HomeView
 { "row": MarketRow, "about": { "contract": "C…", "classic": "native", "issuer": null, "decimals": 7, "homeDomain": null } }
 ```
 
-Balances come from the authenticated `/v1/account`.
+Balances come from the viewer `/v1/account` (§6.0).
 
 **`GET /v1/markets/:id/history?range=day|week|month|all`** →
 
@@ -1095,7 +1202,8 @@ Balances come from the authenticated `/v1/account`.
 - **Launch tokens** use `lite.token_candles` close × `lite.ref_usd_at(quoteRef, bucket)`, forward-filled per bucket
   from max(since, createdAt). Their `source` is `"curve+pool"`.
 
-**`GET /v1/assets?q=`** (needs the JWT, so `held` can be set) →
+**`GET /v1/assets?q=`** (viewer: `held` from the token's address, or in the public view from `?address=`; without
+either, `held` is `false`) →
 
 ```json
 { "results": [ { "id", "kind": "registry"|"launch"|"classic"|"contract", "code", "name", "contract", "classic",
@@ -1203,6 +1311,9 @@ and a send to an account without the asset's trustline (`recipient_missing`, `re
 
 - `trades` merges curve and pool trades, each with `venue: "curve"|"soroswap"`, newest 50.
 - `pricePoints` hold at most 300 points.
+- **Viewer routes** (§6.0): the board and the detail answer without a session. In the public view, `you` is
+  `{balance, isCreator, costBasisQuote: null, pnlQuote: null}` for `?address=` (indexed balance), or `null` without
+  it. `GET /v1/economics` is public.
 
 **`POST /v1/launches/:token/quote`** returns separate `baseFee`, `creatorFee`, `snipeFee`, `used` and `refund`.
 
@@ -1254,7 +1365,10 @@ The admin is never exposed. `treasury` is shown only in the publish review.
 | `GET /v1/moments?filter=all\|collecting\|closed&limit=` | `listed` Moments only. `closed` covers sold out and window closed. |
 | `GET /v1/moments/:id` | Adds `collectorsSummary {count, largest {address, editions}}`, `you {editions: [ids still owned], spent}`, `creatorEarned`. |
 | `GET /v1/moments/owned` | Reads `lite.moment_editions where owner = user`, replacing the `owner_of` loop (moments.ts:47-59). |
-| `GET /v1/moments/mine` | `{ "created": [MomentRow & {"proceeds", "proceedsUsd"}], "collected": [{"tokenId", "momentId", "contract", "moment": MomentRow}], "totals": {"editions", "moments", "spentByQuote", "earnedByQuote"} }` |
+| `GET /v1/moments/mine` | `{ "created": [MomentRow & {"proceeds", "proceedsUsd"}], "collected": [{"tokenId", "momentId", "contract", "moment": MomentRow}], "totals": {"editions", "moments", "spentByQuote", "earnedByQuote"} }` (session: DyorHQ history) |
+
+The feed, `/:id` and `/owned` are viewer routes (§6.0). In the public view, `/:id`'s `you` is
+`{editions, spent: null}` for `?address=` (or `null` without it), and `/owned` needs `?address=`.
 
 ```jsonc
 // MomentRow (adds to moments.ts momentRow)
@@ -1301,6 +1415,7 @@ returns `{uri, posterUrl}`.
 | `GET /v1/earn/markets` | Adds `totalSuppliedUsd`, `freeLiquidityUsd` (supplied − borrowed, in USD), `priceUsd` and `poolStatus` (`active \| on_ice \| frozen`, from Blend's pool status: 0–1 active, 2–3 on ice, 4–5 frozen; setup = frozen). |
 | `GET /v1/earn/positions` | Rows become the `earn` holding rows of §6.5. |
 | `GET /v1/earn/history?pool=&asset=&range=week\|month` | `{ "points": [{ "t", "supplyApy", "utilization" }] }` from `lite.earn_snapshots`, taken every 10 minutes. |
+| Auth classes (§6.0) | `markets` and `history` become public; `positions` is a viewer route whose public view leaves `deposited`, `withdrawn` and `earned` `null` (`earnedComplete: false`). |
 
 **Activity** (WP-18). `GET /v1/activity?section=&kind=&period=&market=&limit=` items add `section`, `hash`,
 `feeCharged`, `feePayer`, `result` (with `amountOut`), `ref` (`{token}` or `{momentId}` or `{market}`), resolved
@@ -1404,6 +1519,9 @@ returns `{uri, posterUrl}`.
 | 422 `simulation_failed` with `contractCode` | stable per contract error: `launch.slippage`, `launch.closed`, `launch.disabled`, `launch.nothing_to_claim`, `moment.closed`, `moment.sold_out`, `moment.price_too_low`, `trust.missing` | The price moved past your 1% limit. Nothing was sent. Review again for a new price. / This curve isn't taking trades now. / New launches are paused. / Nothing to claim yet. / This Moment's collect window has closed. / This Moment is sold out. / The price is below the minimum (%@). / Enable %@ first. |
 | 429 `upload_budget`, `bridge_relay_limit` | budgets | You've uploaded a lot today. Try again tomorrow. / You've bridged in many times today. Try again tomorrow. |
 | 422 `tx_rejected` (existing) | other send errors | the server message, verbatim |
+| 401 `unauthorized` (existing) | a Bearer token that is invalid or expired | none: the phone renews silently and retries once (§6.18) |
+| 401 `refresh_invalid` / `refresh_reused` | refresh token unknown, expired or revoked / already used (the family is revoked) | none: silent sign-in (seed accounts) or the public view (passkey accounts) |
+| 400 `address_required` | a viewer route about an account called with neither a token nor `?address=` | none (a phone bug) |
 
 ### 6.14 Environment
 
@@ -1422,6 +1540,7 @@ returns `{uri, posterUrl}`.
 | `LITE_INDEXER_ALLOW_RESET` | — |
 | `LITE_MOMENT_LINK_BASE` | — |
 | `LITE_LOCAL_STORAGE_DIR`, `LITE_PUBLIC_BASE` | Local stack only; refused on mainnet. |
+| `LITE_JWT_TTL_S`, `LITE_REFRESH_TTL_S` (WP-02b) | QA overrides of the access-token (default 3600) and refresh-token (default 2592000) lifetimes, so the "no prompt after expiry" checks run in minutes. Testnet only, at least 60 and 120 s; ignored with a warning on mainnet. `local-stack.sh --short-sessions` writes 120 / 600. |
 
 Numeric pairs are testnet / mainnet. `networkByName` throws on any name other than `testnet` or `mainnet`.
 
@@ -1439,9 +1558,11 @@ functions and grants `lite_api`. Storage changes are guarded with `to_regclass('
 | `20261014000009_lite_moments_media.sql` | WP-16 | `moment_metadata`; new `moments` columns (description, place, taken_on, media_type, poster_url, platform_bps, royalty_bps, collectors, listed); `moment_editions`; `media_uploads`; the guarded write-once trigger for `lite-media`. |
 | `20261014000010_lite_portfolio.sql` | WP-18 | Indexes for portfolio and activity reads (`tx_log(address, section, created_at)`, `launch_trades(trader, ts)`, `moment_collects(collector, ts)`). |
 | `20261014000011_lite_bridge.sql` | WP-17 | `bridge_transfers.relay_day` and an index for the relay cap. |
+| `20261014000012_lite_auth_refresh.sql` | WP-02b | `lite.auth_refresh` (`id uuid`, `family uuid`, `address`, `token_hash text unique` (sha256 hex), `created_at`, `expires_at`, `used_at`, `revoked_at`, `replaced_by`), indexes on `family` and `address`, the RLS loop, `lite_api` grants. No raw token is ever stored. |
+| `20261014000013_lite_wallet_history.sql` | WP-63 (M4) | `lite.external_trades` (renumbered from 12 so the M0 migration sorts first). |
 
-Hosted order (owner, O-2): 20261011000001, 0004, 0003, 0002 (the cron, last), then 0005 to 0011 in order, before the
-cron is switched on.
+Hosted order (owner, O-2): 20261011000001, 0004, 0003, 0002 (the cron, last), then 0005 to 0012 in order, before the
+cron is switched on. 0013 comes with M4.
 
 ### 6.16 Deployments, smoke items and the QA deployment (WP-04)
 
@@ -1476,6 +1597,55 @@ cron is switched on.
 
 `lite_schema_test.sql` runs inside `begin; … rollback;`.
 
+### 6.18 Sessions: sign-in, refresh, sign-out and the viewer class (WP-02b; decision 6)
+
+**Sign-in** (unchanged routes, changed answer):
+- `POST /v1/auth/challenge {address}` → `{nonce, message, expiresAt}` as today (nonce single use, 5 minutes).
+- `POST /v1/auth/verify {address, nonce, signature, inviteCode?}` → `{token, expiresAt, refreshToken,
+  refreshExpiresAt, tester}`. `token` is the HS256 access JWT, now 1 hour (`LITE_JWT_TTL_S` on testnet QA only).
+  `refreshToken` starts a new family (§5.9). An `inviteCode` sent by an existing tester is ignored, not consumed, so
+  the phone may send one whenever it has one.
+
+**`POST /v1/auth/refresh {address, refreshToken}`** (public; 30 a minute per IP) → the same answer as verify:
+1. In one transaction: `update lite.auth_refresh set used_at = now() where token_hash = $h and address = $a and
+   used_at is null and revoked_at is null and expires_at > now() returning family`.
+2. No row, and the hash exists with `used_at` set: revoke the family, 401 `refresh_reused`. No row otherwise: 401
+   `refresh_invalid`.
+3. The tester must still be allowed (403 `access_revoked` otherwise, and the family is revoked).
+4. Insert the successor in the same family (`replaced_by` on the old row), expiring 30 days from now; sign a new
+   access JWT.
+5. Opportunistic cleanup: delete at most 500 rows that expired more than 7 days ago.
+
+**`POST /v1/auth/signout {refreshToken}`** (public; 20 a minute per IP) → 204. Revokes that token's family. Unknown
+tokens also get 204 (no oracle).
+
+**Guard** (`lite/index.ts`, `routes/auth.ts`):
+
+```ts
+const PUBLIC = /^[A-Z]+ \/v1\/(auth\/|config$|fees$|markets(\/|$)|prices$|economics$|earn\/(markets|history)$|local-media\/)/;
+const VIEWER = /^GET \/v1\/(account|holdings|earn\/positions|moments\/owned|launches(\/:token)?|moments(\/:id)?|assets)$/;
+before(req, route):
+  public                         → rateLimit(`public:${ip}`, 300)
+  viewer, no Authorization header → rateLimit(`view:${ip}`, 120)        // public view
+  otherwise                      → await auth.user(req)                 // 401 / 403 as today
+viewer(req) → { address, scope: "owner" } from the token, or { address: ?address (StrKey-checked) | null, scope: "public" }
+```
+
+Handlers of viewer routes call `viewer(req)` and build the public view from on-chain and indexed data only
+(§6.4, §6.5, §6.9, §6.10). The public view answers every valid G… alike, member or not, so it reveals nothing about
+who uses DyorHQ.
+
+**What the phone does** (StellarKit WP-03b, DyorLite WP-12):
+
+| When | What happens | Prompt |
+|---|---|---|
+| Before expiry | While the app is active, the session renews 10 minutes before `expiresAt`, and again on becoming active if less than 10 minutes are left. | never |
+| A 401 on any authenticated request | LiteAPI runs one renewal (shared by concurrent requests) and retries the request once. | never |
+| Renewal order | 1. `auth/refresh` with the stored refresh token. 2. Seed accounts: the silent SEP-53 sign-in (§5.8). 3. Otherwise: no session. Viewer requests are retried without the token (public view); session requests report "needs sign-in" to the screen (§8). | never |
+| 403 `access_revoked` | The paused card with "Access to Stellar was turned off for this account." (not a lock: a server refusal). | never |
+| Offline | The token is kept; reads fail with Monad's error and Retry states over the saved figures. | never |
+| A passkey account with no session that starts an action, or taps a history part's "Sign in with your passkey" | `session.signIn()`: one passkey ceremony, used for the SEP-53 sign-in only, then dropped. An action's own per-step passkey prompts follow as usual. This happens only after the refresh token was lost (revoked, signed out, or 30 days unused). | the passkey, once |
+
 ---
 
 ## 7. StellarKit and DyorLite (the headless layer)
@@ -1508,6 +1678,26 @@ Changed models:
 - `StellarActivityItem` gains the §6.10 fields.
 - `Intent` gains `to`, `memo`.
 
+**WP-03b (sessions without gating, decision 6):**
+- `AuthResult` gains `refreshToken` and `refreshExpiresAt` (optional, so older answers decode).
+- Viewer payloads gain an optional `view` (`owner | public`). Fields that are `null` in the public view become
+  optional where they weren't: `StellarFirstFunding.starterSwap`, its `faucet.usedToday`, and the Moment detail's
+  `you.spent`.
+- **`LiteAPI`:**
+  - `signIn(address:inviteCode:timeout:sign:)`, where `sign: @Sendable (String) async throws -> String` returns a
+    SEP-53 signature. It runs the §5.8 shape check before calling `sign`, and verifies the result before
+    `auth/verify`. The old `signIn(signer:inviteCode:timeout:)` stays as a wrapper over it.
+  - `init(baseURL:network:session:)`: the pinned network name, for the shape check.
+  - `refresh(address:refreshToken:timeout:) -> AuthResult` and `revoke(refreshToken:)` (`auth/signout`, best effort).
+  - Three access modes replace `authenticated: Bool`: `.public` (never a token), `.viewer` (the token when held,
+    otherwise `?address=` from `viewerAddress`), `.session` (token required).
+  - `setRenewal(_:)`: on a 401 to a request that carried a token, one shared renewal, then one retry. If renewal
+    fails, a viewer request is retried without the token, and a session request throws `.notSignedIn`.
+- `StellarKeychain`'s session item also holds `refreshToken` and `refreshExpiresAt` (decode-tolerant), with the same
+  this-device-only attributes. `eraseSession` and `erase` remove them.
+- `contract.ts` and `API-lite.md` carry the three classes, the refresh and signout routes, the public-view field table
+  and the codes `refresh_invalid`, `refresh_reused` and `address_required`. `prices` is public, as WP-02 serves it.
+
 **WP-11 (verifiers and fees):**
 - `PinnedContracts.feePolicy: FeePolicy {maxFee, maxInclusionFeePerOp, starterInnerFeeMax}` and
   `PinnedContracts.rpcURL`. The init has defaults (`FeePolicy.standard`, the testnet RPC), so the code compiles before
@@ -1532,17 +1722,42 @@ public protocol LiteMonadBridge: Sendable {                      // + preview, d
   func preview(_ steps: [EvmStep]) async throws -> LiteMonadFeePreview?
 }
 
-@MainActor @Observable public final class LiteSession {         // today's API, plus:
-  public enum HomePhase: Equatable, Sendable { case loading, ready, locked, paused(Failure) }   // was internal
-  public private(set) var home: HomePhase; public private(set) var address: String?; public let env: LiteEnvironment
+// The host's key provider (decision 6). Nothing here hands out a signer outside a signing run.
+public protocol LiteKeyProvider: Sendable {
+  var address: String { get }; var canSign: Bool { get }; var methodLabel: String { get }; var canExportSecret: Bool { get }
+  var signsInSilently: Bool { get }                       // true: a seed on this iPhone; false: passkey, watch-only
+  func signInSignature(for message: String) async throws -> String   // SEP-53, base64; never prompts (§5.8);
+                                                          // throws LiteSession.Failure.needsPasskey when !signsInSilently
+  func beginSigning(reason: String) async throws -> LiteSigningRun  // seed: App Lock once, only when it applies
+                                                          // (Monad's rule, read live); passkey: no prompt here
+  func revealSecret(reason: String) async throws -> String           // always the device owner (Face ID or passcode),
+}                                                         // whatever App Lock says, as Monad's key export
+public protocol LiteSigningRun: Sendable {                // one confirmed action; holds no secret
+  func signer(reason: String) async throws -> StellarSigner           // seed: Keychain read, no prompt; passkey: one
+  func end()                                              // ceremony per call. After end(), signer throws.
+}
+
+@MainActor @Observable public final class LiteSession {         // today's API, changed by decision 6:
+  public enum HomePhase: Equatable, Sendable { case loading, ready, paused(Failure) }   // was internal; no `locked`
+  public enum Access: Equatable, Sendable { case session, publicView }   // publicView: reading with no session
+  public enum Step: Hashable, Sendable { case signIn, invite, setUp }   // no `unlock`
+  public private(set) var home: HomePhase; public private(set) var access: Access
+  public private(set) var address: String?; public let env: LiteEnvironment
   public var methodLabel: String? { get }; public var canExportSecret: Bool { get }; public var canSign: Bool { get }
   public var isTestnet: Bool { get }
-  public let publicReads: LitePublicReads                        // markets while locked (no token)
+  public let publicReads: LitePublicReads                        // markets with no token at all
+  public init(env:stellarAddress:monad:keys:setupKey:)            // setupKey: a passkey account's one setup ceremony
+  public func plan() -> Plan                                       // .instant once set up on this iPhone, unless signed out
+  public func resumeAtLaunch() async                               // never prompts; .ready when set up; renews in the background
+  public func signIn() async throws                                // seed: silent; passkey: one ceremony (sign-in only)
+  public func appDidBecomeActive()                                 // renews if under 10 minutes are left
+  public func appDidEnterBackground()                              // stops the renewal timer; ends a running setup run
   public func refreshHome() async
   public func revealSecret(reason: String) async throws -> String   // replaces views calling signer(reason:).secret
+  public func signOut() async                                      // revokes the refresh family; erases session and figures
   public var onSettled: (@MainActor (LiteSettledAction) -> Void)?
   public var onSignOut: (@MainActor (String) -> Void)?           // the host erases its saved figures
-  public var setupFee: PlanFees? { get }                           // the trust step's decoded fee + reserve (§8.14)
+  public var setupFee: PlanFees? { get }                           // the trust step's fee + reserve: estimate, then decoded (§8.14)
 }
 
 @MainActor @Observable public final class LitePublicReads {
@@ -1618,7 +1833,37 @@ public enum LiteMediaPolicy { static func imageSources(_ uri: String, base: URL,
 - `StellarFeeSummary` (the Max network fee text inputs);
 - `StellarPercent` (fraction → percent, R24).
 
-**Kept internal:** `LiteSession.keys`, `signer(reason:)`, `LiteBackend`, `LiteSessionVault`, `LiteStore.api`.
+**Kept internal:** `LiteSession.keys`, `LiteBackend`, `LiteSessionVault`, `LiteStore.api`. `signer(reason:)` is
+deleted: every signature goes through a `LiteSigningRun`.
+
+**Session rules (decision 6).**
+- **No lock.** `HomePhase.locked`, `State.locked`, the `.unlock` step, `UnlockResult` for seed accounts, `idleTimeout`,
+  the idle timer and the "pending again" unlock row are deleted. `canSign` means the key: false for watch-only or a
+  key not on this iPhone, never because of a session.
+- **Reads.** The store reads viewer routes with the token when it has one and in the public view otherwise, so Home,
+  boards, token pages, Earn and the wallet sheets always fill. Session-only parts (portfolio, activity, My Launchpad,
+  My Moments) report `LiteReadStatus.needsSignIn` while `access == .publicView`; the screens show `StellarSignInRow`
+  there (§8). `access` is `.session` whenever a token is held, and seed accounts are back in `.session` after any
+  renewal that reaches the server.
+- **Renewal** follows §6.18. The timer runs only while the scene is active; nothing is dropped at background
+  because nothing secret is held.
+- **Signing.** `LiteStore.run(_:reason:)` calls `keys.beginSigning(reason:)` once per action, which is where App Lock
+  is asked when it applies, and `run.signer(reason: stepTitle)` per step. It ends the run on settle, failure or
+  cancel. Before building, it makes sure of a session: silent for seed accounts; for a passkey account in the
+  public view, one `signIn()` ceremony when the user starts the action (never to view).
+- **Setup run** (§8.14):
+  - seed accounts: check, silent sign-in, invite when asked (nothing held while waiting), account read, the Set Up
+    tap, then App Lock if it applies (as a Monad Confirm), activate and enable;
+  - passkey accounts: check, the Set Up tap (with the invite field on a first sign-in on this iPhone), then one
+    `setupKey` ceremony whose signer signs the sign-in and, with no user wait in between, the Enable USDC step;
+    then the signer is dropped.
+  `appDidEnterBackground()` ends a running passkey run ("Not finished. Try again.") instead of keeping its signer.
+- **Hygiene.** A `StellarSigner` exists only inside one signing operation that never waits on the user: one
+  signature (a sign-in or a step), or a passkey account's setup run. It is never stored, never kept across a user
+  wait or in the background, and never handed to a view.
+- **Sign out of Stellar.** Revokes the refresh family (best effort), erases the Keychain session item and the saved
+  figures, and sets `lite.signedOut.<G>`, so the next switch runs the sign-in step again (silent for seed accounts,
+  one passkey prompt for passkey accounts). A successful sign-in clears it.
 
 **Transitional:** the legacy DyorLite screens become `public` in WP-12 (`LiteLegacyScreens`), so the app's seams
 (§13.3) can host them until each port lands. They are deleted in WP-50, together with `LiteTab`, `LiteStyle`,
@@ -1648,6 +1893,16 @@ The only intended differences are network facts:
 - Earn takes Perps' slot;
 - Moments are editions with no coin;
 - testnet labels show on testnet.
+
+**No access gate on any screen (decision 6).**
+- No Stellar screen has a locked variant, a locked card, an unlock button or "Unlock again to continue".
+- Figures come from viewer and public routes, so they fill with or without a session (§6.0).
+- The one place a session matters on screen is a DyorHQ-history part (Total Volume, Portfolio, Recent Activity, My
+  Launchpad, My Moments, Swap History). It shows only for a passkey account whose refresh token is gone (§6.18).
+  The part then shows `StellarSignInRow`: the Paragraph "Sign in again to see your Stellar history." and a bordered
+  button "Sign in with your passkey", which calls `StellarActions.signIn()`. Nothing prompts until it is tapped. Seed
+  accounts never see it.
+- Prompts happen only when signing (§8.7).
 
 Copy marked **(key)** reuses an existing build-23 Localizable key verbatim. All other copy is new, in the area's
 Stellar table (§10).
@@ -1695,12 +1950,12 @@ Every one of these hangs off `AppNetwork.stellar.isTestnet`, so pinning mainnet 
 | Split | Four `splitStat`s: Spot (`allocationSpot`, key `homeCategory.spot`), Earn (`allocationPerps`, Stellar key `homeCategory.earn` [tight]), Launch (`allocationLaunchpad`, key), Moments (`allocationMoments`, key) | totals |
 | Testnet caption | Paragraph, footnote, secondary (§8.1) | |
 
-**Variants.** The chip row always stays. The rest of the card is replaced by:
-- **locked:** a placeholder figure, "Unlock to see your Stellar balance." and `PrimaryButton("Unlock with \(BiometricGate.promptName)")`
-  (runs `StellarActions.unlock`);
-- **paused:** `InlineError` with the reason, plus `PrimaryButton` "Switch to Monad".
-
-These have no Monad equivalent. They are kept from DyorLite and rebuilt with app components.
+**Variants.** The chip row always stays. The rest of the card is replaced only when **paused** (maintenance, an update
+needed, or access turned off): `InlineError` with the reason, plus `PrimaryButton` "Switch to Monad". This has no
+Monad equivalent; it is kept from DyorLite and rebuilt with app components. There is **no locked variant**
+(decision 6): after a relaunch, after 12 hours or more, or after the background, the card shows the saved figures,
+then the fresh ones, with no prompt. Total Volume shows `StellarSignInRow`'s state (an unread figure, the button
+under it) only in the passkey public-view case of §8.
 
 #### 8.2.2 Tiles (copy of `HomeAction` as `StellarHomeAction`)
 
@@ -1710,10 +1965,10 @@ These have no Monad equivalent. They are kept from DyorLite and rebuilt with app
 
 | Tile | Symbol | Opens | Enabled |
 |---|---|---|---|
-| Bridge | `point.3.connected.trianglepath.dotted` | `StellarBridgeView()` | session ready |
+| Bridge | `point.3.connected.trianglepath.dotted` | `StellarBridgeView()` | Home ready |
 | Deposit | `creditcard` | `StellarReceiveSheet()`: Receive + Add cash + testnet faucet | whenever the Stellar address is known |
-| Withdraw | `arrow.up` | `StellarSendSheet()`: Send + Cash out | session ready and can sign |
-| Transfer | `arrow.left.arrow.right` | `StellarTransferSheet(direction: .toEarn, market: nil)` | session ready and can sign |
+| Withdraw | `arrow.up` | `StellarSendSheet()`: Send + Cash out | Home ready and `canSign` |
+| Transfer | `arrow.left.arrow.right` | `StellarTransferSheet(direction: .toEarn, market: nil)` | Home ready and `canSign` |
 
 #### 8.2.3 Add-funds card (copy of AddFundsCard.swift:8-196 as `StellarAddFundsCard`, with `StellarFundingWatch`)
 
@@ -1739,7 +1994,7 @@ These have no Monad equivalent. They are kept from DyorLite and rebuilt with app
 - **Rows.** Six ranked rows. Dividers are inset by the text inset; `@ScaledMetric(relativeTo: .footnote) rankWidth = 16`.
   Each row: rank, `StellarTokenLogo` 34, code (subheadline semibold) plus badge, name (caption, one line),
   `USDText(price:)` and `ChangeBadge` (or `StellarNewBadge` under 24 h). A row pushes `StellarTokenDetailView(asset:)`.
-- **Data.** `session.publicReads.markets`, so the card shows while the session is locked, as Monad's always does.
+- **Data.** `session.publicReads.markets`, so the card shows with or without a session, as Monad's always does.
   Tabs are sorted with `StellarMarketRanking`.
 - **States.** Empty: "Loading markets…" (key). Failed: `InlineError("Markets couldn't be loaded just now.")` + Retry (key).
 
@@ -1763,7 +2018,7 @@ or a spinner while it reloads (Monad :482-525).
   first read.
 - **Pull to refresh.** `.refreshable { await Task { async let h = model.load(force: true); async let p = portfolio
   .load(force: true); _ = await (h, p) }.value }`. It never calls `env.history.kick`.
-- **Polling.** Every 30 s while on screen, the scene is active and the session is ready.
+- **Polling.** Every 30 s while on screen, the scene is active and Home is ready (with or without a session).
 - **After any settled action:** the store refreshes the account, holdings, Earn and portfolio.
 
 ### 8.3 Token page: `StellarTokenDetailView(asset:)` (WP-30; copy of TokenDetailView, HomeView.swift:1273-1455)
@@ -1802,7 +2057,8 @@ or a spinner while it reloads (Monad :482-525).
    - "View on StellarExpert" (`safari` symbol) → `StellarExplorer.asset/contract`.
    - Set Price Alert (M4, WP-60).
 
-**Data:** the market row from `publicReads.market(id)`, and the balance from the store when unlocked.
+**Data:** the market row from `publicReads.market(id)`, and the balance from the store's account and holdings
+(owner or public view, §6.0).
 
 ### 8.4 Search: `StellarSearchSheet(purpose:onPick:)` (WP-30; copy of TokenPickerSheet, SwapView.swift:798-940)
 
@@ -1940,7 +2196,7 @@ struct StellarConfirmationSheet<Details: View>: View {
    | Event | Row |
    |---|---|
    | `.building` | "Preparing…" |
-   | `.signing` (existing event) | "%@: confirm with %@" (`faceid`) |
+   | `.signing` (existing event) | passkey accounts: "%@: confirm with %@" (`faceid`; the passkey prompt's name); seed accounts: no change of row (the App Lock prompt, if any, came at Confirm) |
    | `.submitted` | "%@ sent" (key) + "View" (key) |
    | `.confirmed` | "%@ confirmed" (key), positive + "View" |
 10. **Failure:** `InlineError(LiteErrorText.describe(error))`. If any step was sent, `TransactionRun.alreadySent`
@@ -1949,7 +2205,8 @@ struct StellarConfirmationSheet<Details: View>: View {
 **Bottom bar** (`.safeAreaInset(edge: .bottom)`, `.background(.bar)`):
 - `PrimaryButton(title: tr(confirmTitle))`, disabled while preparing, on error, on a failed check, when XLM is short,
   or when a fee is over the cap.
-- Above it, for more than one step: "%lld steps · each asks for %@" (`BiometricGate.promptName`, plural).
+- Above it, for more than one step **on a passkey account only**: "%lld steps · each asks for your passkey" (plural).
+  Seed accounts get no such line: one Confirm covers every step, as on Monad.
 - Then busy, then `PrimaryButton("Done", systemImage: "checkmark")`.
 
 **Behaviour.**
@@ -1959,8 +2216,18 @@ struct StellarConfirmationSheet<Details: View>: View {
 - Notifications come from the store's `onSettled` (§3.7), never from the sheet.
 - Presentation is Monad's (copied).
 
-**Signing prompt.** There is no App Lock prompt. Every Stellar signature already asks for Face ID, the passcode or
-the passkey (`GatedSeedKeyProvider`, DyorHQLiteKeys.swift:85-98), and each step's prompt reason is its title.
+**Signing prompt (decision 6: Monad's rule, TransactionRun.swift:403-408).** Confirm calls
+`store.run(action, reason: "Confirm \(confirmTitle)")`, whose `keys.beginSigning(reason:)` decides:
+
+| Account | App Lock on | App Lock off |
+|---|---|---|
+| Seed (imported, email & password) | Face ID or the passcode **once** at Confirm (`BiometricGate.authenticate`), then every step signs with no prompt; with no device passcode, Monad's "App Lock needs a device passcode…" (key) and nothing is signed | no prompt at all |
+| Passkey (Mera) | App Lock never applies (`appLockApplies` is false for passkey accounts) | the passkey once per signed step, its reason the step's title |
+
+A cancelled prompt leaves the sheet as it was: nothing was sent (`TransactionRun.notSent`). App Lock is read when
+Confirm is tapped, so a change in Profile › Security applies to the next Confirm. `GatedSeedKeyProvider` no longer
+prompts per signature (DyorHQLiteKeys.swift:85-98 at c2ee50e): its run reads the Keychain seed per step and drops
+it after that signature.
 
 **Callers:**
 
@@ -1992,8 +2259,9 @@ the passkey (`GatedSeedKeyProvider`, DyorHQLiteKeys.swift:85-98), and each step'
   - testnet only, "Get %@ test XLM" (`drop`) with a spinner, then "%@ test XLM added", or the server's message ("You
     already got test XLM today.");
   - when USDC isn't enabled, "Enable USDC to receive it" → the Enable review.
-- **While locked.** QR, address, Copy and Share show. The rows are disabled, with "Unlock Stellar to add cash or get
-  test XLM."
+- **No locked state** (decision 6). Every row is always enabled. Add cash and the faucet need a session: seed
+  accounts always have one (silent renewal); a passkey account in the public view gets its one passkey sign-in
+  when it taps the row, then the row continues.
 
 #### 8.8.2 Withdraw: `StellarSendSheet(asset:)` (copy of SendSheet, ProfileView.swift:404+)
 
@@ -2021,8 +2289,9 @@ the passkey (`GatedSeedKeyProvider`, DyorHQLiteKeys.swift:85-98), and each step'
 `List(.insetGrouped)`, title "Add Cash" or "Cash Out" (via `tr(...)`).
 
 - **Controls.** A segmented "Add cash | Cash out", then the asset row (USDC, XLM).
-- **Providers.** Rows with name, domain and countries. A tap runs `store.startCash` (SEP-10 inside DyorLite; the
-  signer prompt reads "Sign in to %@"), then opens `SafariView` on the SEP-24 page.
+- **Providers.** Rows with name, domain and countries. A tap runs `store.startCash` (SEP-10 inside DyorLite, through
+  a signing run with the reason "Sign in to %@": App Lock once if it applies, or the passkey), then opens
+  `SafariView` on the SEP-24 page.
 - **No provider:** `ContentUnavailableView` "No provider for your country yet."
 - **Status** (key), shown after start: "Started at %@" → "Waiting for you at %@" → "%@ is processing" →
   "Completed". A Cash out at `pending_user_transfer_start` shows "Send %@ %@ to %@", which opens the anchor-payment
@@ -2045,9 +2314,11 @@ the passkey (`GatedSeedKeyProvider`, DyorHQLiteKeys.swift:85-98), and each step'
 - **Shortfall** (until WP-61/62): "Swap for %@" → `openStellarSwap`.
 - **Review:** the Earn caller rows.
 
-#### 8.8.5 Locked: `StellarLockedSheet`
+#### 8.8.5 Locked sheet: removed
 
-The DyorLite `LiteLockedSheet`, rebuilt with app components.
+Decision 6 removes it: no `StellarLockedSheet` is built. (DyorLite at 651918e has no such sheet type either; its
+locked states are LiteRootView's resting card and LiteHomeView's locked card, which WP-12 removes and WP-50 deletes
+with the other DyorLite views.)
 
 ### 8.9 Bridge: `StellarBridgeView(direction:)` + `StellarBridgeTracker` (WP-33; copy of BridgeView's form, BridgeView.swift:117-250)
 
@@ -2418,6 +2689,9 @@ Volume, the side menu, Earn's ⋯ menu, and a `stellar:portfolio` notification.
 | Activity (key) | `StellarActivityRow`s from `portfolio.activity`; "Nothing in this period." / "Loading…" / "Show all %lld" (keys). |
 | Coverage footer | The server's `coverage.note`, verbatim (M4 widens coverage). |
 
+Portfolio is DyorHQ history (a session route). In the passkey public-view case (§8), the hero's figures stay unread
+and `StellarSignInRow` sits under the hero; the Assets card still fills from holdings.
+
 #### 8.12.2 Profile hooks (WP-41; the ProfileView STELLAR_LITE extension and `Lite/StellarProfile.swift`)
 
 **Wallet on Stellar:**
@@ -2439,8 +2713,12 @@ Volume, the side menu, Earn's ⋯ menu, and a `stellar:portfolio` notification.
 - "Minimum balance" = `xlm.minBalance`, with the footer "Stellar keeps this much XLM in every account: %@ XLM for
   the account and %@ XLM for each enabled asset. It's returned when you remove the asset.";
 - on mainnet only, "Set up by DyorHQ" (the sponsored reserve);
-- "Show Stellar secret key", through `session.revealSecret`, with the import note (Freighter, LOBSTR, xBull);
-- "Sign out of Stellar".
+- "Show Stellar secret key", through `session.revealSecret`, with the import note (Freighter, LOBSTR, xBull). It
+  always asks for Face ID or the passcode, whatever App Lock says, as Monad's key export does
+  (WalletExportView.swift:166-180); with no device passcode it refuses with Monad's copy (key);
+- "Sign out of Stellar" (§7.2): revokes the refresh token, erases the session and the Stellar saved figures, and
+  switches to Monad. The next switch runs the sign-in step again: silent for a seed account, one passkey prompt for a
+  passkey account. No prompt to sign out: the Stellar key stays where the account keeps it.
 
 The faucet and "Reserves paid by DyorHQ" are removed from this page; the faucet lives in Deposit.
 
@@ -2473,6 +2751,7 @@ The faucet and "Reserves paid by DyorHQ" are removed from this page; the faucet 
 - Empty: `ContentUnavailableView` "No Activity Yet" (key) / "Your swaps, launches, Moments and Earn deposits on
   Stellar show up here." / "Start Trading" (key), which closes Profile and opens Earn in Swap mode.
 - Loading: "Loading activity…" (key). Error: InlineError + Retry. Pull to refresh.
+- No session (the passkey public-view case of §8): `StellarSignInRow` in place of the list.
 
 ### 8.13 Side menu (WP-21; SideMenuView reused, Router `MenuItem` hook)
 
@@ -2500,11 +2779,27 @@ Perps' slot. The "Now" badge follows `isCurrent` (§3.5). The footer stays "Dyor
   |---|---|
   | Testnet | "Creates your test account with %@ test XLM from Stellar's testnet faucet, then enables USDC. Enabling USDC holds 0.5 XLM and costs a small network fee, paid from your test XLM." (`faucet.amount`) |
   | Mainnet | "Creates your Stellar account and enables USDC. DyorHQ pays this one-time setup. After it, you pay Stellar's network fees in XLM." |
-- **Enable USDC row** in the setup checklist. Once its step is built, the row shows "Holds %@ XLM · network fee up to
-  %@ XLM", from `session.setupFee`: the decoded fee and `baseReserve`. It runs only after the user has tapped Set Up,
-  which is the confirmation for that fee. That matches Monad, where the setup confirm shows the cost before anything
-  is signed.
-- **Removed:** "you spend nothing", and "DyorHQ pays the network fees and the reserve…".
+- **Enable USDC row** in the setup checklist. Before the tap it shows "Holds %@ XLM · network fee up to %@ XLM" from
+  `session.setupFee`: `baseReserve`, and the `trust` estimate of `/v1/fees` (public). Once the step is built, the
+  decoded fee replaces the estimate, and PlanRunner refuses a built fee above the one confirmed (§4.4). It runs only
+  after the user has tapped Set Up, which is the confirmation for that fee. That matches Monad, where the setup
+  confirm shows the cost before anything is signed.
+- **Steps (decision 6).** There is no "Unlock your Stellar key" step for any account, and no "Unlocked", "Unlock again
+  to continue." or idle drop.
+
+  | Account | Checklist | Prompts |
+  |---|---|---|
+  | Seed (imported phrase or key, email & password v2) | Sign in ("Signing in…", silent SEP-53, §5.8) → Invite code (only when the server asks; nothing is held while it waits) → Set up (the user's tap) | none to sign in. At Enable USDC, Face ID or the passcode once, only when App Lock applies, as a Monad Confirm. |
+  | Passkey (Mera) | Set up first (the user's tap; on a first sign-in on this iPhone, an optional "Invite code" field: "Needed the first time you use Stellar.") → "Confirm with your passkey" → Sign in → Enable USDC | exactly one passkey prompt. Its signer signs the sign-in and then, with no user wait in between, the Enable USDC step, and is dropped. An account already set up stops after the sign-in, and nothing is spent. |
+
+  A passkey account that left the invite field empty and turns out to need one sees the field again, with "Enter
+  your invite code to continue."; the next tap asks for the passkey again (the run kept nothing). Going to the
+  background during a passkey run ends it: "Not finished. Try again." (no signer survives it).
+- **Already set up.** `plan()` is `.instant` for an account set up on this iPhone, session or not: the switch never
+  opens this sheet, never prompts, and the session renews in the background (§6.18). After Sign out of Stellar, the
+  switch shows only the Sign in step (silent for seed accounts).
+- **Removed:** "you spend nothing", "DyorHQ pays the network fees and the reserve…", "Unlock your Stellar key",
+  "Unlocked", "Unlock again to continue." and "Unlock was cancelled." (WP-52 prunes the keys).
 
 ### 8.15 Notifications (WP-21 recorder; titles from `LiteTitles`)
 
@@ -2564,7 +2859,8 @@ strings.
   catalog.
 - **Picked up automatically.** `Internal/Resources` is already a source folder of the internal target
   (generate.py:56), so new tables need no project edit.
-- **`Lite.xcstrings`** keeps the existing glue's keys. Only WP-52 edits it (pruning stale keys).
+- **`Lite.xcstrings`** keeps the existing glue's keys. Only WP-52 edits it (pruning stale keys, including the unlock,
+  locked-card and idle-drop keys that decision 6 retires).
 
 **Resolving.**
 - **`liteTr(_:)`** (LiteText.swift) asserts that the table is `Lite` or starts with `Stellar` (WP-20).
@@ -2723,16 +3019,17 @@ Saved figures never animate in. With Reduce Motion, no transitions are added.
 
 | Target | Holds | Run |
 |---|---|---|
-| StellarKit (`swift test`, also Linux CI) | renames; fixtures decode; XLMReserve; PlanFees; PlanRunner with fakes (fee above confirmed, sponsor outside activation, sponsored inner fee cap, limits); verifier vectors | `cd $S/ios/Packages/StellarKit && swift test` |
-| DyorLite (xcodebuild on the agent simulator) | LiteSessionTests, journey, titles, l10n; LiteDerived (totals gating, maxAmount); LiteMediaPolicy; LiteSettled (once per plan, fires with no view, carries section and reference); LiteErrorText codes; StellarMarketRanking; StellarMomentState; StellarLaunchMath; StellarActivityPresenter (never "TOKEN"); StellarPercent (0.0123 → 1.23) | `xcodebuild -scheme DyorLite -destination "platform=iOS Simulator,id=$SIM" test` |
-| DyorHQInternalTests (new hosted target, WP-20) | StellarRouting (menu order, tab mapping, `StellarDestination` round trip, refuses Monad references, `openOnStellar`); tab order; StellarFormat (fee summary strings: one step, more steps, unpriced, sponsored); StellarAccountID (checksum); StellarImages; StellarSaved (separate directory, erase on forget, epoch guard); StellarActivityRecorder (kind, route `.home`, reference, owner, dedupe); per-area model tests | `xcodebuild -project DyorHQInternal.xcodeproj -scheme DyorHQ … test -only-testing:DyorHQInternalTests` |
+| StellarKit (`swift test`, also Linux CI) | renames; fixtures decode (public views and old auth answers included); XLMReserve; PlanFees; PlanRunner with fakes (fee above confirmed, sponsor outside activation, sponsored inner fee cap, limits); verifier vectors; LiteSessionAPITests (WP-03b: challenge shape refusals never call `sign`; a non-SEP-53 signature is refused before verify; one shared renewal for concurrent 401s, then one retry; a viewer request falls back to `?address=`; a session request throws `notSignedIn`; refresh stores the rotated token) | `cd $S/ios/Packages/StellarKit && swift test` |
+| DyorLite (xcodebuild on the agent simulator) | LiteSessionTests, journey, titles, l10n, with a fake provider that counts prompts (decision 6: zero prompts on resume, renewal, 401 and reads; no `locked` state reachable; App Lock prompt once per run only when its closure says so; passkey setup is one ceremony; no signer held after a run or the background); LiteDerived (totals gating, maxAmount); LiteMediaPolicy; LiteSettled (once per plan, fires with no view, carries section and reference); LiteErrorText codes; StellarMarketRanking; StellarMomentState; StellarLaunchMath; StellarActivityPresenter (never "TOKEN"); StellarPercent (0.0123 → 1.23) | `xcodebuild -scheme DyorLite -destination "platform=iOS Simulator,id=$SIM" test` |
+| DyorHQInternalTests (new hosted target, WP-20) | StellarRouting (menu order, tab mapping, `StellarDestination` round trip, refuses Monad references, `openOnStellar`); tab order; StellarFormat (fee summary strings: one step, more steps, unpriced, sponsored); StellarAccountID (checksum); StellarImages; StellarSaved (separate directory, erase on forget, epoch guard); StellarActivityRecorder (kind, route `.home`, reference, owner, dedupe); StellarKeys (WP-20: `GatedSeedKeyProvider` signs the sign-in with no gate call; `beginSigning` calls the gate only when App Lock applies and fails closed with no passcode; `revealSecret` always calls it; the passkey provider never calls it); per-area model tests | `xcodebuild -project DyorHQInternal.xcodeproj -scheme DyorHQ … test -only-testing:DyorHQInternalTests` |
 | DyorKit (`swift test`) | the source lints over Lite/ (§3.10) | `cd $A/ios/DyorKit && swift test`, then restore `Package.resolved` |
 | Deno unit (`backend/tests/unit/`) | §12.5 | `deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/` |
-| SQL (`backend/tests/sql/*.sql`, each inside `begin … rollback`) | reserve_sponsorship (once, released retry, attempts, daily count, daily fee, IP); token_candles merge; token_price_at; ref_usd_at preference; launch_holders exclusion; `lite_api` executes new functions and `anon` can't; the RLS loop | `backend/scripts/schema-test.sh <port>` |
+| SQL (`backend/tests/sql/*.sql`, each inside `begin … rollback`) | reserve_sponsorship (once, released retry, attempts, daily count, daily fee, IP); token_candles merge; token_price_at; ref_usd_at preference; launch_holders exclusion; `lite.auth_refresh` (unique hash, single use, family revoke; `anon` can't read it); `lite_api` executes new functions and `anon` can't; the RLS loop | `backend/scripts/schema-test.sh <port>` |
 
 ### 12.3 Verification blocks (referenced by every package)
 
-`$A` and `$S` are the package's two worktrees (`scripts/agent/worktree.sh`). `$SIM` is the agent simulator
+`$S` is the package's worktree of the private repository (`scripts/agent/worktree.sh`) and `$A` is `$S/app`, its app
+copy (owner decision 2026-10-14). `$SIM` is the agent simulator
 `3672E24D-0458-4181-B351-94A3D1FCDB01`. `$WP` is the package id.
 
 ```sh
@@ -2803,8 +3100,9 @@ Generated by `backend/tests/vectors/gen-vectors.ts` and committed to
 
 | File | Covers |
 |---|---|
-| `router.test.ts` (WP-02) | every route to its handler; static Moments paths before `:id`; public routes need no JWT |
-| `env.test.ts` (WP-02) | unknown network throws; keeper required on mainnet and different from the sponsor |
+| `router.test.ts` (WP-02, then WP-02b) | every route to its handler; static Moments paths before `:id`; public routes need no JWT; viewer routes answer without a header (public view), refuse a bad or expired token with 401, and need `?address=` where they are about an account; session routes need the JWT |
+| `env.test.ts` (WP-02, then WP-02b) | unknown network throws; keeper required on mainnet and different from the sponsor; the session TTL overrides apply on testnet only, with their minimums |
+| `session.test.ts` (WP-02b) | verify returns a refresh token; refresh rotates it; a reused token revokes the family (401 `refresh_reused`) and its successor stops working; expired and unknown tokens get `refresh_invalid`; a revoked tester gets 403 and the family goes; signout revokes and answers 204 for unknown tokens; access JWT lifetime 1 h; the invite is not consumed for an existing tester |
 | `fees.test.ts` (WP-10) | minBalance and spendable from Horizon fixtures (Friendbot, sponsored mainnet, liabilities); `assertAffordable` order and codes; `feeCeiling` fallback and cap; `starterSwapEligibility` truth table |
 | `resolve.test.ts`, `outcome.test.ts`, `symbols.test.ts` (WP-10) | resolution; never "TOKEN"; `amountOut` from SDEX XDR, Soroswap Vec, Aquarius u128; look-alike folding |
 | `verify.test.ts` (WP-11) | the vectors |
@@ -2821,6 +3119,7 @@ Generated by `backend/tests/vectors/gen-vectors.ts` and committed to
 | Phase | Owner | Asserts |
 |---|---|---|
 | `auth` | WP-10 | the trust step is `feePayer: user`; XLM fell by `fee_charged` plus the 0.5 XLM reserve |
+| `session` | WP-02b | verify gives a refresh token; refresh rotates; reuse revokes the family; signout revokes; with `--short-sessions`, a request after the access token expired gets 401 and succeeds after one refresh; each viewer route that is implemented answers its public view for `?address=` with no header |
 | `fees` | WP-10 | Max-send XLM to a fresh address with XLMReserve math succeeds; a swap is then refused before signing with `not_enough_xlm_for_fee`; the faucet restores |
 | `starter` | WP-10 | only with `--activation sponsored`: sponsored activation; a USDC → XLM starter is sponsored once (`tx_log.fee_payer = sponsor`, sponsorship `success`); the second is user-paid; a third starter is refused |
 | `send`, `swap` | WP-10 | memo bound; `result.amountOut` set |
@@ -2846,6 +3145,10 @@ Generated by `backend/tests/vectors/gen-vectors.ts` and committed to
   Stellar notification tapped from Monad switches to Stellar; a Moment link opened from Stellar switches to Monad.
 - **Lifecycle.** Cold launch on Stellar (no prompt); sign-out erases the Stellar snapshots; Monad screens are
   identical to build 23.
+- **No access gate (decision 6).** No prompt and no locked state to open or browse Stellar after a relaunch, after
+  12+ hours (locally, `--short-sessions` expires the tokens in minutes instead), or after the background. A seed
+  account's transactions prompt only with App Lock on (once per Confirm); a passkey account's only for its passkey.
+  Appendix A F04 and F04b.
 
 ---
 
@@ -2855,7 +3158,7 @@ Generated by `backend/tests/vectors/gen-vectors.ts` and committed to
 
 | M | Contents | Exit |
 |---|---|---|
-| 0 | WP-00 build-23 checks; WP-01 agent tooling; WP-02 backend scaffold and network policy; WP-03 API contract and renames | Every check green on the merged heads; the contract reviewed by the lead |
+| 0 | WP-00 build-23 checks; WP-01 agent tooling; WP-02 backend scaffold and network policy; WP-03 API contract and renames; then WP-03b and WP-02b, the decision-6 follow-ups (sessions without gating: refresh tokens, viewer routes, silent SEP-53 sign-in in StellarKit) | Every check green on the merged heads; the contract reviewed by the lead |
 | 1 | WP-11 verifiers; WP-13 markets; WP-04 deploy/pin/local stack; WP-10 hybrid fees server; WP-14 launch, WP-15 earn, WP-16 moments+media, WP-17 bridge+cash backends; WP-12 DyorLite; WP-18 holdings/portfolio/activity; WP-20 app foundations; WP-21 shell and routing; WP-22 setup sheet | **I1**: user-paid fees end to end on testnet; tab order and menu right; seams host the old screens |
 | 2 | WP-30…WP-41 screens | **I2**: no `SEAM(`; full agent QA en-light plus es-dark |
 | 3 | WP-50 DyorLite slimming; WP-51 docs; WP-52 strings | **I3**: full QA matrix; lead QA on the owner's panel; then O-2, hosted QA, O-3 |
@@ -2875,7 +3178,7 @@ Each seam has its final type name and init. Until its port lands, it delegates t
 or for a screen with no legacy counterpart shows the closest legacy screen. It carries `// SEAM(WP-xx)`. All of them
 are gone at I2.
 
-| File (`ios/DyorHQ/Lite/…`) | Type and init | Port |
+| File (`S:app/ios/DyorHQ/Lite/…`) | Type and init | Port |
 |---|---|---|
 | `Home/StellarHomeView.swift` | `StellarHomeView()` | WP-31 |
 | `Home/StellarTokenDetailView.swift` | `StellarTokenDetailView(asset: String)` | WP-30 |
@@ -2899,14 +3202,17 @@ The seams make M2's packages independent: none of them references a type another
 
 ### 13.4 Worktrees, locks and commits
 
-- **`scripts/agent/worktree.sh WP-xx`** (WP-01) creates `~/Hackathon-b17/wt/WP-xx/IOS-app` (branch `stellar/WP-xx`
-  from the current `lite/network-switch`) and `~/Hackathon-b17/wt/WP-xx/multichain-stellar` (branch `stellar/WP-xx`
-  from `main`) side by side. It also:
-  - copies `ios/project.local.yml`;
+- **One worktree per package, in the private repository** (owner decision 2026-10-14: the app code lives in
+  `S:app/`). `scripts/agent/worktree.sh WP-xx` (WP-01) creates `~/Hackathon-b17/wt/WP-xx/multichain-stellar`
+  (branch `stellar/WP-xx` from `main`); the package's A is that worktree's `app/` (`$A = $S/app`). App and package
+  changes of one package therefore land on one branch. It also:
+  - copies `ios/project.local.yml` into `app/ios/`;
   - excludes `/.secrets` in S;
   - symlinks S's `.secrets` to the main checkout's, so `local-stack.sh` can read it.
 
-  Nobody prints `.secrets`.
+  Nobody prints `.secrets`. M0 packages begun before this decision (WP-00 to WP-03, each with an IOS-app worktree
+  beside it) finish where they are; the lead carries WP-00's app-side files into `S:app/` when integrating, and
+  `worktree.sh` and `verify-app.sh` take `$A = $S/app` from M1 on.
 - **Locks.** `scripts/agent/lock.sh acquire|release <sim|stack> WP-xx` (mkdir locks under `~/Hackathon-b17/wt/.locks`)
   guards the agent simulator (every `xcodebuild test` and simulator run) and the default local stack (ports 8000,
   8001, 54329). Package stacks use `PORT_BASE` and `--no-loop`. The owner's simulator is the lead's only.
@@ -2915,14 +3221,15 @@ The seams make M2's packages independent: none of them references a type another
   issues, screenshot paths.
 - **Not allowed:** push, deploy, Supabase writes and mainnet actions. Testnet on-chain actions are allowed only in
   e2e and QA runs on a package's private stack.
-- **Commit messages and public files** in IOS-app never describe vulnerabilities, incidents or internal findings
-  (CLAUDE.md).
+- **Commit messages and public files** never describe vulnerabilities, incidents or internal findings (CLAUDE.md).
+  `S:app/` is a copy of a public repository's tree, so it gets the same care: nothing written there should need to be
+  hidden if it is ever upstreamed.
 
 ### 13.5 Integration (lead)
 
 - **I1** (after M1):
-  1. Merge into S `main`: WP-01, 02, 03, 11, 13, 04, 10, 14, 15, 16, 17, 18, 12.
-  2. Merge into A `lite/network-switch`: WP-00, 20, 21, 22.
+  1. Merge into S `main`: WP-01, 02, 03, 03b, 02b, 11, 13, 04, 10, 14, 15, 16, 17, 18, 12.
+  2. Merge the app packages into S `main` too (their files are under `app/`): WP-00, 20, 21, 22.
   3. Run every verification block.
   4. Run the local stack and the full e2e (with `--activation sponsored` for `starter`).
   5. Regenerate the real verifier vectors.
@@ -2942,7 +3249,7 @@ The seams make M2's packages independent: none of them references a type another
 |---|---|
 | O-1 | **Redeploy the live testnet contracts** after WP-04 merges: own `DEPLOYER_SECRET` (admin) and `TREASURY_PUBLIC` (a G-address with a USDC trustline), an economics file (Q4), `deploy-contracts.ts --deployment testnet` without `SMOKE`. The lead then commits the regenerated `testnet.json` and pins (no secret in either). |
 | O-2 | **Supabase production deploy** (project fmnjqrguvopusfufmirs). Agents may prepare; the owner approves each write in the Claude UI: migrations (§6.15 order), the `lite_api` role, the `lite-media` bucket and its write-once trigger, function secrets (`SPONSOR_SECRET`, **`KEEPER_SECRET`**, `LITE_JWT_SECRET`, `LITE_CRON_SECRET`, `LITE_NETWORK=testnet`, `LITE_DEPLOYMENT=testnet`, `LITE_MIN_BUILD`), the `lite` and `lite-indexer` functions, the cron last, then `app_config` flags and tester invites. |
-| O-3 | **Push** IOS-app `lite/network-switch` (public; Q2) and S `main` (private). |
+| O-3 | **Push** S `main` (private), which carries the app copy `app/`. Nothing goes to the public DyorHQ/IOS-app (owner decision 2026-10-14). |
 | O-4 | **Internal TestFlight:** archive `DyorHQInternal.xcodeproj` with the owner's Xcode account. |
 | O-5 | **Funding:** testnet sponsor and keeper top-ups via Friendbot. Mainnet funding, RPC provider, audit, anchors and Privy Stellar wallets belong to the mainnet program. |
 
@@ -2958,9 +3265,8 @@ The seams make M2's packages independent: none of them references a type another
   - StellarExpert: no key, terms not published.
 
   Confirm or choose **before the hosted deploy (O-2)**. Development does not wait.
-- **Q2: public code.** The Stellar screens will live in DyorHQ/IOS-app, which is public, once `lite/network-switch`
-  is pushed. Today they are in the private multichain-stellar repository. Do you accept that, and may the branch be
-  pushed after I3?
+- **Q2: public code. Answered 2026-10-14:** the app code lives in the private repository's app copy (`S:app/`), and
+  nothing from this program is pushed to the public DyorHQ/IOS-app.
 - **Q3: QA deployment.** May agents deploy a separate testnet contract set, `testnet-qa`, with throwaway admin and
   treasury keys and small economics? It is used only for e2e and simulator tests of create, graduate and publish
   after your redeploy, and keeps test launches and Moments out of the live feed. Without it, those flows are tested
@@ -2979,6 +3285,11 @@ The seams make M2's packages independent: none of them references a type another
 
   This program ships them as they are, and the screens show only what the contracts do. Do you accept that for now,
   or should a contract change and an audit be scheduled?
+- **Q6: the invite code on testnet (does not block).** Decision 6 removes every device gate: no Face ID or passcode
+  to view, no locked screen, no session expiry. One gate is left, on the server: a first sign-in on Stellar needs an
+  invite code, and a tester can be turned off. Should "no need for gating it since it's on Testnet" also open Stellar
+  to every DyorHQ account on testnet, with no invite? The build keeps invites until you say so. Dropping them needs
+  only a server change, no app release.
 
 Decided without asking (reasons in §2):
 - Kraken as the default provider;
@@ -3004,7 +3315,7 @@ Decided without asking (reasons in §2):
 | RK10 | Price source down or rate-limited | M | M | indexer-side cache, stale flag, null, XLM fallback | WP-13 |
 | RK11 | Testnet resets wipe accounts and contracts | M | M | reset tied to the deployment key; runbook redeploy; setup re-runs | WP-02, WP-04 |
 | RK12 | RPC's 7-day event retention leaves holders or editions incomplete | M | M | per-group cursors, reconcile, `holdersComplete`, an archive endpoint later | WP-14 |
-| RK13 | The Stellar UI becomes public code | H | M | Q2; nothing secret or internal in A | owner |
+| RK13 | The Stellar UI becomes public code | L | M | Answered (Q2): the app code lives in `S:app/`, private; nothing secret or internal in A in case it is ever upstreamed | owner |
 | RK14 | Privy users (most users) can't use Stellar | H | H | the next program; the sheet explains it truthfully | owner |
 | RK15 | Translation volume across 17 tables × 4 languages | M | M | each package translates its own table; WP-52 audit | all |
 | RK16 | Blend's testnet pool lends its own test USDC | H | L | truthful labels, swap route check, nothing hidden | WP-35 |
@@ -3020,6 +3331,10 @@ Decided without asking (reasons in §2):
 | RK26 | Notifications mirror to the Monad account's backend row; an App Store build restores Stellar rows | M | L | route `.home` and the body names the network | WP-21 |
 | RK27 | Copies drift from later Monad changes (build 24+) | M | M | `check-copies.py` on every rebase | lead |
 | RK28 | Soroswap pair assumptions (`token_0` read once; sync before swap) | L | M | read at graduation; unit fixtures; reconcile | WP-14 |
+| RK29 | With no access gate, someone holding an unlocked phone can see the Stellar section (decision 6, as on Monad) | M | L | testnet only; App Lock still gates every signature, and is on by default for new installs with a passcode (Theme.swift:55-68); key export always asks | owner |
+| RK30 | A stolen refresh token keeps a session alive | L | M | hashed at rest; this-device-only Keychain; single use with family revoke on reuse; 30-day expiry; revoked at sign-out and erase; a session can read history and build plans but never sign | WP-02b, WP-03b |
+| RK31 | Silent sign-in is talked into signing something else | L | H | SEP-53 domain separation, the exact five-line shape check, the phone's own check of the signature (§5.8); no raw-sign API on the provider | WP-03b, WP-20 |
+| RK32 | Public viewer reads are used to fan out RPC or scrape | M | L | indexed values only (no live RPC) in the public view; 120 a minute per IP; 15 s cache per address; only on-chain facts are served | WP-02b, WP-10, WP-18 |
 
 ---
 
@@ -3030,20 +3345,27 @@ Decided without asking (reasons in §2):
   scratchpad's `qa/<date>`).
 - QA wallets (QA-A main, QA-B starter rehearsal, QA-C drained, plus a Monad account with history) are generated by
   script into `.secrets/qa-wallets.env` (mode 600) and typed into the simulator's Import screen. They are never
-  printed or pasted into chat.
+  printed or pasted into chat. QA-P is a Mera passkey account, on the simulator's passkey stub (Debug) where it covers
+  the phrase ceremony, otherwise on the owner's device at I3.
 
-Screen ids used below: S01 Home, S02 locked Home, S03 paused Home, S04 add-funds card, S05 search, S06 token pages, S07 Deposit, S08 Withdraw, S09 Transfer, S10 Bridge, S11 cash, S12 Launch board, S13 curve launch page, S14 graduated launch page, S15 Create, S16 My Launchpad, S17 Earn mode, S18 Select Market and ticket, S19 Swap mode, S20 Moments board, S21 Moment page and Freighter sheet, S22 Publish, S23 My Moments, S24 user-paid review, S25 sponsored review, S26 progress and Done, S27 side menu, S28 Portfolio, S29 Profile, S30 Stellar account, S31 Recent Activity, S32 Profile Receive, S33 Profile Send, S34 notification center, S35 network sheet, S36 resting tabs.
+Screen ids used below: S01 Home, S02 Home after the session expired (no lock), S03 paused Home, S04 add-funds card, S05 search, S06 token pages, S07 Deposit, S08 Withdraw, S09 Transfer, S10 Bridge, S11 cash, S12 Launch board, S13 curve launch page, S14 graduated launch page, S15 Create, S16 My Launchpad, S17 Earn mode, S18 Select Market and ticket, S19 Swap mode, S20 Moments board, S21 Moment page and Freighter sheet, S22 Publish, S23 My Moments, S24 user-paid review, S25 sponsored review, S26 progress and Done, S27 side menu, S28 Portfolio, S29 Profile, S30 Stellar account, S31 Recent Activity, S32 Profile Receive, S33 Profile Send, S34 notification center, S35 network sheet, S36 resting tabs.
 
-1. **Backend.** `backend/scripts/local-stack.sh start` (testnet; add `--activation sponsored` only for F05), then
+1. **Backend.** `backend/scripts/local-stack.sh start --short-sessions` (testnet; access tokens last 120 s and
+   refresh tokens 600 s, standing in for "12+ hours"; add `--activation sponsored` only for F05), then
    `backend/scripts/local-stack.sh invite qa` (the code goes to `.secrets/local-invites.txt`, never printed).
 2. **App.**
-   1. `cd $A/ios && python3 -I Internal/generate.py --spec project.local.yml --lite $S/ios/Packages`.
+   1. `cd $A/ios && python3 -I Internal/generate.py --spec project.local.yml --lite $S/ios/Packages` (`$A = $S/app`).
    2. Build Debug for `$SIM`, then `xcrun simctl install` and `launch fun.dyorhq.app`.
-   3. Enrol Face ID with `notifyutil` (INTEGRATION-ios §7), and match it when prompted.
-3. **F01 First switch.** Chip → Stellar → Confirm, which shows "You pay Stellar's network fees in XLM…". Then setup:
-   unlock, invite, Friendbot, Enable USDC. The Enable row shows "Holds 0.5 XLM · network fee up to … XLM".
+   3. Enrol Face ID with `notifyutil` (INTEGRATION-ios §7), and match it when prompted. Count every prompt from here
+      on: decision 6 allows one only where a step below says so.
+3. **F01 First switch** (QA-A, App Lock on). Chip → Stellar → Confirm, which shows "You pay Stellar's network fees in
+   XLM…". Then setup: Sign in (no prompt), invite, Set up, Friendbot, Enable USDC. The Enable row shows "Holds 0.5 XLM
+   · network fee up to … XLM" before the tap. Exactly one Face ID prompt, at Enable USDC (App Lock); no "Unlock your
+   Stellar key" row anywhere.
    - Horizon `fee_account` of the trust tx is the user.
    - You land on Stellar Home.
+   - QA-P (passkey): Set up first (invite field shown), then exactly one passkey prompt for sign-in and Enable USDC
+     together, and no Face ID App Lock prompt.
 4. **F02 Tabs and menu.**
    - The tab bar reads Home · Launch · Earn · Moments.
    - Menu rows: Home, Spot, Earn, Launch, Moments, News, Portfolio, Get Help.
@@ -3055,74 +3377,99 @@ Screen ids used below: S01 Home, S02 locked Home, S03 paused Home, S04 add-funds
    - Four tiles; allocation; Top Tokens in all four tabs (no BUSDC, no CHECK); My Holdings in all four segments.
    - Every figure traces to a source: balances to Horizon for QA-A's G-address, launch and portfolio figures to the
      local database (`lite.*` tables), prices to `lite.ref_quotes`.
-6. **F04 Locked and paused.** Locked (S02): Top Tokens still shows. Paused (S03): `lite.app_config` maintenance, on
-   the local database only. Resting tabs (S36).
-7. **F05 Starter swap** (local `--activation sponsored` only), with QA-B:
+6. **F04 No lock, and paused** (decision 6; QA-A, then QA-P). Each case shows no prompt and no locked card, and Home's
+   figures, Top Tokens, the boards and Earn fill:
+   - **Relaunch:** kill and relaunch on Stellar.
+   - **Expiry:** wait 3 minutes (past the 120 s access token; on the hosted stack, 12+ hours) and pull to refresh, then
+     open every tab (S02). The API log shows one `auth/refresh` and no `auth/challenge`.
+   - **Background:** background the app for 3 minutes, mid-review included; on return the review still confirms with
+     no extra prompt.
+   - **Refresh gone, seed account:** revoke QA-A's family on the local database
+     (`update lite.auth_refresh set revoked_at = now() where address = '<QA-A G…>'`) and expire the session: the next
+     read signs in silently (`auth/challenge` then `auth/verify` in the log), still with no prompt.
+   - **Refresh gone, passkey account (QA-P):** the same revoke. Figures still fill (public view). Portfolio, Recent
+     Activity, My Launchpad and My Moments show `StellarSignInRow`, with no prompt until "Sign in with your passkey" is
+     tapped (one passkey prompt, then the history shows).
+   - **Paused (S03):** `lite.app_config` maintenance, on the local database only, and the paused card shows Switch to
+     Monad. Resting tabs (S36) show only loading or paused.
+7. **F04b App Lock and signing** (decision 6; Profile › Security):
+   - QA-A with App Lock **on**: a 2-step plan (Enable EURC + swap) asks for Face ID **once**, at Confirm. Cancel at
+     the prompt: nothing is sent and the review stays.
+   - QA-A with App Lock **off**: the same plan signs with no prompt.
+   - QA-P: no App Lock prompt whatever the setting; one passkey prompt per signed step ("%lld steps · each asks for
+     your passkey" shows on the review).
+   - "Show Stellar secret key" asks for Face ID or the passcode even with App Lock off.
+8. **F05 Starter swap** (local `--activation sponsored` only), with QA-B:
    1. A sponsored activation gives 0 XLM and USDC enabled.
    2. QA-A sends 5 USDC.
    3. The add-funds card shows "Swap … USDC for XLM", and the review says "Paid by DyorHQ".
    4. Horizon `fee_account` is the sponsor.
    5. A second USDC → XLM swap is user-paid, or blocked by "Not enough XLM".
-8. **F06 Max and fees** (QA-A, XLM → USDC Max):
+9. **F06 Max and fees** (QA-A, XLM → USDC Max):
    - the amount equals spendable − the swap estimate × 5/4;
    - the review shows "Max network fee · Up to X XLM";
    - after Confirm, `fee_account` is the user and the minimum balance is intact;
    - the Stellar notification is in the bell, and tapping it lands on Stellar Swap.
-9. **F07 Not enough XLM** (QA-C, after sending Max XLM away):
-   - Earn Deposit's review shows "Not enough XLM for the network fee." with Add XLM;
-   - the add-funds card shows on Home;
-   - Deposit's "Get … test XLM" restores the balance.
-10. **F08 Token pages and search** (S05, S06): XLM, USDC, a curve launch and a graduated launch. Check the source line,
+10. **F07 Not enough XLM** (QA-C, after sending Max XLM away):
+    - Earn Deposit's review shows "Not enough XLM for the network fee." with Add XLM;
+    - the add-funds card shows on Home;
+    - Deposit's "Get … test XLM" restores the balance.
+11. **F08 Token pages and search** (S05, S06): XLM, USDC, a curve launch and a graduated launch. Check the source line,
     chart, Locked/Available for XLM and the StellarExpert link. A pasted C… id shows Unverified.
-11. **F09 Swap mode** (S19): quotes per venue, best marked, 15 s refresh, slippage sheet, Swap History ranges.
-12. **F10 Earn** (S17, S18):
+12. **F09 Swap mode** (S19): quotes per venue, best marked, 15 s refresh, slippage sheet, Swap History ranges.
+13. **F10 Earn** (S17, S18):
     - market header with pool status; Select Market; ticket Max; Deposit and Withdraw;
     - Position, Assets and History tabs; the APY chart fills;
     - Home's Transfer sheet in both directions;
     - the BUSDC footer, plus "Swap for Blend test USDC" only when a route exists.
-13. **F11 Wallet** (S07, S08, S11): Deposit (QR, Copy writes the address, Add cash, faucet on testnet only). Send with
+14. **F11 Wallet** (S07, S08, S11): Deposit (QR, Copy writes the address, Add cash, faucet on testnet only). Send with
     a memo; the review "To" is the typed address. Send to a missing account accepts XLM ≥ 1 only. An M… address is
     refused. Cash: testanchor deposit and cash-out, and the tracker posts once.
-14. **F12 Bridge** (S10): a real Iris fee; ETA present or omitted.
+15. **F12 Bridge** (S10): a real Iris fee; ETA present or omitted.
     - With testnet MON and USDC on the QA Monad wallet: Monad → Stellar, where the review shows the decoded approve
       and burn and "Up to … MON"; then Stellar → Monad with Claim.
     - Otherwise: a quote and a truthful refusal.
-15. **F13 Launch** (S12–S16).
+16. **F13 Launch** (S12–S16).
     - **On the live deployment (read-only plus trades):** board sections, chips, search; launch page stats and
       holders; buy and sell at 1% with the shortfall copy; My Launchpad.
     - **On `testnet-qa` (Q3) or before O-1:** create with an image, description and links plus a developer buy; fill
       the curve; graduate by hand; claim fees; Claim All.
-16. **F14 Moments** (S20–S23), on `testnet-qa` or before O-1:
+17. **F14 Moments** (S20–S23), on `testnet-qa` or before O-1:
     - publish a photo, and a video whose poster shows on the card;
     - collect 2 on a capped Moment until sold out (the ticket hides);
     - the terms-changed guard (admin `set_policy` on `testnet-qa` only);
     - My Moments;
     - View in Freighter: Copy copies the contract; the token ID is selectable text; the values match `owner_of` on
       chain.
-17. **F15 Review sheets** (S24–S26): user-paid, enable, restore (if any), the sponsored starter, progress, View links;
+18. **F15 Review sheets** (S24–S26): user-paid, enable, restore (if any), the sponsored starter, progress, View links;
     Done and Close after a sent failure.
-18. **F16 Portfolio** (S28): every period; the five section cards; network fees; the coverage note.
-19. **F17 Profile** (S29–S33):
+19. **F16 Portfolio** (S28): every period; the five section cards; network fees; the coverage note.
+20. **F17 Profile** (S29–S33):
     - Wallet with Recent Activity (fee and payer per row);
     - Network with RPC = the pinned host;
     - the account page (minimum balance, no faucet, no "Reserves paid by DyorHQ");
-    - sign out of Stellar, after which the next launch starts on Monad and the Stellar snapshots are gone.
-20. **F18 Separation.** On Monad, note Recent Activity's count and Portfolio's All volume. Run F06 on Stellar. Back on
+    - sign out of Stellar: no prompt; the API log shows `auth/signout`; the next launch starts on Monad and the
+      Stellar snapshots are gone; the next switch shows only the Sign in step (silent for QA-A, one passkey prompt
+      for QA-P).
+21. **F18 Separation.** On Monad, note Recent Activity's count and Portfolio's All volume. Run F06 on Stellar. Back on
     Monad, both are unchanged, and the bell's Monad items open Monad screens.
-21. **F19 Cold launch and links.** A cold launch on Stellar shows no prompt. A Moment link opened from Stellar switches
-    to Monad. A Stellar notification tapped while on Monad switches to Stellar.
-22. **F20 Languages and appearance.**
+22. **F19 Cold launch and links.** A cold launch on Stellar shows no prompt and no locked state, also after the
+    session expired (F04). A Moment link opened from Stellar switches to Monad. A Stellar notification tapped while on
+    Monad switches to Stellar, with no prompt.
+23. **F20 Languages and appearance.**
     - Repeat S01–S36 in es, light and dark.
     - Spot-check fr, zh-Hans and ko at AX3 for wraps.
     - S01 and S24 at AX5.
     - VoiceOver walk: Home → token page → Swap review → Earn deposit → Portfolio.
     - Monad and Stellar names are never translated.
-23. **F21 Evidence.** For every on-chain step, save `curl -s https://horizon-testnet.stellar.org/transactions/<hash> |
+24. **F21 Evidence.** For every on-chain step, save `curl -s https://horizon-testnet.stellar.org/transactions/<hash> |
     jq '.fee_account,.fee_charged'` into `$QA`, next to the screenshot of its review's fee row.
-24. **Hosted QA (after O-2).** Release internal build against the hosted API on the owner's panel: F01, F03, F06, F11,
-    F17, F18.
+25. **Hosted QA (after O-2).** Release internal build against the hosted API on the owner's panel: F01, F03, F04 (with
+    the real 1-hour token, and a reopen after 12+ hours), F04b, F06, F11, F17, F18.
 
 ## Appendix B. Work packages (summary; full briefs are returned with this document)
+
+Repo A means `S:app/` (owner decision 2026-10-14); every package works in one S worktree (§13.4).
 
 | Id | Repo | M | Depends on | Owns (exclusively, while running) |
 |---|---|---|---|---|
@@ -3130,22 +3477,24 @@ Screen ids used below: S01 Home, S02 locked Home, S03 paused Home, S04 add-funds
 | WP-01 | S | 0 | — | `scripts/agent/*`, `backend/scripts/schema-test.sh` |
 | WP-02 | S | 0 | — | `lite/index.ts`, `lite/routes/*` (creates all), `_shared/{env,networks,http,db}.ts`, `_shared/deployments/index.ts`, launchpad.ts transitional exports and `stellar.ts keeper()` (one-time), `lite-indexer/index.ts`, `jobs/*` + `handlers/*` (creates all), `tests/unit/{router,env,auth_http,bridge}.test.ts` (split), `tests/sql/lite_schema_test.sql`, `tests/e2e/lite_e2e.ts` + `phases/*` (creates all), `.github/workflows/backend.yml` |
 | WP-03 | S | 0 | — | `docs/API-lite.md`, `_shared/contract.ts`, `backend/tests/fixtures/**`, StellarKit `LiteClient/{Models,LiteAPI,Anchors}.swift` + new `Models+*.swift`, `StellarCore/Amount.swift`, rename-only edits elsewhere in StellarKit and DyorLite and LiteHarness, StellarKit and DyorLite tests |
+| WP-03b | S | 0 | WP-03 | decision 6 in the contract and StellarKit: `docs/API-lite.md`, `_shared/contract.ts`, `backend/tests/fixtures/api/**` (auth and public-view fixtures), `backend/tests/fixtures/fixtures.test.ts`, StellarKit `LiteClient/{LiteAPI, Models, Models+Wallet, Models+Moments}.swift`, `StellarKit/StellarKeychain.swift`, `Tests/LiteClientTests/**` |
+| WP-02b | S | 0 | WP-02, WP-03b | decision 6 on the server: `_shared/auth.ts`, `lite/routes/auth.ts`, `lite/index.ts` (guard), `_shared/env.ts` (session TTL overrides), migration 12, `tests/unit/{auth_http, router, env, session}.test.ts`, `tests/sql/auth_refresh_test.sql`, `tests/e2e/lite_e2e.ts` (phase list) + `phases/session.ts` |
 | WP-11 | S | 1 | WP-02, WP-03 | `StellarCore/{Verify/TxVerifier, XDR/Types, XDR/XDRReader, Network/Network, Network/PinnedContracts+Testnet}.swift`, new `Fees/XLMReserve.swift`, `LiteClient/{PlanRunner, PlanFees}.swift`, `StellarCoreTests/**`, new LiteClient tests, `_shared/verify.ts`, `tests/vectors/gen-vectors.ts`, `tests/unit/verify.test.ts`, `backend/scripts/gen-pinned.ts` |
 | WP-13 | S | 1 | WP-02, WP-03 | `_shared/{prices, refprices, markets, directory}.ts`, `routes/markets.ts`, `jobs/{refprices,purge}.ts`, migration 06, its tests and phases |
-| WP-04 | S | 1 | WP-02, WP-11 | `backend/scripts/{deploy-contracts, gen-pinned, new-testnet-secrets}.ts`, `local-stack.sh`, `scripts/local/*`, `_shared/deployments/*`, generated pins, `docs/RUNBOOK-testnet.md` |
-| WP-10 | S | 1 | WP-02, WP-03, WP-11 | `_shared/{plans, stellar, account, swap, ttl, fees, sponsor, assets}.ts`, `routes/{fees,account,plans,swap}.ts`, `jobs/{settle,graduate,ttl,ops}.ts`, migration 05, `lite_schema_test.sql`, its tests and phases |
-| WP-14 | S | 1 | WP-02, WP-03, WP-11, WP-13 | `_shared/{launchpad, symbols, launch_metadata, economics}.ts`, `routes/launches.ts`, `handlers/launchpad.ts`, `jobs/{watch,reconcile}.ts`, migration 07, its tests and phases |
-| WP-15 | S | 1 | WP-02, WP-03, WP-11, WP-13 | `_shared/earn.ts`, `routes/earn.ts`, `jobs/earn.ts`, migration 08, its tests and phases |
-| WP-16 | S | 1 | WP-02, WP-03, WP-11, WP-13 | `_shared/{moments, media, localmedia}.ts`, `routes/moments.ts`, `handlers/moments.ts`, migration 09, its tests and phases |
+| WP-04 | S | 1 | WP-02, WP-02b, WP-11 | `backend/scripts/{deploy-contracts, gen-pinned, new-testnet-secrets}.ts`, `local-stack.sh`, `scripts/local/*`, `_shared/deployments/*`, generated pins, `docs/RUNBOOK-testnet.md` |
+| WP-10 | S | 1 | WP-02, WP-02b, WP-03, WP-03b, WP-11 | `_shared/{plans, stellar, account, swap, ttl, fees, sponsor, assets}.ts`, `routes/{fees,account,plans,swap}.ts`, `jobs/{settle,graduate,ttl,ops}.ts`, migration 05, `lite_schema_test.sql`, its tests and phases |
+| WP-14 | S | 1 | WP-02, WP-02b, WP-03, WP-03b, WP-11, WP-13 | `_shared/{launchpad, symbols, launch_metadata, economics}.ts`, `routes/launches.ts`, `handlers/launchpad.ts`, `jobs/{watch,reconcile}.ts`, migration 07, its tests and phases |
+| WP-15 | S | 1 | WP-02, WP-02b, WP-03, WP-03b, WP-11, WP-13 | `_shared/earn.ts`, `routes/earn.ts`, `jobs/earn.ts`, migration 08, its tests and phases |
+| WP-16 | S | 1 | WP-02, WP-02b, WP-03, WP-03b, WP-11, WP-13 | `_shared/{moments, media, localmedia}.ts`, `routes/moments.ts`, `handlers/moments.ts`, migration 09, its tests and phases |
 | WP-17 | S | 1 | WP-02, WP-03, WP-11 | `_shared/bridge.ts`, `routes/{bridge,cash}.ts`, `jobs/bridges.ts`, migration 11, `tests/unit/bridge.test.ts`, its tests and phases |
-| WP-12 | S | 1 | WP-03, WP-11 | `ios/Packages/DyorLite/**` (data layer + public legacy screens), DyorLite tests, `ios/LiteHarness/**` |
-| WP-18 | S | 1 | WP-10, WP-13, WP-14, WP-15, WP-16, WP-17 | `_shared/{holdings, portfolio, stats, activity}.ts`, `routes/{holdings,portfolio,activity,assets}.ts`, migration 10, its tests and phases |
-| WP-20 | A | 1 | WP-00, WP-12 | `ios/Internal/{generate.py, Info.plist}`, `ios/Internal/Tests/StellarFoundationsTests.swift`, `Lite/{LiteText, LiteMode, DyorHQLiteKeys}.swift`, `Lite/Core/{StellarActions, StellarSaved, StellarImages, StellarFormat, StellarAccountID}.swift`, `Lite/Design/*`, `Lite/Wallet/StellarConfirmationSheet.swift`, `Resources/{StellarCommon,StellarReview}.xcstrings` |
+| WP-12 | S | 1 | WP-03, WP-03b, WP-11 | `ios/Packages/DyorLite/**` (data layer + public legacy screens), DyorLite tests, `ios/LiteHarness/**` |
+| WP-18 | S | 1 | WP-02b, WP-10, WP-13, WP-14, WP-15, WP-16, WP-17 | `_shared/{holdings, portfolio, stats, activity}.ts`, `routes/{holdings,portfolio,activity,assets}.ts`, migration 10, its tests and phases |
+| WP-20 | A | 1 | WP-00, WP-12 | `ios/Internal/{generate.py, Info.plist}`, `ios/Internal/Tests/StellarFoundationsTests.swift`, `Lite/{LiteText, LiteMode, DyorHQLiteKeys}.swift`, `Lite/Core/{StellarActions, StellarSaved, StellarImages, StellarFormat, StellarAccountID}.swift`, `Lite/Design/*` (StellarSignInRow included), `Lite/Wallet/StellarConfirmationSheet.swift`, `Resources/{StellarCommon,StellarReview}.xcstrings` |
 | WP-21 | A | 1 | WP-20 | `Lite/{AppNetwork, NetworkRoot, AppCovers}.swift`, `Lite/Core/{StellarRootView, StellarRouting, StellarActivityRecorder}.swift`, `Lite/Trade/StellarTradeView.swift`, the seam files (§13.3), the STELLAR_LITE blocks of `App/Router.swift` and `Menu/SideMenuView.swift`, `Resources/StellarShell.xcstrings`, `Tests/StellarRoutingTests.swift` |
 | WP-22 | A | 1 | WP-20 | `Lite/NetworkSheet.swift`, `Resources/StellarSetup.xcstrings`, `Tests/StellarSetupTests.swift` |
 | WP-30 | A | 2 | WP-21 | seams `Home/StellarTokenDetailView`, `Home/StellarSearchSheet`; `StellarToken.xcstrings`; `Tests/StellarTokenTests.swift` |
 | WP-31 | A | 2 | WP-21 | seam `Home/StellarHomeView`; `Home/{StellarHomeModel, StellarHomeRows, StellarAddFundsCard}.swift`; `StellarHome.xcstrings`; `Tests/StellarHomeTests.swift` |
-| WP-32 | A | 2 | WP-21 | seams `Wallet/{StellarReceiveSheet, StellarSendSheet, StellarTransferSheet}`; `Wallet/{StellarCashSheet, StellarCashTracker, StellarLockedSheet}.swift`; `StellarWallet.xcstrings`; `Tests/StellarWalletTests.swift` |
+| WP-32 | A | 2 | WP-21 | seams `Wallet/{StellarReceiveSheet, StellarSendSheet, StellarTransferSheet}`; `Wallet/{StellarCashSheet, StellarCashTracker}.swift` (no locked sheet); `StellarWallet.xcstrings`; `Tests/StellarWalletTests.swift` |
 | WP-33 | A | 2 | WP-21 | seam `Bridge/StellarBridgeView`; `Bridge/{StellarBridgeInReview, StellarBridgeTracker, StellarBridgePins, StellarEvmStepCheck}.swift`; `Lite/MonadBridgeAdapter.swift`; `StellarBridge.xcstrings`; `Tests/StellarBridgeTests.swift` |
 | WP-34 | A | 2 | WP-21 | seam `Trade/StellarSwapView`; `Trade/{StellarSwapModel, StellarSwapHistory}.swift`; `StellarSwap.xcstrings`; `Tests/StellarSwapTests.swift` |
 | WP-35 | A | 2 | WP-21 | seam `Trade/StellarEarnView`; `Trade/{StellarEarnModel, StellarSelectMarketSheet, StellarRateChart}.swift`; `StellarEarn.xcstrings`; `Tests/StellarEarnTests.swift` |
@@ -3161,4 +3510,4 @@ Screen ids used below: S01 Home, S02 locked Home, S03 paused Home, S04 add-funds
 | WP-60 | A | 4 | WP-30, WP-52 | new `Lite/Alerts/StellarPriceAlerts.swift`, a new STELLAR_LITE block in `Wallet/PriceAlerts.swift`, `Home/StellarTokenDetailView.swift`, `StellarAlerts.xcstrings`, `Tests/StellarAlertsTests.swift` |
 | WP-61 | S | 4 | WP-15 | `_shared/earn.ts`, `routes/earn.ts`, earn tests and phase |
 | WP-62 | A | 4 | WP-32, WP-61, WP-52 | `Wallet/StellarTransferSheet.swift`, `StellarWallet.xcstrings`, `Tests/StellarWalletTests.swift` |
-| WP-63 | S | 4 | WP-18 | new `jobs/wallet_history.ts`, `lite-indexer/index.ts` registration, `_shared/{portfolio,stats}.ts`, migration 12, tests |
+| WP-63 | S | 4 | WP-18 | new `jobs/wallet_history.ts`, `lite-indexer/index.ts` registration, `_shared/{portfolio,stats}.ts`, migration 13, tests |
