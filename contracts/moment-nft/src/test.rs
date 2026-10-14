@@ -1,5 +1,5 @@
 //! moment-nft (§10, §18.1): edition numbering, close and edition size, royalty, provenance, the minter's auth, the
-//! SEP-50 functions OpenZeppelin provides, and the cost of the largest collect.
+//! SEP-50 functions OpenZeppelin provides, the missing burn and admin functions, and the cost of the largest collect.
 extern crate std;
 
 use super::*;
@@ -7,6 +7,7 @@ use soroban_sdk::testutils::{
     Address as _, AuthorizedFunction, AuthorizedInvocation, ContractEvents, Events as _, MockAuth, MockAuthInvoke,
 };
 use soroban_sdk::{vec, Event as _, IntoVal, Symbol, Val, Vec};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::vec::Vec as StdVec;
 use stellar_tokens::non_fungible::{Mint, NonFungibleTokenError};
 
@@ -125,6 +126,26 @@ fn failure<R: core::fmt::Debug, C: core::fmt::Debug>(
     r: Result<R, Result<soroban_sdk::Error, C>>,
 ) -> soroban_sdk::Error {
     r.unwrap_err().unwrap()
+}
+
+/// The host's refusal of a call whose `require_auth` no signature covers.
+const AUTH_REFUSED: &str = "Error(Auth, InvalidAction)";
+/// The host's answer to a call of a function the contract doesn't have, "calling unknown contract function"
+/// (host:src/host/frame.rs:1008-1018).
+const UNKNOWN_FUNCTION: &str = "Error(Context, MissingValue)";
+
+/// The host error `call` aborts with, as the host prints it (`AUTH_REFUSED`, `UNKNOWN_FUNCTION`, …), or "returned"
+/// when it doesn't abort. A `try_` call can't name it: the host hands every error that isn't a contract error back to
+/// a `try_` caller as `Error(Context, InvalidAction)` (host:src/host.rs:2650-2670). So the call goes without `try_`,
+/// and the error is the first line of the abort, "HostError: Error(…)".
+fn host_error<R>(call: impl FnOnce() -> R) -> std::string::String {
+    match catch_unwind(AssertUnwindSafe(call)) {
+        Ok(_) => "returned".into(),
+        Err(abort) => {
+            let message = abort.downcast_ref::<std::string::String>().expect("the host's abort message");
+            message.lines().next().unwrap().trim_start_matches("HostError: ").into()
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ construction
@@ -312,15 +333,17 @@ fn only_the_minter_can_mint_or_close() {
     let (alice, mallory) = (t.account(), t.account());
     let mint = t.call("mint", (alice.clone(), 2u32).into_val(&t.e));
     let close = t.call("close", ().into_val(&t.e));
-    t.e.set_auths(&[]);
 
-    // Nobody has authorized these calls as the minter.
-    assert!(nft.try_mint(&alice, &2).is_err());
-    assert!(nft.try_close().is_err());
+    // Nobody has authorized these calls as the minter, so the host refuses both for the minter's auth.
+    t.e.set_auths(&[]);
+    assert_eq!(host_error(|| nft.mint(&alice, &2)), AUTH_REFUSED);
+    assert_eq!(host_error(|| nft.close()), AUTH_REFUSED);
     // Someone else's signature doesn't do either: not a stranger's, the creator's or the collector's.
     for signer in [&mallory, &t.creator, &alice] {
-        assert!(nft.mock_auths(&[MockAuth { address: signer, invoke: &mint }]).try_mint(&alice, &2).is_err());
-        assert!(nft.mock_auths(&[MockAuth { address: signer, invoke: &close }]).try_close().is_err());
+        t.e.mock_auths(&[MockAuth { address: signer, invoke: &mint }]);
+        assert_eq!(host_error(|| nft.mint(&alice, &2)), AUTH_REFUSED);
+        t.e.mock_auths(&[MockAuth { address: signer, invoke: &close }]);
+        assert_eq!(host_error(|| nft.close()), AUTH_REFUSED);
     }
     assert_eq!((nft.minted(), nft.closed()), (0, false));
 
@@ -342,14 +365,16 @@ fn moments_v2_mints_and_closes_through_the_shared_client() {
 
     assert_eq!(minter.collect(&id, &alice, &4), 1);
     assert_eq!(minter.collect(&id, &bob, &MAX_MINT), 5);
-    assert!(stranger.try_collect(&id, &alice, &1).is_err());
-    assert!(stranger.try_end(&id).is_err());
+    // Another contract's call carries its own auth, not the minter's.
+    assert_eq!(host_error(|| stranger.collect(&id, &alice, &1)), AUTH_REFUSED);
+    assert_eq!(host_error(|| stranger.end(&id)), AUTH_REFUSED);
 
     minter.end(&id);
     let nft = MomentNftClient::new(&e, &id);
     assert_eq!((nft.minted(), nft.edition_size()), (24, Some(24)));
-    assert!(minter.try_collect(&id, &alice, &1).is_err());
-    assert!(minter.try_end(&id).is_err());
+    // The NFT's own refusals reach moments-v2 as they are.
+    assert_eq!(failure(minter.try_collect(&id, &alice, &1)), err(Error::Closed));
+    assert_eq!(failure(minter.try_end(&id)), err(Error::AlreadyClosed));
 }
 
 // ------------------------------------------------------------------------------------------------ SEP-50
@@ -382,24 +407,38 @@ fn editions_move_by_transfer_approval_and_operator_also_after_close() {
 
 #[test]
 fn there_is_no_burn_and_no_admin() {
+    // Each call a burnable, royalty-setting, metadata-setting, owned, pausable or upgradable NFT would take, made with
+    // arguments of the right shape and every auth mocked, so a function by that name would run: it would return, or
+    // fail with a contract error, an argument-count trap or a host error of its own. The host answers each one as a
+    // call of an unknown function instead.
     let t = setup();
-    t.nft().mint(&t.account(), &1);
-    let missing = [
-        "burn",
-        "burn_from",
-        "set_default_royalty",
-        "set_token_royalty",
-        "remove_token_royalty",
-        "set_metadata",
-        "set_minter",
-        "set_admin",
-        "upgrade",
+    let e = &t.e;
+    let nft = t.nft();
+    let (alice, mallory) = (t.account(), t.account());
+    nft.mint(&alice, &1);
+    nft.approve_for_all(&alice, &mallory, &(e.ledger().sequence() + 1_000));
+    let text = |s: &str| String::from_str(e, s);
+    let calls: [(&str, Vec<Val>); 11] = [
+        ("burn", (alice.clone(), 1u32).into_val(e)),
+        ("burn_from", (mallory.clone(), alice.clone(), 1u32).into_val(e)),
+        ("set_default_royalty", (mallory.clone(), 10_000u32, t.creator.clone()).into_val(e)),
+        ("set_token_royalty", (1u32, mallory.clone(), 10_000u32, t.creator.clone()).into_val(e)),
+        ("remove_token_royalty", (1u32, t.creator.clone()).into_val(e)),
+        ("set_metadata", (text("ipfs://other/"), text("Other"), text("OTHER")).into_val(e)),
+        ("set_minter", (mallory.clone(),).into_val(e)),
+        ("set_admin", (mallory.clone(),).into_val(e)),
+        ("transfer_ownership", (mallory.clone(), 1_000u32).into_val(e)),
+        ("pause", (t.minter.clone(),).into_val(e)),
+        ("upgrade", (BytesN::from_array(e, &[7; 32]), t.minter.clone()).into_val(e)),
     ];
-    for name in missing {
-        let r = t.e.try_invoke_contract::<Val, soroban_sdk::Error>(&t.id, &Symbol::new(&t.e, name), vec![&t.e]);
-        assert!(r.is_err(), "{name} must not exist");
+    for (name, args) in calls {
+        let error = host_error(|| e.invoke_contract::<Val>(&t.id, &Symbol::new(e, name), args));
+        assert_eq!(error, UNKNOWN_FUNCTION, "{name}");
     }
-    assert_eq!(t.nft().minted(), 1);
+    // Edition 1 is as it was, and so is the Moment.
+    assert_eq!((nft.owner_of(&1), nft.balance(&alice), nft.minted()), (alice.clone(), 1, 1));
+    assert_eq!(nft.royalty_info(&1, &1_000_000_000), (t.creator.clone(), 50_000_000));
+    assert_eq!((nft.token_uri(&1), nft.minter(), nft.closed()), (text(URI), t.minter.clone(), false));
 }
 
 // ------------------------------------------------------------------------------------------------ resources
