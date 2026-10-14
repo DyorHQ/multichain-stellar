@@ -1,5 +1,6 @@
-// The functions' environment (docs/DESIGN-stellar-parity.md §6.14) and the network policy it selects (§4.2); then the
-// indexer: when it may clear its tables, and its run's order, budget and records (§6.1).
+// The functions' environment (docs/DESIGN-stellar-parity.md §6.14) and the network policy it selects (§4.2), the
+// session settings included (§5.9, §6.18); then the indexer: when it may clear its tables, its run's order, budget
+// and records (§6.1), and LITE_KEEPER (§6.17).
 import { Keypair } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { setTestEnv, SPONSOR } from "../fixtures/routes/harness.ts";
@@ -111,6 +112,59 @@ Deno.test("the local stack's settings are refused off testnet", () => {
   });
   withEnv({ LITE_NETWORK: "mainnet", LITE_LOCAL_STORAGE_DIR: "/tmp/lite-media" }, () => assertThrows(() => env.localStorageDir, Error, "local testnet stack only"));
   withEnv({ LITE_NETWORK: "mainnet", LITE_PUBLIC_BASE: "http://127.0.0.1" }, () => assertThrows(() => env.publicBase, Error, "local testnet stack only"));
+});
+
+/** Runs `fn` and answers what it warned. */
+function warnings(fn: () => void): string[] {
+  const warn = console.warn;
+  const seen: string[] = [];
+  console.warn = (...args: unknown[]) => void seen.push(args.join(" "));
+  try {
+    fn();
+  } finally {
+    console.warn = warn;
+  }
+  return seen;
+}
+
+Deno.test("session lifetimes (§5.9, §6.14): an hour and 30 days; testnet QA overrides them, down to 60 and 120 s", () => {
+  const unset = { LITE_JWT_TTL_S: undefined, LITE_REFRESH_TTL_S: undefined };
+  for (const net of ["testnet", "mainnet"]) {
+    withEnv({ ...unset, LITE_NETWORK: net }, () => assertEquals([env.jwtTtlS, env.refreshTtlS], [3600, 2_592_000]));
+  }
+  withEnv({ LITE_NETWORK: "testnet", LITE_JWT_TTL_S: "120", LITE_REFRESH_TTL_S: "600" }, () => assertEquals([env.jwtTtlS, env.refreshTtlS], [120, 600]));
+  withEnv({ LITE_NETWORK: "testnet", LITE_JWT_TTL_S: "60", LITE_REFRESH_TTL_S: "120" }, () => assertEquals([env.jwtTtlS, env.refreshTtlS], [60, 120]));
+  for (const v of ["59", "0", "-5", "90.5", "an hour"]) {
+    withEnv({ LITE_NETWORK: "testnet", LITE_JWT_TTL_S: v }, () => assertThrows(() => env.jwtTtlS, Error, "LITE_JWT_TTL_S must be a whole number of seconds, at least 60"));
+  }
+  withEnv({ LITE_NETWORK: "testnet", LITE_REFRESH_TTL_S: "119" }, () => assertThrows(() => env.refreshTtlS, Error, "at least 120"));
+});
+
+Deno.test("mainnet ignores the session overrides, with one warning per variable", () => {
+  const seen = warnings(() =>
+    withEnv({ LITE_NETWORK: "mainnet", LITE_JWT_TTL_S: "120", LITE_REFRESH_TTL_S: "5" }, () => {
+      for (let i = 0; i < 3; i++) assertEquals([env.jwtTtlS, env.refreshTtlS], [3600, 2_592_000]);
+    })
+  );
+  assertEquals(seen, ["LITE_JWT_TTL_S is set but ignored: it applies on testnet only.", "LITE_REFRESH_TTL_S is set but ignored: it applies on testnet only."]);
+});
+
+Deno.test("the invite gate: none on testnet, always on mainnet; LITE_INVITE_REQUIRED sets it on testnet only", () => {
+  withEnv({ LITE_NETWORK: "testnet", LITE_INVITE_REQUIRED: undefined }, () => assertEquals(env.inviteRequired, false));
+  withEnv({ LITE_NETWORK: "mainnet", LITE_INVITE_REQUIRED: undefined }, () => assertEquals(env.inviteRequired, true));
+  for (const [v, required] of [["1", true], ["true", true], ["0", false], ["false", false]] as const) {
+    withEnv({ LITE_NETWORK: "testnet", LITE_INVITE_REQUIRED: v }, () => assertEquals(env.inviteRequired, required, v));
+  }
+  withEnv({ LITE_NETWORK: "testnet", LITE_INVITE_REQUIRED: "yes" }, () => assertThrows(() => env.inviteRequired, Error, "LITE_INVITE_REQUIRED is 1 or 0"));
+  const seen = warnings(() => withEnv({ LITE_NETWORK: "mainnet", LITE_INVITE_REQUIRED: "0" }, () => assertEquals(env.inviteRequired, true)));
+  assertEquals(seen, ["LITE_INVITE_REQUIRED is set but ignored: it applies on testnet only."]);
+});
+
+Deno.test("LITE_KEEPER: on unless set off", () => {
+  withEnv({ LITE_KEEPER: undefined }, () => assertEquals(env.keeperEnabled, true));
+  withEnv({ LITE_KEEPER: "on" }, () => assertEquals(env.keeperEnabled, true));
+  withEnv({ LITE_KEEPER: "off" }, () => assertEquals(env.keeperEnabled, false));
+  withEnv({ LITE_KEEPER: "0" }, () => assertThrows(() => env.keeperEnabled, Error, "LITE_KEEPER is on or off"));
 });
 
 Deno.test("the sponsor's old fee knobs are gone: the cap is the network's maxFee", () => {
@@ -274,6 +328,25 @@ function jobRunsDb(recording: boolean, last: Record<string, Date> = {}): unknown
   }));
   return inserted;
 }
+
+Deno.test("the indexer's keeper jobs are graduation, the bridge relay and TTL upkeep", () => {
+  assertEquals(JOBS.filter((j) => j.keeper).map((j) => j.name), ["graduate", "bridges", "ttl"]);
+});
+
+Deno.test("LITE_KEEPER=off: the indexer skips every keeper job and runs the rest", async () => {
+  const run = async (keeper: string | undefined) => {
+    jobRunsDb(false);
+    const ran: string[] = [];
+    const job = (name: string, signs = false) => ({ name, keeper: signs, run: () => (ran.push(name), Promise.resolve(name)) });
+    const out = await withEnvAsync({ LITE_KEEPER: keeper }, () => runJobs([job("index"), job("graduate", true), job("settle"), job("ttl", true)], clock().now));
+    return { ran, out };
+  };
+  const off = await run("off");
+  assertEquals(off.ran, ["index", "settle"]);
+  assertEquals([off.out.graduate, off.out.ttl], [{ skipped: "LITE_KEEPER=off" }, { skipped: "LITE_KEEPER=off" }]);
+  assertEquals((await run(undefined)).ran, ["index", "graduate", "settle", "ttl"]);
+  assertEquals((await run("on")).ran, ["index", "graduate", "settle", "ttl"]);
+});
 
 Deno.test("indexer budget: nothing starts after 45 s, nothing late after 40 s; a job not written yet is skipped", async () => {
   jobRunsDb(false);
