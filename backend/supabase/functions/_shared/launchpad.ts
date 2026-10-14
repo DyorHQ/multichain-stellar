@@ -20,6 +20,25 @@ function quoteAsset(id: string) {
   return a;
 }
 
+// ------------------------------------------------------------------------------------------------ markets and search
+// Launch tokens in the markets and in asset search (docs/DESIGN-stellar-parity.md §6.6). Until these are written, both
+// list only the registry's assets: shorter lists, with nothing standing in for the launches.
+
+/** Listed, priced launch tokens as market rows (kind "launch"), by 24h USD volume, then newest. */
+export function launchMarketRows(): Promise<Record<string, unknown>[]> {
+  return Promise.resolve([]);
+}
+
+/** A launch token's USD price over `range`, for /v1/markets/:id/history. */
+export function launchHistory(_token: string, _range: "day" | "week" | "month" | "all"): Promise<{ t: string; usd: number }[]> {
+  return Promise.resolve([]);
+}
+
+/** Launches whose ticker or name matches `q`, for /v1/assets. */
+export function launchSearch(_q: string): Promise<Record<string, unknown>[]> {
+  return Promise.resolve([]);
+}
+
 export async function listLaunches(sort: string, limit: number) {
   const order = sort === "hot" ? sql()`volume_quote desc` : sort === "graduated" ? sql()`updated_at desc` : sql()`created_at desc`;
   const where = sort === "graduated" ? sql()`where graduated` : sort === "hot" ? sql()`where not graduated` : sql()``;

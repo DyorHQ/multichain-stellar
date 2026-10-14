@@ -1,0 +1,46 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/moments?limit=5",
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "moments": [
+        {
+          "id": 3,
+          "creator": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+          "uri": "https://local.invalid/storage/v1/object/public/lite-media/moments/m3.json",
+          "title": "Accra at dusk",
+          "mediaUrl": "https://local.invalid/storage/v1/object/public/lite-media/uploads/m3.jpg",
+          "price": "20000000",
+          "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+          "maxEditions": 10,
+          "minted": 2,
+          "deadline": "2099-01-01T00:00:00.000Z",
+          "open": true,
+          "createdAt": "2026-10-13T06:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

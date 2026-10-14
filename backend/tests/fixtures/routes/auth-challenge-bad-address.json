@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/auth/challenge",
+    "body": {
+      "address": "not-an-address"
+    },
+    "auth": false
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "bad_address",
+        "message": "That isn't a Stellar account address (G…).",
+        "detail": null
+      }
+    }
+  }
+}

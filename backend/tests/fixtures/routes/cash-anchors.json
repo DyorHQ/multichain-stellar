@@ -1,0 +1,47 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/cash/anchors?country=gh",
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "anchors": [
+        {
+          "domain": "testanchor.stellar.org",
+          "name": "Stellar Test Anchor",
+          "assets": [
+            "USDC",
+            "XLM"
+          ],
+          "countries": [
+            "*"
+          ],
+          "kinds": [
+            "deposit",
+            "withdraw"
+          ]
+        }
+      ]
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}
