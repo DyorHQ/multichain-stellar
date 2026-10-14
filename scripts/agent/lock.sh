@@ -1,11 +1,13 @@
 #!/bin/bash
 # Locks that work packages take before using a shared resource (docs/DESIGN-stellar-parity.md §13.4):
-#   sim    the agent simulator (every `xcodebuild test` and simulator run)
+#   xcode  Xcode, one holder at a time: every xcodebuild (build or test) and every simulator run
+#   sim    the agent simulator (every `xcodebuild test` and simulator run; take xcode first)
 #   stack  the default local stack (backend/scripts/local-stack.sh without PORT_BASE: ports 8000, 8001 and 54329)
+#   cargo  Rust builds, two at a time: the slots cargo-1 and cargo-2 (acquire takes a free one, release gives it back)
 #
-#   scripts/agent/lock.sh acquire <sim|stack> <WP-xx>   0: held by WP-xx now (or already); 1: another owner holds it
-#   scripts/agent/lock.sh release <sim|stack> <WP-xx>   0: released (or not held); 1: another owner holds it
-#   scripts/agent/lock.sh status [sim|stack]            who holds what
+#   scripts/agent/lock.sh acquire <xcode|sim|stack|cargo> <WP-xx>   0: held by WP-xx now (or already); 1: busy
+#   scripts/agent/lock.sh release <xcode|sim|stack|cargo> <WP-xx>   0: released (or not held); 1: held by another
+#   scripts/agent/lock.sh status [xcode|sim|stack|cargo]            who holds what
 #
 # A lock is the directory ~/Hackathon-b17/wt/.locks/<name> (mkdir is atomic) with three files: `owner` (the package),
 # `pid` (the process the lock lives with, and that process's start time) and `since`. That process is the one that
@@ -26,7 +28,7 @@ die() {
   exit 2
 }
 usage() {
-  sed -n '6,8p' "$0" | sed 's/^# //' >&2
+  sed -n '8,10p' "$0" | sed 's/^# //' >&2
   exit 2
 }
 
@@ -112,31 +114,57 @@ reclaim() { # dir pid-file-as-seen
   rmdir "$guard"
 }
 
-acquire() {
-  local dir="$LOCKS/$NAME" deadline=$((SECONDS + ${LOCK_WAIT:-0})) seen
-  mkdir -p "$LOCKS"
-  while :; do
-    if take "$dir"; then
-      say "$NAME acquired by $OWNER"
+# The lock directories of a resource: its own, or cargo's two slots.
+slots() { if [ "$1" = cargo ]; then printf '%s\n' cargo-1 cargo-2; else printf '%s\n' "$1"; fi; }
+
+# The slot of NAME that OWNER holds (a live lock taken with this script), if any.
+held_slot() {
+  local slot dir
+  for slot in $(slots "$NAME"); do
+    dir="$LOCKS/$slot"
+    if [ -f "$dir/pid" ] && alive "$dir" && [ "$(cat "$dir/owner" 2>/dev/null || true)" = "$OWNER" ]; then
+      printf '%s' "$slot"
       return 0
     fi
-    if [ -f "$dir/pid" ]; then
-      if alive "$dir" && [ "$(cat "$dir/owner" 2>/dev/null || true)" = "$OWNER" ]; then
-        say "$NAME is already held by $OWNER"
+  done
+  return 1
+}
+
+acquire() {
+  local deadline=$((SECONDS + ${LOCK_WAIT:-0})) slot dir seen
+  mkdir -p "$LOCKS"
+  # Checked first, so that an owner of one cargo slot never takes the other one as well.
+  if slot="$(held_slot)"; then
+    say "$slot is already held by $OWNER"
+    return 0
+  fi
+  # A lock this owner took by hand (mkdir, its name in `owner`) is held too; only its holder gives it back (rmdir).
+  for slot in $(slots "$NAME"); do
+    dir="$LOCKS/$slot"
+    if [ -d "$dir" ] && [ ! -f "$dir/pid" ] && [ "$(head -1 "$dir/owner" 2>/dev/null || true)" = "$OWNER" ]; then
+      say "$slot is already held by $OWNER, taken by hand"
+      return 0
+    fi
+  done
+  while :; do
+    for slot in $(slots "$NAME"); do
+      dir="$LOCKS/$slot"
+      if take "$dir"; then
+        say "$slot acquired by $OWNER"
         return 0
       fi
-      if ! alive "$dir"; then
+      if [ -f "$dir/pid" ] && ! alive "$dir"; then
         seen="$(cat "$dir/pid" 2>/dev/null || true)"
-        say "$NAME: taking over a stale lock ($(describe "$dir"))"
+        say "$slot: taking over a stale lock ($(describe "$dir"))"
         reclaim "$dir" "$seen" || true
         if take "$dir"; then
-          say "$NAME acquired by $OWNER"
+          say "$slot acquired by $OWNER"
           return 0
         fi
       fi
-    fi
+    done
     if [ "$SECONDS" -ge "$deadline" ]; then
-      say "$NAME is busy: $(describe "$dir")"
+      for slot in $(slots "$NAME"); do say "$slot is busy: $(describe "$LOCKS/$slot")"; done
       return 1
     fi
     sleep 5
@@ -144,40 +172,50 @@ acquire() {
 }
 
 release() {
-  local dir="$LOCKS/$NAME" owner
+  local slot dir owner
+  # cargo: the slot this owner holds, whichever it is.
+  if [ "$NAME" = cargo ]; then
+    slot="$(held_slot)" || { say "cargo: no slot is held by $OWNER"; return 0; }
+  else
+    slot="$NAME"
+  fi
+  dir="$LOCKS/$slot"
   if [ ! -d "$dir" ]; then
-    say "$NAME is not held"
+    say "$slot is not held"
     return 0
   fi
   if [ ! -f "$dir/pid" ]; then
-    say "$NAME was taken by hand (no pid file); only its holder removes it"
+    say "$slot was taken by hand (no pid file); only its holder removes it"
     return 1
   fi
   owner="$(cat "$dir/owner")"
   if [ "$owner" != "$OWNER" ]; then
-    say "$NAME is held by $owner, not $OWNER: not released"
+    say "$slot is held by $owner, not $OWNER: not released"
     return 1
   fi
   rm -f "$dir/owner" "$dir/pid" "$dir/since"
   rmdir "$dir" 2>/dev/null || { say "$dir holds other files: left in place"; return 1; }
-  say "$NAME released by $OWNER"
+  say "$slot released by $OWNER"
 }
 
 status() {
-  local name
+  local name slot
   for name in "$@"; do
-    if [ -d "$LOCKS/$name" ]; then say "$name: $(describe "$LOCKS/$name")"; else say "$name: free"; fi
+    for slot in $(slots "$name"); do
+      if [ -d "$LOCKS/$slot" ]; then say "$slot: $(describe "$LOCKS/$slot")"; else say "$slot: free"; fi
+    done
   done
 }
 
-valid_name() { case "$1" in sim | stack) return 0 ;; *) return 1 ;; esac }
+NAMES="xcode, sim, stack or cargo"
+valid_name() { case "$1" in xcode | sim | stack | cargo) return 0 ;; *) return 1 ;; esac }
 
 case "${1:-}" in
   acquire | release)
     [ $# -eq 3 ] || usage
     NAME="$2"
     OWNER="$3"
-    valid_name "$NAME" || die "unknown lock '$NAME': sim or stack"
+    valid_name "$NAME" || die "unknown lock '$NAME': $NAMES"
     [[ "$OWNER" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$ ]] || die "owner must be a package id such as WP-21"
     [[ "${LOCK_WAIT:-0}" =~ ^[0-9]+$ ]] || die "LOCK_WAIT must be a number of seconds"
     if [ -n "${LOCK_PID:-}" ]; then
@@ -188,10 +226,10 @@ case "${1:-}" in
     ;;
   status)
     if [ $# -eq 2 ]; then
-      valid_name "$2" || die "unknown lock '$2': sim or stack"
+      valid_name "$2" || die "unknown lock '$2': $NAMES"
       status "$2"
     else
-      status sim stack
+      status xcode sim stack cargo
     fi
     ;;
   *) usage ;;
