@@ -5,4 +5,4 @@
 
 ios/DyorHQ/Lite/*/StellarConfirmationSheet.swift Paid by DyorHQ # the value of a verified sponsored step's row (§4.3, §4.6)
 ios/Internal/Resources/Stellar*.xcstrings Paid by DyorHQ # that row's key and its translations
-ios/Packages/*/Tests/* example.invalid # unit tests use a reserved host name that never resolves (RFC 2606)
+ios/Packages/DyorLite/Tests/DyorLiteTests/DyorLiteTests.swift example.invalid # a never-called test host (RFC 2606); beyond §9: lead to confirm

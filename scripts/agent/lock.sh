@@ -30,7 +30,9 @@ usage() {
   exit 2
 }
 
-started() { ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//' || true; }
+# A process's start time. ps writes it in the caller's locale and time zone, so both are pinned: a lock taken from a
+# terminal with LANG or TZ set must read the same from an agent without them, or it would look stale and be taken over.
+started() { LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//' || true; }
 
 # The process that started the calling shell: up the parents from the caller, past every shell, `env` and `timeout`.
 holder() {

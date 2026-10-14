@@ -43,6 +43,8 @@ scripts/agent/lock.sh status
 - A lock is the folder `~/Hackathon-b17/wt/.locks/<name>`, holding `owner`, `pid` and `since`.
 - The recorded process is the one that started the calling shell: the Claude Code session, or the terminal window. The
   lock stays held between an agent's commands. Once that process has exited, the next `acquire` takes the lock over.
+- `pid` also holds that process's start time, in the C locale and UTC: a reused PID doesn't keep a lock alive, and a
+  lock reads the same from a terminal with `LANG` or `TZ` set as from an agent without them.
 - `LOCK_WAIT=<seconds>` makes `acquire` retry every 5 seconds before giving up. `LOCK_PID=<pid>` ties the lock to
   another process.
 - A lock folder without a `pid` file was taken by hand (`mkdir`). It is never taken over; its holder removes it.
@@ -63,13 +65,19 @@ scripts/agent/scan-placeholders.sh $A $S
 
 ## Placeholder scan
 
-`scan-placeholders.sh [--allow FILE] <A> <S>` greps the tracked files of A's `ios/DyorHQ/Lite` and `ios/Internal`, and
-of S's `backend` and `ios/Packages`. It looks for the §9 patterns, as fixed, case-sensitive strings:
+`scan-placeholders.sh [--allow FILE] <A> <S>` greps A's `ios/DyorHQ/Lite` and `ios/Internal`, the `#if STELLAR_LITE`
+blocks of A's other Swift files (the network switch's hooks in build-23 files), and S's `backend` and `ios/Packages`.
+It reads tracked files and new ones that aren't added yet, so run it before committing; ignored files and secret files
+are left out. It looks for these fixed, case-sensitive strings:
 
 ```
 "TOKEN"   example.invalid   USDC: 1   BUSDC: 1   Paid by DyorHQ   pays the Stellar network fees
 Reserves paid by DyorHQ   10,000 test   10000 test   Lorem
+pays the network fees   number(10_000)   10_000.formatted
 ```
+
+The first two lines are §9's list. The third catches evidence that §9's table says this scan tests and the list
+misses: the "DyorHQ pays the network fees and the reserve" copy, and the testnet faucet's 10,000 written in code.
 
 It exits 1 on any hit that isn't allowed. `scan-allow.txt` lists the allowed ones, one per line:
 

@@ -1,9 +1,10 @@
 #!/bin/bash
 # The placeholder scan of docs/DESIGN-stellar-parity.md §9: text that stands in for real data must not reach the new
-# app code or the backend. It greps the tracked files (new files count once staged with `git add`) of
-#   A, the IOS-app worktree:            ios/DyorHQ/Lite, ios/Internal
+# app code or the backend. It greps the files (tracked, and new ones not added yet; ignored ones aside) of
+#   A, the IOS-app worktree:            ios/DyorHQ/Lite, ios/Internal, and the #if STELLAR_LITE blocks of its other
+#                                       Swift files (the network switch's hooks in build-23 files, §3.1)
 #   S, the multichain-stellar worktree: backend, ios/Packages
-# for each pattern below, and fails on any hit that the allow list doesn't name.
+# for each pattern below, and fails on any hit that the allow list doesn't name. It never reads a secret file.
 #
 #   scripts/agent/scan-placeholders.sh [--allow FILE] <A> <S>     FILE defaults to scripts/agent/scan-allow.txt
 #
@@ -15,10 +16,17 @@
 # Exit status: 0 when no hit is left over, 1 when some are, 2 for a usage or allow-list error.
 set -euo pipefail
 
+# §9's list, then three for evidence that its table says this scan tests and that the list misses: the copy "DyorHQ
+# pays the network fees and the reserve" (NetworkSheet) and the testnet faucet's 10,000 written in code (NetworkSheet,
+# LiteHomeView).
 PATTERNS=('"TOKEN"' 'example.invalid' 'USDC: 1' 'BUSDC: 1' 'Paid by DyorHQ' 'pays the Stellar network fees'
-  'Reserves paid by DyorHQ' '10,000 test' '10000 test' 'Lorem')
+  'Reserves paid by DyorHQ' '10,000 test' '10000 test' 'Lorem'
+  'pays the network fees' 'number(10_000)' '10_000.formatted')
 APP_PATHS=(ios/DyorHQ/Lite ios/Internal)
 LITE_PATHS=(backend ios/Packages)
+# Every grep leaves these out, tracked or not.
+NO_SECRETS=(':(exclude,glob)**/.env*' ':(exclude,glob)**/Secrets.xcconfig' ':(exclude,glob)**/.secrets'
+  ':(exclude,glob)**/.secrets/**')
 
 say() { printf 'scan-placeholders: %s\n' "$*"; }
 die() {
@@ -96,34 +104,76 @@ allowed() { # path pattern
 HITS=0
 ALLOWED=0
 REPORT=""
+# Counts <pattern>'s hits, given as git grep prints them (path:line:text); reports those the allow list doesn't name.
+record() { # label pattern hits
+  local label="$1" pattern="$2" hit path rest number text
+  [ -n "$3" ] || return 0
+  while IFS= read -r hit; do
+    path="${hit%%:*}"
+    rest="${hit#*:}"
+    number="${rest%%:*}"
+    text="$(trim "${rest#*:}")"
+    if allowed "$path" "$pattern"; then
+      ALLOWED=$((ALLOWED + 1))
+      continue
+    fi
+    HITS=$((HITS + 1))
+    REPORT="$REPORT$(printf '%s %s:%s  [%s]  %s' "$label" "$path" "$number" "$pattern" "${text:0:100}")"$'\n'
+  done <<<"$3"
+}
+
+# git grep over <repo>'s working tree: tracked files, and untracked ones that aren't ignored.
+grep_repo() { # repo grep-arguments...
+  local repo="$1" status=0
+  shift
+  git -C "$repo" grep -I --untracked "$@" || status=$?
+  [ "$status" -le 1 ] || die "git grep failed in $repo"
+}
+
 scan() { # label repo paths...
-  local label="$1" repo="$2" pattern out status hit path rest number text
+  local label="$1" repo="$2" pattern out
   shift 2
   for pattern in "${PATTERNS[@]}"; do
-    status=0
-    out="$(git -C "$repo" grep -n -I -F -e "$pattern" -- "$@")" || status=$?
-    [ "$status" -le 1 ] || die "git grep failed in $repo"
-    [ -n "$out" ] || continue
-    while IFS= read -r hit; do
-      path="${hit%%:*}"
-      rest="${hit#*:}"
-      number="${rest%%:*}"
-      text="$(trim "${rest#*:}")"
-      if allowed "$path" "$pattern"; then
-        ALLOWED=$((ALLOWED + 1))
-        continue
-      fi
-      HITS=$((HITS + 1))
-      REPORT="$REPORT$(printf '%s %s:%s  [%s]  %s' "$label" "$path" "$number" "$pattern" "${text:0:100}")"$'\n'
-    done <<<"$out"
+    out="$(grep_repo "$repo" -n -F -e "$pattern" -- "$@" "${NO_SECRETS[@]}")"
+    record "$label" "$pattern" "$out"
   done
 }
 
-say "A = $A (${APP_PATHS[*]}); S = $S (${LITE_PATHS[*]})"
+# Each #if keeps a frame: lite says its open branch only compiles with STELLAR_LITE, and neg that the #if tested
+# !STELLAR_LITE, which makes its #elseif and #else branches the Lite ones. A line inside any Lite frame is printed as
+# git grep prints a hit.
+LITE_LINES='
+function lite_cond(s) { gsub(/![[:space:]]*STELLAR_LITE/, "", s); return s ~ /STELLAR_LITE/ }
+/^[[:space:]]*#if[[:space:]]/ { d++; lite[d] = lite_cond($0); neg[d] = $0 ~ /![[:space:]]*STELLAR_LITE/; next }
+/^[[:space:]]*#elseif[[:space:]]/ { if (d) lite[d] = neg[d] || lite_cond($0); next }
+/^[[:space:]]*#else([[:space:]]|$)/ { if (d) lite[d] = neg[d]; next }
+/^[[:space:]]*#endif/ { if (d) d--; next }
+{ for (i = 1; i <= d; i++) if (lite[i]) { print ENVIRON["SCAN_PATH"] ":" NR ":" $0; next } }
+'
+
+# A's Swift files outside APP_PATHS hold build-23 code, and the network switch's hooks inside #if STELLAR_LITE (§3.1):
+# only those blocks are scanned.
+scan_blocks() { # label repo
+  local label="$1" repo="$2" files path lines="" pattern
+  files="$(grep_repo "$repo" -l -F -e STELLAR_LITE -- 'ios/*.swift' ':(exclude)ios/DyorHQ/Lite' \
+    ':(exclude)ios/Internal' "${NO_SECRETS[@]}")"
+  [ -n "$files" ] || return 0
+  while IFS= read -r path; do
+    lines="$lines$(SCAN_PATH="$path" awk "$LITE_LINES" "$repo/$path")"$'\n'
+  done <<<"$files"
+  for pattern in "${PATTERNS[@]}"; do
+    # The pattern in a line's text, not in its path:line: prefix.
+    record "$label" "$pattern" "$(printf '%s' "$lines" |
+      PATTERN="$pattern" awk '{ t = $0; sub(/^[^:]*:[^:]*:/, "", t) } index(t, ENVIRON["PATTERN"])')"
+  done
+}
+
+say "A = $A (${APP_PATHS[*]}, and #if STELLAR_LITE blocks elsewhere in ios); S = $S (${LITE_PATHS[*]})"
 scan A "$A" "${APP_PATHS[@]}"
+scan_blocks A "$A"
 scan S "$S" "${LITE_PATHS[@]}"
-# By repository, file and line.
-[ -z "$REPORT" ] || printf '%s' "$REPORT" | sort -t: -k1,1 -k2,2n
+# By repository, file and line, the same order in every locale.
+[ -z "$REPORT" ] || printf '%s' "$REPORT" | LC_ALL=C sort -t: -k1,1 -k2,2n
 
 unused=""
 for ((i = 0; i < ${#ALLOW_GLOB[@]}; i++)); do
