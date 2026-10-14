@@ -152,5 +152,6 @@
     "earn": "ok",
     "launch": "ok",
     "moments": "ok"
-  }
+  },
+  "view": "owner"
 }

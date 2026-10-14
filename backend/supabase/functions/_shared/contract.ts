@@ -1284,7 +1284,9 @@ export interface CashTracked {
 // ------------------------------------------------------------------------------------------------ routes
 
 /** Who may call a route (docs/API-lite.md §0; DESIGN-stellar-parity §6.0 and §6.18).
- *  - "public": no token, nothing about any account; cacheable (`Cache-Control: public, max-age=30`).
+ *  - "public": no token, nothing about any account; cacheable (`Cache-Control: public, max-age=30`). An
+ *    `Authorization` header is ignored, never refused: the phone still sends its token to `prices`, `economics`,
+ *    `earn/markets` and `earn/history` while the server before WP-13, WP-14 and WP-15 asks for one there.
  *  - "viewer": a session is optional. With a valid Bearer token, the owner view of its account (`view: "owner"`). With
  *    no `Authorization` header, the public view of `?address=G…` (`view: "public"`): on-chain facts only, every
  *    DyorHQ-history field null, cacheable for 15 s. A route about an account answers 400 `address_required` without

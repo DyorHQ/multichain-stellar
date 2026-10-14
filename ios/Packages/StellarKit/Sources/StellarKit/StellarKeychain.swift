@@ -24,28 +24,23 @@ public enum StellarKeychain {
     }
 
     /// The session, replacing the stored one whole: its access token, and the refresh token that renews it (single use,
-    /// so each refresh saves its successor here). The item is this device's only, like the seed.
+    /// so each refresh saves its successor here). The item is this device's only, like the seed; its format is
+    /// `LiteSavedSession`'s.
     public static func saveSession(token: String, expiresAt: Date, refreshToken: String? = nil, refreshExpiresAt: Date? = nil, account: String, network: String) throws {
-        var fields = ["token": token, "expiresAt": ISO8601DateFormatter().string(from: expiresAt)]
-        if let refreshToken, let refreshExpiresAt {
-            fields["refreshToken"] = refreshToken
-            fields["refreshExpiresAt"] = ISO8601DateFormatter().string(from: refreshExpiresAt)
-        }
-        try save(try JSONEncoder().encode(fields), key: "session.\(network).\(account)")
+        let saved = LiteSavedSession(token: token, expiresAt: expiresAt, refreshToken: refreshToken, refreshExpiresAt: refreshExpiresAt)
+        try save(try saved.data(), key: "session.\(network).\(account)")
     }
 
     /// The access token. A session saved without a refresh token (or before there were any) loads the same.
     public static func session(account: String, network: String) -> (token: String, expiresAt: Date)? {
-        guard let fields = sessionFields(account: account, network: network),
-              let token = fields["token"], let exp = fields["expiresAt"].flatMap(ISO8601DateFormatter().date(from:)) else { return nil }
-        return (token, exp)
+        savedSession(account: account, network: network).map { ($0.token, $0.expiresAt) }
     }
 
-    /// The refresh token saved with the session, and when it lapses; nil when the session has none.
-    public static func refreshToken(account: String, network: String) -> (token: String, expiresAt: Date)? {
-        guard let fields = sessionFields(account: account, network: network),
-              let token = fields["refreshToken"], let exp = fields["refreshExpiresAt"].flatMap(ISO8601DateFormatter().date(from:)) else { return nil }
-        return (token, exp)
+    /// The refresh token saved with the session, and when it lapses (nil when its answer didn't say); nil when the
+    /// session has none.
+    public static func refreshToken(account: String, network: String) -> (token: String, expiresAt: Date?)? {
+        guard let saved = savedSession(account: account, network: network), let token = saved.refreshToken else { return nil }
+        return (token, saved.refreshExpiresAt)
     }
 
     /// The session alone, refresh token included (signing out of Stellar on this iPhone): the stored seed stays, so the
@@ -54,8 +49,8 @@ public enum StellarKeychain {
         delete(key: "session.\(network).\(account)")
     }
 
-    private static func sessionFields(account: String, network: String) -> [String: String]? {
-        load(key: "session.\(network).\(account)").flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }
+    private static func savedSession(account: String, network: String) -> LiteSavedSession? {
+        load(key: "session.\(network).\(account)").flatMap(LiteSavedSession.init(data:))
     }
 
     /// Everything Lite stored for `account`, sessions and their refresh tokens included (sign-out, account deletion,

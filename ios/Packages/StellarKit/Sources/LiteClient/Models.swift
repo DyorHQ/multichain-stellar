@@ -633,3 +633,38 @@ public struct AuthResult: Codable, Equatable, Sendable {
     public let refreshToken: String?
     public let refreshExpiresAt: String?
 }
+
+/// A session as the phone keeps it between launches (`StellarKeychain.saveSession`): the access token and the refresh
+/// token that renews it, each with when it ends. The item is one JSON object of strings, times in ISO 8601 to the
+/// second, so an item saved before refresh tokens (`token` and `expiresAt` alone) still reads, an older build still
+/// finds those two in a newer item, and a refresh token is kept even when its answer gave no expiry.
+public struct LiteSavedSession: Equatable, Sendable {
+    public let token: String
+    public let expiresAt: Date
+    public let refreshToken: String?
+    public let refreshExpiresAt: Date?
+
+    public init(token: String, expiresAt: Date, refreshToken: String? = nil, refreshExpiresAt: Date? = nil) {
+        self.token = token
+        self.expiresAt = expiresAt
+        self.refreshToken = refreshToken
+        self.refreshExpiresAt = refreshExpiresAt
+    }
+
+    /// An item read back; nil when it isn't a session.
+    public init?(data: Data) {
+        let time = ISO8601DateFormatter()
+        guard let fields = try? JSONDecoder().decode([String: String].self, from: data),
+              let token = fields["token"], let expiresAt = fields["expiresAt"].flatMap(time.date(from:)) else { return nil }
+        self.init(token: token, expiresAt: expiresAt, refreshToken: fields["refreshToken"], refreshExpiresAt: fields["refreshExpiresAt"].flatMap(time.date(from:)))
+    }
+
+    /// The item's bytes.
+    public func data() throws -> Data {
+        let time = ISO8601DateFormatter()
+        var fields = ["token": token, "expiresAt": time.string(from: expiresAt)]
+        fields["refreshToken"] = refreshToken
+        fields["refreshExpiresAt"] = refreshExpiresAt.map(time.string(from:))
+        return try JSONEncoder().encode(fields)
+    }
+}

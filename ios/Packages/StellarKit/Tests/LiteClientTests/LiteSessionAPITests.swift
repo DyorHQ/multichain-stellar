@@ -7,8 +7,9 @@ import StellarCore
 import XCTest
 
 /// Sessions without gating (DESIGN-stellar-parity §5.8, §6.18): the sign-in signs only the exact challenge and sends
-/// only a SEP-53 signature it checked; a refresh keeps the rotated token; a 401 runs one shared renewal and one retry,
-/// then falls back to the public view (viewer routes) or `notSignedIn` (session routes).
+/// only a SEP-53 signature it checked; a refresh keeps the rotated token and never presents one twice; a 401 runs one
+/// shared renewal and one retry, then falls back to the public view (viewer routes) or `notSignedIn` (session routes,
+/// and reads about an account with no viewer).
 final class LiteSessionAPITests: XCTestCase {
     private let base = URL(string: "https://lite.test/functions/v1/lite")!
     private let signer = try! StellarSigner(seed: [UInt8](repeating: 7, count: 32))
@@ -197,6 +198,52 @@ final class LiteSessionAPITests: XCTestCase {
         XCTAssertNil(refresh)
     }
 
+    /// A renewal before expiry and one after a 401 refreshing the same token at once: one request, one rotation, the
+    /// same answer for both.
+    func testRefreshesOfOneTokenAtOnceShareOneRequest() async throws {
+        let api = api()
+        await api.restore(token: "old", expiresAt: Date().addingTimeInterval(60), refreshToken: "lrt_first", refreshExpiresAt: Date().addingTimeInterval(86_400))
+        let answer = try ApiFixtures.data("auth-refresh")
+        SessionServer.handle { _ in
+            Thread.sleep(forTimeInterval: 0.2)
+            return (200, answer)
+        }
+        async let first = api.refresh(address: signer.address, refreshToken: "lrt_first")
+        async let second = api.refresh(address: signer.address, refreshToken: "lrt_first")
+        let (a, b) = try await (first, second)
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(SessionServer.seen.map(\.route), ["/v1/auth/refresh"])
+        let refresh = await api.refreshToken
+        XCTAssertEqual(refresh, a.refreshToken)
+    }
+
+    /// A refresh token rotated here is never presented again (that would end its family): the one it was rotated to
+    /// goes instead, and with none held nothing is sent.
+    func testARotatedRefreshTokenIsNeverPresentedAgain() async throws {
+        let api = api()
+        await api.restore(token: "old", expiresAt: Date().addingTimeInterval(60), refreshToken: "lrt_first", refreshExpiresAt: Date().addingTimeInterval(86_400))
+        let rotated = try ApiFixtures.decode("auth-refresh", as: AuthResult.self)
+        let successor = try XCTUnwrap(rotated.refreshToken)
+        let answer = try ApiFixtures.data("auth-refresh")
+        SessionServer.handle { _ in (200, answer) }
+        _ = try await api.refresh(address: signer.address, refreshToken: "lrt_first")
+        // A caller that read the stored token before that rotation finished.
+        _ = try await api.refresh(address: signer.address, refreshToken: "lrt_first")
+        XCTAssertEqual(SessionServer.seen.map { $0.json?["refreshToken"] }, ["lrt_first", successor])
+
+        SessionServer.reset(keepingHandler: true)
+        await api.signOut()
+        for spent in ["lrt_first", successor] {
+            do {
+                _ = try await api.refresh(address: signer.address, refreshToken: spent)
+                XCTFail("\(spent) was presented again")
+            } catch let error as LiteAPIError {
+                XCTAssertEqual(error, .notSignedIn)
+            }
+        }
+        XCTAssertEqual(SessionServer.seen.count, 0)
+    }
+
     func testRevokeIsBestEffort() async throws {
         let api = api()
         await api.restore(token: "t", expiresAt: Date(), refreshToken: "lrt_mine", refreshExpiresAt: Date())
@@ -332,6 +379,37 @@ final class LiteSessionAPITests: XCTestCase {
         XCTAssertEqual(SessionServer.seen.map(\.route), ["/v1/moments", "/v1/moments"])
         let token = await api.token
         XCTAssertNil(token)
+    }
+
+    /// A restored session with no viewer set (as DyorLite restores one at launch): once its token is refused and can't
+    /// be renewed, a read about the account says `notSignedIn` instead of asking about no one; a board still answers.
+    func testWithoutAViewerAnAccountReadIsNotAskedAfterRenewalFails() async throws {
+        let api = api()
+        await api.restore(token: "old", expiresAt: Date().addingTimeInterval(60))
+        await api.setRenewal { throw LiteAPIError.server(status: 401, code: "refresh_invalid", message: "Sign in again.") }
+        let addressRequired = try ApiFixtures.data("error-address-required")
+        let board = try ApiFixtures.data("moments")
+        SessionServer.handle { request in
+            if request.authorization != nil { return (401, SessionServer.unauthorized) }
+            return request.route == "/v1/moments" ? (200, board) : (400, addressRequired)
+        }
+        do {
+            _ = try await api.account()
+            XCTFail("an account read without a session or a viewer returned")
+        } catch let error as LiteAPIError {
+            XCTAssertEqual(error, .notSignedIn)
+        }
+        XCTAssertEqual(SessionServer.seen.map(\.route), ["/v1/account"])
+        XCTAssertEqual(SessionServer.seen.map(\.authorization), ["Bearer old"])
+
+        SessionServer.reset(keepingHandler: true)
+        _ = try await api.moments()
+        do {
+            _ = try await api.earnPositions()
+            XCTFail("an Earn read without a session or a viewer returned")
+        } catch LiteAPIError.notSignedIn {}
+        XCTAssertEqual(SessionServer.seen.map(\.route), ["/v1/moments"])
+        XCTAssertEqual(SessionServer.seen.map(\.authorization), [nil])
     }
 
     /// Only a 401 renews: any other refusal of a session's request is the answer.

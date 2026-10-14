@@ -45,20 +45,29 @@ public enum LiteAPIError: Error, Equatable, LocalizedError {
 
 /// The Lite API (`/functions/v1/lite/v1/…`). One instance per Stellar account.
 ///
-/// Each route belongs to one of three classes (docs/API-lite.md §0). Public routes never carry the session token.
-/// Viewer routes (the account's balances, positions and editions, the boards, a launch or a Moment, asset search)
-/// carry it when one is held, and otherwise ask for the public view of `viewerAddress`: on-chain facts only, DyorHQ's
-/// own history left null. Session routes (history, plans, every write) need it. When a request that carried the token
-/// is refused with 401, the renewal set with `setRenewal(_:)` runs once, shared by every request it refused, and the
-/// request is tried once more; when that fails too, a viewer request is answered with the public view and a session
-/// request throws `notSignedIn`.
+/// Each route belongs to one of three classes (docs/API-lite.md §0). Public routes never carry the session token,
+/// except the four today's server still guards (`Access.publicPending`). Viewer routes (the account's balances,
+/// positions and editions, the boards, a launch or a Moment, asset search) carry it when one is held, and otherwise ask
+/// for the public view of `viewerAddress`: on-chain facts only, DyorHQ's own history left null. A route about an
+/// account isn't asked at all without a session or a viewer (`notSignedIn`). Session routes (history, plans, every
+/// write) need the token. When a request that carried it is refused with 401, the renewal set with `setRenewal(_:)`
+/// runs once, shared by every request it refused, and the request is tried once more; when that fails too, the token
+/// is dropped, a viewer request is answered with the public view and a session request throws `notSignedIn`. The
+/// token goes before any public view is asked for, so `token` says which view the reads answer, the lists included.
 public actor LiteAPI {
     /// Who a request is for (`LiteAPI`'s three route classes).
-    enum Access: Sendable {
+    enum Access: Sendable, Equatable {
         /// Never the token.
         case `public`
-        /// The token when one is held, otherwise the public view of `viewerAddress`.
-        case viewer
+        /// A public route today's server still guards: `prices`, `economics` and Earn's `markets` and `history` (the
+        /// contract makes them public; WP-13, WP-14 and WP-15 serve them so). The token when one is held, and nothing
+        /// else. A public route ignores the token, so this stays right until they become `public` here too.
+        case publicPending
+        /// The token when one is held, otherwise the public view of `viewerAddress`. `aboutAccount`: the answer is
+        /// about an account (the account, its holdings, Earn positions or editions), so with no viewer either it isn't
+        /// asked (`notSignedIn`; the server would refuse it with 400 `address_required`). A board or a page asks
+        /// without one.
+        case viewer(aboutAccount: Bool)
         /// The token, or `notSignedIn`.
         case session
     }
@@ -78,6 +87,10 @@ public actor LiteAPI {
     /// Renews the session after a 401 (`setRenewal(_:)`), and the renewal running now.
     private var renewal: (@Sendable () async throws -> Void)?
     private var renewing: Task<Void, Error>?
+    /// The refreshes running now, by the refresh token each presents, and the refresh tokens already rotated here: a
+    /// refresh token is single use, and presenting one twice ends its whole family (`refresh(address:refreshToken:)`).
+    private var refreshing: [String: Task<AuthResult, Error>] = [:]
+    private var spent: Set<String> = []
 
     public init(baseURL: URL, network: String? = nil, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -87,7 +100,7 @@ public actor LiteAPI {
 
     public var isSignedIn: Bool { token != nil && (tokenExpiry ?? .distantPast) > Date().addingTimeInterval(60) }
 
-    /// A saved session, as the last sign-in or refresh left it.
+    /// A saved session, as the last sign-in or refresh left it. The viewer stays as `setViewer(address:)` left it.
     public func restore(token: String, expiresAt: Date, refreshToken: String? = nil, refreshExpiresAt: Date? = nil) {
         self.token = token
         tokenExpiry = expiresAt
@@ -103,16 +116,17 @@ public actor LiteAPI {
         refreshExpiry = nil
     }
 
-    /// The account viewer routes ask about while no session is held; nil asks about none (the boards still answer, an
-    /// account's own reads answer 400 `address_required`).
+    /// The account viewer routes ask about while no session is held; nil asks about none (the boards still answer; an
+    /// account's own reads throw `notSignedIn` without asking).
     public func setViewer(address: String?) {
         viewerAddress = address
     }
 
     /// What renews the session when a request that carried the token is refused with 401: typically `refresh` with the
-    /// stored refresh token, then a silent sign-in. It runs once for every request refused meanwhile, and should set a
-    /// new token (`refresh`, `signIn`, `restore`) or throw. It must make no other call through this API: a request
-    /// refused while it runs would wait for it.
+    /// refresh token this API holds (`refreshToken`), then a silent sign-in. It runs once for every request refused
+    /// meanwhile, and should set a new token (`refresh`, `signIn`, `restore`) or throw. It must make no other call
+    /// through this API: a request refused while it runs would wait for it. A renewal before expiry may call `refresh`
+    /// at the same time: the two share one rotation.
     public func setRenewal(_ renew: (@Sendable () async throws -> Void)?) {
         renewal = renew
     }
@@ -151,9 +165,25 @@ public actor LiteAPI {
     /// Renews the session with a refresh token, which is single use: the answer carries a new session and its successor,
     /// kept as a sign-in's are. A refresh token that was already used ends its whole family (401 `refresh_reused`); one
     /// that is unknown, expired or revoked is refused with 401 `refresh_invalid`. Either way it is dropped here too.
+    ///
+    /// So that two renewals (one before expiry, one after a 401) can't end the session between them, no refresh token
+    /// is presented twice from here: refreshes of one token at the same time share its one request and answer, and a
+    /// token already rotated here is replaced by the one this API holds now (`notSignedIn` when it holds none).
     public func refresh(address: String, refreshToken: String, timeout: TimeInterval = 60) async throws -> AuthResult {
+        let current = spent.contains(refreshToken) ? self.refreshToken : refreshToken
+        guard let presented = current, !spent.contains(presented) else { throw LiteAPIError.notSignedIn }
+        if let running = refreshing[presented] { return try await running.value }
+        let rotation = Task { try await rotate(address: address, refreshToken: presented, timeout: timeout) }
+        refreshing[presented] = rotation
+        defer { refreshing[presented] = nil }
+        return try await rotation.value
+    }
+
+    /// One `auth/refresh`: its session kept, and `refreshToken` spent.
+    private func rotate(address: String, refreshToken: String, timeout: TimeInterval) async throws -> AuthResult {
         do {
             let result: AuthResult = try await request("POST", "auth/refresh", body: ["address": address, "refreshToken": refreshToken], access: .public, timeout: timeout)
+            spent.insert(refreshToken)
             keep(result, address: address)
             return result
         } catch {
@@ -229,10 +259,10 @@ public actor LiteAPI {
     public func config(timeout: TimeInterval = 60) async throws -> LiteConfig { try await request("GET", "config", access: .public, timeout: timeout) }
     /// Public, like `config` and the markets: none of them reads anything about the user.
     public func fees(timeout: TimeInterval = 60) async throws -> StellarFees { try await request("GET", "fees", access: .public, timeout: timeout) }
-    /// A viewer read: the session's account, or the public view of the viewer's (`view` says which).
-    public func account(timeout: TimeInterval = 60) async throws -> AccountView { try await request("GET", "account", access: .viewer, timeout: timeout) }
+    /// A viewer read about the account: the session's, or the public view of the viewer's (`view` says which).
+    public func account(timeout: TimeInterval = 60) async throws -> AccountView { try await request("GET", "account", access: .viewer(aboutAccount: true), timeout: timeout) }
     /// A viewer read, like `account`.
-    public func holdings(timeout: TimeInterval = 60) async throws -> StellarHoldings { try await request("GET", "holdings", access: .viewer, timeout: timeout) }
+    public func holdings(timeout: TimeInterval = 60) async throws -> StellarHoldings { try await request("GET", "holdings", access: .viewer(aboutAccount: true), timeout: timeout) }
     public func activate() async throws -> ActivationResult { try await request("POST", "account/activate", body: [String: String]()) }
     public func enable(asset: String) async throws -> PlanView { try await request("POST", "account/trust", body: ["asset": asset]) }
     public func faucet() async throws -> AnyJSON { try await request("POST", "account/faucet", body: [String: String]()) }
@@ -291,7 +321,7 @@ public actor LiteAPI {
     /// account, or the viewer's.
     public func searchAssets(_ query: String) async throws -> [StellarAssetResult] {
         struct R: Decodable { let results: [StellarAssetResult] }
-        let r: R = try await request("GET", Self.path("assets", ["q": query]), access: .viewer)
+        let r: R = try await request("GET", Self.path("assets", ["q": query]), access: .viewer(aboutAccount: false))
         return r.results
     }
 
@@ -299,23 +329,24 @@ public actor LiteAPI {
         try await request("GET", Self.path("portfolio", ["period": period.rawValue]))
     }
 
-    /// Public.
+    /// Public (the session goes along while the server still asks for one: `Access.publicPending`).
     public func earnMarkets() async throws -> [EarnMarket] {
         struct R: Decodable { let markets: [EarnMarket] }
-        let r: R = try await request("GET", "earn/markets", access: .public)
+        let r: R = try await request("GET", "earn/markets", access: .publicPending)
         return r.markets
     }
 
-    /// A viewer read. In the public view `deposited`, `withdrawn` and `earned` are nil (DyorHQ's history).
+    /// A viewer read about the account. In the public view `deposited`, `withdrawn` and `earned` are nil (DyorHQ's
+    /// history).
     public func earnPositions() async throws -> [EarnPosition] {
         struct R: Decodable { let positions: [EarnPosition] }
-        let r: R = try await request("GET", "earn/positions", access: .viewer)
+        let r: R = try await request("GET", "earn/positions", access: .viewer(aboutAccount: true))
         return r.positions
     }
 
-    /// `range`: `.week` or `.month`. Public.
+    /// `range`: `.week` or `.month`. Public, like `earnMarkets`.
     public func earnHistory(pool: String, asset: String, range: VolumePeriodKey) async throws -> StellarEarnHistory {
-        try await request("GET", Self.path("earn/history", ["pool": pool, "asset": asset, "range": range.rawValue]), access: .public)
+        try await request("GET", Self.path("earn/history", ["pool": pool, "asset": asset, "range": range.rawValue]), access: .publicPending)
     }
 
     public func buildEarn(deposit: Bool, pool: String, asset: String, amount: Int64) async throws -> PlanView {
@@ -325,19 +356,19 @@ public actor LiteAPI {
     /// A viewer read, like the board.
     public func launches(sort: String) async throws -> [StellarLaunch] {
         struct R: Decodable { let launches: [StellarLaunch] }
-        let r: R = try await request("GET", Self.path("launches", ["sort": sort]), access: .viewer)
+        let r: R = try await request("GET", Self.path("launches", ["sort": sort]), access: .viewer(aboutAccount: false))
         return r.launches
     }
 
     /// A page of the board. `section`: "explore" or "graduated"; `sort`: "newest", "market_cap" or "near_graduation";
     /// `query` searches names and tickers; `cursor` is the previous page's `nextCursor`. A viewer read.
     public func launchBoard(section: String, sort: String, query: String? = nil, limit: Int? = nil, cursor: String? = nil) async throws -> StellarLaunchBoard {
-        try await request("GET", Self.path("launches", ["section": section, "sort": sort, "q": query, "limit": limit.map(String.init), "cursor": cursor]), access: .viewer)
+        try await request("GET", Self.path("launches", ["section": section, "sort": sort, "q": query, "limit": limit.map(String.init), "cursor": cursor]), access: .viewer(aboutAccount: false))
     }
 
     /// A viewer read. In the public view `you` has no cost basis or P&L, and is nil without a viewer.
     public func launch(_ token: String, candles: String? = "5m") async throws -> StellarLaunchDetail {
-        try await request("GET", Self.path("launches/\(Self.segment(token))", ["candles": candles]), access: .viewer)
+        try await request("GET", Self.path("launches/\(Self.segment(token))", ["candles": candles]), access: .viewer(aboutAccount: false))
     }
 
     public func quoteTrade(token: String, buy: Bool, amount: Int64) async throws -> TradeQuote {
@@ -378,8 +409,8 @@ public actor LiteAPI {
         return r.uri
     }
 
-    /// The launchpad's and the Moments contract's terms, read live from the contracts. Public.
-    public func economics() async throws -> StellarEconomics { try await request("GET", "economics", access: .public) }
+    /// The launchpad's and the Moments contract's terms, read live from the contracts. Public, like `earnMarkets`.
+    public func economics() async throws -> StellarEconomics { try await request("GET", "economics", access: .publicPending) }
 
     public func myLaunchpad() async throws -> StellarMyLaunchpad { try await request("GET", "launchpad/me") }
 
@@ -402,17 +433,17 @@ public actor LiteAPI {
     /// `filter`: "all", "collecting" or "closed"; nil asks for the server's default (all). A viewer read.
     public func moments(filter: String? = nil, limit: Int? = nil) async throws -> [StellarMoment] {
         struct R: Decodable { let moments: [StellarMoment] }
-        let r: R = try await request("GET", Self.path("moments", ["filter": filter, "limit": limit.map(String.init)]), access: .viewer)
+        let r: R = try await request("GET", Self.path("moments", ["filter": filter, "limit": limit.map(String.init)]), access: .viewer(aboutAccount: false))
         return r.moments
     }
 
     /// A viewer read. In the public view `you.spent` is nil, and `you` is nil without a viewer.
-    public func moment(_ id: Int) async throws -> StellarMomentDetail { try await request("GET", "moments/\(id)", access: .viewer) }
+    public func moment(_ id: Int) async throws -> StellarMomentDetail { try await request("GET", "moments/\(id)", access: .viewer(aboutAccount: false)) }
 
-    /// A viewer read: the session's editions, or the viewer's.
+    /// A viewer read about the account: the session's editions, or the viewer's.
     public func ownedEditions() async throws -> [StellarEdition] {
         struct R: Decodable { let editions: [StellarEdition] }
-        let r: R = try await request("GET", "moments/owned", access: .viewer)
+        let r: R = try await request("GET", "moments/owned", access: .viewer(aboutAccount: true))
         return r.editions
     }
 
@@ -476,8 +507,8 @@ public actor LiteAPI {
         return r.items
     }
 
-    /// Public.
-    public func prices() async throws -> StellarPrices { try await request("GET", "prices", access: .public) }
+    /// Public, like `earnMarkets`.
+    public func prices() async throws -> StellarPrices { try await request("GET", "prices", access: .publicPending) }
 
     // ---------------------------------------------------------------------------------------------- transport
 
@@ -548,8 +579,7 @@ public actor LiteAPI {
     /// One call, as its route's class has it (`Access`); the body of its answer.
     func send(_ method: String, _ path: String, body: Data?, access: Access, timeout: TimeInterval) async throws -> Data {
         guard access != .public, let sent = token else {
-            if access == .session { throw LiteAPIError.notSignedIn }
-            return try await exchange(method, access == .viewer ? viewing(path) : path, body: body, token: nil, timeout: timeout)
+            return try await exchange(method, try withoutSession(path, access), body: body, token: nil, timeout: timeout)
         }
         let (data, status) = try await answer(method, path, body: body, token: sent, timeout: timeout)
         if status != 401 { return try Self.accepted(data, status: status) }
@@ -559,8 +589,7 @@ public actor LiteAPI {
             if status != 401 { return try Self.accepted(data, status: status) }
             drop(fresh)
         }
-        guard access == .viewer else { throw LiteAPIError.notSignedIn }
-        return try await exchange(method, viewing(path), body: body, token: nil, timeout: timeout)
+        return try await exchange(method, try withoutSession(path, access), body: body, token: nil, timeout: timeout)
     }
 
     /// Runs the renewal after `refused` was refused, once for every request it refused: a request refused while a
@@ -593,10 +622,22 @@ public actor LiteAPI {
         tokenExpiry = nil
     }
 
-    /// A viewer route's path asking for the public view of `viewerAddress` (with none, the route's own public answer).
-    private func viewing(_ path: String) -> String {
-        guard let viewerAddress, let address = viewerAddress.addingPercentEncoding(withAllowedCharacters: Self.unreserved) else { return path }
-        return path + (path.contains("?") ? "&" : "?") + "address=" + address
+    /// A request's path without a session: a public route's as it is, a viewer route's asking for the public view of
+    /// `viewerAddress` (a board's or a page's as it is when there is none). A session route, or one about an account
+    /// with no viewer, isn't asked: `notSignedIn`.
+    private func withoutSession(_ path: String, _ access: Access) throws -> String {
+        switch access {
+        case .public, .publicPending:
+            return path
+        case .viewer(let aboutAccount):
+            guard let viewerAddress, let address = viewerAddress.addingPercentEncoding(withAllowedCharacters: Self.unreserved) else {
+                if aboutAccount { throw LiteAPIError.notSignedIn }
+                return path
+            }
+            return path + (path.contains("?") ? "&" : "?") + "address=" + address
+        case .session:
+            throw LiteAPIError.notSignedIn
+        }
     }
 
     /// One request; the answer's body as `accepted` reads it.

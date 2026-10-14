@@ -37,17 +37,20 @@ optional in Swift.
   own history and every write do.
   - **public**: no token, and nothing about any account: `auth/*`, `config`, `fees`, `markets*`, `prices`,
     `economics`, `earn/markets`, `earn/history` and the local media stand-in's reads. They read only the database,
-    the in-isolate caches and cached contract views, and answer with `Cache-Control: public, max-age=30`. The phone
-    never sends them the token.
+    the in-isolate caches and cached contract views, and answer with `Cache-Control: public, max-age=30`. They
+    ignore an `Authorization` header, never refuse it. The phone sends them no token, except `prices`, `economics`,
+    `earn/markets` and `earn/history` while it holds one: until WP-13, WP-14 and WP-15 serve those without a session,
+    today's server still asks for it there.
   - **viewer**: a session is optional: `GET /v1/account`, `/v1/holdings`, `/v1/earn/positions`, `/v1/moments/owned`,
     `/v1/launches`, `/v1/launches/:token`, `/v1/moments`, `/v1/moments/:id` and `/v1/assets`. With a valid
     `authorization: Bearer <token>` (§2): the **owner view** of the token's account, `"view": "owner"`. With no
     `Authorization` header: the **public view** for `?address=G…`, `"view": "public"`: on-chain facts only, every
     field from DyorHQ's own history `null` (§2, "Public views"), `Cache-Control: public, max-age=15`. A route about an
-    account (`account`, `holdings`, `earn/positions`, `moments/owned`) answers 400 `address_required` with neither;
-    the boards, a launch and a Moment answer without `?address=`, with no `you`. A token that is present but invalid
-    or expired gets 401, never the public view, so the phone renews instead of silently getting less. The public view
-    never checks the tester list and answers every valid G… alike.
+    account (`account`, `holdings`, `earn/positions`, `moments/owned`) answers 400 `address_required` with neither
+    (the phone doesn't ask it then: `LiteAPIError.notSignedIn`); the boards, a launch and a Moment answer without
+    `?address=`, with no `you`. A token that is present but invalid or expired gets 401, never the public view, so the
+    phone renews instead of silently getting less. The public view never checks the tester list and answers every
+    valid G… alike.
   - **session**: the token is required: DyorHQ's history (`portfolio`, `activity`, `launchpad/me`, `moments/mine`,
     `tx/:hash`) and every write, quote or plan (`account/activate|trust|faucet`, `recipient`, `send`, `plans/*`,
     `tx/submit`, `swap/*`, `earn/build`, the `launches/*` writes and quotes, the `moments/*` writes, `media/*`,
@@ -193,8 +196,10 @@ user signs out of Stellar or of the app, or erases this iPhone.
 **What the phone does.** It renews the session before the access token ends (10 minutes before `expiresAt` while the
 app is active). On a 401 to a request that carried the token, `LiteAPI` runs one renewal, shared by every request
 refused meanwhile, and tries each of them once more. A renewal is `auth/refresh` with the stored refresh token, then,
-for a seed account, the silent sign-in above. When neither works, a viewer request is answered with the public view and
-a session request reports that the user needs to sign in. None of this asks for Face ID, the passcode or a passkey.
+for a seed account, the silent sign-in above. The phone never presents a refresh token twice (that would revoke its
+own family): refreshes of one token at the same time share one request, and a token it already rotated is replaced by
+its successor. When neither works, a viewer request is answered with the public view and a session request reports
+that the user needs to sign in. None of this asks for Face ID, the passcode or a passkey.
 
 **Public views** (viewer routes without a token, §0): the owner view's shape with `"view": "public"`. On-chain facts
 stay; DyorHQ's own history is `null`:
@@ -741,10 +746,11 @@ token). `<name>.public.json` is a viewer route's public view (§2); `account.mis
 - **`LiteClientTests`** decode every fixture with the model the client uses (`testDecodesApiFixtures`), and fail when
   a model drops a field the fixture carries (each model is encoded back and compared), so a misspelt optional can't
   read as nil. `LiteAPIRouteTests` serve them from a stub server to check each `LiteAPI` method's route, its token
-  (none on the public routes; `?address=` on the viewer routes without one) and its error codes and details.
-  `LiteSessionAPITests` check the sign-in (a challenge of any other shape is never signed, a signature that isn't
-  SEP-53 is never sent), the refresh and the renewal (one for concurrent 401s, then one retry, then the public view or
-  `notSignedIn`).
+  (none on the public routes but the four still guarded; `?address=` on the viewer routes without one, and no request
+  about an account without a viewer) and its error codes and details. `LiteSessionAPITests` check the sign-in (a
+  challenge of any other shape is never signed, a signature that isn't SEP-53 is never sent), the refresh (one request
+  for refreshes of one token at once, never a rotated token again) and the renewal (one for concurrent 401s, then one
+  retry, then the public view or `notSignedIn`). `SavedSessionTests` check the Keychain item's format.
 - **Backend packages** add `<area>_fixtures.test.ts`, which produce their answers from seeded data and compare them
   with these files. A deliberate change to an answer changes its fixture, the Swift model and `contract.ts` together:
   a fixture field missing from `contract.ts` fails `fixtures.test.ts`, one the Swift model drops fails

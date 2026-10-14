@@ -77,12 +77,12 @@ final class ApiFixtureTests: XCTestCase {
         "market-history": (roundTrip(StellarPriceHistory.self), []),
         "assets": (roundTrip(Listed<StellarAssetResult>.self), []),
         "prices": (roundTrip(StellarPrices.self), []),
-        "holdings": (roundTrip(StellarHoldings.self), []),
+        // StellarHoldings (Models+Portfolio.swift) and StellarLaunchBoard (Models+Launch.swift) don't keep `view` yet.
+        "holdings": (roundTrip(StellarHoldings.self), ["view"]),
         "holdings.partial": (roundTrip(StellarHoldings.self), []),
-        // StellarHoldings (Models+Portfolio.swift) doesn't keep the public view's `view` yet.
         "holdings.public": (roundTrip(StellarHoldings.self), ["view"]),
         "portfolio": (roundTrip(StellarPortfolio.self), []),
-        "launches": (roundTrip(StellarLaunchBoard.self), []),
+        "launches": (roundTrip(StellarLaunchBoard.self), ["view"]),
         "launches.legacy": (roundTrip(StellarLaunchBoard.self), []),
         "launch": (roundTrip(StellarLaunchDetail.self), []),
         "launch.legacy": (roundTrip(StellarLaunchDetail.self), []),
@@ -286,6 +286,8 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertNil(positions.positions?.first?.deposited)
         XCTAssertEqual(try ApiFixtures.decode("earn-positions", as: Listed<EarnPosition>.self).view, "owner")
         XCTAssertEqual(try ApiFixtures.decode("moments-owned.public", as: Listed<StellarEdition>.self).editions?.map(\.tokenId), [7, 8])
+        XCTAssertEqual(try ApiFixtures.decode("moments", as: Listed<StellarMoment>.self).view, "owner")
+        XCTAssertEqual(try ApiFixtures.decode("assets", as: Listed<StellarAssetResult>.self).view, "owner")
 
         let launch = try ApiFixtures.decode("launch.public", as: StellarLaunchDetail.self)
         XCTAssertEqual(launch.view, "public")
@@ -339,20 +341,50 @@ final class LiteAPIRouteTests: XCTestCase {
         try await expect("GET", "/v1/markets/XLM/history?range=week", token: false, fixture: "market-history") {
             _ = try await $0.marketHistory("XLM", range: .week)
         }
-        try await expect("GET", "/v1/economics", token: false, fixture: "economics") { _ = try await $0.economics() }
-        try await expect("GET", "/v1/earn/markets", token: false, fixture: "earn-markets") { _ = try await $0.earnMarkets() }
-        try await expect("GET", "/v1/earn/history?pool=CPOOL&asset=CXLM&range=week", token: false, fixture: "earn-history") {
-            _ = try await $0.earnHistory(pool: "CPOOL", asset: "CXLM", range: .week)
-        }
-        try await expect("GET", "/v1/prices", token: false, fixture: "prices") { _ = try await $0.prices() }
     }
 
-    /// Without a session, the viewer routes ask for the viewer's public view, and the session routes ask nothing.
+    /// The public routes today's server still guards (`Access.publicPending`) carry the session while one is held, and
+    /// nothing else without one: no token, no address.
+    func testGuardedPublicReadsCarryTheSessionWhileOneIsHeld() async throws {
+        for signedIn in [true, false] {
+            if !signedIn {
+                api = LiteAPI(baseURL: URL(string: base)!, session: StubServer.session)
+                await api.setViewer(address: "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH")
+            }
+            try await expect("GET", "/v1/economics", token: signedIn, fixture: "economics") { _ = try await $0.economics() }
+            try await expect("GET", "/v1/earn/markets", token: signedIn, fixture: "earn-markets") { _ = try await $0.earnMarkets() }
+            try await expect("GET", "/v1/earn/history?pool=CPOOL&asset=CXLM&range=week", token: signedIn, fixture: "earn-history") {
+                _ = try await $0.earnHistory(pool: "CPOOL", asset: "CXLM", range: .week)
+            }
+            try await expect("GET", "/v1/prices", token: signedIn, fixture: "prices") { _ = try await $0.prices() }
+        }
+    }
+
+    /// Without a session, the viewer routes ask for the viewer's public view, and the session routes ask nothing. With
+    /// no viewer either, a board or a page asks without one, and a read about an account isn't asked.
     func testViewerReadsWithoutASessionAskForThePublicView() async throws {
         api = LiteAPI(baseURL: URL(string: base)!, session: StubServer.session)
         let viewer = "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH"
         try await expect("GET", "/v1/launches?section=explore&sort=newest", token: false, fixture: "launches") {
             _ = try await $0.launchBoard(section: "explore", sort: "newest")
+        }
+        try await expect("GET", "/v1/moments", token: false, fixture: "moments") { _ = try await $0.moments() }
+        try await expect("GET", "/v1/launches/CTOKEN?candles=5m", token: false, fixture: "launch.public") { _ = try await $0.launch("CTOKEN") }
+        let aboutAnAccount: [(String, (LiteAPI) async throws -> Void)] = [
+            ("account", { _ = try await $0.account() }),
+            ("holdings", { _ = try await $0.holdings() }),
+            ("earn/positions", { _ = try await $0.earnPositions() }),
+            ("moments/owned", { _ = try await $0.ownedEditions() }),
+        ]
+        for (route, read) in aboutAnAccount {
+            StubServer.serve(try ApiFixtures.data("error-address-required"), status: 400)
+            do {
+                try await read(api)
+                XCTFail("\(route) was asked about no account")
+            } catch let error as LiteAPIError {
+                XCTAssertEqual(error, .notSignedIn, route)
+            }
+            XCTAssertNil(StubServer.taken(), "\(route) was sent")
         }
         await api.setViewer(address: viewer)
         try await expect("GET", "/v1/account?address=\(viewer)", token: false, fixture: "account.public") {
