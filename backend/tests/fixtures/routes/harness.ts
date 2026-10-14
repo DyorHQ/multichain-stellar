@@ -85,8 +85,8 @@ class FakeQuery implements PromiseLike<Row[]> {
   }
 }
 
-/** A stand-in for postgres.js: tagged queries (and fragments inside them), sql.json, sql.begin and sql.end. A query
- *  runs when it is awaited, as with postgres.js, so a fragment never reaches the responder on its own. */
+/** A stand-in for postgres.js: tagged queries (and fragments inside them), sql.unsafe, sql.json, sql.begin and
+ *  sql.end. A query runs when it is awaited, as with postgres.js, so a fragment never reaches the responder alone. */
 export function fakeSql(respond: Responder): postgres.Sql {
   const tag = (strings: TemplateStringsArray, ...values: unknown[]) => {
     let text = strings[0];
@@ -104,6 +104,7 @@ export function fakeSql(respond: Responder): postgres.Sql {
     return new FakeQuery(text.replace(/\s+/g, " ").trim(), params, respond);
   };
   const sql: any = Object.assign(tag, {
+    unsafe: (text: string, params: unknown[] = []) => new FakeQuery(text.replace(/\s+/g, " ").trim(), params, respond),
     json: (v: unknown) => v,
     begin: async (fn: (tx: unknown) => unknown) => await fn(sql),
     end: async () => {},

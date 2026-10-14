@@ -70,8 +70,10 @@ async function phase(name: string, fn: () => Promise<string>) {
 }
 
 async function indexer() {
-  const mod = await import("../../supabase/functions/lite-indexer/index.ts");
-  return { events: await mod.indexEvents(), settled: await mod.settlePending(), graduated: await mod.keeper() };
+  const { indexEvents } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
+  const { settlePending } = await import("../../supabase/functions/lite-indexer/jobs/settle.ts");
+  const { graduate } = await import("../../supabase/functions/lite-indexer/jobs/graduate.ts");
+  return { events: await indexEvents(), settled: await settlePending(), graduated: await graduate() };
 }
 
 function bal(acct: any, id: string): bigint {
