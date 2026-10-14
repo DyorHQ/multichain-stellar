@@ -49,29 +49,36 @@ export async function accountViewer(req: Request): Promise<Viewer & { address: s
   return { address: v.address, scope: v.scope };
 }
 
+/** The JSON object a request carries. Other JSON (null, an array, a string, a number) reads as an empty object, so its
+ *  fields count as missing (400 or 401) instead of failing the request as 500. */
+async function readBody<T>(req: Request): Promise<T> {
+  const body = await readJson<unknown>(req);
+  return (body !== null && typeof body === "object" && !Array.isArray(body) ? body : {}) as T;
+}
+
 export function register(router: Router): void {
   router.on("POST /v1/auth/challenge", async ({ req }) => {
     rateLimit(`ip:${clientIp(req)}`, 20);
-    const body = await readJson<{ address: string }>(req);
+    const body = await readBody<{ address: string }>(req);
     return json(await createChallenge(assertAccountId(body.address)));
   });
 
   router.on("POST /v1/auth/verify", async ({ req }) => {
     rateLimit(`ip:${clientIp(req)}`, 20);
-    const body = await readJson<{ address: string; nonce: string; signature: string; inviteCode?: string }>(req);
+    const body = await readBody<{ address: string; nonce: string; signature: string; inviteCode?: string }>(req);
     return json(await verifyChallenge(body));
   });
 
   router.on("POST /v1/auth/refresh", async ({ req }) => {
     rateLimit(`refresh:${clientIp(req)}`, 30);
-    const body = await readJson<{ address: string; refreshToken: string }>(req);
+    const body = await readBody<{ address: string; refreshToken: string }>(req);
     return json(await refreshSession(body));
   });
 
   // 204 whatever the body holds: the answer says nothing about which refresh tokens exist.
   router.on("POST /v1/auth/signout", async ({ req }) => {
     rateLimit(`signout:${clientIp(req)}`, 20);
-    const body = await readJson<{ refreshToken?: unknown }>(req).catch(() => ({ refreshToken: undefined }));
+    const body = await readBody<{ refreshToken?: unknown }>(req).catch(() => ({ refreshToken: undefined }));
     await revokeSession(body.refreshToken);
     return new Response(null, { status: 204 });
   });

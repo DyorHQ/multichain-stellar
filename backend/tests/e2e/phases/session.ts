@@ -1,7 +1,7 @@
 // session: sessions without gating (docs/DESIGN-stellar-parity.md §5.9, §6.18, §12.6). A first sign-in needs an invite
 // only where config.inviteRequired, and registers the tester otherwise; verify hands out a refresh token, stored only as
 // its SHA-256; a refresh rotates it; presenting a spent one ends its family, successor included; sign-out ends a family
-// and answers 204 for any token; a revoked tester's refresh gets 403. On a stack with short sessions
+// and answers 204 for any token or body; a revoked tester's refresh gets 403. On a stack with short sessions
 // (LITE_JWT_TTL_S, local-stack.sh --short-sessions), a request after the access token expired gets 401 and succeeds
 // after one refresh. The viewer routes whose handlers already serve the public view answer it for ?address= with no
 // token. The phase signs in throwaway accounts of its own, so it runs with or without the auth phase.
@@ -107,6 +107,10 @@ export default async function session(t: E2E): Promise<string> {
     const a = await signout(unknown);
     if (a.status !== 204) throw new Error(`sign-out of ${String(unknown)}: expected 204, got ${a.status}`);
   }
+  // A body that isn't a JSON object reads as one with no fields.
+  const nullBody = await call("POST", "/auth/signout", null);
+  if (nullBody.status !== 204) throw new Error(`sign-out with a null body: expected 204, got ${nullBody.status}`);
+  expect(await call("POST", "/auth/refresh", null), 400, "bad_address", "a refresh with a null body");
 
   // 6. Short sessions: once the access token has expired, a request is refused and succeeds after one refresh.
   let expiry = `access tokens live ${lifetime} s, so expiry isn't waited for (run the stack with short sessions)`;
@@ -155,7 +159,7 @@ export default async function session(t: E2E): Promise<string> {
 
   return [
     `invites: ${invites}`,
-    "refresh rotates, a reused token ends its family, sign-out ends one (204 for any token), a revoked tester gets 403",
+    "refresh rotates, a reused token ends its family, sign-out ends one (204 for any token or body), a revoked tester gets 403",
     expiry,
     `public views: ${served.length ? served.join(", ") : "none served yet"}`,
     ...(waiting.length ? [`still asking for a session: ${waiting.join(", ")}`] : []),

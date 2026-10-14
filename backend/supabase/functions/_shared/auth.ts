@@ -101,7 +101,7 @@ export async function verifyChallenge(input: VerifyInput): Promise<AuthResult> {
   return { ...access, tester, refreshToken: refresh.token, refreshExpiresAt: refresh.expiresAt.toISOString() };
 }
 
-async function ensureTester(address: string, inviteCode?: string): Promise<{ address: string; label: string | null }> {
+async function ensureTester(address: string, inviteCode: unknown): Promise<{ address: string; label: string | null }> {
   const existing = await sql()`select address, label, revoked_at from lite.testers where address = ${address}`;
   if (existing.length > 0) {
     if (existing[0].revoked_at) throw forbidden("access_revoked", "Access to Stellar was turned off for this account.");
@@ -114,6 +114,7 @@ async function ensureTester(address: string, inviteCode?: string): Promise<{ add
     return { address, label: null };
   }
   // A code that is given is checked and used, invite gate or not.
+  if (typeof inviteCode !== "string") throw forbidden("bad_invite", "That code isn't valid, has expired or was already used.");
   const codeHash = hex(await sha256(inviteCode.trim().toUpperCase()));
   return await sql().begin(async (tx) => {
     const inv = await tx`
@@ -156,7 +157,8 @@ function revokeFamily(q: postgres.Sql, family: string) {
 export async function refreshSession(input: RefreshInput): Promise<AuthResult> {
   const address = assertAccountId(input.address);
   const hash = await refreshHash(input.refreshToken);
-  if (!hash) throw refreshInvalid();
+  // Before migration 12 no sign-in handed out a refresh token, so none can be valid.
+  if (!hash || !(await tableExists("lite.auth_refresh"))) throw refreshInvalid();
   const next = await newRefreshToken();
   // One transaction spends, checks and replaces the token. A refusal returns rather than throws, so that a family it
   // revokes stays revoked.
@@ -197,10 +199,10 @@ export async function refreshSession(input: RefreshInput): Promise<AuthResult> {
 }
 
 /** auth/signout: revokes the family of `refreshToken`. A token that is unknown, malformed or revoked already changes
- *  nothing, and the caller can't tell. */
+ *  nothing, and the caller can't tell; nor can it before migration 12, when no family exists. */
 export async function revokeSession(refreshToken: unknown): Promise<void> {
   const hash = await refreshHash(refreshToken);
-  if (!hash) return;
+  if (!hash || !(await tableExists("lite.auth_refresh"))) return;
   await sql()`
     update lite.auth_refresh set revoked_at = now()
      where family = (select family from lite.auth_refresh where token_hash = ${hash}) and revoked_at is null`;

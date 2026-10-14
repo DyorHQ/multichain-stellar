@@ -1,9 +1,10 @@
 // Sessions without gating (docs/DESIGN-stellar-parity.md §5.9, §6.18; §12.5): verify hands out a refresh token that
 // starts a family; a refresh spends it and hands out its successor; presenting a spent token revokes the family, its
 // successor included; unknown, expired and revoked tokens get refresh_invalid; a revoked tester gets 403 and the family
-// goes; sign-out revokes a family and answers 204 for any token; the access token lives an hour. Then the invite gate:
-// none on testnet (a first sign-in registers the tester), required with LITE_INVITE_REQUIRED=1 as on mainnet, an invite
-// that is given is still checked and used, and an existing tester's is ignored.
+// goes; sign-out revokes a family and answers 204 for any token and any body; the access token lives an hour; before
+// migration 12 a refresh is refused and a sign-out changes nothing. Then the invite gate: none on testnet (a first
+// sign-in registers the tester), required with LITE_INVITE_REQUIRED=1 as on mainnet, an invite that is given is still
+// checked and used, and an existing tester's is ignored.
 //
 // The database is a stand-in that answers _shared/auth.ts's own statements from rows held here, as Postgres would
 // (the statements themselves run on Postgres in backend/tests/sql/auth_refresh_test.sql and the e2e session phase).
@@ -55,6 +56,8 @@ class Tables {
   testers = new Map<string, Tester>();
   invites: Invite[] = [];
   refresh: RefreshRow[] = [];
+  /** Whether migration 12 has created lite.auth_refresh. */
+  migrated = true;
   /** Every statement and every parameter the code sent. */
   queries: string[] = [];
   sent: unknown[] = [];
@@ -76,6 +79,7 @@ class Tables {
   private answer(q: string, ps: unknown[]): Row[] {
     const now = new Date();
     const p = ps as any[];
+    if (!this.migrated && q.includes("lite.auth_refresh")) throw new Error('relation "lite.auth_refresh" does not exist');
     switch (q) {
       case "insert into lite.auth_nonces (nonce, address, message, expires_at) values (?, ?, ?, ?)":
         this.nonces.set(p[0], { address: p[1], message: p[2], used: false });
@@ -109,7 +113,7 @@ class Tables {
         this.testers.set(p[0], { address: p[0], invite_id: p[1], label: p[2], revoked_at: null });
         return [];
       case "select to_regclass(?) is not null as present":
-        return [{ present: true }];
+        return [{ present: p[0] !== "lite.auth_refresh" || this.migrated }];
       case "insert into lite.auth_refresh (family, address, token_hash, expires_at) values (?, ?, ?, ?)":
       case "insert into lite.auth_refresh (family, address, token_hash, expires_at) values (?, ?, ?, ?) returning id": {
         if (this.refresh.some((r) => r.token_hash === p[2])) throw new Error("duplicate key value violates unique constraint");
@@ -332,6 +336,11 @@ Deno.test("testnet: an invite that is given is still checked, and used", async (
   const db = new Tables();
   db.invites.push({ id: crypto.randomUUID(), code_hash: await hashOf("DYOR-ABCDE-FGHJK"), label: "Jay", max_uses: 1, uses: 0, expires_at: new Date(Date.now() + DAY) });
   assertEquals(await refusal(() => signIn(Keypair.random(), "DYOR-WRONG-CODE0")), [403, "bad_invite"]);
+  // A code that isn't a string is no code either.
+  for (const code of [5, true, { code: "DYOR-ABCDE-FGHJK" }]) {
+    assertEquals(await refusal(() => signIn(Keypair.random(), code as unknown as string)), [403, "bad_invite"], JSON.stringify(code));
+  }
+  assertEquals([db.testers.size, db.invites[0].uses], [0, 0]);
   const kp = Keypair.random();
   const v = await signIn(kp, " dyor-abcde-fghjk ");
   assertEquals([v.tester.label, db.invites[0].uses, db.testers.get(kp.publicKey())?.invite_id], ["Jay", 1, db.invites[0].id]);
@@ -399,11 +408,37 @@ Deno.test("POST /v1/auth/signout answers 204 with no body, for any token and any
   const kp = Keypair.random();
   db.tester(kp.publicKey());
   const v = await signIn(kp);
-  for (const body of [{ refreshToken: v.refreshToken }, { refreshToken: `lrt_${"C".repeat(43)}` }, {}, "not json", ""]) {
+  const bodies = [{ refreshToken: v.refreshToken }, { refreshToken: `lrt_${"C".repeat(43)}` }, {}, { refreshToken: 123 }, "null", "[]", '"x"', "7", "not json", ""];
+  for (const body of bodies) {
     const res = await post("/auth/signout", body);
     assertEquals([res.status, await res.text()], [204, ""], JSON.stringify(body));
   }
   assert(db.refresh.every((r) => r.revoked_at !== null));
+});
+
+Deno.test("a JSON body that isn't an object counts as one with no fields: 400 on challenge, verify and refresh", async () => {
+  new Tables();
+  for (const path of ["/auth/challenge", "/auth/verify", "/auth/refresh"]) {
+    for (const body of ["null", "[]", '"x"', "7"]) {
+      const res = await post(path, body, "192.0.2.11");
+      assertEquals([res.status, (await res.json()).error.code], [400, "bad_address"], `${path} ${body}`);
+    }
+  }
+});
+
+Deno.test("before migration 12: verify hands out no refresh token, a refresh gets refresh_invalid and sign-out 204", async () => {
+  const db = new Tables();
+  db.migrated = false;
+  const kp = Keypair.random();
+  db.tester(kp.publicKey());
+  const v = await signIn(kp);
+  assertEquals([v.refreshToken, v.refreshExpiresAt], [undefined, undefined]);
+  const token = `lrt_${"D".repeat(43)}`;
+  const out = await post("/auth/signout", { refreshToken: token }, "192.0.2.12");
+  assertEquals([out.status, await out.text()], [204, ""]);
+  const refreshed = await post("/auth/refresh", { address: kp.publicKey(), refreshToken: token }, "192.0.2.12");
+  assertEquals([refreshed.status, (await refreshed.json()).error.code], [401, "refresh_invalid"]);
+  assert(!db.queries.some((q) => q.includes("lite.auth_refresh")), "lite.auth_refresh was queried");
 });
 
 Deno.test("refresh is limited to 30 and sign-out to 20 a minute per IP", async () => {
