@@ -108,6 +108,24 @@ take_xcode() {
   case "$out" in *"acquired by"*) HELD=1 ;; esac
 }
 
+# Runs one of the public app's own scripts (app/scripts/dev), which take git's top level for the app's root. It gets
+# app/ as the top level: this repository's git directory, A as the work tree, and a temporary index with app/'s entries
+# (staged ones included) under their app paths (ios/…). Nothing is written to the repository.
+as_app_repo() { # command...
+  local index status=0
+  index="$(mktemp "${TMP%/}/verify-app-index.XXXXXX")"
+  rm -f "$index"
+  git -C "$S" ls-files -s -z -- app/ |
+    python3 -I -c 'import sys; sys.stdout.buffer.write(sys.stdin.buffer.read().replace(b"\tapp/", b"\t"))' |
+    GIT_INDEX_FILE="$index" git -C "$S" update-index -z --index-info || {
+    rm -f "$index"
+    return 2
+  }
+  GIT_DIR="$(git -C "$S" rev-parse --absolute-git-dir)" GIT_WORK_TREE="$A" GIT_INDEX_FILE="$index" "$@" || status=$?
+  rm -f "$index"
+  return "$status"
+}
+
 say "S = $S"
 say "A = $A"
 say "logs in $LOGS"
@@ -134,7 +152,7 @@ step V-APP "check-copies.py" "$IOS" python3 -I Internal/check-copies.py
 
 # V-STR
 step V-STR "check-lite-strings.py --enforce" "$IOS" python3 -I Internal/check-lite-strings.py --derived "$DD" --enforce
-step V-STR "check-strings.py --enforce" "$A" python3 -I scripts/dev/check-strings.py --enforce
+step V-STR "check-strings.py --enforce" "$A" as_app_repo python3 -I scripts/dev/check-strings.py --enforce
 
 # V-DYORKIT
 step V-DYORKIT "swift test" "$IOS/DyorKit" swift test

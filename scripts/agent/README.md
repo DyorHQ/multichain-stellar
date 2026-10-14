@@ -77,7 +77,9 @@ scripts/agent/scan-placeholders.sh $S
 - `verify-app.sh` takes the `xcode` lock once, before the first build, and gives it back after the last one
   (DyorKit's `swift test`), waiting for it up to `LOCK_WAIT` seconds (default 7200). It builds the internal project
   (Debug and Release) and the App Store project into one folder, `$A/ios/DerivedData-WP-xx`, then runs the checks
-  against the app copy's snapshot. It restores `app/ios/DyorKit/Package.resolved` on every exit, since `swift test`
+  against the app copy's snapshot. The public app's own `scripts/dev/check-strings.py` takes git's top level for the
+  app's root, so it runs with `app/` as the top level (a temporary index of `app/`'s entries; nothing is written to
+  the repository). It restores `app/ios/DyorKit/Package.resolved` on every exit, since `swift test`
   and the internal build rewrite it and DyorKit never changes (I2). `--clean` deletes the derived data and DyorKit's
   `.build` at the end when the run made them.
 - `verify-backend.sh` runs what `.github/workflows/backend.yml` runs: the type check of every entry point, the unit
