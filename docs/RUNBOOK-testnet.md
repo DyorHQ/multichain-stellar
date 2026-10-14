@@ -28,23 +28,48 @@ sponsor, the same way the in-app faucet does.
 
 ## 2. Contracts
 
-```bash
-cd contracts && ./build.sh && cargo test          # dist/*.wasm, spec-shaken, with SHA256SUMS
-cd .. && deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts.ts
-SPONSOR_PUBLIC=G… deno run -A --config backend/supabase/functions/deno.json backend/scripts/gen-pinned.ts
-```
+DyorHQ's own contracts are the launchpad and Moments, plus the launch-token code the launchpad deploys for each launch.
+The deployer becomes the admin of both. The other pinned contracts (the Soroswap and Aquarius routers, the Blend pool,
+Circle's CCTP messenger, the XLM and USDC token contracts) are third-party.
 
-The deploy script does six things:
+What the admin can do: set the economics, fees and snipe schedule of launches created from then on, pause new
+launches, set Moments' minimum prices and platform fee (capped at 10%), and hand admin over with `set_admin` (both
+keys sign). It can't touch a live curve, user funds, creator fees or the locked LP. There is no upgrade function: the
+code is immutable. The treasury is fixed at deployment.
 
-1. Uploads the three WASMs.
-2. Deploys the launchpad and Moments.
-3. Sets the economics: XLM phantom 2,000 / threshold 4,324.55; USDC phantom 200 / threshold 432.46; Moments min price 0.1.
-4. Extends the instances and code to 30 days.
-5. Writes `backend/supabase/functions/_shared/deployments/testnet.json`.
-6. Smoke-tests a launch, a publish and a collect.
+Needs Rust 1.91+ with the `wasm32v1-none` target (`rustup target add wasm32v1-none`) and Deno 2. No Stellar CLI:
+`build.sh` does its spec shaking, and the deploy script talks to testnet RPC itself. From the repository root:
 
-`gen-pinned.ts` then regenerates the contract allowlist the app pins. Commit both files: an app build refuses any
-contract that isn't pinned.
+1. **Build and test.** The build is reproducible: `dist/SHA256SUMS` matches the hashes in `testnet.json` for the same
+   sources.
+   ```bash
+   (cd contracts && ./build.sh && cargo test)
+   ```
+2. **Keys.** Either let the script create them, or bring your own.
+   - Fresh keys: move the old key file aside (`mv .secrets/testnet-deployer.env .secrets/testnet-deployer.<date>.env`).
+     The script then creates an admin and a treasury key, funds both through Friendbot, writes them to
+     `.secrets/testnet-deployer.env` (mode 600) and prints only their public keys.
+   - Your own: `read -rs DEPLOYER_SECRET && export DEPLOYER_SECRET` (the admin's `S…`, not echoed, not in the shell
+     history) and `export TREASURY_PUBLIC=G…`. Set both, or the script reads the old file.
+3. **Deploy.** Add `SKIP_SMOKE=1` to skip the smoke test.
+   ```bash
+   deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts.ts
+   ```
+   It uploads the three WASMs, deploys the launchpad and Moments, and sets the economics: XLM phantom 2,000 /
+   threshold 4,324.55; USDC phantom 200 / threshold 432.46; Moments minimum price 0.1. It then extends the instances and
+   code to 30 days, writes `backend/supabase/functions/_shared/deployments/testnet.json`, and smoke-tests a launch
+   ("CHECK"), a publish and a collect.
+4. **Pin them in the app.** The sponsor is the backend's fee payer (§1); it doesn't change with the contracts.
+   ```bash
+   SPONSOR_PUBLIC=G… deno run -A --config backend/supabase/functions/deno.json backend/scripts/gen-pinned.ts
+   ```
+5. **Commit** `testnet.json` and `PinnedContracts+Testnet.swift`: an app build refuses any contract that isn't pinned.
+6. **Restart the backend** on the new `testnet.json`: `backend/scripts/local-stack.sh stop` and `start`, or for the
+   hosted project `supabase functions deploy lite lite-indexer` (§3, step 4). On its next run the indexer sees the new
+   contracts, clears the launches and Moments it indexed for the old ones, and indexes from the new deployment's
+   ledger.
+7. **Ship a new internal build.** It pins the new contracts; older builds refuse them.
+8. **Keep the keys:** move `.secrets/testnet-deployer.env` (or your own key) to the password manager.
 
 ## 3. Supabase (the DyorHQ project, schema `lite`)
 

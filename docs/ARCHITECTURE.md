@@ -393,6 +393,11 @@ Profile (app): Network section (the chip, the chain, Stellar account → LiteAcc
 | Sponsor | Friendbot-funded account | Funded hot account + daily budget + alerts |
 | Supabase | DyorHQ project, schema `lite` | Revisit (DECISIONS #17): the sponsor then holds real XLM |
 
+Testnet needs no RPC account or key: SDF's public RPC, Horizon and Friendbot are free. The backend uses RPC and Horizon;
+the phone only reads RPC (`getLedgerEntries`) to check a launch token's code before it signs. It takes the URL from
+`/v1/config`, which returns `STELLAR_RPC_URL` when that is set. So on mainnet, a provider URL with a key in it would
+reach every phone: use a keyless endpoint for the phone, or proxy its one read through the API.
+
 ## 8. Security model
 
 | Threat | Control |

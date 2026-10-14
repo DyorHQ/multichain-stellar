@@ -12,6 +12,11 @@ import { keepAlive } from "../_shared/ttl.ts";
 
 const CURSOR = "events";
 
+/** What the indexed tables describe: the network and its launchpad and Moments contracts, kept with the cursor. */
+export function deploymentKey(net: { passphrase: string; contracts: { launchpad?: string | null; moments?: string | null } }): string {
+  return [net.passphrase, net.contracts.launchpad ?? "", net.contracts.moments ?? ""].join("|");
+}
+
 function contractIdOf(e: any): string {
   const c = e.contractId;
   if (!c) return "";
@@ -33,6 +38,7 @@ async function fetchMetadata(uri: string): Promise<{ title: string | null; media
 export async function indexEvents(): Promise<{ events: number; latest: number; reset: boolean }> {
   const net = env.network;
   const ids = [net.contracts.launchpad, net.contracts.moments].filter((x): x is string => Boolean(x));
+  const key = deploymentKey(net);
   const latest = (await rpcServer().getLatestLedger()).sequence;
   const cur = await sql()`select ledger, cursor, network_id from lite.indexer_cursors where name = ${CURSOR}`;
   let reset = false;
@@ -43,12 +49,22 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
     console.warn("testnet reset detected; indexed data cleared. Redeploy contracts (docs/RUNBOOK-testnet.md).");
     return { events: 0, latest, reset };
   }
+  let cursor: string | null = cur.length ? (cur[0].cursor as string | null) : null;
+  if (cur.length && cur[0].network_id !== key) {
+    // Other contracts than the indexed ones (deploy-contracts.ts ran again, no network reset): the rows describe
+    // contracts the app no longer pins, and the new Moments contract numbers its Moments from 1 again, which the old
+    // rows would shadow (`on conflict do nothing`). Start over from the new deployment's ledger.
+    reset = true;
+    await sql()`truncate lite.launch_trades, lite.launches, lite.moment_collects, lite.moments, lite.indexer_cursors`;
+    console.warn("new contracts detected; indexed data cleared, indexing again from their deploy ledger.");
+    cursor = null;
+  }
   if (ids.length === 0) return { events: 0, latest, reset };
 
   const deployLedger = Number((deployment as any).deployLedger ?? 0);
   const filters = [{ type: "contract", contractIds: ids }];
   const fromStart = () => ({ filters, limit: 500, startLedger: Math.max(deployLedger || latest - 100_000, latest - 110_000) });
-  let req: any = cur.length && cur[0].cursor ? { filters, limit: 500, cursor: cur[0].cursor } : fromStart();
+  let req: any = cursor ? { filters, limit: 500, cursor } : fromStart();
 
   let count = 0;
   // RPC scans a bounded ledger window per request and answers with a cursor at the window's end, so a page with
@@ -73,8 +89,8 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
       count++;
     }
     await sql()`
-      insert into lite.indexer_cursors (name, ledger, cursor, network_id) values (${CURSOR}, ${res.latestLedger}, ${res.cursor ?? null}, ${net.passphrase})
-      on conflict (name) do update set ledger = excluded.ledger, cursor = excluded.cursor, updated_at = now()`;
+      insert into lite.indexer_cursors (name, ledger, cursor, network_id) values (${CURSOR}, ${res.latestLedger}, ${res.cursor ?? null}, ${key})
+      on conflict (name) do update set ledger = excluded.ledger, cursor = excluded.cursor, network_id = excluded.network_id, updated_at = now()`;
     if (!res.cursor) break;
     if (cursorLedger(res.cursor) >= res.latestLedger - 1 && (res.events as any[]).length < 500) break;
     req = { filters, limit: 500, cursor: res.cursor };
