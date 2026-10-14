@@ -1,0 +1,42 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/send",
+    "body": {
+      "asset": "XLM",
+      "to": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+      "amount": "10000000",
+      "memo": "x",
+      "memoType": "emoji"
+    },
+    "auth": true
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "bad_memo",
+        "message": "memoType is text, id or hash.",
+        "detail": null
+      }
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/nope",
+    "auth": false
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "no_route",
+        "message": "No route for GET /functions/v1/lite/v1/nope",
+        "detail": null
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/launches?sort=hot&limit=5",
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "launches": [
+        {
+          "token": "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR",
+          "creator": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+          "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+          "name": "E2E Cat",
+          "symbol": "ECAT",
+          "uri": "",
+          "supply": "10000000000000000",
+          "quoteReserve": "300000000000",
+          "tokenReserve": "9000000000000000",
+          "realQuote": "1000000000",
+          "threshold": "50000000000",
+          "progress": 0.02,
+          "completed": false,
+          "graduated": false,
+          "pair": null,
+          "lastPrice": "0.0000333",
+          "volume": "1000000000",
+          "trades": 4,
+          "createdAt": "2026-10-13T07:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

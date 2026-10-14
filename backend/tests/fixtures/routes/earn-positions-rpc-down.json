@@ -1,0 +1,34 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/earn/positions",
+    "auth": true
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "internal",
+        "message": "Something went wrong on our side. Try again."
+      }
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

@@ -12,11 +12,23 @@ export function sql(): postgres.Sql {
   return client;
 }
 
+/** Unit tests answer queries with a stand-in instead of a database (backend/tests/fixtures/routes/harness.ts). */
+export function replaceSql(standIn: postgres.Sql | null): void {
+  client = standIn;
+}
+
 export async function closeDb(): Promise<void> {
   if (client) {
     await client.end({ timeout: 2 });
     client = null;
   }
+}
+
+/** True when `name` ("lite.job_runs") exists. Code that runs before a later migration has been applied (hosted
+ *  applies them by hand, in order) checks for that migration's tables first. */
+export async function tableExists(name: string): Promise<boolean> {
+  const rows = await sql()`select to_regclass(${name}) is not null as present`;
+  return Boolean(rows[0]?.present);
 }
 
 export type Json = Record<string, unknown> | unknown[];

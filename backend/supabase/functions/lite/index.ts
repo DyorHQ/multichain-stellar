@@ -278,11 +278,14 @@ router.on("GET /v1/prices", async ({ req }) => {
   return json(await prices());
 });
 
-Deno.serve((req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+/** The API's request handler. Running this file serves it; tests import it. */
+export function handle(req: Request): Promise<Response> {
+  if (req.method === "OPTIONS") return Promise.resolve(new Response(null, { status: 204 }));
   return router.handle(req).catch((err) => {
     if (err instanceof ApiError) return json({ error: { code: err.code, message: err.message } }, err.status);
     console.error(err);
     return json({ error: { code: "internal", message: "Something went wrong on our side." } }, 500);
   });
-});
+}
+
+if (import.meta.main) Deno.serve(handle);

@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/earn/build",
+    "body": {
+      "action": "borrow",
+      "pool": "C",
+      "asset": "XLM",
+      "amount": "1"
+    },
+    "auth": true
+  },
+  "response": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "bad_action",
+        "message": "action is deposit or withdraw.",
+        "detail": null
+      }
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}
