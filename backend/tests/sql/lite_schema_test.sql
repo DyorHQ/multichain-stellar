@@ -1,4 +1,7 @@
 -- Run after the migrations: psql -v ON_ERROR_STOP=1 -f lite_schema_test.sql
+-- One transaction, rolled back: the test leaves no row, table or truncation behind, even in a database in use.
+begin;
+
 -- 1. anon/authenticated can read or write nothing in schema lite.
 do $$
 declare t record; denied int := 0; total int := 0;
@@ -77,3 +80,5 @@ begin
   raise notice 'ok: lite_api works in lite and is refused outside it';
 end $$;
 drop table public.lite_api_sentinel;
+
+rollback;
