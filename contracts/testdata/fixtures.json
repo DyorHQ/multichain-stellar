@@ -1,0 +1,317 @@
+{
+  "fixtures": [
+    {
+      "file": "aquarius_router.wasm",
+      "contract_id": "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD",
+      "wasm_hash": "c99539b023df4a28d7857d33ca4c915c2e20fec04f12b125132b84fbdf94dad3",
+      "sha256": "c99539b023df4a28d7857d33ca4c915c2e20fec04f12b125132b84fbdf94dad3",
+      "network": "testnet",
+      "fetched_at": "2026-10-14T15:36:19Z",
+      "ledger": 5193718,
+      "notes": "Aquarius liquidity-pool router on testnet (contract_name AMMRouter, version 220). Its instance names aquarius_pool.wasm's hash as ConstantPoolHash and aquarius_token_share.wasm's as TokenHash, so new standard pools are deployed from exactly these two fixtures. Unlike its pools it has no constructor: the tests configure it with init_admin, set_privileged_addrs, set_pool_hash, set_token_hash, set_reward_token, set_pools_plane, init_config_storage, set_reward_boost_config and configure_init_pool_payment.",
+      "role": "router"
+    },
+    {
+      "file": "aquarius_pool.wasm",
+      "contract_id": "CCSXYUVLYALKJGIIYMGYLZI447VS6TDWFTVDL43B4IKK2WERHLWUVCRC",
+      "wasm_hash": "d691135aade93ff0f7c229e009cde042130a05124cf7202b03d11246b4f9b473",
+      "sha256": "d691135aade93ff0f7c229e009cde042130a05124cf7202b03d11246b4f9b473",
+      "network": "testnet",
+      "fetched_at": "2026-10-14T15:36:19Z",
+      "ledger": 5193718,
+      "notes": "The testnet XLM-AQUA standard (constant-product) pool with fee_fraction 30, pool index 9ac7a9cd... Its WASM is the router's ConstantPoolHash. The router deploys it and calls initialize_all; it holds the reserves itself and keeps its shares in a separate share token (share_id).",
+      "role": "standard_pool"
+    },
+    {
+      "file": "aquarius_token_share.wasm",
+      "contract_id": "CBDBKHQ47GQYGSIO4ZGIWCQJFWZXFOFKHTF34LTBSS76MBVPHZDKWECV",
+      "wasm_hash": "72eb5d52c532e78ccc6c8a7f8523c458e03764074717172f69c2539e754ce624",
+      "sha256": "72eb5d52c532e78ccc6c8a7f8523c458e03764074717172f69c2539e754ce624",
+      "network": "testnet",
+      "fetched_at": "2026-10-14T15:36:19Z",
+      "ledger": 5193718,
+      "notes": "The share token of the XLM-AQUA 0.3% pool (metadata: Pool Share Token, POOL, 7 decimals; admin = the pool). Its WASM is the router's TokenHash. SEP-41 transfer, balance and burn, but no total_supply: a pool's supply is pool.get_total_shares().",
+      "role": "share_token"
+    }
+  ],
+  "aquarius": {
+    "network": "testnet",
+    "checked_at": "2026-10-14",
+    "sources": "Read-only RPC only (getLedgerEntries through tools/fetch-fixtures.sh and simulateTransaction of view calls and unsigned simulations); nothing was signed or submitted and no key was used.",
+    "router": {
+      "contract_id": "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD",
+      "wasm_hash": "c99539b023df4a28d7857d33ca4c915c2e20fec04f12b125132b84fbdf94dad3",
+      "version": 220,
+      "constant_pool_hash": "d691135aade93ff0f7c229e009cde042130a05124cf7202b03d11246b4f9b473",
+      "token_hash": "72eb5d52c532e78ccc6c8a7f8523c458e03764074717172f69c2539e754ce624",
+      "emergency_mode": true,
+      "upgradeable": "Aquarius's admin can upgrade the router and its pools (commit_upgrade/apply_upgrade, FutureWASM) and kill deposits, swaps or claims per pool (risk R3). Before enabling or funding the venue, compare the live router wasm hash, ConstantPoolHash and TokenHash with this file; re-run the gate when any differs.",
+      "emergency_mode_note": "EmergencyMode is true on the testnet router, its config storage and the XLM-AQUA pool. Deposits, swaps and pool creation still simulate successfully on testnet (2026-10-14)."
+    },
+    "pool_payment": {
+      "getters": {
+        "asset": "get_init_pool_payment_token() -> Address",
+        "amount": "get_standard_pool_payment_amount() -> u128",
+        "to": "get_init_pool_payment_address() -> Address"
+      },
+      "asset": "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE",
+      "standard_amount": "10000000",
+      "stable_amount": "10000000",
+      "concentrated_amount": "10000000",
+      "to": "CBIEL5HBXWXYNYFVULPFZU5OZLZCCCIZXCY3KUDRFX4OFANEJJPIBXGG",
+      "note": "1 AQUA per new standard pool. No transfer when the pool exists or the amount is 0. exec-aquarius: max_pool_payment 10 AQUA; float target 50 AQUA on the owner's testnet, 10 AQUA on testnet-qa; keeper alert below 5 AQUA (F11)."
+    },
+    "standard_pool_index": {
+      "derivation": "sha256(xdr(Symbol standard) || xdr(Symbol 0x00) || xdr(u32 fee_fraction) || xdr(Symbol 0x00)), the same for every token set (dyor_common::aquarius::standard_pool_index)",
+      "fee_10": "b2e02fcfca6c96f8ad5cbd84e7784a777b36d9c96a2459402c4f458462aab7f0",
+      "fee_30": "9ac7a9cde23ac2ada11105eeaa42e43c2ea8332ca0aa8f41f58d7160274d718e",
+      "fee_100": "37b955f3708dae748cad465441fcad70b26ffe272385227a4a737234ae429bdf"
+    },
+    "token_order": "Every router call takes the token set sorted ascending by address; get_pools on an unsorted pair fails TokensNotSorted (2002). get_pools on a pair the router has never seen returns an empty map.",
+    "auth_trees": {
+      "init_standard_pool": "router.init_standard_pool(user, tokens, fee) > payment_token.transfer(user, payment_address, amount)",
+      "init_standard_pool_existing": "router.init_standard_pool(user, tokens, fee) with no sub-invocation",
+      "deposit": "router.deposit(user, tokens, index, desired, min_shares) > pool.deposit(user, desired, min_shares) > tokens[0].transfer(user, pool, a0), tokens[1].transfer(user, pool, a1)",
+      "withdraw": "router.withdraw(user, tokens, index, share_amount, min_amounts) > pool.withdraw(user, share_amount, min_amounts) > share_token.burn(user, share_amount)",
+      "swap": "router.swap(user, tokens, token_in, token_out, index, in_amount, out_min) > pool.swap(user, in_idx, out_idx, in_amount, out_min) > token_in.transfer(user, pool, in_amount)",
+      "contract_callers": "A contract that calls the router itself is authorized for that root call and pre-authorizes the nodes below it with authorize_as_current_contract (exec-aquarius: the payment transfer, and pool.deposit with its two transfers; lp-locker: pool.withdraw with the share burn)."
+    },
+    "events": {
+      "pool_created": {
+        "contract": "router",
+        "topics": [
+          "Symbol add_pool",
+          "Vec<Address> tokens"
+        ],
+        "data": [
+          "Address pool",
+          "Symbol pool_type (constant for a standard pool)",
+          "BytesN<32> pool_index",
+          "Vec<u32> init_args = [fee_fraction]"
+        ],
+        "note": "CT-15 pool discovery. Confirmed on the fixture (test the_router_announces_the_new_pool_with_add_pool) and by a testnet simulation."
+      }
+    },
+    "aqua": {
+      "code": "AQUA",
+      "issuer": "GAHPYWLK6YRN7CVYZOO4H3VDRZ7PVF5UJGLZCSPAEIKJE2XSWF5LAGER",
+      "sac": "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE",
+      "decimals": 7,
+      "note": "The router's pool payment asset and reward token on testnet."
+    },
+    "xlm_aqua_pool": {
+      "tokens": [
+        "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE"
+      ],
+      "xlm_sac": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "fee_fraction": 30,
+      "pool_index": "9ac7a9cde23ac2ada11105eeaa42e43c2ea8332ca0aa8f41f58d7160274d718e",
+      "pool": "CCSXYUVLYALKJGIIYMGYLZI447VS6TDWFTVDL43B4IKK2WERHLWUVCRC",
+      "share_token": "CBDBKHQ47GQYGSIO4ZGIWCQJFWZXFOFKHTF34LTBSS76MBVPHZDKWECV",
+      "reserves_at_check": [
+        "349583963389",
+        "7911445542969"
+      ],
+      "total_shares_at_check": "1625829750901",
+      "other_pools_of_the_pair": {
+        "standard_fee_10": "CA3ONLQ2ICEVLKPN6DVOISTH4P2Q6K5EDH6RFTVVQ3LCJ6CZLT2FD466",
+        "standard_fee_100": "CANU4PCJAKSTNCKX7UVICFIVM2MDAYGUPHBCMMZ7CIEDKHSUSH6UZECE",
+        "concentrated_fee_10": "CBLLSKUH6N6HGFV5MSAMMJWJFYNUFEH7EGH2T4HJKOVMIZNJ23BZSMCM",
+        "concentrated_fee_30": "CBEPUTV5IJHR75PKITMFDCWTTKEHLWDEUOARPNVIW52A3AHK7OLIFCEK"
+      },
+      "note": "Use the 0.3% standard pool for the float-funding swap (CT-11, V8)."
+    },
+    "float_funding_swap": {
+      "estimate": "router.estimate_swap(tokens: Vec<Address>, token_in: Address, token_out: Address, pool_index: BytesN<32>, in_amount: u128) -> u128",
+      "swap": "router.swap(user: Address, tokens: Vec<Address>, token_in: Address, token_out: Address, pool_index: BytesN<32>, in_amount: u128, out_min: u128) -> u128",
+      "also": "swap_chained(user, swaps_chain, token_in, in_amount, out_min) and swap_chained_strict_receive(user, swaps_chain, token_in, out_amount, max_in) for multi-hop routes",
+      "estimate_1_xlm_at_check": "225624945",
+      "estimate_60_xlm_at_check": "13514756656",
+      "note": "XLM to AQUA: tokens = [XLM SAC, AQUA SAC], token_in = XLM SAC, pool_index = the 0.3% index. At the check 1 XLM bought 22.56 AQUA, so the 50 AQUA float target costs about 2.3 XLM. The deployer needs an AQUA trustline first."
+    },
+    "error_codes": {
+      "router": [
+        101,
+        102,
+        103,
+        104,
+        201,
+        301,
+        302,
+        303,
+        305,
+        306,
+        307,
+        308,
+        309,
+        310,
+        311,
+        312,
+        313,
+        314,
+        315,
+        316,
+        317,
+        318,
+        319,
+        320,
+        321,
+        322,
+        323,
+        324,
+        325,
+        326,
+        401,
+        404,
+        501,
+        502,
+        503,
+        510,
+        701,
+        702,
+        2001,
+        2002,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2017,
+        2018,
+        2019,
+        2020,
+        2906,
+        2907,
+        2908
+      ],
+      "standard_pool": [
+        101,
+        102,
+        103,
+        104,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        305,
+        401,
+        404,
+        501,
+        502,
+        503,
+        510,
+        701,
+        702,
+        2001,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2017,
+        2018,
+        2019,
+        2020,
+        2906,
+        2907,
+        2908
+      ],
+      "share_token": [
+        101,
+        102,
+        103,
+        104,
+        201,
+        501,
+        502,
+        503,
+        510,
+        601,
+        602,
+        603,
+        604,
+        605,
+        606,
+        2906,
+        2907,
+        2908
+      ],
+      "in_dyorhq_namespace": false,
+      "note": "From the fixtures' contract specs; the highest is 2908, so none falls in 10_100-11_099 (V10, test no_aquarius_fixture_error_code_falls_in_the_dyorhq_namespace)."
+    },
+    "exec_aquarius_errors": {
+      "NotCaller": 10401,
+      "InvalidAmounts": 10402,
+      "UnsupportedFeeTier": 10403,
+      "PaymentUnavailable": 10404,
+      "PaymentTooHigh": 10405,
+      "PoolNotEmpty": 10406,
+      "LiquidityTooLow": 10407
+    },
+    "gate": {
+      "method": "contracts/exec-aquarius/src/test.rs runs the three fixtures in the soroban-sdk 26.1.1 test host, with the router configured like testnet (1 AQUA per standard pool) and stand-ins for the pools plane, config storage and reward boost feed, which no gate check depends on. Graduations run with enforced auth through a launchpad stand-in that calls try_graduate.",
+      "checks": {
+        "1": {
+          "check": "pool-creation payment getter and the auth trees of init_standard_pool and deposit",
+          "result": "pass",
+          "tests": [
+            "gate_1_payment_getter_and_the_auth_trees_of_init_standard_pool_and_deposit"
+          ]
+        },
+        "2": {
+          "check": "during deposit the launch token moves only executor to pool",
+          "result": "pass",
+          "tests": [
+            "gate_2_the_launch_token_moves_only_from_the_executor_to_the_pool",
+            "leftovers_go_back_to_the_source"
+          ]
+        },
+        "3": {
+          "check": "the reserve-holding address is the returned pool",
+          "result": "pass",
+          "tests": [
+            "gate_3_the_reserves_sit_at_the_returned_pool"
+          ]
+        },
+        "4": {
+          "check": "pool lookup for a token pair (get_pools), the pool's token list (get_tokens) and share_id",
+          "result": "pass",
+          "tests": [
+            "gate_4_pool_lookup_token_list_and_share_id"
+          ]
+        },
+        "5": {
+          "check": "withdraw by share amount",
+          "result": "pass",
+          "tests": [
+            "gate_5_withdraw_by_share_amount"
+          ]
+        }
+      },
+      "AQUARIUS_POOL_LOOKUP_OK": true,
+      "AQUARIUS_VENUE_OK": true,
+      "decision": "go: all five checks pass. Aquarius (standard pool, 0.3% tier) may be a creator-chosen graduation venue on testnet, behind CT-19's review; mainnet stays deferred (23.2)."
+    }
+  }
+}
