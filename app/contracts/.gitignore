@@ -1,0 +1,10 @@
+out/
+cache/
+broadcast/
+
+# redeploy script logs (kept locally, not in git)
+deployments/*.log
+
+# deploy script records that are not (yet) the live record: dry runs, and broadcasts awaiting promotion (script/README.md)
+deployments/dryrun-*.json
+deployments/pending-*.json

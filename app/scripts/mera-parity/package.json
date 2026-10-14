@@ -1,0 +1,18 @@
+{
+  "name": "dyorhq-mera-parity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Checks the Swift Mera port in ios/DyorKit against @category-labs/mera 0.2.0 (see parity.mjs).",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "parity": "node parity.mjs"
+  },
+  "dependencies": {
+    "@category-labs/mera": "0.2.0",
+    "@scure/bip32": "2.3.0",
+    "@scure/bip39": "2.3.0"
+  }
+}

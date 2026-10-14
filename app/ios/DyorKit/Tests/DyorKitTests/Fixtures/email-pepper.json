@@ -1,0 +1,12 @@
+{
+  "about": "e = SHA256(utf8(label + normalized)), normalized = EmailWallet.normalize(email) = Swift's email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(). Shared by EmailWalletTests (the app) and the email-pepper edge function's tests (normalizeEmail / emailHash in supabase/functions/email-pepper/index.ts): the server's hash of the email Privy attests must equal the app's e byte for byte. Computed with Swift on Apple's runtime. Beyond plain ASCII they pin the two places JavaScript's own trim()/toLowerCase() differ: U+200B is trimmed and U+FEFF is not, and a final capital sigma lowercases to U+03C3 (no final-sigma context).",
+  "label": "dyorhq/email-pepper/v1/email:",
+  "vectors": [
+    { "email": "  Alice.Test@Example.com \n", "normalized": "alice.test@example.com", "e": "2ecf504cb940af9ff3e0171edd90a0849991bb2273583a0cb2e46391cecc63ee" },
+    { "email": "vector@dyorhq.test", "normalized": "vector@dyorhq.test", "e": "2783f7c835521d160a765f298b86317c13ec8e2ad98ba8f4c795416ac90a11cf" },
+    { "email": " 　 \u0085\t\u000b\u000c\r Bob@Example.COM   ​", "normalized": "bob@example.com", "e": "d741aa636462aa4c1cb49db5f5c771aff590e2cbcbee3df30440a648a0dc72aa" },
+    { "email": "bom@example.com﻿", "normalized": "bom@example.com﻿", "e": "f57874b7f1fa5070ca9daa09e5e3088900e79b9ca2d4dcdc426b9ecb5cd6ce97" },
+    { "email": "ΟΔΥΣΣΕΥΣ@EXAMPLE.GR", "normalized": "οδυσσευσ@example.gr", "e": "36ef5b498459b13aa628c89b1285db78dfb1d956753556789221017e37f1e05b" },
+    { "email": "İK.ẞ@ÖRNEK.COM.TR", "normalized": "i̇k.ß@örnek.com.tr", "e": "ad3431bb13d0fbe8b36686216e3c055a2f4b7621137552d1dea7c6617efc98a1" }
+  ]
+}

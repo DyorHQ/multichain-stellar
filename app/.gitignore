@@ -1,0 +1,77 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/scripts/mera-parity/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# build output of the former web app (kept ignored so stale local folders never show up)
+/.next/
+/.vinext/
+/out/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+
+# former web hosting (same reason)
+.vercel
+
+# the former Expo prototype and its archive, if still present locally (not part of this repository)
+/mainstreet-app/
+/mainstreet-repo.tar.gz
+
+# TypeScript and tool output
+*.tsbuildinfo
+next-env.d.ts
+/dist/
+/.wrangler/
+/outputs/
+/work/
+
+# example env is safe to commit
+!.env.example
+
+# secrets and signing material that must never be committed (scripts/dev/forbidden-paths.sh and .leakguard enforce it)
+.dev.vars
+.dev.vars.*
+*.p8
+*.p12
+*.pfx
+*.key
+*.mobileprovision
+*.provisionprofile
+*.keystore
+*.jks
+*.kdbx
+Secrets.xcconfig
+
+# local AI-session settings and notes
+.claude/settings.local.json
+.claude/*.local.*
+CLAUDE.local.md
+
+# archives and exports: they embed every value the build saw
+*.xcarchive/
+*.ipa
+
+# deployment and tool logs
+*.log

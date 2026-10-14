@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+out = "out"
+test = "test"
+script = "script"
+libs = ["lib"]
+solc = "0.8.26"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+bytecode_hash = "none"
+gas_limit = "300000000"
+# Monad's contract-size cap is 128 KiB; LaunchpadFactory is ~25.5 KB (over Ethereum's 24 KB EIP-170).
+code_size_limit = 131072
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
+# Uniswap v4 core must keep its published optimizer settings to stay under the contract size limit.
+additional_compiler_profiles = [{ name = "v4core", via_ir = true, optimizer_runs = 44444444 }]
+compilation_restrictions = [{ paths = "lib/v4-core/src/**", optimizer_runs = 44444444 }]
+
+[fuzz]
+runs = 256
+
+[rpc_endpoints]
+monad = "https://rpc.monad.xyz"
+monad_testnet = "https://testnet-rpc.monad.xyz"

@@ -1,0 +1,139 @@
+// GENERATED — do not edit. Source: supabase/functions/_shared/history-scans.json.
+// Regenerate: deno run --allow-read --allow-write supabase/functions/_shared/gen_history_scans.ts
+export const HISTORY_SCANS = {
+  "version": 1,
+  "mirrors": "ios/DyorKit/Sources/DyorKit/Services/WalletHistory.swift (WalletHistoryScans), checked by ios/DyorKit/Tests/DyorKitTests/HistoryScanParityTests.swift and supabase/tests/history_cache_test.ts",
+  "appTransferWindow": {
+    "days": 30,
+    "secondsPerBlock": 0.3023,
+    "blocks": 8574264
+  },
+  "scans": [
+    {
+      "id": "launchpad",
+      "kind": "global",
+      "walletTopic": 1,
+      "floor": 103542521,
+      "addresses": [],
+      "events": [
+        {
+          "signature": "CurveBuy(address,address,uint256,uint256,uint256,uint256)",
+          "topic": "0xec36bf571f136799e8dc0b0b8bea4b04d8bd3d43de838aab0d5fc21d4cbfc455"
+        },
+        {
+          "signature": "CurveSell(address,address,uint256,uint256,uint256,uint256)",
+          "topic": "0x8113d738abdcb6b38357e9d53a54a7157861a09031b453651f0fe7fe151f59df"
+        },
+        {
+          "signature": "Paid(address,uint256)",
+          "topic": "0x737c69225d647e5994eab1a6c301bf6d9232beb2759ae1e27a8966b4732bc489"
+        },
+        {
+          "signature": "PaidToken(address,address,uint256)",
+          "topic": "0x8e75d141563dab9e2b7c297c2c15c67d7553b6201efe3c78fb9a1805e71c3d19"
+        },
+        {
+          "signature": "Claimed(address,uint256)",
+          "topic": "0xd8138f8a3f377c5259ca548e70e4c2de94f129f5a11036a15b69513cba2b426a"
+        },
+        {
+          "signature": "ClaimedToken(address,address,uint256)",
+          "topic": "0xdbc1ea3a8459e4c7e11fb385b52bbb5cc8c8ab85eec5d883ac9aa78c171f5141"
+        }
+      ]
+    },
+    {
+      "id": "fee-sharing",
+      "kind": "global",
+      "walletTopic": 2,
+      "floor": 103542521,
+      "addresses": [
+        "0x0c7a1f7625696babf9a7309ed3c4a9086efee8dd",
+        "0x1413cb051f78a4605cd150d4e97b1b06f81e2bdf",
+        "0x5358a136a50ee4f961b532064dc641e8f4fa5656",
+        "0x70f8f64c6a4a76a507e322bcef19e6e37abe4ef6",
+        "0xc618bb26bbc3c84c30519f31e32ee52ea2bfac52"
+      ],
+      "events": [
+        {
+          "signature": "Claimed(address,address,uint256)",
+          "topic": "0xf7a40077ff7a04c7e61f6f26fb13774259ddf1b6bce9ecf26a8276cdd3992683"
+        }
+      ]
+    },
+    {
+      "id": "moments",
+      "kind": "global",
+      "walletTopic": 2,
+      "floor": 105347754,
+      "addresses": [
+        "0x05584910ab57d65723eb878d295b3353a4cbb021",
+        "0x0fd4ac52bbf387dbb3156805769bfc0c260f7e26",
+        "0x360e2068eaec5b5a9af60a7c4059bd4b30b7209c",
+        "0x501d703588c4feabbee5a9a77408c7fcbd3a20cc",
+        "0x64698c7702d85f87f43a6dff7d495cdd2327c020",
+        "0x6eb483c1e1be2b6700ad590dde326b597a13649a",
+        "0x8aa322471bef2996d3b50cb12f63c6a0054460cc",
+        "0x8f65ea0236b5fa6351a45bd48244c3525fb92493",
+        "0x95eb7f5a88b10d9df32ac54f48c767927fa80840",
+        "0xb4ee9e67d9e1772bc6949748e3755ea7c1dfe32c",
+        "0xb53897a4c6280480c267351518d184c2e6591d30",
+        "0xc12b6b6948185cef75f861c5327702c30cb8a581",
+        "0xd5bfff467fdae04664357e75bf059986c41260cc",
+        "0xda7042cf42b26be4d6816c9eeb1b0bee8e3fe0cc",
+        "0xe087eff01c567f88a7cb6bdbdbf04b46fee56c99",
+        "0xe6beb4a10827a2e50b155b7386b1369d504186cc"
+      ],
+      "events": [
+        {
+          "signature": "Collected(uint256,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)",
+          "topic": "0xc475c499a9357ec964b24130f5e1e4b21748160d33ce0df8721acb1e370b7c96"
+        },
+        {
+          "signature": "Claimed(uint256,address,uint256,uint256)",
+          "topic": "0xd9cb1e2714d65a111c0f20f060176ad657496bd47a3de04ec7c3d4ca232112ac"
+        },
+        {
+          "signature": "Withdrawn(uint256,address,uint256)",
+          "topic": "0xcf7d23a3cbe4e8b36ff82fd1b05b1b17373dc7804b4ebbd6e2356716ef202372"
+        },
+        {
+          "signature": "FeesWithdrawn(uint256,address,uint256)",
+          "topic": "0x538e1189c5c6413ddd9194fe5e947ef693ea737bd368a9e0aca4c286854c9bd8"
+        },
+        {
+          "signature": "Published(uint256,address,address,address,uint256,uint16,uint256,uint256,uint64)",
+          "topic": "0xdb7fe8c848b875fe70036b24da1910e5e09c9ade908d9ddedbf970ae0fd7c8b7"
+        }
+      ]
+    },
+    {
+      "id": "transfers-in",
+      "kind": "wallet",
+      "walletTopic": 2,
+      "floor": 0,
+      "addresses": [],
+      "events": [
+        {
+          "signature": "Transfer(address,address,uint256)",
+          "topic": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        }
+      ],
+      "appFloor": "earliest(firstTransaction, appTransferWindow)"
+    },
+    {
+      "id": "transfers-out",
+      "kind": "wallet",
+      "walletTopic": 1,
+      "floor": 0,
+      "addresses": [],
+      "events": [
+        {
+          "signature": "Transfer(address,address,uint256)",
+          "topic": "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        }
+      ],
+      "appFloor": "earliest(firstTransaction, appTransferWindow)"
+    }
+  ]
+} as const;

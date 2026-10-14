@@ -1,0 +1,205 @@
+# XcodeGen spec for the native DyorHQ app. Regenerate the project with `xcodegen generate` from this folder.
+name: DyorHQ
+options:
+  bundleIdPrefix: fun.dyorhq
+  # English is the development language: the source of every string catalog (Localizable, InfoPlist, DyorKit's).
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  groupSortPosition: top
+
+configFiles:
+  Debug: DyorHQ/Config/Secrets.xcconfig
+  Release: DyorHQ/Config/Secrets.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: "$(DEVELOPMENT_TEAM)"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+
+packages:
+  DyorKit:
+    path: DyorKit
+  # 2.16.2+ is REQUIRED for TestFlight external testing / App Store: 2.15.0 statically bundled SwiftyJSON (on
+  # Apple's list of SDKs that must ship a privacy manifest + signature) without either, so every build was marked
+  # Invalid Binary by Beta App Review (ITMS-91061 / ITMS-91065) while internal testing — which skips that check —
+  # kept working. 2.16.2 removes the SwiftyJSON dependency (privy-io/privy-ios#86).
+  Privy:
+    url: https://github.com/privy-io/privy-ios
+    from: 2.16.2
+
+targets:
+  DyorHQ:
+    type: application
+    platform: iOS
+    sources:
+      - path: DyorHQ
+        excludes:
+          - "Config/*.xcconfig"
+    dependencies:
+      - package: DyorKit
+      - package: Privy
+        product: Privy
+    info:
+      path: DyorHQ/Info.plist
+      properties:
+        CFBundleDisplayName: DyorHQ
+        CFBundleName: DyorHQ
+        CFBundleShortVersionString: "1.1"
+        CFBundleVersion: "24"
+        # Only the languages that ship: a language is added here, and to the catalogs, once its translation is complete
+        # (scripts/dev/check-strings.py). The Language screen offers the bundle's languages (AppLanguage.shipped).
+        CFBundleLocalizations: [en, es, fr, zh-Hans, ko]
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Portrait-only phone app: opt out of iPad multitasking so a single orientation is valid (fixes App Store
+        # validation error 90474, which otherwise demands all four orientations for multitasking-capable bundles).
+        UIRequiresFullScreen: true
+        UIUserInterfaceStyle: Automatic
+        ITSAppUsesNonExemptEncryption: false
+        NSFaceIDUsageDescription: DyorHQ uses Face ID to unlock your wallet on this device.
+        NSPhotoLibraryUsageDescription: DyorHQ uses your photos to add a token image when you launch a coin.
+        CFBundleURLTypes:
+          - CFBundleURLName: fun.dyorhq.app
+            CFBundleURLSchemes: [dyorhq]
+        LSApplicationQueriesSchemes: [https]
+        # Values below are filled from Secrets.xcconfig at build time and read by AppConfig.swift. EVERYTHING here ships
+        # in plaintext inside the IPA, so only PUBLIC identifiers belong here — never an API key or a keyed URL
+        # (scripts/testflight.sh refuses to upload an archive that contains one).
+        PrivyAppID: "$(PRIVY_APP_ID)"
+        PrivyClientID: "$(PRIVY_CLIENT_ID)"
+        # Debug-only RPC override (a local anvil fork). Empty in Release by DYOR_DEBUG_RPC_OVERRIDE below, and ignored
+        # by Release code anyway: shipped builds use the keyless public Monad RPCs (Monad.publicRPCs).
+        MonadRPCURL: "$(DYOR_DEBUG_RPC_OVERRIDE)"
+        # SOCIAL_LOGINS_ENABLED=YES in Secrets.xcconfig shows Apple/Google sign-in (both live in the Privy dashboard
+        # since 2026-09-24). Unset resolves to false and onboarding hides them — they must stay together (App Review 4.8).
+        SocialLoginsEnabled: "$(SOCIAL_LOGINS_ENABLED)"
+        # Google Sans Medium, subset to the "Continue with Google" label (Google's sign-in branding guidelines).
+        UIAppFonts: [GoogleSans-Medium.ttf]
+        # Set PASSKEYS_ENABLED=YES to offer Mera passkey accounts next to the other sign-in methods, once passkeys are live
+        # (Associated Domains enabled on the App ID and the AASA served by Apple's CDN — see the entitlements below).
+        # Until then the UI hides passkey options. Unset resolves to false. The rpId is the constant Mera.relyingParty
+        # (accounts.dyorhq.fun), not a build setting. Privy passkeys are off whenever Mera is on: they'd share the rpId.
+        PasskeysEnabled: "$(PASSKEYS_ENABLED)"
+        PerplBuilderID: "$(PERPL_BUILDER_ID)"
+        # Debug-only contract overrides for a fork rehearsal of the v2 deploy (LAUNCHPAD_* and MOMENTS_* in the xcconfig).
+        # Empty in Release by the DYOR_DEBUG_* settings below, and ignored by Release code anyway: shipped builds use the
+        # v2 addresses baked into DyorKit.
+        LaunchpadFactory: "$(DYOR_DEBUG_LAUNCHPAD_FACTORY)"
+        LaunchRouter: "$(DYOR_DEBUG_LAUNCH_ROUTER)"
+        FeeEscrow: "$(DYOR_DEBUG_FEE_ESCROW)"
+        HolderFeeSharing: "$(DYOR_DEBUG_HOLDER_FEE_SHARING)"
+        MemeHook: "$(DYOR_DEBUG_MEME_HOOK)"
+        MomentsFactory: "$(DYOR_DEBUG_MOMENTS_FACTORY)"
+        MomentsCollect: "$(DYOR_DEBUG_MOMENTS_COLLECT)"
+        MomentsVesting: "$(DYOR_DEBUG_MOMENTS_VESTING)"
+        MomentsGraduation: "$(DYOR_DEBUG_MOMENTS_GRADUATION)"
+        MomentsLocker: "$(DYOR_DEBUG_MOMENTS_LOCKER)"
+        MomentsHook: "$(DYOR_DEBUG_MOMENTS_HOOK)"
+        MomentsBuyback: "$(DYOR_DEBUG_MOMENTS_BUYBACK)"
+        MomentsPlatform: "$(DYOR_DEBUG_MOMENTS_PLATFORM)"
+        MomentsTreasury: "$(DYOR_DEBUG_MOMENTS_TREASURY)"
+        MomentsDeployBlock: "$(DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK)"
+        # The Aurora API key is NOT here: it lives server-side in the aurora-proxy Edge Function (Supabase secret
+        # AURORA_API_KEY). The fee recipient is a public NEAR account name.
+        AuroraFeeRecipient: "$(AURORA_FEE_RECIPIENT)"
+    entitlements:
+      path: DyorHQ/DyorHQ.entitlements
+      # XcodeGen REWRITES DyorHQ.entitlements from these properties on every `xcodegen generate` — edit here, never the
+      # file. Sign in with Apple is on: PrivySDK runs Apple's native ASAuthorizationController, which needs this
+      # entitlement, and the Sign in with Apple capability is enabled on the fun.dyorhq.app App ID (primary App ID).
+      # Associated Domains: passkeys (Mera) bind to the rpId accounts.dyorhq.fun (Mera.relyingParty in DyorKit, which a
+      # DyorKit test keeps equal to this line). That host serves only
+      # https://accounts.dyorhq.fun/.well-known/apple-app-site-association (GitHub Pages, repo DyorHQ/accounts-domain).
+      # Moment links (MomentLink.host in DyorKit, pinned by the same test) are universal links on dyorhq.fun/moments/*:
+      # the website serves https://dyorhq.fun/.well-known/apple-app-site-association with applinks only. Applinks never
+      # go on the passkey host, and webcredentials never on dyorhq.fun. Never add ?mode=developer — it never associates
+      # in a distribution build. Device builds also need Associated Domains on the App ID. Don't install a device build
+      # until https://app-site-association.cdn-apple.com/a/v1/<host> serves each host's file: iOS caches a failed fetch
+      # until the build number changes.
+      properties:
+        com.apple.developer.applesignin: [Default]
+        com.apple.developer.associated-domains: ["webcredentials:accounts.dyorhq.fun", "applinks:dyorhq.fun"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fun.dyorhq.app
+        # iPhone-only (1). XcodeGen's iOS-app preset injects "1,2" (universal) at the target level, which overrode the
+        # project-level "1" and made the App Store validator demand all four orientations for iPad multitasking.
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+      configs:
+        # MONAD_RPC_URL (Secrets.xcconfig) reaches Info.plist in Debug only — a Release/TestFlight/App Store build
+        # can never bake a provider URL, keyed or not. The contract overrides likewise: a shipped build can't be pointed at
+        # other contracts.
+        Debug:
+          DYOR_DEBUG_RPC_OVERRIDE: "$(MONAD_RPC_URL)"
+          DYOR_DEBUG_LAUNCHPAD_FACTORY: "$(LAUNCHPAD_FACTORY)"
+          DYOR_DEBUG_LAUNCH_ROUTER: "$(LAUNCH_ROUTER)"
+          DYOR_DEBUG_FEE_ESCROW: "$(FEE_ESCROW)"
+          DYOR_DEBUG_HOLDER_FEE_SHARING: "$(HOLDER_FEE_SHARING)"
+          DYOR_DEBUG_MEME_HOOK: "$(MEME_HOOK)"
+          DYOR_DEBUG_MOMENTS_FACTORY: "$(MOMENTS_FACTORY)"
+          DYOR_DEBUG_MOMENTS_COLLECT: "$(MOMENTS_COLLECT)"
+          DYOR_DEBUG_MOMENTS_VESTING: "$(MOMENTS_VESTING)"
+          DYOR_DEBUG_MOMENTS_GRADUATION: "$(MOMENTS_GRADUATION)"
+          DYOR_DEBUG_MOMENTS_LOCKER: "$(MOMENTS_LOCKER)"
+          DYOR_DEBUG_MOMENTS_HOOK: "$(MOMENTS_HOOK)"
+          DYOR_DEBUG_MOMENTS_BUYBACK: "$(MOMENTS_BUYBACK)"
+          DYOR_DEBUG_MOMENTS_PLATFORM: "$(MOMENTS_PLATFORM)"
+          DYOR_DEBUG_MOMENTS_TREASURY: "$(MOMENTS_TREASURY)"
+          DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK: "$(MOMENTS_DEPLOY_BLOCK)"
+        Release:
+          DYOR_DEBUG_RPC_OVERRIDE: ""
+          DYOR_DEBUG_LAUNCHPAD_FACTORY: ""
+          DYOR_DEBUG_LAUNCH_ROUTER: ""
+          DYOR_DEBUG_FEE_ESCROW: ""
+          DYOR_DEBUG_HOLDER_FEE_SHARING: ""
+          DYOR_DEBUG_MEME_HOOK: ""
+          DYOR_DEBUG_MOMENTS_FACTORY: ""
+          DYOR_DEBUG_MOMENTS_COLLECT: ""
+          DYOR_DEBUG_MOMENTS_VESTING: ""
+          DYOR_DEBUG_MOMENTS_GRADUATION: ""
+          DYOR_DEBUG_MOMENTS_LOCKER: ""
+          DYOR_DEBUG_MOMENTS_HOOK: ""
+          DYOR_DEBUG_MOMENTS_BUYBACK: ""
+          DYOR_DEBUG_MOMENTS_PLATFORM: ""
+          DYOR_DEBUG_MOMENTS_TREASURY: ""
+          DYOR_DEBUG_MOMENTS_DEPLOY_BLOCK: ""
+    preBuildScripts:
+      # The v2 release gate on EVERY archive, however it is made (Product › Archive in Xcode included, not only Xcode
+      # Cloud's ci_post_xcodebuild.sh and scripts/testflight.sh, which keep their own check as a second layer):
+      # check-launchpad-addresses.py --release refuses while DyorKit's v2 addresses are PENDING or a retired Moments
+      # cohort is not final on chain (read-only calls to a public Monad RPC). Install (archive) builds only, whatever
+      # the configuration. User script sandboxing stays on: the files it reads under ios/ are declared below (the rest
+      # of the repo is outside the sandbox's SRCROOT denial). Never showEnvVars: the build settings hold
+      # Secrets.xcconfig's values.
+      - name: v2 Release Gate
+        runOnlyWhenInstalling: true
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        shell: /bin/sh
+        inputFiles:
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Launchpad/LaunchpadModels.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentsModels.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Services/Moments/MomentLink.swift
+          - $(SRCROOT)/DyorKit/Sources/DyorKit/Chain/Monad.swift
+          - $(SRCROOT)/DyorHQ/Config/Secrets.xcconfig
+        script: |
+          exec python3 "$SRCROOT/../scripts/dev/check-launchpad-addresses.py" --release
+    # Share the DyorHQ scheme (archive builds Release) for the Xcode Cloud workflow, as Apple's setup guide asks. XcodeGen
+    # writes no scheme unless asked; locally Xcode auto-creates one, which is why `-scheme DyorHQ` works there.
+    scheme: {}

@@ -1,0 +1,234 @@
+# gitleaks configuration for the leak-guard workflow (.github/workflows/leak-guard.yml), which runs gitleaks over the
+# commits of each push and pull request. It extends gitleaks' default rules (GitHub, AWS, Slack, Stripe, Anthropic,
+# OpenAI, Google, npm, age, PEM keys, JWTs, generic API keys and more) with this project's own, and allowlists the
+# public values the apps ship on purpose. scripts/dev/secret-scan.sh carries the same custom patterns, plus the local
+# .env / Secrets.xcconfig values and a BIP-39 seed-phrase check that one regex cannot do efficiently: keep them in step.
+# A finding on a value that is truly public gets an allowlist entry here (by value or path) — never a bare
+# `gitleaks:allow` — and the matching "@allow" line in .leakguard for secret-scan.sh. CI reads this file from the
+# default branch, so a change takes effect once it has merged.
+title = "DyorHQ leak guard"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "dyorhq-alchemy-rpc-url"
+description = "Alchemy keyed RPC URL"
+regex = '''alchemy(?:api)?\.(?:com|io)/v2/([A-Za-z0-9_-]{16,})'''
+keywords = ["alchemy"]
+
+[[rules]]
+id = "dyorhq-infura-rpc-url"
+description = "Infura keyed RPC URL"
+regex = '''infura\.io/v3/([0-9a-fA-F]{32})'''
+keywords = ["infura"]
+
+[[rules]]
+id = "dyorhq-quicknode-rpc-url"
+description = "QuickNode keyed RPC URL"
+regex = '''quiknode\.pro/([0-9a-fA-F]{16,})'''
+keywords = ["quiknode"]
+
+[[rules]]
+id = "dyorhq-chainstack-rpc-url"
+description = "Chainstack keyed RPC URL"
+regex = '''chainstack\.com/([0-9a-fA-F]{32})'''
+keywords = ["chainstack"]
+
+[[rules]]
+id = "dyorhq-drpc-rpc-url"
+description = "dRPC keyed RPC URL (dkey=)"
+regex = '''drpc\.org/[^\s"'\x60]*[?&](?i:dkey)=([A-Za-z0-9_-]{16,})'''
+keywords = ["drpc"]
+
+[[rules]]
+id = "dyorhq-ankr-rpc-url"
+description = "Ankr keyed RPC URL"
+regex = '''rpc\.ankr\.com/[A-Za-z0-9_]+/([0-9a-fA-F]{32,})'''
+keywords = ["ankr"]
+
+[[rules]]
+id = "dyorhq-blast-rpc-url"
+description = "Blast API keyed RPC URL"
+regex = '''blastapi\.io/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'''
+keywords = ["blastapi"]
+
+[[rules]]
+id = "dyorhq-getblock-rpc-url"
+description = "GetBlock keyed RPC URL"
+regex = '''getblock\.io/([0-9a-fA-F]{32})'''
+keywords = ["getblock"]
+
+[[rules]]
+id = "dyorhq-nodereal-rpc-url"
+description = "NodeReal keyed RPC URL"
+regex = '''nodereal\.io/v1/([0-9a-fA-F]{32})'''
+keywords = ["nodereal"]
+
+[[rules]]
+id = "dyorhq-tenderly-rpc-url"
+description = "Tenderly keyed RPC URL"
+regex = '''gateway\.tenderly\.co/([A-Za-z0-9]{20,})'''
+keywords = ["tenderly"]
+
+[[rules]]
+id = "dyorhq-rpc-url-path-key"
+description = "Keyed RPC URL (key in the path)"
+regex = '''(?i)https?://[^/\s"'\x60]*(?:rpc|node)[^/\s"'\x60]*/(?:[^\s"'\x60?#]*/)?([0-9a-f]{32,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#"'\x60\s]|$)'''
+keywords = ["rpc", "node"]
+
+[[rules]]
+id = "dyorhq-pimlico-keyed-url"
+description = "Pimlico keyed URL (apikey=)"
+regex = '''pimlico\.io/[^\s"'\x60]*[?&](?i:apikey)=([A-Za-z0-9_-]{8,})'''
+keywords = ["pimlico"]
+
+[[rules]]
+id = "dyorhq-pimlico-api-key"
+description = "Pimlico API key (pim_)"
+regex = '''\b(pim_[A-Za-z0-9]{20,})'''
+keywords = ["pim_"]
+
+[[rules]]
+id = "dyorhq-url-api-key"
+description = "API key or token in a URL query (apikey= / key= / access_token=)"
+regex = '''[?&](?i:api[_-]?key|d?key|access[_-]?token|auth[_-]?token)=([A-Za-z0-9_-]{16,})'''
+keywords = ["key=", "token="]
+
+[[rules]]
+id = "dyorhq-eth-key-assignment"
+description = "Private key assignment (KEY=0x + 64 hex, any case)"
+regex = '''(?i)[a-z0-9_]*key["']?\s*[:=]\s*["']?(0x[0-9a-f]{64})\b'''
+entropy = 3.0
+keywords = ["key"]
+[[rules.allowlists]]
+description = "A public key, not a private one"
+regexTarget = "match"
+regexes = ['''(?i)public|pubkey''']
+
+[[rules]]
+id = "dyorhq-eth-private-key"
+description = "Private key assignment (private_key / --private-key + 64 hex)"
+regex = '''(?i)private[_-]?key["']?(?:\s*[:=]\s*|\s+)["']?((?:0x)?[0-9a-f]{64})\b'''
+keywords = ["private"]
+
+[[rules]]
+id = "dyorhq-eth-key-call"
+description = "32-byte hex key passed to a key or wallet constructor"
+regex = '''(?i)(?:^|[^a-z0-9_])(?:private[a-z0-9_]*|privkey|secret[a-z0-9_]*|signing_?key|signer[a-z0-9_]*|wallet[a-z0-9_]*|from_key|keypair|key|pk|sk)["'\x60 \t]*[(:=][^"'\x60\n]{0,40}["'\x60](?:0x)?([0-9a-f]{64})["'\x60]'''
+
+[[rules]]
+id = "dyorhq-eth-key-literal"
+description = "32-byte hex key after a key-like name (deployerKey = 0x…, RELAYER_PK=…, Treasury key: …)"
+regex = '''(?i)(?:key|pk|priv|secret|seed|signer|deployer|owner|treasury|relayer|keeper|operator|wallet|mnemonic|broadcast|vm\.addr|vm\.sign)[^\n]{0,40}?(?:\b0x|[^0-9a-z_])([0-9a-f]{64})(?:[^0-9a-z_]|$)'''
+entropy = 3.0
+keywords = ["key", "pk", "priv", "secret", "seed", "signer", "deployer", "owner", "treasury", "relayer", "keeper", "operator", "wallet", "mnemonic", "broadcast", "vm.addr", "vm.sign"]
+[[rules.allowlists]]
+description = "A public key, not a private one"
+regexTarget = "line"
+regexes = ['''(?i)pub(?:lic)?[_-]?key[a-z0-9_]*["'\x60 \t]*[:=(]''']
+
+[[rules]]
+id = "dyorhq-eth-key-array"
+description = "32-byte hex key in a key-named array"
+regex = '''(?i)[a-z0-9_]*(?:priv|secret|signer|signing|wallet|mnemonic|seed|key)[a-z0-9_]*[ \t]*(?::[^=\n]*)?[=:][ \t]*\[[^\]]{0,400}?["'\x60](?:0x)?([0-9a-f]{64})["'\x60]'''
+
+[[rules]]
+id = "dyorhq-supabase-secret-key"
+description = "Supabase secret key (sb_secret_)"
+regex = '''\b(sb_secret_[A-Za-z0-9_-]{20,})'''
+keywords = ["sb_secret_"]
+
+[[rules]]
+id = "dyorhq-supabase-access-token"
+description = "Supabase access token (sbp_)"
+regex = '''\b(sbp_[0-9a-f]{40})\b'''
+keywords = ["sbp_"]
+
+[[rules]]
+id = "dyorhq-supabase-service-role-jwt"
+description = "Supabase service_role JWT"
+regex = '''\b(eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*(?:c2VydmljZV9yb2xl|NlcnZpY2Vfcm9sZ|zZXJ2aWNlX3JvbG)[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*)'''
+keywords = ["eyj"]
+
+[[rules]]
+id = "dyorhq-privy-app-secret"
+description = "Privy app secret (privy_app_secret_)"
+regex = '''\b(privy_app_secret_[A-Za-z0-9_-]{20,})'''
+keywords = ["privy_app_secret_"]
+
+[[rules]]
+id = "dyorhq-privy-authorization-key"
+description = "Privy authorization key (wallet-auth:)"
+regex = '''wallet-auth:([A-Za-z0-9+/]{40,}={0,2})'''
+keywords = ["wallet-auth:"]
+
+[[rules]]
+id = "dyorhq-aws-secret-access-key"
+description = "AWS secret access key assignment"
+regex = '''(?i)aws[a-z0-9_.-]{0,20}secret[a-z0-9_.-]{0,20}["']?\s*[:=]\s*["']?([A-Za-z0-9/+]{40})(?:[^A-Za-z0-9/+=]|$)'''
+keywords = ["aws"]
+
+[[rules]]
+id = "dyorhq-discord-webhook"
+description = "Discord webhook URL"
+regex = '''discord(?:app)?\.com/api/webhooks/[0-9]{15,}/([A-Za-z0-9_-]{30,})'''
+keywords = ["discord"]
+
+[[rules]]
+id = "dyorhq-openai-style-key"
+description = "OpenAI-style API key (sk-…)"
+regex = '''(?:^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9]{32,})(?:[^A-Za-z0-9_-]|$)'''
+keywords = ["sk-"]
+
+[[rules]]
+id = "dyorhq-telegram-bot-token"
+description = "Telegram bot token"
+regex = '''(?:^|[^0-9])([0-9]{8,10}:AA[0-9A-Za-z_-]{33})(?:[^0-9A-Za-z_-]|$)'''
+keywords = [":aa"]
+
+[[rules]]
+id = "dyorhq-uuid-key-variable"
+description = "UUID given to a key-named variable"
+regex = '''(?i)[a-z0-9_]*(?:key|secret|token)[a-z0-9_]*["']?\s*[:=]\s*["'\x60]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["'\x60]'''
+keywords = ["key", "secret", "token"]
+
+[[rules]]
+id = "dyorhq-known-secret-variable"
+description = "Known secret variable with a literal value"
+regex = '''(?:APP_JWT_SECRET|PRIVY_APP_SECRET|AURORA_API_KEY|SUPABASE_SERVICE_ROLE_KEY|SERVICE_ROLE_KEY|PINATA_JWT|PINATA_API_KEY|PINATA_API_SECRET|OPENSEA_API_KEY|ALCHEMY_API_KEY|PIMLICO_API_KEY|TREASURY_KEY|OWNER_KEY|DEPLOYER_KEY|RELAYER_KEY|KEEPER_KEY|OPERATOR_KEY|SIGNER_KEY|MNEMONIC|SEED_PHRASE)["']?[ \t]*[:=][ \t]*["']?([A-Za-z0-9_+/=-]{16,})'''
+keywords = ["app_jwt_secret", "privy_app_secret", "aurora_api_key", "service_role_key", "pinata_jwt", "pinata_api_key", "pinata_api_secret", "opensea_api_key", "alchemy_api_key", "pimlico_api_key", "treasury_key", "owner_key", "deployer_key", "relayer_key", "keeper_key", "operator_key", "signer_key", "mnemonic", "seed_phrase"]
+
+[[allowlists]]
+description = "Public values: contract addresses, the Supabase publishable key and anon JWTs, the jwt.io example token, the anvil/hardhat default keys, the fork-only dev keys of scripts/dev/seed-moments-fork.mjs, the AWS documentation examples"
+regexTarget = "secret"
+regexes = [
+  '''^0x[0-9a-fA-F]{40}$''',
+  '''^sb_publishable_[A-Za-z0-9_-]+$''',
+  '''^eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*(?:InJvbGUiOiJhbm9uI|Jyb2xlIjoiYW5vbi|icm9sZSI6ImFub24i)''',
+  '''^eyJ[A-Za-z0-9_-]*\.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lI''',
+  '''(?i)^(?:0x)?(?:ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80|59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d|5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a|7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6|47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a|8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba|92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e|4bbbf85ce3377467afe5d46f804f221813b2bb87f24d81f60f1fcdbf7cbf4356|dbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97|2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6|57bcbb515c0a9835560414863de2a2903e4f195eb93fa071b8d0557608ee952a|3470e801c46dde26c5827e7caa3e523b54f026eec2b2d0bbbae6ad2e98179270|130eadc747f9b9e2c55ec6772c90b96a89e3b2890fa0f66ebd35aba462e32dd5)$''',
+  '''^(?:AKIAIOSFODNN7EXAMPLE|wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY)$''',
+]
+
+[[allowlists]]
+description = "The leak guard's own sources: their patterns and generated fake values (scripts/dev/secret-scan.sh still scans them)"
+paths = [
+  '''^\.gitleaks\.toml$''',
+  '''^\.leakguard$''',
+  '''^scripts/dev/secret-scan\.sh$''',
+  '''^scripts/dev/forbidden-paths\.sh$''',
+  '''^tests/leak-guard\.test\.mjs$''',
+]
+
+[[allowlists]]
+description = "Placeholders in documentation and examples: YOUR_…, REPLACE…, EXAMPLE, CHANGEME, xxxx"
+regexTarget = "match"
+regexes = ['''(?i)your|replace|example|changeme|change_me|placeholder|xxxx|redacted|dummy''']
+
+[[allowlists]]
+description = "Reviewed test vectors of DyorKit's unit tests (BIP-39/BIP-32 vectors, HKDF and signing fixtures), the same files as the @allow lines of .leakguard. A new test vector gets its own entry in both."
+targetRules = ["generic-api-key", "dyorhq-eth-private-key", "dyorhq-eth-key-assignment", "dyorhq-eth-key-literal", "dyorhq-eth-key-call", "dyorhq-eth-key-array"]
+paths = [
+  '''^ios/DyorKit/Tests/DyorKitTests/(?:EmailWalletTests|MeraTests|PerplEnrollmentTests|WalletAuthClientTests|WalletImportTests)\.swift$''',
+]

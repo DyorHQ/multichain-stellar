@@ -1,0 +1,16 @@
+# DyorHQ keepers on Fly.io (build 17 K4): supercronic runs this as the keeper user, in UTC. One line per unit, each
+# with its own key, state file and healthchecks.io check. supercronic never starts a job while its previous run is
+# still going, and run-keeper.sh holds a per-unit lock as well. The offsets keep units from starting in the same
+# minute. Cadence (keepers report 3.3): graduations every 5 minutes (the app promises them; MO-1's clock is 7 days);
+# fee sweeps every 15 minutes; buybacks hourly (MIN_INTERVAL is one hour per Moment); the key-less governance watch
+# every 15 minutes (its log cursor covers every block whatever the cadence, the cadence sets how fast a change pages).
+# A healthchecks.io check per line uses the same schedule, in UTC, with the grace the internal runbook gives. No daily
+# digest: E12 is not built, and the healthchecks.io checks prove liveness.
+#
+# Every line is a dry run until its unit's send flag is 1 (a Fly secret: run-keeper.sh reads it). Never add --send,
+# --manual or --only-live here.
+CRON_TZ=UTC
+*/5 * * * * /app/contracts/keepers/ops/run-keeper.sh grad
+2-59/15 * * * * /app/contracts/keepers/ops/run-keeper.sh sweeps
+7 * * * * /app/contracts/keepers/ops/run-keeper.sh buybacks
+11-59/15 * * * * /app/contracts/keepers/ops/run-keeper.sh governance
