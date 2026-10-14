@@ -50,7 +50,7 @@ struct ConfirmSheet: View {
                     LabeledContent(tr("Network fee"), value: tr("Paid by DyorHQ"))
                     if !action.limits.isEmpty {
                         ForEach(action.limits.sorted(by: { $0.key < $1.key }), id: \.key) { asset, units in
-                            LabeledContent(tr("At most"), value: "\(Amount.format(units, maxFraction: 7)) \(store.asset(asset)?.code ?? tr("tokens"))")
+                            LabeledContent(tr("At most"), value: "\(StellarAmount.format(units, maxFraction: 7)) \(store.asset(asset)?.code ?? tr("tokens"))")
                         }
                     }
                 } footer: {
@@ -142,10 +142,10 @@ struct IntentLines: View {
     private var lines: [String] {
         var out: [String] = []
         for (asset, units) in intent.spend.sorted(by: { $0.key < $1.key }) {
-            out.append(tr("You pay up to \(Amount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
+            out.append(tr("You pay up to \(StellarAmount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
         }
         for (asset, units) in (intent.receive ?? [:]).sorted(by: { $0.key < $1.key }) where units != "0" {
-            out.append(tr("You receive at least \(Amount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
+            out.append(tr("You receive at least \(StellarAmount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
         }
         if let venue = intent.display?["venue"]?.text { out.append(tr("Route: \(LiteTitles.venue(venue))")) }
         if let to = intent.display?["to"]?.text { out.append(tr("To \(shortAddress(to))")) }

@@ -1,0 +1,107 @@
+# Paths that must never be committed to or pushed from this repository. Checked by scripts/dev/forbidden-paths.sh from
+# the .githooks/ hooks and the leak-guard workflow, on top of its built-in list (env files and their copies, keys,
+# keystores, signing material, .xcarchive/.ipa, local Claude settings).
+#
+# One glob per line. A glob without "/" matches the file name at any depth; a glob with "/" matches the whole path from
+# the repository root, and a leading "/" anchors a file name at the root. "*" also matches "/", matching ignores case,
+# and one "{a,b,…}" group expands to one glob per alternative. "!glob" exempts a path that a deny glob matched (secret
+# material only by an exact path).
+# "@" lines: @push-url GLOB (the only remotes a push may go to), @pin PATH SHA256 (a file that must keep exactly that
+# content), @allow GLOB NAME (a reviewed secret-scan false positive: findings called NAME in paths matching GLOB),
+# @public / @internal (repository kind, for secret-scan), @history-base SHA (CI checks history only after these).
+#
+# The hooks read the committed .leakguard as well as the pending one, and CI reads the default branch's: a change here
+# takes effect from the next commit, so commit it on its own, with a reason, and expect CI to flag it for review.
+#
+# Internal documents live in the private repository DyorHQ/internal (under ios-app/), never here: audit reports and
+# findings, checklists, security reviews, runbooks and owner procedures, handoffs, incident and relaunch notes, plans and
+# decision logs. docs/ keeps only its README and the developer docs exempted at the end.
+
+# Pushes go to GitHub, or through the local git proxy of a cloud session, and only to this repository.
+@push-url github.com/dyorhq/ios-app
+@push-url ssh.github.com:443/dyorhq/ios-app
+@push-url *127.0.0.1*/dyorhq/ios-app
+@push-url *localhost*/dyorhq/ios-app
+# Everything on origin at the time the leak guard was added (main and the one unmerged branch) is history; CI's full
+# scans look at newer commits only.
+@history-base 0360d0055d84674e7866bbdb305dbb629517cb7f
+@history-base a9b72245a5822489a7f5d88f177f5b3840f8996d
+
+# Reviewed test vectors: fixed keys, seeds, nonces and pepper values of DyorKit's unit tests (BIP-39/BIP-32 vectors,
+# HKDF and signing fixtures), none of them a real key. A new test vector gets its own line here, committed first.
+@allow ios/DyorKit/Tests/DyorKitTests/EmailWalletTests.swift 32-byte hex key after a key-like name
+@allow ios/DyorKit/Tests/DyorKitTests/EmailWalletTests.swift 32-byte hex key in a key-named array
+@allow ios/DyorKit/Tests/DyorKitTests/MeraTests.swift 32-byte hex key after a key-like name
+@allow ios/DyorKit/Tests/DyorKitTests/MeraTests.swift 32-byte hex key passed to a key or wallet constructor
+@allow ios/DyorKit/Tests/DyorKitTests/PerplEnrollmentTests.swift 32-byte hex key after a key-like name
+@allow ios/DyorKit/Tests/DyorKitTests/WalletAuthClientTests.swift 32-byte hex key after a key-like name
+@allow ios/DyorKit/Tests/DyorKitTests/WalletImportTests.swift 32-byte hex key after a key-like name
+
+# Secrets and credentials beyond the built-in list
+.netrc
+.pgpass
+*.secret
+secrets.json
+secrets.yml
+secrets.yaml
+credentials.json
+service-account*.json
+wallet*.json
+*keystore*.json
+.foundry/*
+
+# Deployment output and logs (forge's cache/ keeps RPC URLs; logs can hold anything a script printed)
+contracts/broadcast/*
+contracts/cache/*
+*.log
+.wrangler/*
+
+# Documents whose text is compressed or binary, which the secret scanner cannot read, and office files: none belongs in a
+# code repository
+*.{pdf,doc,docx,xls,xlsx,ppt,pptx,odt,ods,odp,rtf,pages,numbers}
+
+# Local AI-session files (transcripts too)
+CLAUDE.local.md
+.claude/projects/*
+.claude/shell-snapshots/*
+.claude/todos/*
+*/.claude/*.local.*
+*.jsonl
+
+# Internal documents, by name, in any document format
+HAND*OFF*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*handover*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*RUNBOOK*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*security-audit*
+*security-audit*/*
+*security*review*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*security-review*/*
+*-audit-*/*
+*audit*/REPORT*
+*audit*/FIXES*
+*audit*/CHECKLIST*
+*audit*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+REPORT*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*findings*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*vulnerabilit*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*threat*model*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*pentest*
+*postmortem*
+*post-mortem*
+*confidential*
+*incident*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*relaunch*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*redeploy*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*decisions*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*decision-log*
+*readiness-review*
+*checklist*.{md,markdown,mdx,txt,text,rst,adoc,org,rtf,pdf,doc,docx,odt,pages,html,htm,csv,tsv,xls,xlsx,numbers,json}
+*-plan.md
+*_plan.md
+plan.md
+internal/*
+docs/*
+ios/docs/*
+!docs/README.md
+!docs/app-wiring.md
+!docs/swap-spec.md

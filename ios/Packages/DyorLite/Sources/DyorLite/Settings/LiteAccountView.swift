@@ -20,7 +20,7 @@ public struct LiteAccountView: View {
     /// backend _shared/stellar.ts) counts base reserves: 2 for an account, 1 for each trustline or other entry. A base
     /// reserve is 0.5 XLM (Stellar's network setting).
     static func reserveXLM(_ baseReserves: Int) -> String {
-        "\(Amount.format(Int64(max(0, baseReserves)) * baseReserveStroops, maxFraction: 7)) XLM"
+        "\(StellarAmount.format(Int64(max(0, baseReserves)) * baseReserveStroops, maxFraction: 7)) XLM"
     }
 
     static let baseReserveStroops: Int64 = 5_000_000

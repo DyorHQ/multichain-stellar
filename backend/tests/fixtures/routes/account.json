@@ -1,0 +1,71 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/account",
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "address": "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+      "exists": false,
+      "network": "testnet",
+      "activation": "friendbot",
+      "balances": [
+        {
+          "asset": "XLM",
+          "code": "XLM",
+          "name": "Stellar Lumens",
+          "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+          "classic": "native",
+          "decimals": 7,
+          "balance": "0",
+          "enabled": false,
+          "note": "Test XLM"
+        },
+        {
+          "asset": "USDC",
+          "code": "USDC",
+          "name": "USD Coin",
+          "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+          "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+          "decimals": 7,
+          "balance": "0",
+          "enabled": false,
+          "note": "Circle test USDC (testanchor, CCTP)"
+        },
+        {
+          "asset": "BUSDC",
+          "code": "USDC",
+          "name": "Blend test USDC",
+          "contract": "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
+          "classic": "USDC:GATALTGTWIOT6BUDBCZM3Q4OQ4BO2COLOAZ7IYSKPLC2PMSOPPGF5V56",
+          "decimals": 7,
+          "balance": "0",
+          "enabled": false,
+          "note": "Only Blend's testnet pool uses it; mainnet has one USDC"
+        }
+      ],
+      "reserves": null,
+      "sponsor": "GCATS5YOVB6ROX2WUNKGNQ2MP3GMXDMKSG2O4N5CLX3A6W4PZGZZI55U"
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

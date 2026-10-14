@@ -1,0 +1,40 @@
+{
+  "items": [
+    {
+      "type": "tx",
+      "id": "c3a436e46b4a0dcb674825bff51c9977e2b3766663a5bfdf84e2f71b7649a793",
+      "kind": "swap",
+      "summary": "Swap 10 XLM for at least 1.8843341 USDC",
+      "display": {
+        "venue": "soroswap",
+        "sell": "XLM",
+        "buy": "USDC",
+        "amountIn": "100000000",
+        "minOut": "18843366"
+      },
+      "status": "success",
+      "at": "2026-10-14T09:11:00.000Z"
+    },
+    {
+      "type": "bridge",
+      "id": "c69ef4a0-421e-418d-a93b-92081f4a0fcb",
+      "kind": "monad_to_stellar",
+      "summary": "Moved USDC from Monad",
+      "amount": "12500000",
+      "status": "completed",
+      "at": "2026-10-13T07:41:00.000Z"
+    },
+    {
+      "type": "cash",
+      "id": "d77e0470-cc55-4be3-af10-ba7f5dbd99f0",
+      "kind": "deposit",
+      "summary": "Added USDC",
+      "amount": "50",
+      "display": {
+        "asset": "USDC"
+      },
+      "status": "completed",
+      "at": "2026-10-12T09:41:00.000Z"
+    }
+  ]
+}

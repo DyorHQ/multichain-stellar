@@ -1,0 +1,165 @@
+{
+  "held": [
+    {
+      "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "balance": "12000000000000",
+      "valueUsd": 9.48,
+      "costBasisQuote": "500000000",
+      "pnlQuote": "-2400000",
+      "pnlUsd": -0.02,
+      "onCurve": true,
+      "launch": {
+        "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+        "creator": "GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN",
+        "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "name": "E2E Cat",
+        "symbol": "ECAT",
+        "uri": "https://example.supabase.co/storage/v1/object/public/lite-media/launches/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/aef9135a-6c53-435a-a2e4-5bb339faa0e1.json",
+        "supply": "10000000000000000",
+        "quoteReserve": "289000000000",
+        "tokenReserve": "6920415224913495",
+        "realQuote": "39000000000",
+        "threshold": "93000000000",
+        "progress": 0.4193,
+        "completed": false,
+        "graduated": false,
+        "pair": null,
+        "lastPrice": "0.0000417",
+        "volume": "61000000000",
+        "trades": 12,
+        "createdAt": "2026-10-13T03:41:00.000Z",
+        "quoteCode": "XLM",
+        "image": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/b4e32bb4-0296-4ba8-a4c8-9ebd74f07d5e.png",
+        "description": "A cat that runs end-to-end tests.",
+        "links": {
+          "website": "https://ecat.dyorhq.fun",
+          "x": "https://x.com/ecat",
+          "telegram": null
+        },
+        "burned": "0",
+        "circulating": "10000000000000000",
+        "phase": "curve",
+        "priceQuote": "0.0000417",
+        "priceUsd": 0.0000079,
+        "change24h": 0.12,
+        "isNew": false,
+        "marketCapQuote": "41700",
+        "marketCapUsd": 7927.17,
+        "volume24hQuote": "2100",
+        "volume24hUsd": 399.21,
+        "holders": 5,
+        "holdersComplete": true,
+        "feeBps": 100,
+        "protocolShareBps": 5000,
+        "creatorFeeBps": 100,
+        "poolFeeBps": null,
+        "lookAlike": false,
+        "graduatedAt": null,
+        "lastTradeAt": "2026-10-14T09:29:00.000Z"
+      }
+    }
+  ],
+  "created": [
+    {
+      "launch": {
+        "token": "CDAG2SCOH4WYY4MPRFLWB3OQOHRDJN6GHDHZ6KXE4ZT4AYFR67UWV5JC",
+        "creator": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+        "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+        "name": "Graduate",
+        "symbol": "GRAD",
+        "uri": "",
+        "supply": "10000000000000000",
+        "quoteReserve": "0",
+        "tokenReserve": "0",
+        "realQuote": "93000000000",
+        "threshold": "93000000000",
+        "progress": 1,
+        "completed": true,
+        "graduated": true,
+        "pair": "CAYMMTZR2ZXMQDHFM45I6RI74YEGXD4QXUR5JNY7TBMOEXJTYJ3FXLDI",
+        "lastPrice": "0.0000502",
+        "volume": "151000000000",
+        "trades": 41,
+        "createdAt": "2026-10-08T09:41:00.000Z",
+        "quoteCode": "XLM",
+        "image": null,
+        "description": null,
+        "links": {
+          "website": null,
+          "x": null,
+          "telegram": null
+        },
+        "burned": "1250000000000000",
+        "circulating": "8750000000000000",
+        "phase": "graduated",
+        "priceQuote": "0.0000502",
+        "priceUsd": 0.0000095,
+        "change24h": -0.034,
+        "isNew": false,
+        "marketCapQuote": "439250",
+        "marketCapUsd": 83501.43,
+        "volume24hQuote": "880",
+        "volume24hUsd": 167.29,
+        "holders": 23,
+        "holdersComplete": false,
+        "feeBps": 100,
+        "protocolShareBps": 5000,
+        "creatorFeeBps": 100,
+        "poolFeeBps": 30,
+        "lookAlike": false,
+        "graduatedAt": "2026-10-09T09:41:00.000Z",
+        "lastTradeAt": "2026-10-14T08:06:00.000Z"
+      },
+      "creatorFees": {
+        "unclaimed": "0",
+        "claimed": "9300000",
+        "quote": "XLM",
+        "unclaimedUsd": 0,
+        "claimedUsd": 0.18
+      }
+    }
+  ],
+  "fees": {
+    "byQuote": [
+      {
+        "quote": "XLM",
+        "received": "9300000",
+        "claimable": "0",
+        "receivedUsd": 0.18,
+        "claimableUsd": 0
+      }
+    ]
+  },
+  "activity": [
+    {
+      "type": "tx",
+      "id": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "kind": "launch_buy",
+      "summary": "Buy ECAT with 50 XLM",
+      "status": "success",
+      "at": "2026-10-14T09:29:00.000Z",
+      "display": {
+        "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+        "symbol": "ECAT",
+        "quote": "XLM",
+        "amount": "500000000",
+        "minOut": "11880000000000"
+      },
+      "section": "launch",
+      "hash": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "feeCharged": "41210",
+      "feePayer": "user",
+      "result": {
+        "amountOut": "12000000000000"
+      },
+      "ref": {
+        "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V"
+      },
+      "symbol": "ECAT",
+      "name": "E2E Cat",
+      "title": "Bought ECAT",
+      "subtitle": "1,200,000 ECAT for 50 XLM",
+      "usd": 9.5
+    }
+  ]
+}

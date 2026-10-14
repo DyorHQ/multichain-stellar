@@ -1,0 +1,11 @@
+{
+  "route": "cctp",
+  "direction": "monad_to_stellar",
+  "amountIn": "12500000",
+  "amountOut": "124987500",
+  "fee": "1250",
+  "feeSource": "circle-iris",
+  "etaSeconds": null,
+  "etaBasis": 2,
+  "note": "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar."
+}

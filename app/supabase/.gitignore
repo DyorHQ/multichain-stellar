@@ -1,0 +1,7 @@
+# Supabase CLI working state (created once config.toml exists) and signing-key material: never committed.
+.branches/
+.temp/
+.env
+.env.*
+*.jwk
+signing_keys.json

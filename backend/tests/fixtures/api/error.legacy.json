@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "budget_exhausted",
+    "message": "You've used today's free transactions. Try again tomorrow."
+  }
+}

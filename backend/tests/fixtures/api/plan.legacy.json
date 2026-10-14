@@ -1,0 +1,34 @@
+{
+  "planId": "213c9966-604e-4d46-ab58-114235d7bc30",
+  "kind": "swap",
+  "expiresAt": "2026-10-14T09:56:00.000Z",
+  "steps": [
+    {
+      "id": "s1",
+      "label": "Enable USDC",
+      "status": "built",
+      "intent": {
+        "kind": "trust",
+        "summary": "Enable USDC",
+        "spend": {},
+        "ops": [
+          "changeTrust"
+        ],
+        "trust": [
+          "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        ],
+        "display": {
+          "asset": "USDC"
+        }
+      },
+      "xdr": "AAAAAgAAAACWkx+5IqHDdKtQ/Z773xUBaGRNzFg8rllQIi8Zjpt54AAAJxAAToEGAAAAAQAAAAEAAAAAas9OLAAAAABqz1CEAAAAAAAAAAEAAAAAAAAABgAAAAFVU0RDAAAAAEI+fQXy7K+/7BkrIVo/G+lq7bjY5wJUq+NBPgIH3layf/////////8AAAAAAAAAAA==",
+      "hash": "6d42d713ddbed1c51d1fb0b50d0e122602f712527ce8ee9d16ae981298525519",
+      "builtAt": "2026-10-14T09:41:00.000Z"
+    },
+    {
+      "id": "s2",
+      "label": "Swap",
+      "status": "pending"
+    }
+  ]
+}

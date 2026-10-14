@@ -1,0 +1,672 @@
+[
+ {
+  "id": "CT-00",
+  "title": "Workspace, dyor-common crate, v2 crate skeletons and fixture tooling",
+  "files": [
+   "contracts/Cargo.toml",
+   "contracts/build.sh",
+   "contracts/common/Cargo.toml",
+   "contracts/common/src/lib.rs",
+   "contracts/common/src/types.rs",
+   "contracts/common/src/durations.rs",
+   "contracts/common/src/clients.rs",
+   "contracts/common/src/math.rs",
+   "contracts/common/src/ttl.rs",
+   "contracts/common/src/aquarius.rs (empty stub; ownership passes to CT-03 when CT-00 merges)",
+   "contracts/launchpad-v2/Cargo.toml, src/lib.rs (skeleton; passes to CT-05)",
+   "contracts/launch-token-v2/Cargo.toml, src/lib.rs (skeleton; passes to CT-01)",
+   "contracts/exec-soroswap/Cargo.toml, src/lib.rs (skeleton; passes to CT-02)",
+   "contracts/qa-exec-fail/Cargo.toml, src/lib.rs (skeleton; passes to CT-02)",
+   "contracts/exec-aquarius/Cargo.toml, src/lib.rs (skeleton; passes to CT-03)",
+   "contracts/lp-locker/Cargo.toml, src/lib.rs (skeleton; passes to CT-04)",
+   "contracts/moment-nft/Cargo.toml, src/lib.rs (skeleton; passes to CT-06)",
+   "contracts/moment-coin/Cargo.toml, src/lib.rs (skeleton; passes to CT-07)",
+   "contracts/moments-graduator/Cargo.toml, src/lib.rs (skeleton; passes to CT-08)",
+   "contracts/moments-v2/Cargo.toml, src/lib.rs (skeleton; passes to CT-09)",
+   "contracts/integration-tests/Cargo.toml, src/lib.rs (skeleton; passes to CT-10)",
+   "contracts/tools/fetch-fixtures.sh"
+  ],
+  "depends_on": [],
+  "brief": "Implement §3.1, §3.4 and §4 of DESIGN-stellar-contracts-v2.revised.md.\n- Add 11 workspace members: the 10 v2 contract crates (launchpad-v2, launch-token-v2, exec-soroswap, exec-aquarius, qa-exec-fail, lp-locker, moments-v2, moment-nft, moment-coin, moments-graduator) and a test-only integration-tests crate. Leave the v1 crates launchpad, launch-token and moments byte-for-byte untouched.\n- dyor-common (§4):\n  - types: VenueKind (Soroswap, Aquarius, HoldOnly, QaFail), VenueParams, GraduateArgs, GraduateResult, Payee, HarvestPayees {quote: Vec<Payee>, base: Vec<Payee>} (an empty base list means burn the base side), PositionRef (Launch(Address), Moment(Address)), TtlPolicy, GradFailure {origin, code} and GraduationOutcome {Graduated(Address), Failed(GradFailure)} (finding V10), LaunchDurations {grace, fallback_delay, rescue_admin, rescue_public, locked_fallback, takeover_delay, takeover_window, timelock, timelock_window, harvest_interval}, MomentsDurations {vest_period, stuck_expiry, pending_backstop, timelock, timelock_window, min_window, max_window, harvest_interval} (no grace: Moments have no mark_stuck, finding F15; pending_backstop is the expiry backstop for a Moment whose graduation never records a failure, finding V11);\n  - constants: BPS, ERR_BASE = 10_000 and the ten contract tags of §4 (1 launchpad-v2, 2 launch-token-v2, 3 exec-soroswap, 4 exec-aquarius, 5 qa-exec-fail, 6 lp-locker, 7 moments-v2, 8 moment-nft, 9 moment-coin, 10 moments-graduator) with a const fn err_code(tag, n) = ERR_BASE + tag·100 + n that every v2 contract uses for its #[contracterror] values (finding V10), GRAD_DUST_BPS = 1, MAX_HARVEST_ROUND_BPS = 50, SOROSWAP_MIN_LIQ = 1_000, MIN_DURATION = 60 s, MAX_DURATION = 400 days, MAX_HARVEST_INTERVAL = 1 day, the production duration sets of §14.3 (PRODUCTION_LAUNCH_DURATIONS, PRODUCTION_MOMENTS_DURATIONS) and the testnet-qa sets for tests;\n  - validate_launch_durations and validate_moments_durations with the rules of §4 (including fallback_delay ≤ rescue_admin, harvest_interval ≤ MAX_HARVEST_INTERVAL and pending_backstop ≥ 4 · stuck_expiry; harvest_interval is in both sets; findings F6 and V11);\n  - #[contractclient] traits for every cross-contract surface (LaunchTokenV2 with notify_reward(notifier, asset, amount) and exclude_treasury(), Executor (error type soroban_sdk::Error, so try_ hands every code over unchanged), Locker with harvest_interval(), HarvestOwner, MomentNft, MomentCoin, Graduator (error type soroban_sdk::Error), TreasurySource, SoroswapFactory, SoroswapPair with token_0/token_1). common/src/aquarius.rs is a stub holding two compile-time flags, AQUARIUS_POOL_LOOKUP_OK and AQUARIUS_VENUE_OK, both false, which CT-03 fills and sets;\n  - maths: checked mul_div and mul_div_up, mul_div_u256 and mul_div_up_u256 with a U256 intermediate, isqrt_u128;\n  - grad_failure(e) -> GradFailure (finding V10): a contract error in 10_100–11_099 gives origin = (code − ERR_BASE) / 100 and the code; any other contract error (a DEX, a SAC, an OpenZeppelin check) gives origin 0 and the raw code; a host error gives origin 99 and its ScErrorCode.\n- Each v2 crate gets a Cargo.toml and a stub lib.rs; ownership passes to its package when CT-00 merges. Add proptest as a dev-dependency where tests need it.\n- build.sh builds and spec-shakes all 13 WASMs (3 v1 + 10 v2) into dist/. Do not commit dist; only CT-10 does.\n- tools/fetch-fixtures.sh reads a contract's instance through public RPC getLedgerEntries, follows its WASM hash, downloads the code entry into contracts/testdata/, and records {contract id, wasm hash, sha256, network, fetched_at, notes} in testdata/fixtures.json, creating that file if it is missing (CT-03 owns it). It needs no keys and is not run in this package.",
+  "acceptance": [
+   "cargo test --workspace passes, including all 31 existing v1 tests, unchanged",
+   "Rebuilding the v1 WASMs reproduces contracts/dist/SHA256SUMS. If it doesn't, the package reports it and stops.",
+   "dyor-common math tests cover: overflow traps; rounding direction of mul_div, mul_div_up and their U256 forms; isqrt exact on perfect squares and correct at n±1; mul_div_u256 matching a reference on 10,000 random inputs and trapping when the result exceeds i128",
+   "Duration tests: the production and testnet-qa sets of spec §14.3 pass; a value below 60 s or above 400 d, rescue_public < rescue_admin, grace > rescue_admin, locked_fallback > rescue_admin, fallback_delay > rescue_admin, harvest_interval above 1 day min_window > max_window and pending_backstop < 4 · stuck_expiry each fail; both sets carry harvest_interval, and the Moments sets carry pending_backstop (30 d production, 30 min testnet-qa, finding V11)",
+   "build.sh emits 13 WASMs; every v2 stub compiles for wasm32v1-none",
+   "No crate depends on another contract crate; only on dyor-common",
+   "No secrets or keys in any file; fetch-fixtures.sh takes only an RPC URL and contract ids",
+   "Error namespaces (finding V10): err_code yields ERR_BASE + tag·100 + n; the ten tag ranges are disjoint, inside 10_100–11_099 and outside OpenZeppelin's 100–1501; grad_failure maps a code in each tag's range to that tag, any other contract code to origin 0 with the raw code, and a host error to origin 99"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test --workspace",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-common --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && ls -l dist/*.wasm",
+   "cd ~/Hackathon-b17/multichain-stellar && git diff --stat contracts/launchpad contracts/launch-token contracts/moments"
+  ]
+ },
+ {
+  "id": "CT-01",
+  "title": "launch-token-v2: SEP-41 with the narrowed transfer lock, holder rewards in two assets and hardened pool exclusion",
+  "files": [
+   "contracts/launch-token-v2/Cargo.toml",
+   "contracts/launch-token-v2/src/lib.rs",
+   "contracts/launch-token-v2/src/lock.rs",
+   "contracts/launch-token-v2/src/rewards.rs",
+   "contracts/launch-token-v2/src/test.rs",
+   "contracts/launch-token-v2/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00",
+   "CT-03"
+  ],
+  "brief": "Implement §6 of DESIGN-stellar-contracts-v2.revised.md.\n- Base: OZ stellar-tokens 0.7.2 Base plus burnable, with overrides on transfer, transfer_from, burn and burn_from following the votes extension (oz fungible/extensions/votes/storage.rs:55-190).\n- Transfer lock (§6.1, decision L4): before unlock a transfer succeeds only when from == launchpad, from ∈ lock_from (this launch's venue and fallback executors, constructor args, at most 2) or to == launchpad. Burns are always allowed. The locker is NOT exempt. unlock: launchpad only, once (at graduation or at rescue, L6).\n- The token's own address holds the launch-token rewards: transfer, transfer_from, burn, burn_from and approve from `this` fail TokenAccount at any time, before and after unlock; transfers to `this` are allowed (§6.1, finding F1).\n- Holder rewards (§6.2) when sharing_quote is Some, in two reward pools (decisions O1 and L13, finding F1): Q, the quote (curve fees and the quote side of harvests), and T, the launch token itself (the holders' half of the harvested token side, funded only by the locker after graduation and held at the token's own address). Per pool: reward-per-share with P = 1e18 and U256 intermediates, RewardPool {acc, queued, funded, paid, protocol_owed}; eligible and queued_ledger are shared. MIN_ELIGIBLE = 1 token; release only on a later ledger; self-transfers return early; an account is excluded when it is in FixedExcluded (instance, at most 5, includes the token itself) or its Holder entry says so (persistent, no cap); Holder entries {q_debt, q_owed, t_debt, t_owed, excluded} are written lazily; debts are rounded UP (mul_div_up_u256); Sharing is its own persistent entry. claim and sweep_protocol pay T through the internal update with the hook (the receiver is settled at its old balance first; claim zeroes t_owed before paying).\n- exclude(account): launchpad only. exclude_pool(kind, other, pool): anyone, with the checks of §6.2 (decision L5, finding F2): pool.executable() is a Wasm contract and pool ∉ {this, other} (NotAPool); Soroswap: factory.get_pair(this, other) == pool and the pair's token_0/token_1 are {this, other}; Aquarius: gated only by AQUARIUS_POOL_LOOKUP_OK (CT-03's check 4), never by the overall Aquarius venue go/no-go, then the router's pool lookup for sorted(this, other) contains pool, the pool's token list equals sorted(this, other) and share_id() is a Wasm contract outside {pool, this, other}; the floor: bal(pool) ≥ EXCLUDE_MIN_BALANCE (1e10, 1,000 tokens) or the pool's pending rewards ≥ EXCLUDE_MIN_OWED (1e6) in Q or ≥ EXCLUDE_MIN_BALANCE in T (BelowFloor). The Aquarius router is a required constructor argument (Address, not Option). Both functions are idempotent and move the account's settled owed in both pools into protocol_owed.\n- The treasury (finding V2): a constructor argument (the launchpad's treasury at launch). With sharing on it is excluded at construction through its Holder flag. exclude_treasury() -> bool: anyone; with sharing off it returns false; otherwise exclude_account(launchpad.treasury(), false), idempotent and one-way (a former treasury stays excluded). sweep_protocol excludes the current treasury before paying it. The locker calls exclude_treasury before it pays this token's base side; the launchpad never calls it (re-entry). FixedExcluded (the launchpad, the locker, the two executors and the token itself) is unchanged. Invariant I-T10.\n- notify_reward(notifier, asset, amount): launchpad or locker only; asset is the quote or the token itself (UnsupportedAsset otherwise); amount > 0; funding check per asset (quote: quote.balance(this) ≥ funded − paid + amount; T: the token's own balance ≥ funded − paid + amount). claim(holder) -> (quote, token) (excluded accounts refused), sweep_protocol() -> (quote, token) paying launchpad.treasury(), and the views of §6.4 (pending_rewards and queued_rewards per asset, exclusion_floor).\n- Errors (15, numbered ERR_BASE + 2·100 + n, finding V10) and events (each reward event carries its asset) exactly as §6.4. No admin, and no instance TTL extension in user calls.",
+  "acceptance": [
+   "Every row of the §6.1 path table holds before unlock: holder→holder, holder→executor, holder→pool and holder→locker are refused; launchpad→holder, holder→launchpad, launchpad→executor, executor→pool and executor→launchpad are allowed; burns are allowed. unlock works once, from the launchpad only.",
+   "transfer, transfer_from, burn, burn_from and approve from the token's own address fail TokenAccount before and after unlock; only claim and sweep_protocol lower that balance (I-T8)",
+   "With sharing off, behaviour equals the v1 launch-token, and the 6 v1 tests are ported and pass",
+   "Property test (proptest, 1,000 cases in CI) over random transfers, self-transfers, burns, burn_from, exclude and exclude_pool, notifies of both assets, ledger advances and claims against a Rust reference model: I-T1 to I-T10 hold per asset, no claim or sweep ever fails for lack of funds (I-T2 with debts rounded up), and each holder's claim in each asset equals the model to within 1 unit per release",
+   "A flash test (receive tokens, notify, claim and send away in one ledger) earns 0 in both assets; a claim of launch-token rewards earns nothing on the claimed amount",
+   "exclude_pool accepts the real Soroswap fixture pair of (token, other) above the floor; rejects an account address, a fake contract, a pair of another token and a pair whose token list doesn't match (NotAPool) and a pool below the floor (BelowFloor); is idempotent; moves the pool's stranded owed in both pools to protocol_owed; sweep_protocol pays both to launchpad.treasury()",
+   "The Aquarius branch of exclude_pool works against CT-03's fixtures whenever AQUARIUS_POOL_LOOKUP_OK is true, also with AQUARIUS_VENUE_OK false, and returns UnsupportedVenue only when check 4 failed",
+   "Below MIN_ELIGIBLE, rewards of either asset go to protocol_owed",
+   "notify_reward without funds fails UnderFunded, with 0 fails ZeroAmount, with another asset fails UnsupportedAsset, and from anyone but the launchpad or locker fails NotNotifier",
+   "The treasury is excluded at construction; after the test launchpad's treasury changes, exclude_treasury excludes the new one (idempotent, true once) and the old one stays excluded; sweep_protocol and a locker-funded payout never pay launch tokens to an eligible treasury, and the treasury's pending rewards stay 0; with sharing off exclude_treasury returns false (I-T10, finding V2)",
+   "Release WASM ≤ 64 KB; cost_estimate for a sharing transfer stays ≤ 30M instructions and ≤ 6 write entries"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-launch-token-v2",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-launch-token-v2 --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && wc -c dist/dyor_launch_token_v2.wasm"
+  ]
+ },
+ {
+  "id": "CT-02",
+  "title": "exec-soroswap (caller-restricted Soroswap executor) and qa-exec-fail (testnet-qa failing venue)",
+  "files": [
+   "contracts/exec-soroswap/Cargo.toml",
+   "contracts/exec-soroswap/src/lib.rs",
+   "contracts/exec-soroswap/src/test.rs",
+   "contracts/exec-soroswap/test_snapshots/**",
+   "contracts/qa-exec-fail/Cargo.toml",
+   "contracts/qa-exec-fail/src/lib.rs",
+   "contracts/qa-exec-fail/src/test.rs",
+   "contracts/qa-exec-fail/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00"
+  ],
+  "brief": "Implement §7 (rules for every executor), §7.1 and §7.3 of DESIGN-stellar-contracts-v2.revised.md.\nexec-soroswap: __constructor(factory, callers). graduate(GraduateArgs):\n- require source ∈ callers (NotCaller) and source.require_auth() (decision L4: only launchpad-v2 and moments-graduator);\n- pull both assets from source (pre-authorized by the source);\n- create or get the pair; require pair.total_supply() == 0 (PoolNotEmpty, recoverable);\n- transfer both amounts straight into the pair, then pair.deposit(lp_to); require liquidity ≥ min_liquidity;\n- return any leftovers to source; emit exec_grad.\nNo storage beyond the instance, no admin, and it never calls its caller.\nqa-exec-fail (testnet-qa only, decision O3, §7.3): __constructor(callers, qa_admin, default_mode); set_mode(token, mode) by qa_admin only (NotQaAdmin); unset tokens use default_mode. One instance serves as one venue (no hardcoded venue ids, finding F8) and as the executor of testnet-qa's failing Moments stack (finding F5); its callers are launchpad-v2 and that stack's graduator. Mode 0 returns the recoverable contract error ForcedFailure without moving funds; mode 1 loops until the budget runs out; mode 2 returns a bogus success without moving funds (token_used and quote_used equal to the inputs, its own address as pool and lp_token), which the caller's result checks must reject.\nError enums use dyor-common's err_code: exec-soroswap tag 3, qa-exec-fail tag 5 (so PoolNotEmpty is 10_303 and ForcedFailure 10_502, finding V10).\nTests run against the real Soroswap factory, pair and router WASMs already in contracts/testdata, with a harness contract that calls the executor through try_ and pre-authorizes with authorize_as_current_contract exactly as launchpad-v2 will (§5.5). Confirm SOROSWAP_MIN_LIQ (dyor-common, 1,000) against the pair fixture; report a mismatch to the CT-00 owner instead of editing common.",
+  "acceptance": [
+   "Seeds a fresh pair at the given ratio; the LP lands at lp_to; reserves equal the amounts",
+   "A pre-created pair with quote dust and sync (the case in S:contracts/launchpad/src/test.rs:309) still graduates; the donation only moves the price in the LP's favour",
+   "A source outside callers fails NotCaller, including a contract that holds tokens and signs for itself (the squat attempt of reviews A1/B1)",
+   "A pair that already has LP supply (seeded with two unlocked test assets) fails PoolNotEmpty through try_, and every balance rolls back",
+   "When the harness forces a failure after the pull (min_liquidity unreachable), try_ returns Err and every balance (source, executor, pair) is unchanged",
+   "Pre-auth works with SAC transfers (XLM and USDC); the launch-token-v2 case is covered in CT-10",
+   "SOROSWAP_MIN_LIQ matches the pair fixture's first-deposit lock",
+   "qa-exec-fail mode 0 returns a recoverable error through try_ with no balance change; mode 1 exhausts the budget and the harness call fails as non-recoverable; mode 2 returns Ok and a harness that applies the launchpad's result checks (§5.5) rejects it; set_mode works for qa_admin only; an unset token uses default_mode",
+   "Every error value lies in its tag's range (exec-soroswap 10_301–10_304, qa-exec-fail 10_501–10_503), and none of the Soroswap fixtures' error codes, read from their contract specs, falls in 10_100–11_099 (finding V10)",
+   "Release WASM ≤ 32 KB for exec-soroswap and ≤ 16 KB for qa-exec-fail"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-exec-soroswap -p dyor-qa-exec-fail",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-exec-soroswap -p dyor-qa-exec-fail --all-targets -- -D warnings"
+  ]
+ },
+ {
+  "id": "CT-03",
+  "title": "exec-aquarius, Aquarius client traits and WASM fixtures (five-check go/no-go gate)",
+  "files": [
+   "contracts/exec-aquarius/Cargo.toml",
+   "contracts/exec-aquarius/src/lib.rs",
+   "contracts/exec-aquarius/src/test.rs",
+   "contracts/exec-aquarius/test_snapshots/**",
+   "contracts/common/src/aquarius.rs (from CT-00's stub)",
+   "contracts/testdata/aquarius_router.wasm",
+   "contracts/testdata/aquarius_pool.wasm",
+   "contracts/testdata/aquarius_token_share.wasm",
+   "contracts/testdata/fixtures.json"
+  ],
+  "depends_on": [
+   "CT-00"
+  ],
+  "brief": "Implement §7 (rules) and §7.2 of DESIGN-stellar-contracts-v2.revised.md, and run the five-check go/no-go gate (decision L2).\n- Fetch the Aquarius testnet router CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD, a standard pool and the share token WASMs with tools/fetch-fixtures.sh (read-only RPC, no keys). Record them in fixtures.json with notes.\n- Fill contracts/common/src/aquarius.rs with #[contractclient] traits for exactly the router and pool functions the fixtures confirm: the pool-creation payment getter, init_standard_pool, deposit, the pool lookup for a token pair, the pool's token-list getter and share_id (used by launch-token-v2's exclude_pool), withdraw by share amount (used by lp-locker's harvest) and total shares. Record the router's pool-creation event name in fixtures.json for CT-15.\n- Record each gate check's result separately and set the two compile-time flags in common/src/aquarius.rs: AQUARIUS_POOL_LOOKUP_OK (check 4 with the token-list getter and share_id) and AQUARIUS_VENUE_OK (all five). launch-token-v2's exclusion of Aquarius pools depends only on the first, because anyone can open an Aquarius pool for an unlocked token (decision L5, finding F2); the venue and the locker's Aquarius harvest depend on the second.\n- exec-aquarius: __constructor(router, payment_asset, max_pool_payment, callers). graduate applies the caller rule (L4); finds the standard pool for fee_fraction ∈ {10, 30, 100} (testnet uses 30); creates a missing pool from the AQUA float only when the router's payment asset equals payment_asset, amount ≤ max_pool_payment (PaymentTooHigh) and float ≥ amount (PaymentUnavailable), with an exact authorize_as_current_contract entry; requires total shares == 0 (PoolNotEmpty); calls router.deposit with every deeper transfer pre-authorized; sends the share token to lp_to; returns leftovers to source. Views float, pool_payment and max_pool_payment.\n- The gate (§7.2): (1) the payment getter and the auth trees of init_standard_pool and deposit; (2) during deposit the launch token moves only executor → pool (prove it with a test-only token that refuses every other path, mimicking launch-token-v2's lock); (3) the reserve-holding address equals the returned pool; (4) the pool lookup, the pool's token list and share_id; (5) withdraw by shares. If any check fails, stop and write a no-go naming the failing check; Aquarius then stays disabled as a venue in the deploy economics, and common/src/aquarius.rs keeps only what was confirmed, with AQUARIUS_POOL_LOOKUP_OK still true when check 4 passed.\n- exec-aquarius numbers its errors with err_code, tag 4 (PaymentUnavailable = 10_404, PaymentTooHigh = 10_405, finding V10). Record the Aquarius fixtures' error codes from their contract specs and confirm none falls in 10_100–11_099.\n- For CT-11's float-funding swap (finding V8), record in fixtures.json notes the router's swap and estimate functions, the testnet XLM–AQUA standard pool and the testnet AQUA asset (code, issuer, SAC id).\n- Views float, pool_payment and max_pool_payment let the deploy script and the keeper compare the float with its target (50 × the pool payment on the owner's testnet, 10 × on testnet-qa) and alert below 5 × (finding F11).",
+  "acceptance": [
+   "Fixture sha256s and source contract ids are recorded; no key material",
+   "Graduation into a new pool works and pays exactly the router's configured amount from the float; an amount above max_pool_payment fails PaymentTooHigh",
+   "An existing empty pool is reused without payment; a pool that already has shares fails PoolNotEmpty",
+   "A caller outside callers fails NotCaller and the float is unchanged (the drain probe of review B2)",
+   "A short float returns a recoverable error through try_, and the harness's balances roll back",
+   "Share tokens arrive at lp_to; leftovers return to source; the reserves sit at the returned pool address",
+   "With the lock-mimicking test token, deposit succeeds and no pool → executor transfer of that token is attempted",
+   "Withdraw by shares, the pool lookup, the pool's token list and share_id work against the fixtures",
+   "Or: a written no-go naming the failing check, in which case Aquarius stays disabled as a venue in deploy economics; the two flags in common/src/aquarius.rs record which checks passed",
+   "fixtures.json records the router's swap and estimate functions, the testnet XLM–AQUA pool and the AQUA asset and SAC for CT-11 (finding V8); exec-aquarius errors are 10_401–10_407, and no Aquarius fixture error code falls in 10_100–11_099 (finding V10)"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-exec-aquarius",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-exec-aquarius --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && shasum -a 256 testdata/aquarius_*.wasm && cat testdata/fixtures.json"
+  ]
+ },
+ {
+  "id": "CT-04",
+  "title": "lp-locker: permanent LP custody, fee-growth harvest without a price guard, both-sides payouts",
+  "files": [
+   "contracts/lp-locker/Cargo.toml",
+   "contracts/lp-locker/src/lib.rs",
+   "contracts/lp-locker/src/harvest.rs",
+   "contracts/lp-locker/src/test.rs",
+   "contracts/lp-locker/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00",
+   "CT-01",
+   "CT-02",
+   "CT-03"
+  ],
+  "brief": "Implement §8 of DESIGN-stellar-contracts-v2.revised.md.\n- The constructor fixes the owners (launchpad-v2 and moments-v2, by precomputed ids), the Soroswap factory, the Aquarius router (Option) and harvest_interval, validated with dyor-common's bounds (60 s to 1 day; 3600 in production, 60 on testnet-qa) and readable through harvest_interval(). launchpad-v2 and moments-v2 require it to equal their durations.harvest_interval (finding F6).\n- register: owners only; 1 ≤ harvest_bps ≤ BPS (InvalidHarvestBps); checks LP received against Tracked; records the principal in √k units (U256); last_harvest = now.\n- No poke and no price guard (decision L12). harvest guards: the kind is harvestable (Soroswap; Aquarius only when AQUARIUS_VENUE_OK), and now ≥ last_harvest + harvest_interval.\n- harvest maths: growth = current − principal; take = min(growth·harvest_bps/BPS, current·MAX_HARVEST_ROUND_BPS/BPS); withdraw ΔL (Soroswap: transfer LP to the pair, then withdraw; Aquarius: withdraw by shares); principal = min(principal + mul_div_up(take, BPS − harvest_bps, harvest_bps), current − take). The compounded part is proportional to what was taken, so compounded : harvested = (BPS − hb) : hb in every round, also when the 0.5% cap binds (finding F7); at MOMENT_HARVEST_BPS 6667 that is 3,333 : 6,667, not exactly 1 : 2 (finding V3).\n- Payouts from owner.harvest_payees(reference) → HarvestPayees {quote, base}: when the base list has a notify payee (a sharing launch's token), first call its exclude_treasury(), so the current treasury is excluded before it receives launch tokens (finding V2); each side is split by its own payee list (the last payee gets the remainder), zero amounts skipped; notify payees get asset.transfer(this, token, x) then token.notify_reward(this, asset, x), which for a launch's base side funds launch-token rewards; other payees get try_transfer with an Owed fallback; an empty list burns that side (Moments' coin side). Launches send the same 50/50 list on both sides (decisions O1 and L13, finding F1).\n- withdraw_owed and the views (harvestable includes next_at; harvest_interval). The harvested event carries take and compounded.\n- No principal withdrawal path, no admin and no setters. Errors are numbered ERR_BASE + 6·100 + n (finding V10).",
+  "acceptance": [
+   "After random swaps on a Soroswap fixture, the locked position's √k value never falls below its principal (I-K1). Property test, 1,000 cases.",
+   "TooSoon before the interval; NothingToHarvest without growth; UnsupportedKind for HoldOnly and QaFail, and for Aquarius when AQUARIUS_VENUE_OK is false",
+   "The cap holds: no round withdraws more than 0.5% of the position's LP, and capped growth stays harvestable in later rounds",
+   "harvest_bps 10000 keeps the principal constant; at 6667, compounded : harvested equals (BPS − hb) : hb = 3,333 : 6,667 within rounding in every round (not 1 : 2, finding V3), with the cap binding and not binding (property test, finding F7); harvest_bps 0 or above BPS is refused at register",
+   "Both sides follow the payee lists: the launch case pays 50% to the treasury and 50% to the recipient (sharing off) or to the token with notify_reward for the right asset (sharing on) on each side; the Moments case pays the quote side 40/60 and burns the base side; a payee without a trustline gets Owed on either side and withdraw_owed pays later; zero payouts are skipped; with a notify payee on the base side, exclude_treasury is called on that token before any base-side payout (finding V2)",
+   "The §8.3 bound: moving the price 4x before a harvest does not lower the withdrawn value at the true price, and the base/quote mix shift stays within one round's quote side",
+   "harvest_interval() returns the constructor value; values below 60 s or above 1 day are refused",
+   "Every non-view entry point other than register is permissionless, and no function moves principal LP to any address",
+   "Release WASM ≤ 64 KB"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-lp-locker",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-lp-locker --all-targets -- -D warnings"
+  ]
+ },
+ {
+  "id": "CT-05",
+  "title": "launchpad-v2: curve, 10 XLM booked launch fee, SAC-only quotes, terms, venues, guarded graduation with a fallback delay, pro-rata rescue, creator recipient, recoverable guardian",
+  "files": [
+   "contracts/launchpad-v2/Cargo.toml",
+   "contracts/launchpad-v2/src/lib.rs",
+   "contracts/launchpad-v2/src/curve.rs",
+   "contracts/launchpad-v2/src/admin.rs",
+   "contracts/launchpad-v2/src/graduation.rs",
+   "contracts/launchpad-v2/src/rescue.rs",
+   "contracts/launchpad-v2/src/recipient.rs",
+   "contracts/launchpad-v2/src/storage.rs",
+   "contracts/launchpad-v2/src/events.rs",
+   "contracts/launchpad-v2/src/test.rs",
+   "contracts/launchpad-v2/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00",
+   "CT-01",
+   "CT-02",
+   "CT-03",
+   "CT-04"
+  ],
+  "brief": "Implement §5 of DESIGN-stellar-contracts-v2.revised.md completely.\n- Curve maths: v1 curve.rs with Monad's clamp (net = min(net, remaining); the snipe bucket absorbs rounding; M:contracts/src/BondingCurve.sol:258-274).\n- Constructor: durations validated with dyor-common (with fallback_delay and harvest_interval); requires locker.harvest_interval() == durations.harvest_interval (InvalidConfig, finding F6); checks that the XLM address is a Stellar Asset Contract; the initial venue table in order (ids follow it).\n- launch: salt from creator + nonce with NonceUsed and the token_address view (decision L15); the 10 XLM fee (decision O6) moves creator → launchpad and is booked as curve.launch_fee_due; expected LaunchTerms by value, durations included; the token is deployed with lock_from, fixed_excluded, sharing_quote, the Soroswap factory, the Aquarius router (always passed, finding F2) and the current treasury, which the token excludes from holder rewards (finding V2); temporary Exempt entry; initial buy. launch writes no instance key.\n- set_quote accepts only a Stellar Asset Contract (asset.executable() == Some(Executable::StellarAsset), else QuoteNotSac, finding F17).\n- Trading: every fee, split and snipe value comes from the launch's own pinned Launch record (fee_bps, protocol_share_bps, creator_fee_bps, snipe_schedule, snipe_step_secs), never from Config, as Monad pins per curve and per pool (M:contracts/src/BondingCurve.sol:294; LaunchpadFactory.sol:539; MemeHook.sol:233-234; finding V1). Snipe by ledger timestamp in snipe_step_secs (5 s, L11); fee routing to curve.protocol_fees, curve.creator_fees or the holders (transfer to the token, then notify_reward(this, quote, x)); completion at real_quote == threshold, with no graduation attempt (L3).\n- graduate (the launch's venue only) and graduate_fallback (the fallback venue only, and only from stuck_since + fallback_delay, else FallbackTooEarly, finding F14) through try_ into the executor with exact pre-auth; a failure is decoded with dyor-common's grad_failure and recorded as grad_fail{venue, origin, code, …} and Failed(GradFailure) (finding V10). The result checks of §5.5 panic GraduationInvalid. After success: exclude the pool, unlock, burn the whole remaining balance (L7), dust to protocol_fees, locker.register with LAUNCH_HARVEST_BPS = 10000, stuck_since reset.\n- Stuck: stuck_since on the first recoverable failure; mark_stuck after the grace; the venue-locked fallback rule (locked_fallback delay or allow_fallback) on top of fallback_delay.\n- rescue: admin from rescue_admin, anyone from rescue_public (O2); burn the launchpad's balance, unlock (L6), snapshot refund_quote and refund_supply. refund: pro-rata, no fees, burns the holder's tokens.\n- Creator recipient: transfer; takeover in temporary storage (wait + window; cancel by the admin or the recipient); on any change the booked creator fees move to CreatorOwed(old, quote) (L14); claim_owed. Unharvested LP growth is the declared exception (finding F3).\n- Treasury and venue proposals with the timelock and window; cancel by the admin or the guardian (L8). Guardian (finding F16): two-step handoff (transfer_guardian, accept_guardian), renounce_guardian; the admin's propose_guardian / apply_guardian / cancel_guardian through the timelock, which the guardian can't cancel and a handoff doesn't clear.\n- claim_protocol_fees(tokens ≤ 20) to the treasury current at the call (lead default, finding F3), whitelist, launch pause, status (with fallback_at) and every view.\n- harvest_payees returns the same list for the quote and the base side, built from the launch's pinned Launch.protocol_share_bps, never Config (finding V1): [treasury ps, then the token (notify) when sharing is on or the recipient when it is off, BPS − ps] (decisions O1 and L13, finding F1). The treasury holds the launch tokens it receives; nothing sells them (lead default, finding V2).\n- Errors (37, numbered ERR_BASE + 1·100 + n, finding V10) and events exactly as §5.6–5.7. No upgrade function and no instance TTL extension in user calls.",
+  "acceptance": [
+   "All 14 v1 launchpad tests and 4 curve tests are ported; buy_clamps_at_threshold asserts net == remaining exactly",
+   "Terms mismatch on any single field (durations included) fails TermsChanged; a reused nonce fails NonceUsed; two creators' launches built against the same pre-state both apply, and launch writes no instance key",
+   "The 10 XLM fee (100,000,000 stroops) moves only creator → launchpad and is booked on the launch; claim_protocol_fees sends it and the quote-side protocol fees to the treasury current at the call in one transfer per asset; more than 20 tokens fail TooManyTokens; a treasury without the quote's trustline makes the whole call fail with nothing moved",
+   "set_quote with a Wasm token or an account address fails QuoteNotSac; a SAC is accepted (I-L11); a constructor with a locker whose harvest_interval differs from the durations fails InvalidConfig",
+   "The snipe tax steps at 0/5/10/15/20 s; exempt buyers, the creator and the initial recipient pay none; more than 32 exemptions fail",
+   "With sharing on, the creator part reaches the token and holders can claim it in the next ledger; with sharing off, claim_creator_fees pays the current recipient; after a recipient change the earlier fees are claimable only by the old recipient through claim_owed",
+   "harvest_payees returns the same 50/50 list for both sides, with the token as the notify payee when sharing is on and the recipient when it is off; after a treasury change it names the new treasury; set_fees with a different protocol_share_bps after graduation leaves harvest_payees and the next harvest's split unchanged, and during the curve leaves that launch's route_fees split unchanged (finding V1)",
+   "Completion closes buys and sells; graduate on Soroswap succeeds at the curve's final price (I-L6); the pool is excluded before any later-ledger release; the LP is registered; stuck_since is 0 (I-L9)",
+   "A recoverable executor failure leaves reserves, balances and lock state unchanged (I-L5), sets stuck_since once, and retries don't move it; graduate_fallback fails FallbackTooEarly until stuck_since + fallback_delay, also right after a single transient failure (I-L12), and a primary retry inside the delay graduates on the creator's venue; graduate_fallback never calls the primary executor (a test executor panics if called again); a recoverable failure is recorded with the executor's namespaced origin and code (exec-soroswap PoolNotEmpty as origin 3, code 10_303; qa-exec-fail ForcedFailure as origin 5, code 10_502, finding V10)",
+   "Test executors that over-report or under-report the used amounts, report a wrong pool, or send the LP elsewhere make graduate abort with GraduationInvalid and change nothing",
+   "Rescue is refused before rescue_admin, admin-only until rescue_public, open to anyone after; the token unlocks; refunds pay floor(tokens·refund_quote/refund_supply) in any order (property test), Σ refunds ≤ refund_quote, and buys and sells stay closed",
+   "The guardian can cancel treasury and venue proposals and nothing else; the handoff needs accept_guardian; the admin's guardian replacement applies after the timelock, the guardian can't cancel it and a handoff doesn't clear it; every privileged function rejects a wrong signer (mock_auths); admin calls never change a live launch (I-L4)",
+   "With sharing on, the launch token is built with the treasury excluded; after apply_treasury, the next harvest excludes the new treasury before paying it launch tokens, and the treasury's pending rewards stay 0 in both assets (finding V2)",
+   "Release WASM ≤ 110 KB"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && cargo test -p dyor-launchpad-v2",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-launchpad-v2 --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && wc -c dist/dyor_launchpad_v2.wasm"
+  ]
+ },
+ {
+  "id": "CT-06",
+  "title": "moment-nft: one SEP-50 contract per Moment, edition number = token id",
+  "files": [
+   "contracts/moment-nft/Cargo.toml",
+   "contracts/moment-nft/src/lib.rs",
+   "contracts/moment-nft/src/test.rs",
+   "contracts/moment-nft/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00"
+  ],
+  "brief": "Implement §10 of DESIGN-stellar-contracts-v2.revised.md (decision L9).\n- Constructor (minter, name, symbol, metadata_uri, creator, royalty_bps, media_hash, place, date, external_url). The contract's address is the Moment's id; there is no numeric moment id.\n- Built on OZ NonFungibleToken Base with the royalties default set to the creator.\n- mint(to, qty): minter only, 1 to 20, sequential edition numbers from 1 via Base::mint, refused once closed.\n- close(): minter only, once; freezes edition_size; emits closed.\n- token_uri returns the Moment's metadata URI. Provenance views: media_hash, place, date, external_url.\n- No burn and no admin. Errors are numbered ERR_BASE + 8·100 + n (finding V10).",
+  "acceptance": [
+   "Edition numbers start at 1 and are contiguous across mints; the first edition number is returned",
+   "Minting after close and closing twice both fail; edition_size equals minted",
+   "royalty_info pays royalty_bps to the creator",
+   "Only the minter can mint or close (auth test)",
+   "cost_estimate for mint(…, 20) is ≤ 25 write entries"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-moment-nft",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-moment-nft --all-targets -- -D warnings"
+  ]
+ },
+ {
+  "id": "CT-07",
+  "title": "moment-coin: capped, burnable per-Moment SEP-41 coin",
+  "files": [
+   "contracts/moment-coin/Cargo.toml",
+   "contracts/moment-coin/src/lib.rs",
+   "contracts/moment-coin/src/test.rs",
+   "contracts/moment-coin/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00"
+  ],
+  "brief": "Implement §11 of DESIGN-stellar-contracts-v2.revised.md.\n- Constructor: (minter, name, symbol, cap, initial_to, initial_amount). 7 decimals. OZ Base plus capped plus burnable.\n- mint(to, amount): minter only.\n- No admin, pause or tax. Errors are numbered ERR_BASE + 9·100 + n (finding V10); OZ's ExceededCap keeps its own code.",
+  "acceptance": [
+   "The initial mint lands at initial_to; a mint beyond the cap fails ExceededCap",
+   "Only the minter can mint; holders can burn their own coins and burn_from with an allowance",
+   "Release WASM ≤ 40 KB"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo test -p dyor-moment-coin",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-moment-coin --all-targets -- -D warnings"
+  ]
+ },
+ {
+  "id": "CT-08",
+  "title": "moments-graduator: atomic coin deployment and Soroswap seeding",
+  "files": [
+   "contracts/moments-graduator/Cargo.toml",
+   "contracts/moments-graduator/src/lib.rs",
+   "contracts/moments-graduator/src/test.rs",
+   "contracts/moments-graduator/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00",
+   "CT-02",
+   "CT-04",
+   "CT-07"
+  ],
+  "brief": "Implement §12 of DESIGN-stellar-contracts-v2.revised.md. Constructor (moments, coin_wasm_hash, executor, locker, soroswap_factory). graduate(MomentGradArgs{nft, usdc, reserve, pool_coins, name, symbol, expected_coin}):\n- moments.require_auth(); any other caller fails NotMoments;\n- read moments' USDC balance, then pull the reserve USDC from moments (pre-authorized);\n- deploy moment-coin with salt sha256(\"dyorhq/moment-coin/v2\" ‖ nft.to_xdr()) and an initial mint of pool_coins to itself;\n- pre-authorize its own transfers and call the executor with lp_to = locker and min_liquidity = isqrt(pool_coins·reserve) − SOROSWAP_MIN_LIQ − 1 (the executor's callers include the graduator, decision L4);\n- run the result checks inside its own frame, before any leftover moves (findings F15 and V9): the USDC side (the executor's quote_used within GRAD_DUST_BPS of reserve and ≤ reserve, and equal to the drop in the graduator's USDC balance); the coin side (pool_coins − pool_coins·GRAD_DUST_BPS/BPS ≤ token_used ≤ pool_coins, and the drop in the graduator's coin balance since the mint equals token_used); liquidity ≥ min_liquidity; pool == soroswap_factory.get_pair(coin, usdc); lp_token.balance(locker) ≥ liquidity; coin == expected_coin;\n- burn the leftover coins and return the leftover USDC to moments, then check usdc_used + usdc_returned == reserve and that the drop in moments' USDC balance equals usdc_used; return coin_used = token_used;\n- a failed check returns the recoverable error GraduationInvalid (ERR_BASE + 10·100 + 3 = 11_003; all errors use tag 10, finding V10), so moments' try_ rolls back the whole frame and records the failure;\n- return MomentGradResult.\nAlso the coin_address(nft) view. Tests call it from a harness through try_, to prove that a failure rolls back the coin deployment. On testnet-qa a second instance with qa-exec-fail as its executor serves the failing Moments stack (finding F5); the code is the same.",
+  "acceptance": [
+   "coin_address(nft) equals the deployed coin address",
+   "On success the pool opens at reserve/pool_coins, the LP is at the locker, and coin total_supply equals pool_coins minus any burned leftover",
+   "A forced failure through try_ leaves no coin contract deployed, and the moments harness keeps its USDC",
+   "A lying executor (qa-exec-fail mode 2, or a test executor reporting a wrong pool or wrong amounts) makes graduate return GraduationInvalid through try_, with no coin deployed and every balance unchanged",
+   "Only the configured moments address can call graduate; exec-soroswap refuses a graduator that is not in its callers",
+   "A test executor that seeds the pool with fewer coins than pool_coins while reporting the full amount, or reports token_used outside [pool_coins − 1 bp, pool_coins], or liquidity below the minimum, is rejected through try_ with GraduationInvalid (11_003), with no coin deployed and every balance unchanged (finding V9)"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && cargo test -p dyor-moments-graduator",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-moments-graduator --all-targets -- -D warnings"
+  ]
+ },
+ {
+  "id": "CT-09",
+  "title": "moments-v2: policy, NFT-addressed publish, collect, keeper graduation, vesting, expiry",
+  "files": [
+   "contracts/moments-v2/Cargo.toml",
+   "contracts/moments-v2/src/lib.rs",
+   "contracts/moments-v2/src/policy.rs",
+   "contracts/moments-v2/src/collect.rs",
+   "contracts/moments-v2/src/graduation.rs",
+   "contracts/moments-v2/src/vesting.rs",
+   "contracts/moments-v2/src/storage.rs",
+   "contracts/moments-v2/src/events.rs",
+   "contracts/moments-v2/src/test.rs",
+   "contracts/moments-v2/test_snapshots/**"
+  ],
+  "depends_on": [
+   "CT-00",
+   "CT-04",
+   "CT-06",
+   "CT-07",
+   "CT-08"
+  ],
+  "brief": "Implement §9 of DESIGN-stellar-contracts-v2.revised.md.\n- Governance and guardian, with the dual pause. Policy propose/apply/cancel with the timelock and window from the durations, and Monad's validation adapted to 7 dp.\n- publish with expected MomentsTerms by value (durations and harvest constants included), USDC only (L9), the price ceiling, an NFT deployed per Moment with salt from creator + nonce (L15, NonceUsed), the predicted coin address from graduator.coin_address(nft), and the bundle rate. Moments are keyed by NFT address; there is no MomentCount, and publish and collect write no instance key.\n- collect: the 20/5/75 split into pull ledgers; terminal clamp to exactly T; entitlement accrual; completion without a graduation attempt (L3).\n- graduate(nft) by anyone (the keeper, the creator or any collector) through try_ into the graduator with the USDC pre-auth and expected_coin; a recoverable failure, including the graduator's in-frame GraduationInvalid, is decoded with grad_failure and recorded as grad_fail{origin, code} (finding V10), and is the only writer of stuck_since (finding F15); moments repeats the result checks of §9.3, including the coin_used bound (finding V9), as defence in depth and panics GraduationInvalid if they fail; on success stuck_since = 0, nft.close and locker.register with MOMENT_HARVEST_BPS = 6667.\n- There is no Moments mark_stuck (finding F15). expire under Monad's rules plus stuck_since ≠ 0, which only a recorded failed attempt sets, or the backstop: GraduationPending, now ≥ deadline and now ≥ completed_at + pending_backstop (30 d production, finding V11); the expired event says whether the backstop applied. Invariant I-M8.\n- Vesting claims with period = vest_period: collectors 60/80/100 at 0/1/2 periods; creator 20% + 16% per period; claim_all of at most 20; the supply identity check.\n- withdraw_creator, withdraw_platform and withdraw_treasury pay the snapshotted beneficiaries.\n- harvest_payees returns {quote: [creator 4000, platform 6000], base: []} (the coin side is burned): Monad's 0.2 / 0.3 / 0.5 / 0.5 ratios side by side (decision L13 as corrected, finding F1), with compounded : harvested = 3,333 : 6,667 (finding V3) and a third of fee value kept in the pool instead of Monad's two thirds (lead default, finding V4); MOMENT_HARVEST_BPS and MOMENT_HARVEST_CREATOR_BPS are compile-time constants.\n- Durations are immutable constructor args validated with dyor-common (no grace; harvest_interval and pending_backstop included); the constructor requires locker.harvest_interval() == durations.harvest_interval (finding F6). No upgrade function and no instance TTL extension in user calls. Errors are numbered ERR_BASE + 7·100 + n (finding V10).",
+  "acceptance": [
+   "The 7 v1 Moments tests are ported where they still apply; publish and collect are USDC only",
+   "A reused (creator, nonce) fails NonceUsed; two creators' publishes built against the same pre-state both apply; publish and collect write no instance key",
+   "The terminal clamp lands the reserve exactly on T (I-M1); the excess is never pulled",
+   "The pool coins + allocation + Σ entitlements == S identity holds at graduation (I-M3)",
+   "Vesting boundaries pass at one period minus one second against one period, and at 2 and 5 periods, with both the production and the testnet-qa durations; claims never exceed vested (I-M4)",
+   "Expiry works in all branches; a GraduationPending Moment without a recorded failure can't be expired before completed_at + pending_backstop (refused one second before) and can after it, never before the deadline (I-M7, I-M8, finding V11); a failed graduate by any caller, including a graduator GraduationInvalid, starts the clock and makes it expirable after stuck_expiry; the 70/30 split",
+   "A graduator returning GraduationInvalid is recorded as grad_fail with origin 10 and code 11_003 and nothing else changed (finding V10); graduator results that still slip past it with a wrong coin, wrong USDC accounting or a wrong pool abort with GraduationInvalid; a successful graduation resets stuck_since (I-M6)",
+   "The policy timelock, lapse and cancel paths work; only the guardian lifts its pause; pauses affect publish only (I-M5); a constructor with a locker whose harvest_interval differs fails",
+   "Withdrawals pay only the snapshotted beneficiaries, even after a policy change",
+   "At T = 771.4285714 USDC with 10% allocation, the rate gives 50,000 coins per USDC (Monad parity vector)",
+   "Release WASM ≤ 110 KB"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && cargo test -p dyor-moments-v2",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy -p dyor-moments-v2 --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && wc -c dist/dyor_moments_v2.wasm"
+  ]
+ },
+ {
+  "id": "CT-10",
+  "title": "Cross-contract integration, property, probe and resource-budget suite; commit dist",
+  "files": [
+   "contracts/integration-tests/Cargo.toml",
+   "contracts/integration-tests/src/lib.rs",
+   "contracts/integration-tests/tests/launchpad_journeys.rs",
+   "contracts/integration-tests/tests/moments_journeys.rs",
+   "contracts/integration-tests/tests/properties.rs",
+   "contracts/integration-tests/tests/reentry.rs",
+   "contracts/integration-tests/tests/probes.rs",
+   "contracts/integration-tests/tests/budgets.rs",
+   "contracts/integration-tests/tests/monad_vectors.rs",
+   "contracts/dist/**"
+  ],
+  "depends_on": [
+   "CT-01",
+   "CT-02",
+   "CT-03",
+   "CT-04",
+   "CT-05",
+   "CT-06",
+   "CT-07",
+   "CT-08",
+   "CT-09"
+  ],
+  "brief": "Use contractimport! on the real dist WASMs plus the Soroswap and Aquarius fixtures to run §18.2–18.3 of DESIGN-stellar-contracts-v2.revised.md.\nJourneys:\n- launch → buys → complete → keeper graduate (Soroswap, then Aquarius if CT-03 was a go) → router swaps → harvest → both sides split 50/50: holder claims of quote and launch-token rewards (sharing on), recipient payouts on both sides (sharing off), protocol sweep of both sides (finding F1); the treasury's launch tokens earn no holder rewards, also after a treasury change (finding V2); set_fees after graduation leaves the next harvest's split unchanged (finding V1);\n- qa-exec-fail mode 0 → stuck → graduate_fallback refused until fallback_delay → fallback; mode 1 → mark_stuck → fallback; mode 2 → GraduationInvalid abort → mark_stuck → fallback; venue-locked quote → fallback only after the delay or allow_fallback;\n- forced failure → admin rescue at 7 d and public rescue at 30 d → pro-rata refunds in random order → full exit;\n- a third-party Soroswap pool of a sharing launch → exclude_pool (refused below the floor, accepted above) → stranded owed in both assets to the treasury;\n- a recipient change between harvests: the unharvested growth goes to the new recipient (the declared exception, finding F3); with swap volume above the round cap for several intervals, the backlog left after one harvest matches the residual CT-13 reports (finding V7);\n- Moments publish → terminal collect → keeper graduate → vesting over 5 periods → harvests with the cap binding (compounded : harvested stays (BPS − hb) : hb = 3,333 : 6,667, coin side burned, finding V3); Moments expiry from Collecting, and from GraduationPending only after a recorded failure (a failing-stack graduator on qa-exec-fail modes 0 and 2); a mode-1 Moment stays pending and expire is refused until completed_at + pending_backstop, then succeeds with the 70/30 split (finding V11);\n- the same journeys with the testnet-qa durations of §14.3.\nProbes: one re-entry probe per row of §3.3 (including the locker's exclude_treasury call); the error-code probe (an exec-soroswap PoolNotEmpty and an exec-aquarius PaymentUnavailable, and a graduator GraduationInvalid against an executor error, each record a distinct namespaced (origin, code), finding V10); the graduator coin-side probe (a test executor that seeds fewer coins than it reports is rejected, finding V9); squat probes (an attacker calls each executor, transfers the token to a pair, seeds a quote-only pair); the AQUA drain probe; the reward-pool probes (transfers from the token's own address; 50 dust pairs all refused BelowFloor); the SAC-only quote probe; hot-key footprints for launch, buy, sell, refund, publish and collect (§3.5).\nAlso: stateful property tests across contracts (I-L*, I-T*, I-K1, I-M*), including the compounding ratio; differential vectors against Monad (Launchpad.t.sol curve values including the clamp, MomentsModels.swift maths), scaled for decimals; cost_estimate().resources() ceilings from §18.3, including the worst-case graduate and graduate_fallback per venue and exclude_pool ≤ 60M.\nThen build, record dist/SHA256SUMS for all 13 WASMs, and commit dist. Measure the rent per action and report it, replacing the spec's estimates. After a CT-19 fix, rebuild dist so CT-19 can re-review the new hashes.",
+  "acceptance": [
+   "Every journey passes against the real WASMs, with production and testnet-qa durations",
+   "Every invariant has a property test that runs 1,000 cases in CI",
+   "The re-entry probes prove that no path re-enters a contract already on the stack",
+   "The squat, AQUA-drain, reward-pool, quote, error-code and graduator coin-side probes fail as the spec says, and the hot-key test shows no instance write and no cross-launch key in trade, refund, publish or collect footprints other than the shared SAC balance",
+   "Budget ceilings are encoded, and the suite fails when one is exceeded",
+   "Each v2 WASM is within its size budget (launchpad-v2 and moments-v2 ≤ 110 KB, qa-exec-fail ≤ 16 KB, others ≤ 64 KB)",
+   "dist/SHA256SUMS is updated; the v1 hashes are unchanged",
+   "A rent and budget table per action is reported in the hand-off (not committed as a report file)"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && cargo test --workspace",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && PROPTEST_CASES=1000 cargo test -p dyor-integration-tests -- --nocapture",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cat dist/SHA256SUMS"
+  ]
+ },
+ {
+  "id": "CT-11",
+  "title": "v2 deploy and owner admin scripts, testnet and testnet-qa economics, QA profile guards, reviewed-hash check",
+  "files": [
+   "backend/scripts/deploy-contracts-v2.ts",
+   "backend/scripts/admin-v2.ts",
+   "backend/scripts/lib/contract-ids.ts",
+   "backend/scripts/lib/contract-ids.test.ts",
+   "backend/scripts/lib/v2-profile.ts",
+   "backend/scripts/lib/v2-profile.test.ts",
+   "backend/scripts/lib/reviewed-hashes.ts",
+   "backend/scripts/lib/reviewed-hashes.test.ts",
+   "backend/scripts/economics/testnet-v2.json",
+   "backend/scripts/economics/testnet-qa-v2.json"
+  ],
+  "depends_on": [
+   "CT-10"
+  ],
+  "brief": "§14, §16 and §17 of DESIGN-stellar-contracts-v2.revised.md.\ndeploy-contracts-v2.ts --deployment <testnet|testnet-qa> [--dry-run] [--aquarius auto|off] [--fund-aqua-float]:\n- checks every v2 WASM's sha256 against contracts/review/reviewed-wasm.sha256 (written by CT-19) with lib/reviewed-hashes.ts and refuses a missing file or any mismatch, for testnet and testnet-qa alike; a dry run prints the comparison (decision L16, finding F13);\n- uploads the v2 WASMs; precomputes every singleton id from (deployer, fixed salt) with contract-ids.ts;\n- deploys in order: the executors (callers = launchpad-v2 and moments-graduator), the locker (harvest_interval from the durations), the graduator, launchpad-v2 (initial venue table, durations, TTL policy, guardian) and moments-v2 (durations, policy, guardian), with peers as constructor args;\n- configures quotes (Stellar Asset Contracts only), venues and policy from economics/<name>-v2.json; reads the venue table back from venues() and uses those ids everywhere (finding F8);\n- writes _shared/deployments/<name>-v2.json (ids, the venue table with ids and kinds as read from the chain, aquarius {enabled, reason}, WASM hashes, public roles, durations, deploy ledger, generation entry; never a key; no skip list).\nAny other deployment name, mainnet included, is refused (decision O4).\nv2-profile.ts holds the production and testnet-qa duration sets (equal to dyor-common's, with fallback_delay, harvest_interval and pending_backstop, findings F6 and V11) and the guards: QA durations, qa-exec-fail, the failing Moments stack, key generation and SMOKE=1 are refused for every deployment except testnet-qa (O3).\nKeys:\n- testnet (the owner's deploy, O5): DEPLOYER_SECRET read silently from the environment; ADMIN_PUBLIC, LAUNCHPAD_GUARDIAN_PUBLIC, GOVERNANCE_PUBLIC, MOMENTS_GUARDIAN_PUBLIC and TREASURY_PUBLIC as public addresses; the launchpad guardian must differ from the admin and the Moments guardian from governance;\n- testnet-qa: throwaway QA keys (deployer, admin, guardians, governance, treasury, QA asset issuer, qa-exec-fail admin) generated into a git-ignored file under .secrets/ (mode 600), written and read only by the scripts; never print a secret.\nPreflight: the treasury exists and trusts every enabled classic quote asset (USDC on testnet; USDC and the QA asset on testnet-qa), because claim_protocol_fees is all-or-nothing per call (finding F9). On testnet-qa the script creates the QA treasury's USDC and QA-asset trustlines before the preflight.\ntestnet-qa extras: the QA test asset and its SAC; one qa-exec-fail instance (callers = launchpad-v2 and the failing stack's graduator; qa_admin = the QA key) as one venue; the venue-locked QA quote with venues_allowed = [the qa-exec-fail id as read] and fallback = the Soroswap id as read; the failing Moments stack (a second moments-v2 and moments-graduator from the same WASMs, with qa-exec-fail as the graduator's executor, finding F5). The keeper skip list is CT-15's lite.keeper_skip table, not part of the deployment file.\nAquarius float (findings F11 and V8): if CT-03 was a go and --aquarius isn't off, the script acquires the AQUA before it deploys anything, because the venue table is a launchpad constructor argument. It adds an AQUA trustline to the deployer and swaps XLM → AQUA through the Aquarius testnet router's XLM–AQUA pool (functions, pool and asset from CT-03's fixtures.json notes), after a depth check: estimate 1 XLM and the full amount, and require the full amount to return at least the target (10 × pool_payment on testnet-qa, 50 × on testnet) plus 10% at an average rate within 3% of the 1-XLM rate, spending at most 2,000 XLM. After deploying exec-aquarius it sends the AQUA through the AQUA SAC and reports float() against the target. On testnet-qa the step runs by default from the QA deployer; if the depth check or the swap fails, or with --aquarius off, the script deploys without exec-aquarius and without the Aquarius venue and writes aquarius {enabled: false, reason} into the deployment file. On the owner's testnet the swap runs only with --fund-aqua-float (from the owner's deployer key); otherwise the script reports the float for the owner to fund.\nEconomics files (§14.1–14.2): launch fee 10 XLM (decision O6); XLM phantom 2,000; USDC phantom 20 (L10); Aquarius as venue with fee_fraction 30 and max_pool_payment 10 AQUA only if CT-03 was a go (L2); Moments threshold 10 USDC and the policy of §14.2.\nadmin-v2.ts builds unsigned XDR for: rescue, allow_fallback, takeover propose and cancel, treasury propose and cancel (admin or guardian), venue propose, cancel and enable, quotes, the guardian handoff (transfer, accept, renounce) and the admin's guardian replacement (propose, apply, cancel), policy propose/apply/cancel, pauses, and the v1 cutover (v1 launchpad set_launches_enabled(false); v1 Moments set_policy with the current platform and royalty values read from config() and publishing false). It reads the signing account's signers and thresholds and refuses to build when one signer can meet a multi-signer account's medium threshold alone. It never signs and never submits.\nNothing runs against a live network in this package.",
+  "acceptance": [
+   "deno check passes on both scripts and the lib files",
+   "A dry-run prints the planned ids, constructor args, economics and the reviewed-hash comparison with no secret values; contract-ids.ts matches the SDK's contract-id derivation in a unit test",
+   "reviewed-hashes tests: a missing reviewed file, a WASM differing by one byte and a WASM absent from the list are each refused; an exact match is accepted; the check runs for testnet and testnet-qa",
+   "v2-profile tests: the production and QA sets equal dyor-common's, fallback_delay, harvest_interval and pending_backstop included; QA durations, qa-exec-fail, the failing Moments stack, key generation and SMOKE=1 are refused for testnet; mainnet and unknown deployment names are refused; a launchpad guardian equal to the admin is refused",
+   "Venue ids are never hardcoded: with Aquarius absent, the qa-exec-fail venue gets the next id and the venue-locked quote's venues_allowed uses that id (unit test against a mocked venues() reply)",
+   "The preflight refuses a treasury without a trustline for any enabled classic quote asset, including the QA asset on testnet-qa",
+   "The economics files match spec §14.1–14.2 exactly (launch fee 10 XLM = 100,000,000 stroops, USDC phantom 20, XLM phantom 2,000, Moments 10 USDC, Aquarius tier 30 when enabled)",
+   "admin-v2.ts output is unsigned XDR that the StellarKit decoder can parse; the cutover builder reads config() before set_policy; the threshold check refuses a 2-signer account with medium threshold 1",
+   "AQUA step (finding V8), against mocked router replies: a deep XLM–AQUA pool passes the depth check and the plan funds the float to its target; a thin pool, a failed swap or --aquarius off each yield a testnet-qa plan without exec-aquarius or the Aquarius venue, with aquarius.enabled false and the reason; on testnet nothing is swapped without --fund-aqua-float; the swap never spends more than 2,000 XLM"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno check --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts-v2.ts backend/scripts/admin-v2.ts backend/scripts/lib/contract-ids.ts backend/scripts/lib/v2-profile.ts backend/scripts/lib/reviewed-hashes.ts",
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/scripts/lib/"
+  ]
+ },
+ {
+  "id": "CT-12",
+  "title": "Network registry, deployment generations, pinned contracts and durations",
+  "files": [
+   "backend/supabase/functions/_shared/networks.ts",
+   "backend/supabase/functions/_shared/deployments/index.ts",
+   "backend/scripts/gen-pinned.ts",
+   "backend/supabase/functions/_shared/v2_errors.ts (generated by gen-pinned.ts)",
+   "backend/tests/unit/v2_errors.test.ts",
+   "ios/Packages/StellarKit/Sources/StellarCore/Network/Network.swift",
+   "ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+Testnet.swift"
+  ],
+  "depends_on": [
+   "CT-11",
+   "parity I1 merge (WP-02, WP-04)"
+  ],
+  "brief": "§20.1 of DESIGN-stellar-contracts-v2.revised.md.\n- Registry roles: launchpadV2, momentsV2, lpLocker, execSoroswap, execAquarius (only when the deployment has it), momentsGraduator; runtime WASM hashes launchTokenV2, momentNft and momentCoin; the deployment's durations (both sets, with fallback_delay, harvest_interval and pending_backstop, findings F6 and V11).\n- Generations (v1 retired, v2 live) and deployments testnet, testnet-v2 and testnet-qa-v2, selected with LITE_DEPLOYMENT.\n- qa-exec-fail and the failing Moments stack (momentsV2QaFail, momentsGraduatorQaFail) exist only for testnet-qa-v2 and are never written into PinnedContracts for the app, in release or debug builds (finding F4).\n- PinnedContracts gains runtimeWasmHashes, durations and maxLaunchFeeStroops = 100,000,000 (10 XLM, decision O6: the verifier's bound on a launch's fee, finding F18); gen-pinned.ts writes them. Extend contractAllowlist.\n- The treasury is not a pinned role for any user transaction (the launch fee goes to the launchpad, decision O6).\n- gen-pinned.ts also generates _shared/v2_errors.ts (finding V10): every namespaced v2 error code (ERR_BASE + tag·100 + n) with its contract and name, read from the error enums in the dist WASMs' contract specs, plus OpenZeppelin's and the SAC's known codes for origin 0, and a function that names an (origin, code) pair. CT-13, CT-14, CT-15 and the API use it; nothing else hardcodes an error code.\n- Until the owner's v2 deployment file exists, nothing is pinned for v2 and the v2 routes answer not_deployed.",
+  "acceptance": [
+   "The v1 pins and behaviour are unchanged when no v2 deployment file exists",
+   "gen-pinned output contains the v2 roles, runtime hashes, durations (with fallback_delay, harvest_interval and pending_backstop) and maxLaunchFeeStroops 100000000, no secret, no qa-exec-fail role and no failing-stack role",
+   "v2_errors.ts is generated from the dist WASMs, has one entry per error of every v2 contract inside its tag's range with no duplicate code, and names (4, 10404) PaymentUnavailable, (3, 10304) LiquidityTooLow and (10, 11003) GraduationInvalid (finding V10)",
+   "swift test and the backend unit tests pass"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/",
+   "cd ~/Hackathon-b17/multichain-stellar/ios/Packages/StellarKit && swift test"
+  ]
+ },
+ {
+  "id": "CT-13",
+  "title": "Launchpad v2 backend module: economics, status, plan builders",
+  "files": [
+   "backend/supabase/functions/_shared/launchpad_v2.ts",
+   "backend/tests/unit/launchpad_v2.test.ts"
+  ],
+  "depends_on": [
+   "CT-12"
+  ],
+  "brief": "§20.2–20.3 of DESIGN-stellar-contracts-v2.revised.md for launches.\n- /v1/economics launchpad block: launchFee (10 XLM, booked, decision O6), venues, per-quote venuesAllowed, fallbackVenue and venueLocked, durations (with fallbackDelay and harvestInterval), harvest parameters (interval from the durations; the 50/50 split on both sides, per launch the launch's pinned split, finding V1; holders paid in the quote and the token, finding F1; treasuryLaunchTokens \"held\", finding V2), exclusionFloor, aquariusFloat when Aquarius is enabled, and terms from preview_launch_terms.\n- Live reads: status (phase, stuck_since, mark-stuck time, fallback_at, rescue times, refund rate, and the last failure's origin, code and name from v2_errors.ts, finding V10), rewards in both assets, recipient, pending takeover, CreatorOwed.\n- XLM sufficiency and Max (finding F18): launch_create computes spendable = XLM balance − minimum balance ((2 + subentries + num_sponsoring − num_sponsored) × 0.5 XLM) − the XLM selling liabilities of the account's open DEX offers (finding V12) − the 10 XLM fee − the simulated resource fee and rent − a 0.5 XLM buffer, refuses with insufficient_xlm and the shortfall when it is too low, and the launch preview returns maxInitialBuy (spendable for an XLM quote, the quote balance otherwise).\n- Builders: launch_create (random 64-bit nonce; token_address prediction; the XLM fee to the launchpad in spend; terms by value; venue; sharing; exempt list), launch_buy and launch_sell (Curve phase), launch_refund (refund, with the token burn as outflow), launch_graduate, launch_graduate_fallback (offered only from fallback_at), launch_mark_stuck and launch_rescue (venue labels), launch_claim (permissionless), launch_claim_owed, launch_claim_rewards (token.claim, both assets), and the recipient transfer/cancel/execute; on a graduated launch the transfer and execute plans start with a permissionless locker.harvest step when the interval allows (finding F3); harvests can't repeat inside one plan (the interval guard), so when the growth left after that step is above one round's cap, the plan returns harvestBacklog {residualQuote, residualToken, roundsToDrain, nextHarvestAt} and the intent shows the residual that would go to the new recipient and offers to wait for the hourly harvests (finding V7).\n- Intents with calls, spend and display fields for the verifier.\nRegistration into the route table happens in CT-18.",
+  "acceptance": [
+   "Every builder's transaction passes verifyTransaction against its own intent in unit tests with simulated XDR",
+   "The launch_create intent declares the 10 XLM fee paid to the launchpad (plus the initial buy for XLM quotes) and shows the venue, terms and durations",
+   "launch_create refuses with insufficient_xlm when the account can't cover the minimum balance, the XLM in open DEX offers, the 10 XLM fee and the fees; maxInitialBuy for an XLM quote leaves exactly that much behind (unit tests with and without subentries, and with an open offer selling XLM, finding V12)",
+   "launch_refund declares the burned launch tokens as outflow and shows the fixed refund rate",
+   "Labels never say 'Soroswap' for an Aquarius launch; launch_graduate_fallback is not offered before fallback_at",
+   "Recipient transfer and execute plans on a graduated launch put the harvest step first when the interval allows; with a mocked backlog above one round's cap the intent carries harvestBacklog with the residual and roundsToDrain, and with one under it none (finding V7)",
+   "deno check passes"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/launchpad_v2.test.ts",
+   "cd ~/Hackathon-b17/multichain-stellar && deno check --config backend/supabase/functions/deno.json backend/supabase/functions/_shared/launchpad_v2.ts"
+  ]
+ },
+ {
+  "id": "CT-14",
+  "title": "Moments v2 backend module: policy, terms, NFT-addressed plan builders",
+  "files": [
+   "backend/supabase/functions/_shared/moments_v2.ts",
+   "backend/tests/unit/moments_v2.test.ts"
+  ],
+  "depends_on": [
+   "CT-12"
+  ],
+  "brief": "§20.2–20.3 of DESIGN-stellar-contracts-v2.revised.md for Moments.\n- The economics block: policy, pending policy, terms (durations, without grace and with harvest_interval and pending_backstop, and the harvest constants included, with the ratio stated as 3,333 : 6,667, finding V3), pauses, FDV and completion gross. Only the main Moments stack is served; testnet-qa's failing stack is never exposed by the API (finding F5).\n- Builders, keyed by the Moment's NFT address: moment_publish (random 64-bit nonce, nft_address prediction, terms by value, allocation, provenance), moment_collect (USDC max_total), moment_claim, moment_claim_all (≤ 20), moment_withdraw, moment_graduate and moment_expire. There is no moment_mark_stuck: Moments have no mark_stuck (finding F15).\n- Status: a GraduationPending Moment shows its expiry time: the later of the deadline and the earlier of stuck_since + stuck_expiry (only with a recorded failure) and completed_at + pending_backstop (finding V11); with a recorded failure, also its origin, code and name from v2_errors.ts (finding V10).\n- The vesting schedule view computed from the contract's claimable and the vest_period.\n- Metadata writing reuses the existing storage path rules.",
+  "acceptance": [
+   "Every builder's transaction verifies against its intent",
+   "Publish carries the policy values and durations the phone displays for the terms guard",
+   "Collect's spend equals max_total in USDC only",
+   "Status gives a pending Moment without a recorded failure the backstop expiry time, and one with a failure the earlier of the two clocks, never before the deadline (finding V11)",
+   "deno check passes"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/moments_v2.test.ts",
+   "cd ~/Hackathon-b17/multichain-stellar && deno check --config backend/supabase/functions/deno.json backend/supabase/functions/_shared/moments_v2.ts"
+  ]
+ },
+ {
+  "id": "CT-15",
+  "title": "Indexer v2, migration, keeper jobs and TTL upkeep",
+  "files": [
+   "backend/supabase/functions/lite-indexer/index.ts",
+   "backend/supabase/functions/lite-indexer/v2_events.ts",
+   "backend/supabase/functions/lite-indexer/v2_keeper.ts",
+   "backend/supabase/functions/_shared/ttl.ts",
+   "backend/supabase/migrations/20261015000012_lite_contracts_v2.sql",
+   "backend/tests/sql/lite_v2_schema_test.sql",
+   "backend/tests/unit/indexer_v2.test.ts"
+  ],
+  "depends_on": [
+   "CT-12"
+  ],
+  "brief": "§20.5–20.6 and §13 of DESIGN-stellar-contracts-v2.revised.md.\n- Replace truncate-on-contract-change (lite-indexer/index.ts:53-61) with per-generation cursors and keys. Launches are keyed by token address and v2 Moments by NFT address; v1 Moments stay keyed by (contract, id).\n- Index every v2 event of §20.5 with pure decode functions: reward events per asset (quote or the token itself), harvested with take and compounded, grad_fail with origin, code (named from v2_errors.ts, finding V10) and fallback_at, and expired with its backstop flag (finding V11). Watch launch tokens (rewards events), pools, per-Moment NFT contracts and coins; on testnet-qa also the failing Moments stack, whose rows never reach the app's feeds. Discover pools of sharing launches from Soroswap factory pair-creation events and the Aquarius router's pool-creation events (event names from CT-03's fixtures.json notes), whether or not Aquarius is a graduation venue.\n- The migration adds generation, contract and nonce columns; the tables launch_rewards (per asset), reward_releases, locker_positions, harvests, refunds, creator_owed, moment_positions, moment_withdrawals, vesting_claims, pool_candidates and keeper_skip; the RLS loop of 20261013000004, PUBLIC execute revoked, and grants to lite_api. keeper_skip is the only skip list (finding F5): kind (launch or moment), target (launch token or Moment NFT address), jobs (graduate, fallback, mark_stuck, rescue, expire, harvest), until, note. Every keeper job, its own rescue and optional expire included, checks it, because the e2e holds off exactly those races (finding V5).\n- Keeper jobs (§20.6): graduate launches and Moments in the ledgers after completion, submitting one recoverable failing attempt so it is recorded (for Moments it starts the stuck clock, finding F15) and otherwise only attempts that simulate successfully; mark_stuck for launches only; during fallback_delay simulate graduate every minute and submit it when it would succeed (finding F14); graduate_fallback only from fallback_at and only when the simulated graduate fails; rescue at rescue_public_at; harvest once per interval above the floor (0 on testnet); claim_protocol_fees in batches of ≤ 20 grouped by quote; token.sweep_protocol; after an apply_treasury, token.exclude_treasury() on every graduated sharing launch (finding V2); exclude_pool for discovered pools only when its simulation passes the floor, re-checking pools under the floor hourly (finding F2); alerts for an AQUA float below 5 × the pool payment, any grad_fail with origin 4 and code 10_404 (PaymentUnavailable) or 10_405 (PaymentTooHigh), matched on the namespaced pair (finding V10), a launch stuck past fallback_delay, and a Moment pending over an hour without a recorded failure and again a day before its backstop (findings F11 and V11); optional Moments expire, including at the backstop; honour keeper_skip only on testnet-qa.\n- TTL upkeep extends the singletons, the per-launch, per-Moment and per-coin instances, the v2 code hashes, and live data entries, including unvested vesting positions.",
+  "acceptance": [
+   "A v2 deploy no longer clears v1 rows; v1 Moments (contract, id) and v2 Moments (NFT address) coexist",
+   "Every decoder has a unit test from a real or synthetic event XDR, including reward events of both assets, grad_fail with origin and code, and expired with the backstop flag",
+   "The SQL test shows the new tables are closed to anon and authenticated",
+   "Keeper jobs are idempotent and never sign for users; graduate_fallback is sent only from fallback_at and only when the simulated graduate fails; no Moments mark_stuck is ever sent; exclude_pool is sent only when its simulation passes; keeper_skip, keyed by launch token or Moment NFT address, is honoured on testnet-qa by every job, rescue and expire included, and ignored with a warning elsewhere (finding V5); exclude_treasury is sent for every graduated sharing launch after an apply_treasury event (finding V2)",
+   "The float and stuck alerts fire in unit tests with synthetic state; a grad_fail with exec-soroswap's LiquidityTooLow (local 4, on chain 10_304) doesn't fire the PaymentUnavailable alert (finding V10)",
+   "deno check passes on both functions"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/indexer_v2.test.ts",
+   "cd ~/Hackathon-b17/multichain-stellar && deno check --config backend/supabase/functions/deno.json backend/supabase/functions/lite-indexer/index.ts",
+   "cd ~/Hackathon-b17/multichain-stellar && backend/scripts/local-stack.sh start && psql -h 127.0.0.1 -p 54329 -d lite -v ON_ERROR_STOP=1 -f backend/tests/sql/lite_v2_schema_test.sql"
+  ]
+ },
+ {
+  "id": "CT-16",
+  "title": "Server and phone verifiers for v2 intents, with shared vectors",
+  "files": [
+   "backend/supabase/functions/_shared/verify.ts",
+   "backend/tests/unit/verify.test.ts",
+   "backend/tests/vectors/**",
+   "ios/Packages/StellarKit/Sources/StellarCore/Verify/TxVerifier.swift",
+   "ios/Packages/StellarKit/Tests/StellarCoreTests/**"
+  ],
+  "depends_on": [
+   "CT-12",
+   "CT-13",
+   "CT-14"
+  ],
+  "brief": "§20.4 of DESIGN-stellar-contracts-v2.revised.md.\n- Allow the new roles. Allow runtime contracts only by pinned WASM hash.\n- Bind arguments:\n  - launch: creator == user; terms decoded; venue and fallback executors pinned; locker, token hash and durations equal the pins;\n  - the XLM launch-fee transfer goes from the user to the pinned launchpad for exactly expected.launch_fee, and expected.launch_fee ≤ the pinned maxLaunchFeeStroops (10 XLM, decision O6, finding F18);\n  - refund: holder == user; the burn is the outflow;\n  - collect: collector == user and max_total ≤ spend;\n  - claim, claim_all, token.claim and claim_owed: account == user with zero spend;\n  - permissionless calls carry no user auth.\n- Regenerate the shared vectors so the Swift and TypeScript verifiers agree, and keep every old vector passing.",
+  "acceptance": [
+   "New negative vectors fail on both sides: the launch fee sent to the treasury or any address other than the launchpad; a fee amount different from the terms; a launch fee above the pinned 10 XLM bound even when the terms state it; an unpinned executor in the terms; durations different from the pins; a refund for another holder; a collect from another account; claim rewards or owed fees for another account; an unknown runtime WASM; a qa-exec-fail venue in terms on the testnet pins",
+   "All existing vectors still pass on both sides",
+   "deno test and swift test are green"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/verify.test.ts",
+   "cd ~/Hackathon-b17/multichain-stellar/ios/Packages/StellarKit && swift test"
+  ]
+ },
+ {
+  "id": "CT-17",
+  "title": "StellarKit LiteClient v2 models, API and runtime-contract checks",
+  "files": [
+   "ios/Packages/StellarKit/Sources/LiteClient/LaunchpadV2.swift",
+   "ios/Packages/StellarKit/Sources/LiteClient/MomentsV2.swift",
+   "ios/Packages/StellarKit/Sources/LiteClient/PlanRunner.swift",
+   "ios/Packages/StellarKit/Tests/LiteClientTests/V2Tests.swift"
+  ],
+  "depends_on": [
+   "CT-13",
+   "CT-14",
+   "CT-16"
+  ],
+  "brief": "§20.1–20.3 of DESIGN-stellar-contracts-v2.revised.md.\n- Codable models for the v2 API shapes: launch terms with durations (fallbackDelay, harvestInterval), the 10 XLM launch fee and maxInitialBuy, venues, status with fallback_at, refund rate, rescue times and the failure's origin, code and name (finding V10), the harvest backlog of recipient-change plans (finding V7), rewards in both assets, the exclusion floor, recipient, owed fees, harvests of both sides; Moments v2 rows keyed by NFT address, policy, terms, positions, vesting, and the failed-graduation state with its expiry time, including the backstop date (finding V11).\n- LiteAPI methods as an extension in the new files.\n- Extend PlanRunner's runtime-contract check (PlanRunner.swift:123-131) from the single launch-token hash to the pinned runtimeWasmHashes.",
+  "acceptance": [
+   "Models decode the fixtures captured from CT-13 and CT-14 responses, including one per state that only testnet-qa reaches (stuck with fallback_at and a named failure, venue-locked wait, rescued with a refund rate, failed Moment graduation, a pending Moment with its backstop date, full vesting) (finding F4)",
+   "The runtime check accepts launch-token-v2, moment-nft and moment-coin instances by hash and rejects any other WASM",
+   "swift test passes on macOS; nothing is renamed in public v1 types"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/ios/Packages/StellarKit && swift test"
+  ]
+ },
+ {
+  "id": "CT-18",
+  "title": "API route wiring and the v2 end-to-end script (not run here)",
+  "files": [
+   "backend/supabase/functions/lite/index.ts",
+   "backend/tests/e2e/lite_e2e_v2.ts"
+  ],
+  "depends_on": [
+   "CT-11",
+   "CT-13",
+   "CT-14",
+   "CT-15",
+   "CT-16",
+   "CT-17"
+  ],
+  "brief": "Register the v2 routes and builders: launches, economics, refunds, rewards, owed fees, Moments v2, vesting. v1 routes stay for the retired generation.\nWrite lite_e2e_v2.ts, which plays the phone and, where needed, the keeper, covering every journey of §18.4 of DESIGN-stellar-contracts-v2.revised.md. It reads every contract id and venue id from deployments/testnet-qa-v2.json and /v1/economics, never from constants (finding F8).\n- create with the 10 XLM fee, buy with sharing, complete, keeper graduation (Soroswap; Aquarius, on an XLM quote, only when the deployment file says aquarius.enabled, finding V8), swaps, harvest, quote and launch-token reward claims, creator and owed claims on both sides, protocol sweeps of both sides; the treasury's holder rewards stay 0 (finding V2);\n- a failing-venue launch (mode 0) → stuck → graduate_fallback refused before fallback_delay → fallback; a venue-locked launch → allow_fallback and the delay path; mark_stuck after a mode-1 failure; mode 2 → GraduationInvalid at simulation → mark_stuck → fallback; each grad_fail is checked for its namespaced origin and code (finding V10);\n- rescue by the QA admin and by a stranger, on two launches; before each completes, insert a lite.keeper_skip row for its token with jobs fallback AND rescue, because the keeper is itself \"anyone\" and would otherwise graduate it on the fallback or rescue it at rescue_public_at before the stranger (finding V5); pro-rata refunds;\n- takeover with veto and execution; treasury, guardian and venue timelocks with a guardian cancel; the guardian handoff;\n- Moments on the main stack: publish, collect, terminal, keeper graduation, full vesting with the QA period, harvest, policy timelock; a second Moment left Collecting past its deadline and expired;\n- Moments on the failing stack, by direct contract calls signed with QA keys (finding F5): mode 0 → keeper grad_fail → expire after stuck_expiry; mode 2 → the graduator's GraduationInvalid (origin 10, code 11_003) recorded → expire; every Moment the script expires itself gets a keeper_skip row with job expire, so the keeper's optional expiry doesn't race it (finding V5);\n- a completed failing-stack Moment without a recorded failure is refused by expire (finding V5): on mode 0 the keeper would record a failure at once, so before its terminal collect insert a keeper_skip row for its NFT address with jobs graduate and expire; after the deadline and past stuck_expiry, expire must fail NotExpirable; then call graduate (the failure is recorded) and expire after stuck_expiry;\n- the backstop (finding V11): a mode-1 failing-stack Moment is refused by expire before completed_at + pending_backstop (30 minutes) and expires after it.\nFunding (finding F10): the stuck, fallback, rescue and refund journeys use XLM quotes, with one fresh Friendbot buyer per journey; the venue-locked journey uses the QA asset. USDC (Circle USDC) comes from /v1/swap/quote and /v1/swap/build XLM→USDC, as lite_e2e.ts:108-115 does. The amount is computed from the journeys the run includes, not a constant (finding V6): the per-journey needs of spec §18.4 (USDC-quote launch ≈ 44.2, main-stack Moment 13.34, Collecting-expiry Moment ≈ 1, four failing-stack Moments 53.34, harvest swaps ≈ 3; ≈ 114.9 for the full list) times 1.13, which is 130 USDC for the full list. The swap follows a depth check for that amount: quote 1 XLM and the full amount, and require enough output at an average rate within 3% of the 1-XLM rate; otherwise stop the USDC journeys with a clear message and run the XLM ones.\nFor each state only testnet-qa reaches, the script asserts the API response shape (finding F4).\nIt refuses to run against any deployment other than testnet-qa (and the local stack pointed at it). Do not run it against a deployment in this package: CT-20 runs it after the CT-19 gate (decision L16), and CT-19 reviews this package first.",
+  "acceptance": [
+   "deno check passes on the lite function and the e2e script",
+   "The e2e script refuses LITE_DEPLOYMENT values other than testnet-qa",
+   "No contract id or venue id is a constant in the e2e script; all come from the deployment file or /v1/economics",
+   "The USDC depth check and its clean stop are unit-tested with mocked quotes; the USDC amount computed from the full journey list is 130 USDC (± 1) and shrinks when journeys are skipped (finding V6)",
+   "The keeper_skip rows are inserted before the step the keeper could race: jobs fallback and rescue for both rescue launches, jobs graduate and expire for the not-expirable Moment, job expire for every Moment the script expires itself (finding V5); the Aquarius journeys run only when the deployment file says aquarius.enabled (finding V8)",
+   "No secret is printed; transactions follow the hybrid-fee rules"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && deno check --config backend/supabase/functions/deno.json backend/supabase/functions/lite/index.ts backend/tests/e2e/lite_e2e_v2.ts"
+  ]
+ },
+ {
+  "id": "CT-19",
+  "title": "Internal three-reviewer security review: the gate before every deployment, testnet-qa included",
+  "files": [
+   "contracts/review/reviewed-wasm.sha256 (written at exit: the reviewed lines of contracts/dist/SHA256SUMS and the commit they were built from; hashes only, never finding text)",
+   "reports: DyorHQ/internal ios-app/stellar-v2/ (not this repository)"
+  ],
+  "depends_on": [
+   "CT-10",
+   "CT-11",
+   "CT-13",
+   "CT-14",
+   "CT-15",
+   "CT-16",
+   "CT-17",
+   "CT-18"
+  ],
+  "brief": "§19.1 of DESIGN-stellar-contracts-v2.revised.md. Decision L16: no deployment of any kind (testnet-qa or the owner's testnet) happens before this review exits. The review covers the contracts, the scripts, the backend and CT-18's API wiring and e2e script (finding F13).\nThree independent reviewers:\n- R1, economics and maths: curve and Monad clamp; pro-rata refund rounding; reward-per-share rounding (debts rounded up) and overflow in both reward assets; harvest maths, the both-sides 50/50 split by the launch's pinned share (V1), the compounding ratio (3,333 : 6,667, V3) when the cap binds and the sandwich bound of §8.3; the F3 backlog bound (V7); the treasury's exclusion from holder rewards (V2); Moments harvest constants and the burn's pool-depth effect (V4); vesting; supply identity; the exclusion floor; differential vectors;\n- R2, Soroban platform: authorize_as_current_contract trees; try_ rollback scope, the launchpad's result checks and the graduator's in-frame checks on both sides (V9); the error namespaces and grad_failure (V10); executor caller allowlists, the lock rule and the token's own-address rule; empty-pool tripwires; the re-entry map, including exclude_treasury (V2); whether anyone can make Moments graduation fail non-recoverably on purpose, which the backstop would let a creator profit from (V11); Address::executable checks; nonce salts, footprints and the hot-key table; TTL and archival; resource DoS (graduation and fallback budgets); event sizes; temporary-storage expiry;\n- R3, roles, state machine and integration: timelocks, the guardian handoff and the admin's guardian replacement; admin and public rescue, the fallback delay and takeover; CreatorOwed, the declared exception and the backlog residual in the change plans (V7); the Moments backstop (V11); venue addition; durations, harvest_interval and the testnet-qa guards (no QA durations, qa-exec-fail or failing Moments stack outside testnet-qa); the deploy script's reviewed-hash check; generation migration; backend builders against the phone verifier's bindings; the e2e script's deployment guard; keeper permissionlessness and keeper_skip, including the rows that stop the keeper racing the e2e (V5); the AQUA funding step and its --aquarius switch (V8).\nEach files findings with a reproducing test. A second reviewer confirms or refutes each one. Fixes go back to the owning CT package as CT-xx-fix, CT-10 rebuilds dist, and the fix is re-reviewed. Run cargo clippy -D warnings and Scout for Soroban.\nAt exit, write contracts/review/reviewed-wasm.sha256 with exactly the reviewed v2 lines of contracts/dist/SHA256SUMS and the commit they were built from. deploy-contracts-v2.ts (CT-11) refuses any WASM that doesn't match it, for testnet-qa and the owner's deploy.\nNo finding text goes into this repository, any public repository or a commit message.",
+  "acceptance": [
+   "No open Critical, High or Medium findings",
+   "Every invariant in spec §5.8, §6.5, §8 and §9.5 has a passing test",
+   "contracts/review/reviewed-wasm.sha256 matches contracts/dist/SHA256SUMS for every v2 WASM at the reviewed commit, and holds hashes only",
+   "deploy-contracts-v2.ts --dry-run for testnet-qa reports every WASM as matching the reviewed list",
+   "The reports are stored in DyorHQ/internal ios-app/stellar-v2/ and are not in this repository",
+   "An exit note (no finding text) is recorded for CT-20 and the owner; the mainnet audit recommendation is passed on as a deferred decision (§23.2)"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && cargo clippy --workspace --all-targets -- -D warnings",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && ./build.sh && cargo test --workspace",
+   "cd ~/Hackathon-b17/multichain-stellar/contracts && grep -F -f review/reviewed-wasm.sha256 dist/SHA256SUMS | wc -l",
+   "cd ~/Hackathon-b17/multichain-stellar && deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts-v2.ts --deployment testnet-qa --dry-run"
+  ]
+ },
+ {
+  "id": "CT-20",
+  "title": "testnet-qa deployment with throwaway QA keys and the v2 end-to-end run",
+  "files": [
+   "backend/supabase/functions/_shared/deployments/testnet-qa-v2.json (generated by deploy-contracts-v2.ts; ids, hashes, public keys and durations only)"
+  ],
+  "depends_on": [
+   "CT-18",
+   "CT-19"
+  ],
+  "brief": "§17 step 4 and §18.4 of DESIGN-stellar-contracts-v2.revised.md. Start only after CT-19 has exited with no open Critical, High or Medium finding and contracts/review/reviewed-wasm.sha256 exists (decision L16). Decision O3 allows this deployment.\n- Run deploy-contracts-v2.ts --deployment testnet-qa (dry run first). It refuses any WASM that differs from the reviewed hashes (finding F13). It generates throwaway QA keys into a git-ignored file under .secrets/: never open, print or copy that file; the scripts read it themselves. Keys are funded with Friendbot.\n- The script creates the QA treasury's USDC and QA-asset trustlines and its preflight checks them, so protocol sweeps of every quote succeed (finding F9). It deploys the qa-exec-fail venue and the failing Moments stack (finding F5) and records the venue ids it reads back (finding F8).\n- If CT-03 was a go, deploy-contracts-v2.ts acquires the testnet-qa float itself (10 × the pool payment) with its XLM → AQUA swap step and depth check, before it deploys anything (findings F11 and V8). If the check or the swap fails, the script deploys without Aquarius and records aquarius.enabled false and the reason in the deployment file; say so in the report.\n- Commit only the generated deployments/testnet-qa-v2.json after checking that it holds ids, the venue table, hashes, public keys and durations and no secret.\n- Start the local stack pointed at testnet-qa (LITE_DEPLOYMENT=testnet-qa) and run lite_e2e_v2.ts end to end with the QA durations: every journey of §18.4, with the funding rules of §18.4 (XLM quotes for the stuck, rescue and refund journeys; USDC through the swap route after the depth check, finding F10, for the amount computed from the journeys, 130 USDC for the full list, finding V6; the keeper_skip rows of §18.4, finding V5).\n- Never touch the owner's testnet deployment or the v1 contracts, never write to the production Supabase project, and never add items to live feeds.\n- Report the results, transaction hashes and measured fees and rent in the hand-off, not as a committed report file. State that the listed paths are covered on testnet-qa by the e2e only (finding F4).",
+  "acceptance": [
+   "CT-19's exit note and contracts/review/reviewed-wasm.sha256 exist before the first deploy transaction, and every deployed WASM hash matches that file",
+   "deployments/testnet-qa-v2.json exists, holds the venue table as read from the chain, and contains no secret; nothing under .secrets/ is tracked by git",
+   "The QA treasury trusts USDC and the QA asset, and protocol sweeps of both succeed",
+   "Every §18.4 journey passes on testnet-qa, including fallback after fallback_delay, the venue-locked fallback, mark_stuck after mode-1 and mode-2 failures, admin and public rescue with pro-rata refunds, takeover with veto, guardian cancels and handoff, both-sides harvest payouts, the full Moments vesting schedule, and the failing-stack Moments' grad_fail, GraduationInvalid and expiry, the not-expirable Moment held off the keeper, and the Moments backstop (findings V5 and V11)",
+   "The USDC journeys pass, or the report shows the depth check's numbers and that the XLM journeys passed",
+   "The Aquarius journeys pass, or the report says why Aquarius is disabled on testnet-qa (the deployment file's aquarius.reason, from the swap step's depth check or swap result, finding V8)",
+   "No secret value appears in any output"
+  ],
+  "verify_commands": [
+   "cd ~/Hackathon-b17/multichain-stellar && test \"$(git ls-files -- .secrets | wc -l)\" -eq 0",
+   "cd ~/Hackathon-b17/multichain-stellar && deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts-v2.ts --deployment testnet-qa --dry-run",
+   "cd ~/Hackathon-b17/multichain-stellar && backend/scripts/local-stack.sh start && LITE_DEPLOYMENT=testnet-qa deno run -A --config backend/supabase/functions/deno.json backend/tests/e2e/lite_e2e_v2.ts"
+  ]
+ }
+]

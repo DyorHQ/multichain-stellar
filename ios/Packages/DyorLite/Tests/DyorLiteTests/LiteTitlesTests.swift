@@ -14,7 +14,7 @@ final class LiteTitlesTests: XCTestCase {
 
     override func tearDown() { LiteL10n.locale = saved }
 
-    private func title(_ kind: String, _ display: [String: JSONValue]? = nil) -> String? {
+    private func title(_ kind: String, _ display: [String: StellarJSON]? = nil) -> String? {
         LiteTitles.intent(kind: kind, display: display)
     }
 
@@ -56,7 +56,7 @@ final class LiteTitlesTests: XCTestCase {
     }
 
     func testActivityRowsWordBridgeAndCashTransfersThemselves() throws {
-        func item(_ json: String) throws -> ActivityItem { try JSONDecoder().decode(ActivityItem.self, from: Data(json.utf8)) }
+        func item(_ json: String) throws -> StellarActivityItem { try JSONDecoder().decode(StellarActivityItem.self, from: Data(json.utf8)) }
         // A transaction: its intent's display (the server sends it with every tx row).
         let swap = try item(#"{"type":"tx","id":"h","kind":"swap","summary":"Swap 10 XLM for at least 22.9751758 USDC","status":"success","at":"2026-10-13T09:41:00.000Z","display":{"venue":"aquarius","sell":"XLM","buy":"USDC","amountIn":"100000000","minOut":"229751758"}}"#)
         XCTAssertEqual(LiteTitles.activity(swap), "Swap 10 XLM for USDC")
@@ -84,7 +84,7 @@ final class LiteTitlesTests: XCTestCase {
     /// costs that row its own wording.
     func testActivityItemsDecodeWithAnyDisplay() throws {
         let odd = #"{"items":[{"type":"tx","id":"h","kind":"swap","summary":"Swap","status":"success","at":"2026-10-13T09:41:00.000Z","display":{"route":["a","b"]}}]}"#
-        struct R: Decodable { let items: [ActivityItem] }
+        struct R: Decodable { let items: [StellarActivityItem] }
         let items = try JSONDecoder().decode(R.self, from: Data(odd.utf8)).items
         XCTAssertEqual(items.count, 1)
         XCTAssertNil(items[0].display)

@@ -1,0 +1,44 @@
+{
+  "results": [
+    {
+      "id": "USDC",
+      "kind": "registry",
+      "code": "USDC",
+      "name": "USD Coin",
+      "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      "verified": true,
+      "held": true
+    },
+    {
+      "id": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "kind": "launch",
+      "code": "ECAT",
+      "name": "E2E Cat",
+      "contract": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "classic": null,
+      "verified": true,
+      "held": true
+    },
+    {
+      "id": "AQUA:GAX2PVUCCLITL6T6ESGOJFHA234KIOUSINBZ2BNLPK47PYFS5MCZL2LO",
+      "kind": "classic",
+      "code": "AQUA",
+      "name": null,
+      "contract": "CALSEGHTOL4ZUKIQHT6VNWR74V3DJD6H4Y4KL3KJKOPL3TL32INSNHUU",
+      "classic": "AQUA:GAX2PVUCCLITL6T6ESGOJFHA234KIOUSINBZ2BNLPK47PYFS5MCZL2LO",
+      "verified": false,
+      "held": false
+    },
+    {
+      "id": "CAG7HXJ65BFFSKCG4OE64UCFY7DZXSANMPNYNXO4OOGWCDP6XM7OSGWG",
+      "kind": "contract",
+      "code": "WAVE",
+      "name": "Wave",
+      "contract": "CAG7HXJ65BFFSKCG4OE64UCFY7DZXSANMPNYNXO4OOGWCDP6XM7OSGWG",
+      "classic": null,
+      "verified": false,
+      "held": false
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "transfer": {
+    "id": "67904f04-179c-49db-a5b8-edeb7d2f64ed",
+    "status": "awaiting_source",
+    "direction": "stellar_to_monad"
+  },
+  "plan": {
+    "planId": "7e460862-59a0-4da8-a9ac-31c4e90bd83c",
+    "kind": "bridge_out",
+    "expiresAt": "2026-10-14T09:56:00.000Z",
+    "steps": [
+      {
+        "id": "s1",
+        "label": "Allow the USDC transfer",
+        "status": "built",
+        "intent": {
+          "kind": "approve",
+          "summary": "Allow Circle's bridge to move 12.5 USDC",
+          "spend": {
+            "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA": "125000000"
+          },
+          "calls": [
+            {
+              "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+              "fn": "approve"
+            }
+          ],
+          "display": {
+            "amount": "125000000",
+            "spender": "Circle CCTP"
+          }
+        },
+        "xdr": "AAAAAgAAAACWkx+5IqHDdKtQ/Z773xUBaGRNzFg8rllQIi8Zjpt54AAAJxAAToEGAAAAAQAAAAEAAAAAas9OLAAAAABqz1CEAAAAAAAAAAEAAAAAAAAABgAAAAFVU0RDAAAAAEI+fQXy7K+/7BkrIVo/G+lq7bjY5wJUq+NBPgIH3layf/////////8AAAAAAAAAAA==",
+        "hash": "6d42d713ddbed1c51d1fb0b50d0e122602f712527ce8ee9d16ae981298525519",
+        "builtAt": "2026-10-14T09:41:00.000Z",
+        "stepKind": "token_approve",
+        "maxFee": "300000",
+        "feePayer": "user",
+        "sponsorReason": null,
+        "reserveDelta": 0
+      },
+      {
+        "id": "s2",
+        "label": "Send USDC to Monad",
+        "status": "pending",
+        "stepKind": "cctp_burn",
+        "maxFee": "500000",
+        "feePayer": "user",
+        "sponsorReason": null,
+        "reserveDelta": 0
+      }
+    ],
+    "fees": {
+      "userMax": "800000",
+      "sponsored": false,
+      "newReserves": 0
+    }
+  }
+}

@@ -101,14 +101,14 @@ final class KeyTests: XCTestCase {
 
 final class AmountTests: XCTestCase {
     func testParseAndFormat() {
-        XCTAssertEqual(Amount.parse("12.5"), 125_000_000)
-        XCTAssertEqual(Amount.parse("0.0000001"), 1)
-        XCTAssertEqual(Amount.parse("1.123456789"), 11_234_567)
-        XCTAssertNil(Amount.parse("1.2.3"))
-        XCTAssertNil(Amount.parse("-1"))
-        XCTAssertNil(Amount.parse(""))
-        XCTAssertEqual(Amount.format(Int64(125_000_000)), "12.5")
-        XCTAssertEqual(Amount.format(Int64(1)), "0.0000001")
+        XCTAssertEqual(StellarAmount.parse("12.5"), 125_000_000)
+        XCTAssertEqual(StellarAmount.parse("0.0000001"), 1)
+        XCTAssertEqual(StellarAmount.parse("1.123456789"), 11_234_567)
+        XCTAssertNil(StellarAmount.parse("1.2.3"))
+        XCTAssertNil(StellarAmount.parse("-1"))
+        XCTAssertNil(StellarAmount.parse(""))
+        XCTAssertEqual(StellarAmount.format(Int64(125_000_000)), "12.5")
+        XCTAssertEqual(StellarAmount.format(Int64(1)), "0.0000001")
     }
 }
 

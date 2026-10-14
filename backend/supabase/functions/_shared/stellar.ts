@@ -40,6 +40,14 @@ export function sponsor(): Keypair {
   return sponsorKp;
 }
 
+let keeperKp: Keypair | null = null;
+/** Signs protocol upkeep (graduation, TTL, the CCTP relay); never part of a user's transaction. Testnet falls back to
+ *  the sponsor (env.keeperSecret). */
+export function keeper(): Keypair {
+  if (!keeperKp) keeperKp = Keypair.fromSecret(env.keeperSecret);
+  return keeperKp;
+}
+
 // ------------------------------------------------------------------------------------------------ values
 
 export const sv = {

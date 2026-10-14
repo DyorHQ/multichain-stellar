@@ -1,0 +1,8 @@
+{
+  "token": "fixture-session-token",
+  "expiresAt": "2026-10-14T21:41:00.000Z",
+  "tester": {
+    "address": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+    "label": "Internal QA"
+  }
+}

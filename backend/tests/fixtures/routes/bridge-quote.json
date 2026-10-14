@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/bridge/quote",
+    "body": {
+      "direction": "stellar_to_monad",
+      "amount": "10000000"
+    },
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "route": "cctp",
+      "direction": "stellar_to_monad",
+      "amountIn": "10000000",
+      "amountOut": "1000000",
+      "fee": "0",
+      "etaSeconds": 120,
+      "note": "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar."
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

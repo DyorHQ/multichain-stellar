@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "simulation_failed",
+    "message": "The price moved past your limit. Nothing was sent.",
+    "detail": {
+      "contractCode": "launch.slippage",
+      "raw": "HostError: Error(Contract, #7)"
+    }
+  }
+}

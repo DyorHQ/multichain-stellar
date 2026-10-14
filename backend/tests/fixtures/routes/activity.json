@@ -1,0 +1,66 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/activity",
+    "auth": true
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "items": [
+        {
+          "type": "tx",
+          "id": "abababababababababababababababababababababababababababababababab",
+          "kind": "swap",
+          "summary": "Swap 50 XLM for at least 9.5 USDC",
+          "display": {
+            "venue": "soroswap",
+            "sell": "XLM",
+            "buy": "USDC"
+          },
+          "status": "success",
+          "at": "2026-10-13T08:00:00.000Z"
+        },
+        {
+          "type": "bridge",
+          "id": "3f1c2a9e-0000-4000-8000-000000000002",
+          "kind": "stellar_to_monad",
+          "summary": "Sent USDC to Monad",
+          "amount": "10000000",
+          "status": "attesting",
+          "at": "2026-10-13T07:30:00.000Z"
+        },
+        {
+          "type": "cash",
+          "id": "5d0c1b7e-0000-4000-8000-000000000003",
+          "kind": "deposit",
+          "summary": "Added USDC",
+          "amount": null,
+          "display": {
+            "asset": "USDC"
+          },
+          "status": "incomplete",
+          "at": "2026-10-13T07:00:00.000Z"
+        }
+      ]
+    }
+  },
+  "anonymous": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "Sign in on Stellar to continue.",
+        "detail": null
+      }
+    }
+  }
+}

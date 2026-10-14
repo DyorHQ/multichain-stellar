@@ -1,0 +1,14 @@
+{
+  "hash": "c3a436e46b4a0dcb674825bff51c9977e2b3766663a5bfdf84e2f71b7649a793",
+  "status": "success",
+  "ledger": 5201234,
+  "returnValue": [
+    "100000000",
+    "18938032"
+  ],
+  "feeCharged": "41210",
+  "feePayer": "user",
+  "result": {
+    "amountOut": "18938032"
+  }
+}

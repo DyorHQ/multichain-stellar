@@ -1,0 +1,26 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/auth/verify",
+    "body": {
+      "address": "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+      "nonce": "n0",
+      "signature": "c2ln"
+    },
+    "auth": false
+  },
+  "response": {
+    "status": 401,
+    "headers": {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    },
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "That sign-in expired or was already used. Try again.",
+        "detail": null
+      }
+    }
+  }
+}
