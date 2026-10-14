@@ -1,0 +1,18 @@
+[package]
+name = "dyor-integration-tests"
+description = "Cross-contract journeys, probes, property and budget tests over the built v2 WASMs. Test-only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+dyor-common = { workspace = true }
+proptest = { workspace = true }
