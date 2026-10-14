@@ -112,7 +112,9 @@ export async function markets(net: NetworkConfig = env.network, now: number = Da
   return { asOf: new Date(now).toISOString(), pricing: pricingOf(net), rows: popular(registry, launches) };
 }
 
-/** GET /v1/markets/:id: a registry asset (by id or contract, listed or not) or a listed launch token. */
+/** GET /v1/markets/:id: a registry asset (by id or contract, listed or not) or a listed launch token. A launch's row is
+ *  found in launchMarketRows()' list, so a launch that list leaves out has no page here until launchpad.ts answers
+ *  for a single launch (WP-14). */
 export async function market(id: string, net: NetworkConfig = env.network, now: number = Date.now()): Promise<MarketDetail> {
   const asset = assetById(net, id);
   if (asset) {

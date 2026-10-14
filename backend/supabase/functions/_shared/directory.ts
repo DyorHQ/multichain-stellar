@@ -3,8 +3,10 @@
 // /assets links the issuer's stellar.toml; its [[CURRENCIES]] entry for the asset gives a name and an image. The toml
 // is read over https only, within 3 s and 100 KB, from a public host name; images are kept only when https. Answers
 // are kept in lite.asset_directory: 7 days when definite (including "nothing published"), an hour when a fetch
-// failed. The phone shows the name; v1 shows no directory logo (the app's media policy accepts DyorHQ's own storage
-// only, §3.8).
+// failed. A call looks up at most 5 misses, all at once, so it never waits longer than one lookup, however many
+// trustlines it is asked about (holdings' public view takes any account); the others are answered empty, with nothing
+// kept, and looked up by a later call. The phone shows the name; v1 shows no directory logo (the app's media policy
+// accepts DyorHQ's own storage only, §3.8).
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { NetworkConfig } from "./networks.ts";
@@ -25,8 +27,8 @@ const KEEP_MS = 7 * 86_400_000;
 const RETRY_MS = 3_600_000;
 const TIMEOUT_MS = 3_000;
 const MAX_TOML_BYTES = 100 * 1024;
-/** Misses looked up at once. */
-const PARALLEL = 5;
+/** Misses looked up per call, all at once: a call waits on one lookup at most (Horizon's 3 s, then the toml's). */
+export const LOOKUPS_PER_CALL = 5;
 const MAX_REDIRECTS = 2;
 
 /** "CODE:ISSUER", a classic asset other than XLM. */
@@ -41,7 +43,8 @@ export async function directoryEntry(asset: string, net: NetworkConfig = env.net
 }
 
 /** The directory's entries for classic assets ("CODE:ISSUER"): from lite.asset_directory while kept, otherwise read
- *  from the issuer's stellar.toml and kept. Anything that isn't a classic asset gets an empty entry. */
+ *  from the issuer's stellar.toml and kept, for the first LOOKUPS_PER_CALL misses; the other misses get an empty entry,
+ *  with nothing kept, until a later call. Anything that isn't a classic asset gets an empty entry. */
 export async function directory(assets: string[], net: NetworkConfig = env.network): Promise<Map<string, DirectoryEntry>> {
   const wanted = [...new Set(assets.filter(isClassicAsset))];
   const out = new Map<string, DirectoryEntry>(assets.map((a) => [a, empty(a)]));
@@ -49,18 +52,16 @@ export async function directory(assets: string[], net: NetworkConfig = env.netwo
   const rows = await sql()`
     select asset, home_domain, name, image from lite.asset_directory where asset = any(${wanted}::text[]) and expires_at > now()`;
   for (const r of rows) out.set(r.asset, { asset: r.asset, homeDomain: r.home_domain, name: r.name, image: r.image });
-  const misses = wanted.filter((a) => !rows.some((r) => r.asset === a));
-  for (let i = 0; i < misses.length; i += PARALLEL) {
-    await Promise.all(misses.slice(i, i + PARALLEL).map(async (asset) => {
-      const { entry, definite } = await lookUp(asset, net);
-      await sql()`
-        insert into lite.asset_directory (asset, home_domain, name, image, fetched_at, expires_at)
-        values (${asset}, ${entry.homeDomain}, ${entry.name}, ${entry.image}, now(), ${new Date(Date.now() + (definite ? KEEP_MS : RETRY_MS))})
-        on conflict (asset) do update set home_domain = excluded.home_domain, name = excluded.name, image = excluded.image,
-          fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`;
-      out.set(asset, entry);
-    }));
-  }
+  const misses = wanted.filter((a) => !rows.some((r) => r.asset === a)).slice(0, LOOKUPS_PER_CALL);
+  await Promise.all(misses.map(async (asset) => {
+    const { entry, definite } = await lookUp(asset, net);
+    await sql()`
+      insert into lite.asset_directory (asset, home_domain, name, image, fetched_at, expires_at)
+      values (${asset}, ${entry.homeDomain}, ${entry.name}, ${entry.image}, now(), ${new Date(Date.now() + (definite ? KEEP_MS : RETRY_MS))})
+      on conflict (asset) do update set home_domain = excluded.home_domain, name = excluded.name, image = excluded.image,
+        fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`;
+    out.set(asset, entry);
+  }));
   return out;
 }
 

@@ -3,7 +3,8 @@
 // - the adapters read the ticker, the OHLC candles and the SDEX trade aggregation as the providers write them;
 // - the job asks Kraken first; XLM without a Kraken quote falls back to the SDEX × the last good USDC/USD (this run's,
 //   or a stored one under 24 hours old); USDC never falls back; candles are backfilled once, then written on their
-//   cadence; each quote carries its 24h change from the stored candles, and never replaces a newer one;
+//   cadence; each quote carries its 24h change from the stored candles, and never replaces a newer one; the job's
+//   result names a source only for a quote it wrote;
 // - reads: stale after 10 minutes, unknown after 24 hours; with no provider and nothing stored, no route prices
 //   anything: no code path answers a constant.
 //
@@ -111,11 +112,10 @@ class PriceDb {
     if (q.startsWith("insert into lite.ref_quotes")) {
       const [ref, usd, source, market, change, volume, at] = p as [string, number, string, string, number | null, number | null, Date];
       const old = this.quotes.get(ref);
-      // `where lite.ref_quotes.quoted_at <= excluded.quoted_at`
-      if (!old || +(old.quoted_at as Date) <= +at) {
-        this.quotes.set(ref, { ref, usd: String(usd), source, market, change_24h: change === null ? null : String(change), volume_24h_usd: volume === null ? null : String(volume), quoted_at: at });
-      }
-      return [];
+      // `where lite.ref_quotes.quoted_at <= excluded.quoted_at returning ref`: a row only when written.
+      if (old && +(old.quoted_at as Date) > +at) return [];
+      this.quotes.set(ref, { ref, usd: String(usd), source, market, change_24h: change === null ? null : String(change), volume_24h_usd: volume === null ? null : String(volume), quoted_at: at });
+      return [{ ref }];
     }
     if (q === "select usd, quoted_at from lite.ref_quotes where ref = ?") {
       const row = this.quotes.get(p[0] as string);
@@ -279,14 +279,16 @@ Deno.test("no USDC/USD younger than 24 hours: XLM has no fallback either, and no
   }
 });
 
-Deno.test("a fallback quote never replaces a newer one", async () => {
+Deno.test("a fallback quote never replaces a newer one, and the job doesn't claim it", async () => {
   const db = new PriceDb(() => CAPTURED + HOUR);
   db.quote("USDC", 0.9998, CAPTURED + HOUR - MINUTE);
   // Kraken's XLM from a minute ago; the SDEX's latest trades end at 20:15, 52 minutes before.
   db.quote("XLM", 0.1835, CAPTURED + HOUR - MINUTE);
   providers({ down: ["api.kraken.com"] });
-  await refprices(() => CAPTURED + HOUR);
+  const result = await refprices(() => CAPTURED + HOUR) as { quotes: Record<string, string | null>; errors: string[] };
   assertEquals([db.quotes.get("XLM")!.usd, db.quotes.get("XLM")!.source], ["0.1835", "kraken"]);
+  assertEquals(result.quotes, { XLM: null, USDC: null });
+  assert(result.errors.includes("XLM: the stored quote is newer than horizon's of 2026-10-14T20:15:00.000Z"), JSON.stringify(result.errors));
 });
 
 Deno.test("the job and purge skip until migration 06 is applied", async () => {

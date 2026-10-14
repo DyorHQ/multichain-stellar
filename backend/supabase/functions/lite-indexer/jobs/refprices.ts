@@ -5,7 +5,8 @@
 //    keeps them (Kraken: 720 candles);
 // 3. each quote with its 24h change from the stored candles, into lite.ref_quotes, never over a newer one.
 // A provider that can't be read leaves the stored quote to age (stale after 10 minutes, unknown after 24 hours), and
-// the job's result names it.
+// the job's result names it. The result names a source only for a quote it wrote: one older than the stored quote (the
+// SDEX's, after a newer Kraken quote) isn't written, and its errors say so.
 import { sql, tableExists } from "../../_shared/db.ts";
 import { env } from "../../_shared/env.ts";
 import type { PriceRef } from "../../_shared/networks.ts";
@@ -28,7 +29,8 @@ import {
 const CANDLE_BUDGET_MS = 15_000;
 
 export interface RefpricesResult {
-  /** Each reference asset's source this run, or null when nothing was quoted. */
+  /** The source of each reference asset's quote written this run, or null when none was: nothing was quoted, or the
+   *  stored quote is newer. */
   quotes: Record<string, QuoteSource | null>;
   /** Candles written, by "<ref>/<interval s>". */
   candles: Record<string, number>;
@@ -91,13 +93,16 @@ export async function refprices(now: () => number = Date.now): Promise<Refprices
   }
 
   // 3. Quotes, with their change.
+  const stored: Partial<Record<PriceRef, QuoteSource>> = {};
   for (const ref of REFS) {
     const q = quotes[ref];
-    if (q) await writeQuote(q);
+    if (!q) continue;
+    if (await writeQuote(q)) stored[ref] = q.source;
+    else errors.push(`${ref}: the stored quote is newer than ${q.source}'s of ${q.at.toISOString()}`);
   }
 
   return {
-    quotes: Object.fromEntries(REFS.map((r) => [r, quotes[r]?.source ?? null])),
+    quotes: Object.fromEntries(REFS.map((r) => [r, stored[r] ?? null])),
     candles,
     ...(deferred ? { deferred } : {}),
     ...(errors.length ? { errors } : {}),
@@ -126,7 +131,8 @@ async function writeCandles(ref: PriceRef, interval: IntervalS, list: Candle[], 
   return list.length;
 }
 
-async function writeQuote(q: Quote): Promise<void> {
+/** Writes a quote with its 24h change, unless the stored one is newer; whether it was written. */
+async function writeQuote(q: Quote): Promise<boolean> {
   const { b900, b3600 } = dayAgoBuckets(q.at);
   const closes = await sql()`
     select interval_s, close from lite.ref_candles
@@ -136,11 +142,13 @@ async function writeQuote(q: Quote): Promise<void> {
     return row ? Number(row.close) : null;
   };
   const change = change24h(q.usd, close(900), close(3600));
-  await sql()`
+  const rows = await sql()`
     insert into lite.ref_quotes (ref, usd, source, market, change_24h, volume_24h_usd, quoted_at)
     values (${q.ref}, ${q.usd}, ${q.source}, ${q.market}, ${change}, ${q.volume24hUsd}, ${q.at})
     on conflict (ref) do update set usd = excluded.usd, source = excluded.source, market = excluded.market,
       change_24h = excluded.change_24h, volume_24h_usd = excluded.volume_24h_usd, quoted_at = excluded.quoted_at,
       updated_at = now()
-    where lite.ref_quotes.quoted_at <= excluded.quoted_at`;
+    where lite.ref_quotes.quoted_at <= excluded.quoted_at
+    returning ref`;
+  return rows.length > 0;
 }

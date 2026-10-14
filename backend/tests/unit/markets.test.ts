@@ -7,7 +7,9 @@
 //   start and is current;
 // - every markets route is public: no token needed, a token ignored, cached 30 s;
 // - the directory reads the issuer's stellar.toml over https from a public host only, keeps answers 7 days and failed
-//   fetches an hour.
+//   fetches an hour, and looks up at most 5 misses a call, leaving the others empty, with nothing kept, for a later
+//   call.
+import { Keypair } from "@stellar/stellar-sdk";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fakeSql, goOffline, type Row, setTestEnv } from "../fixtures/routes/harness.ts";
 
@@ -359,4 +361,41 @@ Deno.test("the directory: a failed fetch is retried after an hour; a refused or 
   // An asset Horizon doesn't know: nothing, for 7 days.
   const none = () => new Response(JSON.stringify({ _embedded: { records: [] } }));
   assertEquals(await keptFor({ [HORIZON_AQUA]: none }), { entry: { asset: AQUA, homeDomain: null, name: null, image: null }, keep: 168 });
+});
+
+Deno.test("the directory looks up 5 misses a call; the others are empty, with nothing kept, until a later call", async () => {
+  const issuer = (i: number) => Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(40 + i) as any).publicKey();
+  const assets = Array.from({ length: 7 }, (_, i) => `TOK${i}:${issuer(i)}`);
+  const [first, rest] = [assets.slice(0, dir.LOOKUPS_PER_CALL), assets.slice(dir.LOOKUPS_PER_CALL)];
+  const answers = { [HORIZON_AQUA]: () => new Response(readRef("horizon-assets-aqua.json")), [AQUA_TOML]: () => new Response(readRef("aqua.network-stellar.toml")) };
+  const db = database();
+  const asked = web(answers);
+  const entries = await dir.directory(assets, MAINNET);
+  assertEquals(dir.LOOKUPS_PER_CALL, 5);
+  assertEquals(asked.filter((u) => u === HORIZON_AQUA).length, 5);
+  assertEquals(db.saved.map((s) => s[0]).sort(), [...first].sort());
+  for (const a of first) assertEquals(entries.get(a), { asset: a, homeDomain: "aqua.network", name: null, image: null }, a);
+  for (const a of rest) assertEquals(entries.get(a), { asset: a, homeDomain: null, name: null, image: null }, a);
+  // The next call is served the five kept and looks up the other two.
+  const next = database({ directory: first.map((asset) => ({ asset, home_domain: "aqua.network", name: null, image: null })) });
+  const askedNext = web(answers);
+  const again = await dir.directory(assets, MAINNET);
+  assertEquals(askedNext.filter((u) => u === HORIZON_AQUA).length, 2);
+  assertEquals(next.saved.map((s) => s[0]).sort(), [...rest].sort());
+  assert(assets.every((a) => again.get(a)!.homeDomain === "aqua.network"));
+});
+
+Deno.test("USDC's page on testnet: the home domain testnet Horizon links, whose toml lists mainnet's USDC only", async () => {
+  const db = database({ quotes: QUOTES });
+  const horizon = "https://horizon-testnet.stellar.org/assets";
+  const toml = "https://centre.io/.well-known/stellar.toml";
+  const asked = web({ [horizon]: () => new Response(readRef("horizon-testnet-assets-usdc.json")), [toml]: () => new Response(readRef("centre.io-stellar.toml")) });
+  const usdc = TESTNET.assets.find((a) => a.id === "USDC")!;
+  const res = await get("/v1/markets/USDC");
+  assertEquals(res.status, 200);
+  assertEquals(res.body.about, { contract: usdc.contract, classic: usdc.classic, issuer: "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5", decimals: 7, homeDomain: "centre.io" });
+  assertEquals(asked, [horizon, toml]);
+  // An answer: the domain without a name or an image, kept 7 days.
+  assertEquals(db.saved.map((s) => s.slice(0, 4)), [[usdc.classic, "centre.io", null, null]]);
+  assert(+(db.saved[0][4] as Date) - Date.now() > 7 * DAY - MINUTE);
 });

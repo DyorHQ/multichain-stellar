@@ -22,7 +22,7 @@ create table if not exists lite.ref_quotes (
 );
 
 -- USD candles per reference asset, at 900, 3600 and 86400 s. A bucket starts at a multiple of its interval since the
--- epoch, as the providers' do, so the candle covering a time is found by range.
+-- epoch, as the providers' do (the check below), so the bucket covering a time is that time binned to the interval.
 create table if not exists lite.ref_candles (
   ref text not null check (ref ~ '^[A-Z0-9]{1,12}$'),
   interval_s int not null check (interval_s in (900, 3600, 86400)),
@@ -54,19 +54,21 @@ create table if not exists lite.asset_directory (
 
 -- The USD price of a reference asset at a time: the close of the candle whose bucket covers it, the smallest interval
 -- first (15 minutes, then an hour, then a day); null when no candle covers it. Launch prices in USD are their quote
--- price × this (§6.6).
+-- price × this, once per bucket of a launch's history (§6.6). So each interval is one indexed lookup, of p_at binned
+-- to it (buckets sit on their interval's grid), tried smallest first: never a scan of the candles before p_at.
 create or replace function lite.ref_usd_at(p_ref text, p_at timestamptz)
 returns numeric
 language sql stable
 set search_path = lite, pg_temp
 as $$
-  select close
-    from lite.ref_candles
-   where ref = p_ref
-     and bucket <= p_at
-     and bucket > p_at - make_interval(secs => interval_s)
-   order by interval_s asc
-   limit 1
+  select coalesce(
+    (select close from lite.ref_candles
+      where ref = p_ref and interval_s = 900 and bucket = date_bin('15 minutes', p_at, timestamptz 'epoch')),
+    (select close from lite.ref_candles
+      where ref = p_ref and interval_s = 3600 and bucket = date_bin('1 hour', p_at, timestamptz 'epoch')),
+    (select close from lite.ref_candles
+      where ref = p_ref and interval_s = 86400 and bucket = date_bin('1 day', p_at, timestamptz 'epoch'))
+  )
 $$;
 
 -- Closed to everyone but lite_api, as every lite table is (migrations 1 and 4).
