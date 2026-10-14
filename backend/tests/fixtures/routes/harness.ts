@@ -198,6 +198,8 @@ export interface RouteRequest {
   auth: boolean;
   /** Top-level body fields that follow the clock: compared as "<volatile>". */
   volatile?: string[];
+  /** Its answer gained fields on purpose since the recording: every recorded field must still be there, unchanged. */
+  grown?: string;
 }
 
 const DEAD = "0x000000000000000000000000000000000000dEaD";
@@ -205,7 +207,7 @@ const DEAD = "0x000000000000000000000000000000000000dEaD";
 export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "auth-challenge-bad-address", method: "POST", path: "/v1/auth/challenge", body: { address: "not-an-address" }, auth: false },
   { name: "auth-verify-used-nonce", method: "POST", path: "/v1/auth/verify", body: { address: USER.publicKey(), nonce: "n0", signature: "c2ln" }, auth: false },
-  { name: "config", method: "GET", path: "/v1/config", auth: false },
+  { name: "config", method: "GET", path: "/v1/config", auth: false, grown: "the fields of docs/DESIGN-stellar-parity.md §6.2, and public caching" },
   { name: "account", method: "GET", path: "/v1/account", auth: true },
   { name: "account-activate-friendbot-down", method: "POST", path: "/v1/account/activate", auth: true },
   { name: "account-trust-native", method: "POST", path: "/v1/account/trust", body: { asset: "XLM" }, auth: true },

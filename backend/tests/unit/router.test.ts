@@ -1,13 +1,16 @@
 // The Lite API's routes (lite/index.ts and lite/routes/*.ts):
 // - ROUTES lists every route in the order they match, each with a path that must reach it and no other;
 // - only sign-in, config, fees, market data and the local media stand-in skip the session check;
+// - GET /v1/config serves every field of docs/DESIGN-stellar-parity.md §6.2;
 // - routes answer as they did before they moved from lite/index.ts into lite/routes/: the answers recorded then are
-//   in backend/tests/fixtures/routes/<name>.json, and every request must get the same status, headers and body bytes.
+//   in backend/tests/fixtures/routes/<name>.json, and every request must get the same status, headers and body bytes
+//   (config, which grew on purpose, keeps every recorded field).
 // A package that adds a route adds it to ROUTES. One that changes a route's answer on purpose records them again, and
 // the diff shows what changed:
 //   ROUTES_RECORD=1 deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/router.test.ts
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
-import { fakeSql, fixtureUrl, goOffline, record, RecordedRoute, ROUTE_REQUESTS, routeRows, send, setTestEnv, TOKEN, userToken } from "../fixtures/routes/harness.ts";
+import testnetDeployment from "../../supabase/functions/_shared/deployments/testnet.json" with { type: "json" };
+import { fakeSql, fixtureUrl, goOffline, record, RecordedRoute, ROUTE_REQUESTS, routeRows, send, setTestEnv, SPONSOR, TOKEN, userToken } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
 goOffline();
@@ -86,6 +89,19 @@ function request(spec: string, path: string, token: string | null): Request {
   });
 }
 
+/** `got` holds everything `recorded` holds, unchanged: objects may have gained keys, nothing else may differ. */
+function assertContains(got: unknown, recorded: unknown, at = "body"): void {
+  if (Array.isArray(recorded)) {
+    assert(Array.isArray(got) && got.length === recorded.length, `${at}: ${JSON.stringify(got)}`);
+    recorded.forEach((v, i) => assertContains(got[i], v, `${at}[${i}]`));
+  } else if (recorded !== null && typeof recorded === "object") {
+    assert(got !== null && typeof got === "object" && !Array.isArray(got), `${at}: ${JSON.stringify(got)}`);
+    for (const [k, v] of Object.entries(recorded)) assertContains((got as Record<string, unknown>)[k], v, `${at}.${k}`);
+  } else {
+    assertEquals(got, recorded, at);
+  }
+}
+
 async function quietly<T>(fn: () => Promise<T>): Promise<T> {
   const error = console.error;
   console.error = () => {};
@@ -149,10 +165,70 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
+  Deno.test("GET /v1/config serves every field of §6.2, with testnet's values", async () => {
+    const res = await handle(request("GET /v1/config", "/v1/config", null));
+    assertEquals([res.status, res.headers.get("cache-control")], [200, "public, max-age=30"]);
+    const c = await res.json();
+    assertEquals(Object.keys(c), [
+      "network",
+      "passphrase",
+      "rpcUrl",
+      "horizonUrl",
+      "activation",
+      "sponsor",
+      "deployment",
+      "explorer",
+      "fees",
+      "faucet",
+      "limits",
+      "pricing",
+      "assets",
+      "contracts",
+      "allowlist",
+      "anchors",
+      "bridge",
+      "flags",
+      "minBuild",
+    ]);
+    assertEquals(c.network, "testnet");
+    assertEquals(c.passphrase, "Test SDF Network ; September 2015");
+    assertEquals(c.rpcUrl, "https://soroban-testnet.stellar.org");
+    assertEquals(c.horizonUrl, "https://horizon-testnet.stellar.org");
+    assertEquals(c.activation, "friendbot");
+    assertEquals(c.sponsor, SPONSOR.publicKey());
+    assertEquals(c.deployment, { id: "testnet", launchpad: testnetDeployment.launchpad, moments: testnetDeployment.moments });
+    assertEquals(c.explorer, "https://stellar.expert/explorer/testnet");
+    assertEquals(c.fees, { payer: "user", maxFee: "30000000", maxInclusionPerOp: "200000", starterInnerFeeMax: "1000000", starterSwap: false, fundingFloor: "1000000" });
+    assertEquals(c.faucet, { amount: "10000" });
+    assertEquals(c.limits, { momentMaxEditions: 100000, momentWindowSecs: [3600, 2592000], collectMax: 20, launchName: [1, 32], launchSymbol: [2, 10], uriMax: 256, uploadBytes: 26214400 });
+    assertEquals(c.pricing, { kind: "reference", source: "Kraken", network: "mainnet", note: "Testnet assets have no market. XLM and USDC are valued at mainnet market prices." });
+    assertEquals(Object.keys(c.assets[0]), ["id", "code", "name", "decimals", "contract", "classic", "note", "priceRef", "logo", "listed"]);
+    assertEquals(c.assets.map((a: Record<string, unknown>) => [a.id, a.priceRef, a.logo, a.listed]), [["XLM", "XLM", "XLM", true], ["USDC", "USDC", "USDC", true], ["BUSDC", "USDC", null, false]]);
+    assertEquals(c.contracts.launchpad, testnetDeployment.launchpad);
+    assertEquals(c.flags, { enabled: true, maintenance: false });
+    assertEquals(c.minBuild, 1);
+  });
+
+  Deno.test("GET /v1/config: where activation is sponsored, the starter swap is offered", async () => {
+    Deno.env.set("LITE_ACTIVATION", "sponsored");
+    try {
+      const c = await (await handle(request("GET /v1/config", "/v1/config", null))).json();
+      assertEquals([c.activation, c.fees.starterSwap, c.fees.payer], ["sponsored", true, "user"]);
+    } finally {
+      Deno.env.delete("LITE_ACTIVATION");
+    }
+  });
+
   for (const r of ROUTE_REQUESTS) {
     Deno.test(`${r.method} ${r.path} answers as recorded (${r.name})`, async () => {
       const recorded: RecordedRoute = JSON.parse(await Deno.readTextFile(fixtureUrl(r.name)));
       const got = await send(handle, r, r.auth ? token : null);
+      if (r.grown) {
+        // Grown on purpose (r.grown says how): what was recorded is still there, unchanged.
+        assertEquals([got.status, got.headers["content-type"]], [recorded.response.status, recorded.response.headers["content-type"]]);
+        assertContains(got.body, recorded.response.body);
+        return;
+      }
       assertEquals({ status: got.status, headers: got.headers }, { status: recorded.response.status, headers: recorded.response.headers });
       assertEquals(got.text, JSON.stringify(recorded.response.body));
       if (r.auth) {
