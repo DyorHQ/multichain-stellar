@@ -16,7 +16,7 @@ private multichain-stellar repository and is never copied into DyorHQ/IOS-app.
 `S:app/`, a subtree of the public app's `release/24`, instead of the public DyorHQ/IOS-app repository. So **A is
 `$S/app`**: an A path `ios/…` in this document is `S:app/ios/…`; each package works in one worktree of the private
 repository (§13.4); and nothing in this program is pushed to the public repository (§13.6, O-3). The build-23 rules
-(I1, I2, §12.1) still compare the app against d387a64. Q2 (§14) is answered by this decision.
+(I1, I2, §12.1) compare the app copy against its upstream snapshot: the latest "Squashed 'app/' content" commit, found by the checks themselves (WP-R1). Q2 (§14) is answered by this decision.
 
 "Monad X.swift:n" is a build-23 file in A. "Research" is `research-2026-10-14.md` (six reports). Facts this document
 relies on were re-checked in the code on 2026-10-14. The ones that changed a decision are cited where they are used.
@@ -72,8 +72,9 @@ screen-by-screen spec. §9 to §12 cover placeholders, strings, accessibility an
    - **Secrets hygiene stays:** no seed or signer is kept in memory longer than one signing operation that never
      waits on the user (§7.2).
 
-   Scope: this decision is about the device lock and session expiry. The server-side invite code at a first sign-in
-   and the tester revocation are not device gates and stay until the owner says otherwise (Q6, §14).
+   Scope: this covers the device lock, session expiry and, on TESTNET, the invite code too (lead decision on the
+   owner's "no need for gating it since it's on Testnet"): `inviteRequired` is false on testnet, so a first sign-in
+   needs no code and registers the address as a tester (still revocable). Mainnet keeps `inviteRequired` true.
 
 ### 1.2 Lead defaults adopted
 
@@ -355,7 +356,7 @@ launch named "USDC" would wear Circle's.
 
 **Copies.** These Monad pieces are private or EVM-typed, so they are copied into `Lite/` with a `Stellar` prefix.
 Each copy keeps the original's metrics exactly. It starts with a header naming its source:
-`// Stellar copy of ios/DyorHQ/Home/HomeView.swift HomeAction (d387a64 sha256:<first 12 hex>)`.
+`// Stellar copy of ios/DyorHQ/Home/HomeView.swift HomeAction (<snapshot> sha256:<first 12 hex>)`.
 `check-copies.py` re-hashes each named declaration in the base, brace-matched from its declaration line, and lists
 copies whose source changed. When a later base changes Monad, the copy is re-synced instead of drifting. There is no
 shared JSON registry, so packages never edit a common file.
@@ -628,8 +629,8 @@ and regenerated into the pins in one commit.
 - daily count and fee caps per kind;
 - a daily cap per hashed IP: `HMAC-SHA256(LITE_JWT_SECRET, ip + "|" + utcDay)`. Raw IPs are never stored.
 
-Invite-only sign-in still gates every session, so every transaction and every sponsorship needs an invited, unrevoked
-tester. Viewer routes in their public view (§6.0) need no session; they show only on-chain facts and never sponsor
+Every session belongs to an unrevoked tester: on mainnet an invited one; on testnet (`inviteRequired` false) any
+address that signed in. Sponsorship caps are per address. Viewer routes in their public view (§6.0) need no session; they show only on-chain facts and never sponsor
 anything.
 
 **What the phone believes.** The phone never trusts the server's word that DyorHQ pays. "Paid by DyorHQ" is shown
@@ -2875,7 +2876,7 @@ strings.
 **Reused keys.** Copy identical to Monad's reuses a build-23 Localizable key, written with no comment or through its
 enum label. Examples: "Top Tokens", "My Holdings", "Total Volume", "Avail. Balance", "In Use", "Max network fee",
 "Up to %@", "Review Swap", "Cumulative Volume", "Recent Activity", "Swap complete", "Bridge complete", "Withdrawn to
-Spot", "%lld%% to graduation". A literal that isn't a key at d387a64 must name a Stellar table (§2.2 lists keys the
+Spot", "%lld%% to graduation". A literal that isn't a key in the app snapshot must name a Stellar table (§2.2 lists keys the
 specs wrongly assumed).
 
 **Translations.**
@@ -2897,10 +2898,10 @@ changes reach these screens at once (NetworkRoot.swift:63).
    DyorHQ.build/Objects-normal>`. Never `scripts/dev/strings-sync.sh`.
 2. **`python3 -I scripts/dev/check-strings.py --enforce`.** It reads every tracked `ios/**/*.xcstrings`, the new
    tables included.
-3. **`python3 -I ios/Internal/check-lite-strings.py --derived <DerivedData> --base d387a64 --enforce`** reads the
+3. **`python3 -I ios/Internal/check-lite-strings.py --derived <DerivedData> --enforce`** reads the
    `.stringsdata` of sources under `ios/DyorHQ/Lite/`. It fails when:
    - a Stellar or Lite key is missing from its table or untranslated;
-   - a default-table key doesn't exist in `git show d387a64:ios/DyorHQ/Resources/Localizable.xcstrings`;
+   - a default-table key doesn't exist in the snapshot's `ios/DyorHQ/Resources/Localizable.xcstrings`;
    - an unknown table is used;
    - with `--enforce`, a table holds a key no source uses;
    - a never-translated name was translated.
@@ -2976,7 +2977,7 @@ Saved figures never animate in. With Reduce Motion, no transitions are added.
 
 ### 12.1 Build-23 and repository checks (WP-00, WP-01)
 
-**`ios/Internal/check-build23.py --base d387a64 [--worktree] [--app <App Store .app>]`** (Python, no `unifdef`):
+**`ios/Internal/check-build23.py [--worktree] [--app <App Store .app>]`** (Python, no `unifdef`):
 
 1. It diffs base..HEAD (or base..worktree) over the whole repository and checks each path:
 
@@ -3008,7 +3009,7 @@ Saved figures never animate in. With Reduce Motion, no transitions are added.
 4. It prints paths and the first differing line only. It never prints file contents.
 
 **Other checks.**
-- **`ios/Internal/check-copies.py --base d387a64`** reads every `// Stellar copy of <path> <symbol> (d387a64
+- **`ios/Internal/check-copies.py`** reads every `// Stellar copy of <path> <symbol> (d387a64
   sha256:<12>)` header under `Lite/`. It brace-matches the symbol's declaration in the base blob and compares hashes.
   A mismatch lists the copy to re-sync.
 - **`ios/Internal/check-lite-strings.py`:** §10.
@@ -3041,10 +3042,10 @@ for c in Debug Release; do xcodebuild -project DyorHQInternal.xcodeproj -scheme 
 xcodegen generate --spec project.local.yml
 xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -configuration Release -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath DerivedData-$WP-as CODE_SIGNING_ALLOWED=NO build
-python3 -I Internal/check-build23.py --base d387a64 --app DerivedData-$WP-as/Build/Products/Release-iphonesimulator/DyorHQ.app
-python3 -I Internal/check-copies.py --base d387a64
+python3 -I Internal/check-build23.py --app DerivedData-$WP-as/Build/Products/Release-iphonesimulator/DyorHQ.app
+python3 -I Internal/check-copies.py
 # V-STR
-python3 -I Internal/check-lite-strings.py --derived DerivedData-$WP --base d387a64 --enforce
+python3 -I Internal/check-lite-strings.py --derived DerivedData-$WP --enforce
 (cd $A && python3 -I scripts/dev/check-strings.py --enforce)
 # V-DYORKIT (every netswitch package)
 (cd $A/ios/DyorKit && swift test); git -C $A checkout -- ios/DyorKit/Package.resolved
@@ -3072,7 +3073,7 @@ PORT_BASE=2${NN}00 backend/scripts/local-stack.sh stop
 $S/scripts/agent/scan-placeholders.sh $A $S
 ```
 
-`scripts/agent/verify-app.sh $A $S $WP` runs V-APP, V-STR and V-DYORKIT in order and stops at the first failure.
+`QUICK=1 scripts/agent/verify-app.sh $S $WP` (packages: internal Debug build and the source checks) or `scripts/agent/verify-app.sh $S $WP` (the lead's integration: also the internal Release build, the App Store build with `check-build23.py --app` and DyorKit's tests) runs V-APP, V-STR and V-DYORKIT in order and stops at the first failure.
 `scripts/agent/verify-backend.sh $S $NN` runs V-BE.
 
 ### 12.4 Shared verifier vectors
@@ -3213,7 +3214,7 @@ The seams make M2's packages independent: none of them references a type another
   Nobody prints `.secrets`. M0 packages begun before this decision (WP-00 to WP-03, each with an IOS-app worktree
   beside it) finish where they are; the lead carries WP-00's app-side files into `S:app/` when integrating, and
   `worktree.sh` and `verify-app.sh` take `$A = $S/app` from M1 on.
-- **Locks.** `scripts/agent/lock.sh acquire|release <sim|stack> WP-xx` (mkdir locks under `~/Hackathon-b17/wt/.locks`)
+- **Locks.** `scripts/agent/lock.sh acquire|release <sim|stack|xcode|cargo> WP-xx` (one `xcode` holder for every xcodebuild and simulator run, two `cargo` slots) (mkdir locks under `~/Hackathon-b17/wt/.locks`)
   guards the agent simulator (every `xcodebuild test` and simulator run) and the default local stack (ports 8000,
   8001, 54329). Package stacks use `PORT_BASE` and `--no-loop`. The owner's simulator is the lead's only.
 - **Commits** go on `stellar/WP-xx` only, as "Stellar parity WP-xx: …", ending with the Co-Authored-By line. Hooks
@@ -3237,7 +3238,7 @@ The seams make M2's packages independent: none of them references a type another
      old screens, a swap showing "Up to X XLM".
   7. If O-1 is done: run `gen-pinned --deployment testnet`, commit the pins and `testnet.json`, restart, and confirm no
      smoke item is served.
-  8. Regenerate `ios/Integration/network-switch.patch` in S.
+  8. Run the full `scripts/agent/verify-app.sh $S lead` on the merged head (the patch is gone: the app copy is in S).
 - **I2** (after M2): merge in package order; `SEAM(` grep empty; every block; agent QA (§12.7) en-light plus es-dark
   screens. Fixes go back to the owning package as `WP-xx-fix`.
 - **I3** (after M3): merge; every block and the full matrix; patch regenerated; lead QA on the owner's panel
@@ -3285,11 +3286,9 @@ The seams make M2's packages independent: none of them references a type another
 
   This program ships them as they are, and the screens show only what the contracts do. Do you accept that for now,
   or should a contract change and an audit be scheduled?
-- **Q6: the invite code on testnet (does not block).** Decision 6 removes every device gate: no Face ID or passcode
-  to view, no locked screen, no session expiry. One gate is left, on the server: a first sign-in on Stellar needs an
-  invite code, and a tester can be turned off. Should "no need for gating it since it's on Testnet" also open Stellar
-  to every DyorHQ account on testnet, with no invite? The build keeps invites until you say so. Dropping them needs
-  only a server change, no app release.
+- **Q6: the invite code on testnet: decided.** The lead read "no need for gating it since it's on Testnet" as
+  including the invite: testnet has no invite (`inviteRequired` false, WP-02b); mainnet keeps it. The owner can
+  reverse it with a server setting (`LITE_INVITE_REQUIRED`), no app release.
 
 Decided without asking (reasons in §2):
 - Kraken as the default provider;
@@ -3352,19 +3351,19 @@ Screen ids used below: S01 Home, S02 Home after the session expired (no lock), S
 
 1. **Backend.** `backend/scripts/local-stack.sh start --short-sessions` (testnet; access tokens last 120 s and
    refresh tokens 600 s, standing in for "12+ hours"; add `--activation sponsored` only for F05), then
-   `backend/scripts/local-stack.sh invite qa` (the code goes to `.secrets/local-invites.txt`, never printed).
+   (testnet needs no invite; for the mainnet-style run with `LITE_INVITE_REQUIRED=1`, `backend/scripts/local-stack.sh invite qa` writes the code to `.secrets/local-invites.txt`, never printed).
 2. **App.**
    1. `cd $A/ios && python3 -I Internal/generate.py --spec project.local.yml --lite $S/ios/Packages` (`$A = $S/app`).
    2. Build Debug for `$SIM`, then `xcrun simctl install` and `launch fun.dyorhq.app`.
    3. Enrol Face ID with `notifyutil` (INTEGRATION-ios §7), and match it when prompted. Count every prompt from here
       on: decision 6 allows one only where a step below says so.
 3. **F01 First switch** (QA-A, App Lock on). Chip → Stellar → Confirm, which shows "You pay Stellar's network fees in
-   XLM…". Then setup: Sign in (no prompt), invite, Set up, Friendbot, Enable USDC. The Enable row shows "Holds 0.5 XLM
+   XLM…". Then setup: Sign in (no prompt), Set up, Friendbot, Enable USDC (no invite step on testnet; with `LITE_INVITE_REQUIRED=1` the invite step appears after Sign in). The Enable row shows "Holds 0.5 XLM
    · network fee up to … XLM" before the tap. Exactly one Face ID prompt, at Enable USDC (App Lock); no "Unlock your
    Stellar key" row anywhere.
    - Horizon `fee_account` of the trust tx is the user.
    - You land on Stellar Home.
-   - QA-P (passkey): Set up first (invite field shown), then exactly one passkey prompt for sign-in and Enable USDC
+   - QA-P (passkey): Set up first (no invite field on testnet), then exactly one passkey prompt for sign-in and Enable USDC
      together, and no Face ID App Lock prompt.
 4. **F02 Tabs and menu.**
    - The tab bar reads Home · Launch · Earn · Moments.

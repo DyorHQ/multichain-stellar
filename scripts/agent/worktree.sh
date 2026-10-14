@@ -50,7 +50,7 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
-[[ "$WP" =~ ^WP-[A-Z0-9][A-Za-z0-9]{1,3}(-[a-z0-9]+)?$ ]] || usage
+[[ "$WP" =~ ^(WP|CT)-[A-Z0-9][A-Za-z0-9]{1,3}(-[a-z0-9]+)?$ ]] || usage
 BRANCH="stellar/$WP"
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 # The main checkout: the one whose .git is this repository's common directory.

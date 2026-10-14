@@ -137,10 +137,18 @@ take_xcode
 
 # V-APP
 step V-APP "generate.py (internal project)" "$IOS" python3 -I Internal/generate.py --spec project.local.yml --lite "$S/ios/Packages"
-for c in Debug Release; do
+# QUICK=1 (work packages): the internal Debug build and the source checks only. The lead's integration runs the full
+# set: the internal Release build, the App Store build with check-build23 --app, and DyorKit's tests (DyorKit never
+# changes under §3.1, so a package can't break it).
+CONFIGS=(Debug Release)
+[ -n "${QUICK:-}" ] && CONFIGS=(Debug)
+for c in "${CONFIGS[@]}"; do
   step V-APP "internal $c build" "$IOS" xcodebuild -project DyorHQInternal.xcodeproj -scheme DyorHQ -configuration "$c" \
     "${XCB_SIM[@]}" -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
 done
+if [ -n "${QUICK:-}" ]; then
+  step V-APP "check-build23.py --worktree" "$IOS" python3 -I Internal/check-build23.py --worktree
+else
 step V-APP "xcodegen (App Store project)" "$IOS" xcodegen generate --spec project.local.yml
 # Both projects build DyorHQ.app into the same products folder: the internal Release build's app is removed first, so
 # that nothing of the internal build is left in the app the check looks into.
@@ -148,16 +156,17 @@ rm -rf "${IOS:?}/$APP"
 step V-APP "App Store Release build" "$IOS" xcodebuild -project DyorHQ.xcodeproj -scheme DyorHQ -configuration Release \
   "${XCB_SIM[@]}" -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
 step V-APP "check-build23.py --app" "$IOS" python3 -I Internal/check-build23.py --app "$APP"
+fi
 step V-APP "check-copies.py" "$IOS" python3 -I Internal/check-copies.py
 
 # V-STR
 step V-STR "check-lite-strings.py --enforce" "$IOS" python3 -I Internal/check-lite-strings.py --derived "$DD" --enforce
 step V-STR "check-strings.py --enforce" "$A" as_app_repo python3 -I scripts/dev/check-strings.py --enforce
 
-# V-DYORKIT
-step V-DYORKIT "swift test" "$IOS/DyorKit" swift test
+# V-DYORKIT (skipped with QUICK=1)
+[ -z "${QUICK:-}" ] && step V-DYORKIT "swift test" "$IOS/DyorKit" swift test
 release_xcode
 restore
 step V-DYORKIT "Package.resolved unchanged" "$S" git diff --exit-code --stat -- app/ios/DyorKit/Package.resolved
 
-say "ok: V-APP, V-STR and V-DYORKIT passed for $WP"
+if [ -n "${QUICK:-}" ]; then say "ok: V-APP and V-STR (quick) passed for $WP"; else say "ok: V-APP, V-STR and V-DYORKIT passed for $WP"; fi
