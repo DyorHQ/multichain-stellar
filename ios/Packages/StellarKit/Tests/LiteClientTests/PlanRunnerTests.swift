@@ -3,9 +3,10 @@ import Foundation
 import StellarCore
 import XCTest
 
-/// The plan runner against a fake API (DESIGN-stellar-parity §4.3, §4.4): a step built after the review never goes out
-/// above the fee the user confirmed, a step marked as sponsored never declares more than the pinned starter cap, the
-/// sponsor never signs outside an activation, and the limits still hold. Nothing refused is ever signed.
+/// The plan runner against a fake API (DESIGN-stellar-parity §4.3, §4.4, §5.2): a step the user reviewed goes out as
+/// reviewed, a step built after the review never goes out above the fee the user confirmed, a step marked as sponsored
+/// never declares more than the pinned starter cap, the sponsor never signs outside an activation, and the limits still
+/// hold. Nothing refused is ever signed.
 final class PlanRunnerTests: XCTestCase {
     private let user = try! StellarSigner(seed: [UInt8](repeating: 7, count: 32))
     private let friend = try! StellarSigner(seed: [UInt8](repeating: 8, count: 32)).address
@@ -158,6 +159,58 @@ final class PlanRunnerTests: XCTestCase {
         XCTAssertEqual(signed.value, 0)
     }
 
+    func testSignsAStepTheUserReviewedAsReviewedWhateverTheServerAnswersLater() async throws {
+        // The review showed s2 built: 5 XLM to the friend. Asked to build s1, the server answers with s2 rewritten to
+        // pay another account, its intent rewritten to match. s2 still goes out exactly as reviewed (§5.2).
+        let other = try StellarSigner(seed: [UInt8](repeating: 4, count: 32)).address
+        let first = send(10_000_000, fee: 100)
+        let reviewed = send(50_000_000, fee: 100)
+        let rewritten = TestPlan.step(
+            "s2", "Send to a friend",
+            xdr: TestTransaction.envelope(source: user.address, fee: 100, ops: [.payment(to: other, stroops: 50_000_000)]),
+            intent: Intent(kind: "payment", summary: "", spend: [xlm: "50000000"], ops: ["payment"], to: other)
+        )
+        let plan = TestPlan.view([
+            TestPlan.step("s1", "Send", maxFee: "100"),
+            TestPlan.step("s2", "Send to a friend", xdr: reviewed.xdr, intent: reviewed.intent),
+        ])
+        let backend = FakePlanBackend(plan: plan, builds: ["s1": TestPlan.step("s1", "Send", xdr: first.xdr, intent: first.intent)], rewrites: ["s1": [rewritten]])
+        try await runner(backend).run(plan, limits: [xlm: 60_000_000], fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(SignCount()))
+        let builds = await backend.builds
+        XCTAssertEqual(builds, ["s1"])
+        let signed = await backend.signed
+        let sent = try TransactionEnvelope(base64: XCTUnwrap(signed["s2"])).transaction
+        XCTAssertEqual(sent.operations.map(\.body), [.payment(destination: friend, asset: .native, amount: 50_000_000)])
+    }
+
+    func testLooksUpTheFootprintsContractsOnlyForARestore() async throws {
+        // A swap whose footprint names a pair nobody pins goes out with the RPC down: only a restore's footprint plays a
+        // part in the checks (§4.9), so no other step's footprint costs an RPC lookup.
+        let swap = try SharedVectors.named("soroban swap with a footprint ok")
+        let down = FakeInspector(down: true)
+        try await run(swap, inspector: down)
+        let swapLookups = await down.lookedUp
+        XCTAssertEqual(swapLookups, [])
+        // A restore's footprint is looked up, and the launch token whose data it brings back is recognised.
+        let restore = try SharedVectors.named("restore ok")
+        let rpc = FakeInspector(launchTokens: Set(restore.launchTokens))
+        try await run(restore, inspector: rpc)
+        let restoreLookups = await rpc.lookedUp
+        XCTAssertEqual(restoreLookups, Set(restore.launchTokens))
+    }
+
+    /// Runs a shared vector as a one-step plan, built for the review, on the vector's clock and pins.
+    @discardableResult
+    private func run(_ vector: SharedVectors.Vector, inspector: any LaunchTokenInspecting) async throws -> [TxStatus] {
+        let plan = TestPlan.view([TestPlan.step("s1", vector.name, xdr: vector.envelope, intent: vector.intent)])
+        var runner = PlanRunner(api: FakePlanBackend(plan: plan), user: vector.user, pinned: vector.pinned, inspector: inspector)
+        let now = vector.now
+        runner.now = { Date(timeIntervalSince1970: now) }
+        let key = try SharedVectors.user()
+        let limits = vector.intent.spend.compactMapValues(TxVerifier.units)
+        return try await runner.run(plan, limits: limits, fees: try PlanFees(plan: plan, pinned: vector.pinned), signer: { key })
+    }
+
     func testTheCompatibilityRunPricesUnbuiltStepsAtTheirCeiling() async throws {
         // No server ceiling: the pinned cap is the ceiling, and a step built within it goes out.
         let built = send(10_000_000, fee: 30_000)
@@ -195,27 +248,54 @@ struct NoLaunchTokens: LaunchTokenInspecting {
     func launchTokens(among contracts: [String], pinned: PinnedContracts) async throws -> Set<String> { [] }
 }
 
-/// The Lite API's plan routes: builds a step by swapping in the step given for it, and settles every submission.
+/// Launch tokens as a fake RPC knows them. Each contract outside the pins it's asked about is one RPC lookup, kept in
+/// `lookedUp`; with the RPC down, any lookup fails.
+actor FakeInspector: LaunchTokenInspecting {
+    private let tokens: Set<String>
+    private let down: Bool
+    private(set) var lookedUp: Set<String> = []
+
+    init(launchTokens: Set<String> = [], down: Bool = false) {
+        tokens = launchTokens
+        self.down = down
+    }
+
+    func launchTokens(among contracts: [String], pinned: PinnedContracts) async throws -> Set<String> {
+        let lookups = Set(contracts).subtracting(pinned.allContracts)
+        lookedUp.formUnion(lookups)
+        if down, !lookups.isEmpty { throw URLError(.notConnectedToInternet) }
+        return lookups.intersection(tokens)
+    }
+}
+
+/// The Lite API's plan routes: builds a step by swapping in the step given for it (and any other steps `rewrites` gives
+/// for that build, as a server that changes what the user reviewed would), and settles every submission.
 actor FakePlanBackend: PlanBackend {
     private var plan: PlanView
     private let replacements: [String: PlanStep]
+    private let rewrites: [String: [PlanStep]]
     private(set) var builds: [String] = []
     private(set) var submitted: [String] = []
+    /// The signed envelope submitted for each step.
+    private(set) var signed: [String: String] = [:]
 
-    init(plan: PlanView, builds: [String: PlanStep] = [:]) {
+    init(plan: PlanView, builds: [String: PlanStep] = [:], rewrites: [String: [PlanStep]] = [:]) {
         self.plan = plan
         replacements = builds
+        self.rewrites = rewrites
     }
 
     func buildStep(planId: String, stepId: String) async throws -> PlanView {
         builds.append(stepId)
-        let steps = plan.steps.map { $0.id == stepId ? replacements[stepId] ?? $0 : $0 }
+        let swapped = (replacements[stepId].map { [$0] } ?? []) + (rewrites[stepId] ?? [])
+        let steps = plan.steps.map { step in swapped.first { $0.id == step.id } ?? step }
         plan = PlanView(planId: plan.planId, kind: plan.kind, expiresAt: plan.expiresAt, steps: steps, fees: plan.fees)
         return plan
     }
 
     func submit(planId: String, stepId: String, signedXdr: String) async throws -> TxStatus {
         submitted.append(stepId)
+        signed[stepId] = signedXdr
         return TestPlan.status("hash-\(stepId)", "pending")
     }
 
@@ -312,5 +392,58 @@ enum TestTransaction {
         guard let source else { return w.uint32(0) }
         w.uint32(1)
         account(&w, source)
+    }
+}
+
+/// The shared verifier vectors (Tests/StellarCoreTests/Vectors, from backend/tests/vectors/gen-vectors.ts), read from the
+/// source tree like the API fixtures: transactions stellar-sdk built, to run and price as plan steps.
+enum SharedVectors {
+    struct Vector: Decodable {
+        struct Expect: Decodable { let ok: Bool; let reason: String? }
+        struct Fees: Decodable { let maxFee: String; let maxInclusionPerOp: String; let starterInnerFeeMax: String }
+        let name: String
+        let envelope: String
+        let intent: Intent
+        let user: String
+        let sponsor: String
+        let allowed: [String]
+        let launchTokens: [String]
+        let launchTokenWasmHash: String
+        let monadDomain: UInt32
+        let feePolicy: Fees
+        let now: Double
+        let expect: Expect
+
+        var pinned: PinnedContracts {
+            let fees = FeePolicy(maxFee: Int64(feePolicy.maxFee)!, maxInclusionFeePerOp: Int64(feePolicy.maxInclusionPerOp)!, starterInnerFeeMax: Int64(feePolicy.starterInnerFeeMax)!)
+            return PinnedContracts(network: .testnet, sponsor: sponsor, launchTokenWasmHash: launchTokenWasmHash, roles: ["all": allowed], feePolicy: fees, monadDomain: monadDomain)
+        }
+    }
+
+    private struct Keys: Decodable {
+        struct Sep5: Decodable { let secret: String }
+        let sep5: [Sep5]
+    }
+
+    static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("StellarCoreTests/Vectors")
+
+    static func all() throws -> [Vector] {
+        try JSONDecoder().decode([Vector].self, from: Data(contentsOf: directory.appendingPathComponent("verifier.json")))
+    }
+
+    static func named(_ name: String) throws -> Vector {
+        try XCTUnwrap(all().first(where: { $0.name == name }), name)
+    }
+
+    /// The key of the vectors' user: SEP-5's published test account (keys.json).
+    static func user() throws -> StellarSigner {
+        let keys = try JSONDecoder().decode(Keys.self, from: Data(contentsOf: directory.appendingPathComponent("keys.json")))
+        return try StellarSigner(secret: try XCTUnwrap(keys.sep5.first).secret)
+    }
+
+    /// The TS verifier's reason as the Swift verifier words it: a capital letter and a full stop.
+    static func swiftReason(_ reason: String) -> String {
+        reason.prefix(1).uppercased() + reason.dropFirst() + "."
     }
 }

@@ -70,11 +70,12 @@ public struct PlanRunner: Sendable {
         self.init(api: api, user: user, pinned: pinned, inspector: ContractInspector(pinned: pinned))
     }
 
-    /// `limits`: the most the user confirmed spending across the whole plan, per asset contract id (base units). An
-    /// asset not listed may not be spent at all. `fees`: the network fees the user confirmed, per step
-    /// (`PlanFees(plan:pinned:)`, worked out when the review opened); a step whose fee comes out higher, or that the
-    /// user confirmed as paid by DyorHQ and no longer is, is refused. `signer` is asked once per step (it may prompt
-    /// Face ID or a passkey).
+    /// `plan` is the plan as the user reviewed it: a step it holds built is signed exactly as reviewed, whatever the
+    /// server answers later, and only a step it holds unbuilt is taken from the server, once built. `limits`: the most
+    /// the user confirmed spending across the whole plan, per asset contract id (base units). An asset not listed may
+    /// not be spent at all. `fees`: the network fees the user confirmed, per step (`PlanFees(plan:pinned:)`, worked
+    /// out when the review opened); a step whose fee comes out higher, or that the user confirmed as paid by DyorHQ
+    /// and no longer is, is refused. `signer` is asked once per step (it may prompt Face ID or a passkey).
     @discardableResult
     public func run(
         _ plan: PlanView,
@@ -85,16 +86,16 @@ public struct PlanRunner: Sendable {
     ) async throws -> [TxStatus] {
         var spent: [String: Int64] = [:]
         var results: [TxStatus] = []
-        var current = plan
-        for index in plan.steps.indices {
-            var step = current.steps[index]
+        for (index, reviewed) in plan.steps.enumerated() {
+            var step = reviewed
             if step.xdr == nil {
                 onEvent(.building(stepId: step.id, label: step.label))
-                current = try await api.buildStep(planId: plan.planId, stepId: step.id)
-                guard current.steps.indices.contains(index), current.steps[index].id == step.id else {
+                // Of the plan the server answers with, only this step: the others are the ones the user reviewed.
+                let built = try await api.buildStep(planId: plan.planId, stepId: step.id)
+                guard built.steps.indices.contains(index), built.steps[index].id == step.id else {
                     throw Failure.refused(step: step.label, reason: "the plan changed")
                 }
-                step = current.steps[index]
+                step = built.steps[index]
             }
             guard let xdr = step.xdr, let intent = step.intent else { throw Failure.refused(step: step.label, reason: "missing transaction") }
 
@@ -105,7 +106,7 @@ public struct PlanRunner: Sendable {
                 throw Failure.refused(step: step.label, reason: "\(error)")
             }
             var verifier = TxVerifier(user: user, pinned: pinned, now: now)
-            let candidates = (intent.calls ?? []).map(\.contract) + (envelope.transaction.footprint?.contracts ?? [])
+            let candidates = Self.launchTokenCandidates(envelope.transaction, intent: intent)
             verifier.verifiedLaunchTokens = try await inspector.launchTokens(among: candidates, pinned: pinned)
             let outflow: [String: Int64]
             do {
@@ -147,6 +148,15 @@ public struct PlanRunner: Sendable {
         onEvent: @Sendable (Event) -> Void = { _ in }
     ) async throws -> [TxStatus] {
         try await run(plan, limits: limits, fees: PlanFees(plan: plan, pinned: pinned), signer: signer, onEvent: onEvent)
+    }
+
+    /// The contracts the verifier may need to know as launch tokens: the calls the intent names, and for a restore the
+    /// contracts whose data it brings back (§4.9). Any other step's footprint plays no part in the checks, so it costs
+    /// no RPC lookup and an RPC that's down can't stop it.
+    static func launchTokenCandidates(_ tx: Transaction, intent: Intent) -> [String] {
+        let calls = (intent.calls ?? []).map(\.contract)
+        guard intent.kind == "restore", tx.operations.contains(where: { $0.body == .restoreFootprint }) else { return calls }
+        return calls + (tx.footprint?.contracts ?? [])
     }
 
     private func waitFor(_ hash: String, step: String) async throws -> TxStatus {

@@ -53,10 +53,12 @@ public struct XDRReader {
         }
     }
 
+    /// `n` bytes, then the zeros that pad them to a multiple of 4. Any other padding is refused, as stellar-sdk and the
+    /// network refuse it, so the bytes read are the ones stellar-sdk would write for the same value.
     public mutating func fixed(_ n: Int) throws -> [UInt8] {
         let v = Array(try take(n))
         let pad = (4 - n % 4) % 4
-        if pad > 0 { _ = try take(pad) }
+        if pad > 0, try take(pad).contains(where: { $0 != 0 }) { throw XDRError.invalid("padding") }
         return v
     }
 
@@ -66,9 +68,12 @@ public struct XDRReader {
         return try fixed(n)
     }
 
+    /// UTF-8 text, kept byte for byte. (Foundation's decoder drops a leading byte-order mark, so it would read a
+    /// function named "\u{FEFF}transfer" as "transfer" where stellar-sdk reads it as written.)
     public mutating func string(max: Int, _ what: String = "string") throws -> String {
         let b = try variable(max: max, what)
-        guard let s = String(bytes: b, encoding: .utf8) else { throw XDRError.invalid(what) }
+        let s = String(decoding: b, as: UTF8.self)
+        guard s.utf8.elementsEqual(b) else { throw XDRError.invalid(what) }
         return s
     }
 

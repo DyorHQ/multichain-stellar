@@ -235,6 +235,8 @@ const USDC_SPEC = `USDC:${USDC_ASSET.getIssuer()}`;
 const EVIL = new Contract("CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526").contractId();
 /** A launch token the phone verified (deployed from the pinned launch-token WASM). */
 const TOKEN = StrKey.encodeContract(Buffer.alloc(32, 0x22));
+/** A Soroswap pair: a contract a swap's footprint names, and nobody pins. */
+const PAIR = StrKey.encodeContract(Buffer.alloc(32, 0x33));
 const MONAD_USER = "0x" + "12".repeat(20);
 const NOW = 1_800_000_000;
 
@@ -254,6 +256,12 @@ function tx(ops: xdr.Operation[], o: { source?: string | MuxedAccount; maxTime?:
 function withFee(t: Transaction, fee: number): Transaction {
   const envelope = t.toEnvelope();
   envelope.v1().tx().fee(fee);
+  return new Transaction(envelope, PASS);
+}
+/** The same trustline change with another limit (stellar-sdk won't build a negative one). */
+function withLimit(t: Transaction, limit: bigint): Transaction {
+  const envelope = t.toEnvelope();
+  envelope.v1().tx().operations()[0].body().changeTrustOp().limit(xdr.Int64.fromString(limit.toString()));
   return new Transaction(envelope, PASS);
 }
 const resources = (resourceFee: number, readWrite: xdr.LedgerKey[] = []) => new SorobanDataBuilder().setResourceFee(resourceFee).setReadWrite(readWrite).build();
@@ -373,6 +381,8 @@ const syn: Synthetic[] = [
   ["sponsor pays out in activation", tx([Operation.beginSponsoringFutureReserves({ sponsoredId: user, source: sponsor }), Operation.payment({ destination: user, asset: Asset.native(), amount: "1", source: sponsor })]), { ...activateIntent, ops: ["beginSponsoringFutureReserves", "payment"] }],
   ["user-paid trust ok", tx([Operation.changeTrust({ asset: USDC_ASSET })]), trustIntent, { step: { feePayer: "user", sponsorReason: null } }],
   ["trust undeclared asset", tx([Operation.changeTrust({ asset: new Asset("EVIL", sponsor) })]), trustIntent],
+  ["trust removed", tx([Operation.changeTrust({ asset: USDC_ASSET, limit: "0" })]), trustIntent],
+  ["trust with a negative limit", withLimit(tx([Operation.changeTrust({ asset: USDC_ASSET })]), -1n), trustIntent],
 
   // Destinations and memos (§5.2).
   ["payment to another destination", tx([pay("5", third)]), payIntent("50000000")],
@@ -499,11 +509,38 @@ const syn: Synthetic[] = [
   })(),
   ["function without a rule", tx([invoke(call(ROUTER, "add_liquidity", [addr(user)]))]), callIntent("swap", ROUTER, "add_liquidity")],
 
+  // Where a decoder or a comparison could tell the verifiers apart: an authorization is of the call itself only byte for
+  // byte (a twin root that differs only in a string's Unicode normalization or an error's code holds a transfer to
+  // another account), and a function name is read as written.
+  ...(() => {
+    const launch = (name: xdr.ScVal, uri: xdr.ScVal) =>
+      call(LAUNCHPAD, "launch", [addr(user), addr(XLM), name, str("DPLY"), uri, u32(100), i128(0n), i128(0n)]);
+    const uri = str("https://x.test/m.json");
+    const withTwin = (ic: xdr.InvokeContractArgs, twin: xdr.InvokeContractArgs) => tx([invoke(ic, [], [src(inv(twin, [pull(USDC, third, 5n)]))])]);
+    const error = (code: number) => xdr.ScVal.scvError(xdr.ScError.sceContract(code));
+    const intent = callIntent("launch_create", LAUNCHPAD, "launch", { [USDC]: "5" }, { to: friend });
+    return [
+      ["auth root that is the call in another normalization", withTwin(launch(str("Caf\u00e9"), uri), launch(str("Cafe\u0301"), uri)), intent],
+      ["auth root that is the call with another error code", withTwin(launch(str("Deploy"), error(1)), launch(str("Deploy"), error(2))), intent],
+      [
+        "call to a function name with a byte-order mark",
+        tx([invoke(call(USDC, "\ufefftransfer", [addr(user), addr(friend), i128(100n)]))]),
+        callIntent("payment", USDC, "transfer", { [USDC]: "100" }, { to: friend }),
+      ],
+    ] as Synthetic[];
+  })(),
+
   // Restores (§4.9).
   ["restore ok", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [instanceKey(LAUNCHPAD), balanceKey(TOKEN), codeKey(WASM)]) }), restoreIntent(), { launchTokens: [TOKEN] }],
   ["restore with a footprint outside the allowlist", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [instanceKey(LAUNCHPAD), balanceKey(EVIL)]) }), restoreIntent()],
   ["restore of another WASM", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [codeKey("cd".repeat(32))]) }), restoreIntent()],
   ["restore outside its own intent", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [instanceKey(LAUNCHPAD)]) }), restoreIntent("swap")],
+  // Any other step's footprint plays no part in the checks, unpinned contracts and all.
+  [
+    "soroban swap with a footprint ok",
+    tx([invoke(swapCall(100n, 10n), [pull(XLM, ROUTER, 100n)])], { soroban: resources(50_000, [instanceKey(ROUTER), instanceKey(PAIR)]) }),
+    swapIntent(100n, ROUTER, 10n),
+  ],
 
   // Who pays (§4.3): the verifier accepts these; verifyFeePayer and PlanFees decide.
   ["starter step within the cap", sixPayments(1_000_000), starterIntent, { step: { feePayer: "sponsor", sponsorReason: "starter_swap" } }],

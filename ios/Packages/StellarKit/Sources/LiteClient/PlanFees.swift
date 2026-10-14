@@ -54,7 +54,8 @@ public struct PlanFees: Equatable, Sendable {
     }
 
     /// Works out every step of `plan`. Throws `PlanRunner.Failure.refused` for a step the runner would refuse anyway:
-    /// a fee or ceiling above the pinned cap, or a step marked as sponsored that declares more than
+    /// a built step outside the verifier's fee caps (the whole fee, the resource fee's range, the inclusion bid), an
+    /// unbuilt step's ceiling above the pinned cap, or a step marked as sponsored that declares more than
     /// `starterInnerFeeMax`. `estimates` prices an unbuilt step the server sent no ceiling for; without either, its
     /// ceiling is the pinned cap.
     public init(plan: PlanView, pinned: PinnedContracts, estimates: StellarFees? = nil) throws {
@@ -83,18 +84,19 @@ public struct PlanFees: Equatable, Sendable {
     }
 
     static func step(_ step: PlanStep, envelope: TransactionEnvelope, pinned: PinnedContracts) throws -> Step {
-        let fee = Int64(envelope.transaction.fee)
-        guard fee <= pinned.feePolicy.maxFee else { throw PlanRunner.Failure.refused(step: step.label, reason: aboveCap) }
+        let verifier = TxVerifier(user: "", pinned: pinned)
         let payer: StellarFeePayer
         do {
-            payer = try TxVerifier(user: "", pinned: pinned).feePayer(envelope, intent: step.intent, flaggedPayer: step.feePayer, sponsorReason: step.sponsorReason)
+            // The verifier's own fee caps (the whole fee, the resource fee's range, the inclusion bid), then who pays.
+            try verifier.checkFees(envelope.transaction)
+            payer = try verifier.feePayer(envelope, intent: step.intent, flaggedPayer: step.feePayer, sponsorReason: step.sponsorReason)
         } catch let f as VerificationFailure {
             throw PlanRunner.Failure.refused(step: step.label, reason: f.reason)
         }
-        return Step(id: step.id, stepKind: step.stepKind, maxFee: fee, built: true, payer: payer, reserveDelta: max(0, step.reserveDelta ?? 0))
+        return Step(id: step.id, stepKind: step.stepKind, maxFee: Int64(envelope.transaction.fee), built: true, payer: payer, reserveDelta: max(0, step.reserveDelta ?? 0))
     }
 
-    /// The verifier's reason, so either check reads the same.
+    /// The verifier's reason for a fee above the cap, so an unbuilt step's ceiling reads the same.
     static let aboveCap = "The network fee is above the limit."
 }
 

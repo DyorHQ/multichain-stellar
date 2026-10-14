@@ -210,6 +210,7 @@ public struct TxVerifier {
                 for entry in auth {
                     guard entry.credentials == .sourceAccount else { throw fail("The transaction needs a signature from another address.") }
                     // The authorization of the call itself is bound by the call's rule; any other root is bound here.
+                    // A root is the call itself only byte for byte (InvokeContractArgs ==), as verify.ts compares them.
                     let covered = entry.rootInvocation.function == .contractFn(call)
                     try walk(entry.rootInvocation, intent: intent, covered: covered, outflow: &outflow)
                 }
@@ -244,8 +245,9 @@ public struct TxVerifier {
         return sponsorReason == StellarSponsorReason.starterSwap.rawValue ? .dyorHQ(.starterSwap) : .user
     }
 
-    /// The fee caps (§4.4): the whole fee, then the resource fee's range and the inclusion bid per operation.
-    private func checkFees(_ tx: Transaction) throws {
+    /// The fee caps (§4.4): the whole fee, then the resource fee's range and the inclusion bid per operation. `verify`
+    /// runs them, and PlanFees prices a built step with them, so the review never shows a fee the runner would refuse.
+    public func checkFees(_ tx: Transaction) throws {
         let policy = pinned.feePolicy
         let fee = Int64(tx.fee)
         let ops = Int64(tx.operations.count)

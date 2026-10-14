@@ -127,6 +127,54 @@ final class KeyTests: XCTestCase {
     }
 }
 
+final class XDRTests: XCTestCase {
+    private func xdr(_ bytes: [UInt8]) -> XDRReader {
+        var w = XDRWriter()
+        w.variable(bytes)
+        return XDRReader(w.bytes)
+    }
+
+    func testStringsAreReadByteForByte() throws {
+        let marked: [UInt8] = [0xEF, 0xBB, 0xBF] + Array("transfer".utf8)
+        var r = xdr(marked)
+        let name = try r.string(max: 32)
+        XCTAssertEqual(Array(name.utf8), marked, "the byte-order mark is kept")
+        XCTAssertNotEqual(name, "transfer")
+        var invalid = xdr([0x61, 0xFF])
+        XCTAssertThrowsError(try invalid.string(max: 32)) { XCTAssertEqual($0 as? XDRError, .invalid("string")) }
+    }
+
+    func testPaddingIsZeros() throws {
+        var zeros = XDRReader([0, 0, 0, 1, 0x61, 0, 0, 0])
+        XCTAssertEqual(try zeros.variable(max: 4), [0x61])
+        var other = XDRReader([0, 0, 0, 1, 0x61, 0, 0, 1])
+        XCTAssertThrowsError(try other.variable(max: 4)) { XCTAssertEqual($0 as? XDRError, .invalid("padding")) }
+    }
+
+    func testValuesAndCallsAreTheSameOnlyByteForByte() throws {
+        // Swift's == on text calls the two spellings of "Café" equal; their XDR differs, and so do the values.
+        let nfc = "Caf\u{E9}", nfd = "Cafe\u{301}"
+        XCTAssertNotEqual(SCVal.string(nfc), SCVal.string(nfd))
+        XCTAssertNotEqual(SCVal.symbol(nfc), SCVal.symbol(nfd))
+        XCTAssertNotEqual(SCVal.error(type: 0, code: 1), SCVal.error(type: 0, code: 2))
+        XCTAssertEqual(SCVal.error(type: 0, code: 1), SCVal.error(type: 0, code: 1))
+        // A call to `launch` with one string argument, decoded.
+        func call(_ text: String) throws -> InvokeContractArgs {
+            var w = XDRWriter()
+            w.uint32(1) // SC_ADDRESS_TYPE_CONTRACT
+            w.raw([UInt8](repeating: 0x22, count: 32))
+            w.variable(Array("launch".utf8))
+            w.uint32(1) // one argument
+            w.uint32(14) // SCV_STRING
+            w.variable(Array(text.utf8))
+            var r = XDRReader(w.bytes)
+            return try XDRDecode.invokeContractArgs(&r)
+        }
+        XCTAssertEqual(try call(nfc), try call(nfc))
+        XCTAssertNotEqual(try call(nfc), try call(nfd))
+    }
+}
+
 final class AmountTests: XCTestCase {
     func testParseAndFormat() {
         XCTAssertEqual(StellarAmount.parse("12.5"), 125_000_000)
@@ -205,6 +253,20 @@ final class VerifierVectorTests: XCTestCase {
             "soroswap min below receive", "curve buy min_tokens_out below receive", "blend submit to another account",
             "cctp burn to another mint recipient", "restore with a footprint outside the allowlist", "restore ok",
             "starter step with an inner fee above the cap",
+        ] {
+            XCTAssertTrue(names.contains(name), name)
+        }
+    }
+
+    /// So are the cases where a decoder or a comparison could tell the two verifiers apart (verify.test.ts keeps the
+    /// same list, with their verdicts).
+    func testCoversTheParityCases() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let names = Set(vectors.map(\.name))
+        for name in [
+            "auth root that is the call in another normalization", "auth root that is the call with another error code",
+            "call to a function name with a byte-order mark", "trust removed", "trust with a negative limit",
+            "soroban swap with a footprint ok",
         ] {
             XCTAssertTrue(names.contains(name), name)
         }

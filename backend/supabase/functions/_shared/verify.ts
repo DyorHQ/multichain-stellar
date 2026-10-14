@@ -411,7 +411,8 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
         const line = op.line as Asset;
         const spec = line.isNative() ? "native" : `${line.getCode()}:${line.getIssuer()}`;
         if (!(intent.trust ?? []).includes(spec)) fail(`unexpected trustline ${spec}`);
-        if (stroops(op.limit) === 0n) fail("the transaction removes a trustline");
+        // A limit of 0 removes the trustline; a negative one is malformed. Swift refuses both alike (limit > 0).
+        if (stroops(op.limit) <= 0n) fail("the transaction removes a trustline");
         break;
       }
       case "beginSponsoringFutureReserves":

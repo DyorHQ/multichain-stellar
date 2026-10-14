@@ -35,7 +35,8 @@ public enum SCAddress: Equatable, Hashable {
 public indirect enum SCVal: Equatable {
     case bool(Bool)
     case void
-    case error
+    /// An SCError: its type (0 for a contract's own error), and the contract's code or the host's error code.
+    case error(type: Int32, code: UInt32)
     case u32(UInt32)
     case i32(Int32)
     case u64(UInt64)
@@ -55,10 +56,13 @@ public indirect enum SCVal: Equatable {
     case ledgerKeyContractInstance
     case ledgerKeyNonce(Int64)
 
+    /// The same value, as its XDR says it: strings and symbols compare as bytes (Swift's `==` on text would also match
+    /// another Unicode normalization of them), errors by type and code.
     public static func == (a: SCVal, b: SCVal) -> Bool {
         switch (a, b) {
         case let (.bool(x), .bool(y)): return x == y
-        case (.void, .void), (.error, .error), (.ledgerKeyContractInstance, .ledgerKeyContractInstance): return true
+        case (.void, .void), (.ledgerKeyContractInstance, .ledgerKeyContractInstance): return true
+        case let (.error(t1, c1), .error(t2, c2)): return t1 == t2 && c1 == c2
         case let (.u32(x), .u32(y)): return x == y
         case let (.i32(x), .i32(y)): return x == y
         case let (.u64(x), .u64(y)), let (.timepoint(x), .timepoint(y)), let (.duration(x), .duration(y)): return x == y
@@ -66,7 +70,7 @@ public indirect enum SCVal: Equatable {
         case let (.u128(h1, l1), .u128(h2, l2)): return h1 == h2 && l1 == l2
         case let (.i128(h1, l1), .i128(h2, l2)): return h1 == h2 && l1 == l2
         case let (.u256(x), .u256(y)), let (.i256(x), .i256(y)), let (.bytes(x), .bytes(y)): return x == y
-        case let (.string(x), .string(y)), let (.symbol(x), .symbol(y)): return x == y
+        case let (.string(x), .string(y)), let (.symbol(x), .symbol(y)): return x.utf8.elementsEqual(y.utf8)
         case let (.vec(x), .vec(y)): return x == y
         case let (.map(x), .map(y)):
             guard let x, let y else { return x == nil && y == nil }
@@ -102,6 +106,11 @@ public struct InvokeContractArgs: Equatable {
     public let contract: SCAddress
     public let function: String
     public let args: [SCVal]
+    /// The call as the transaction encodes it.
+    public let xdr: [UInt8]
+
+    /// The same call: the same bytes, as verify.ts compares calls.
+    public static func == (a: InvokeContractArgs, b: InvokeContractArgs) -> Bool { a.xdr == b.xdr }
 }
 
 public enum AuthorizedFunction: Equatable {
@@ -313,10 +322,7 @@ enum XDRDecode {
         switch t {
         case 0: return .bool(try r.bool())
         case 1: return .void
-        case 2:
-            let et = try r.int32()
-            if et == 0 { _ = try r.uint32() } else { _ = try r.int32() }
-            return .error
+        case 2: return .error(type: try r.int32(), code: try r.uint32())
         case 3: return .u32(try r.uint32())
         case 4: return .i32(try r.int32())
         case 5: return .u64(try r.uint64())
@@ -343,10 +349,11 @@ enum XDRDecode {
     }
 
     static func invokeContractArgs(_ r: inout XDRReader) throws -> InvokeContractArgs {
+        let start = r.offset
         let contract = try scAddress(&r)
         let fn = try r.string(max: 32, "function name")
         let args = try r.array(max: 100, "args") { r in try scVal(&r) }
-        return InvokeContractArgs(contract: contract, function: fn, args: args)
+        return InvokeContractArgs(contract: contract, function: fn, args: args, xdr: Array(r.bytes[start..<r.offset]))
     }
 
     static func authorizedInvocation(_ r: inout XDRReader, depth: Int = 0) throws -> AuthorizedInvocation {

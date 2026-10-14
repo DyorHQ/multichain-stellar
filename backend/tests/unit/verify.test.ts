@@ -99,6 +99,22 @@ Deno.test("the vectors cover every case of the design's list, with the verdict i
   assertEquals(byName.get("starter step with an inner fee above the cap")?.step, { ok: false, reason: "the sponsored step's network fee is above the limit" });
 });
 
+Deno.test("the vectors keep the cases where a decoder or a comparison could tell the two verifiers apart", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  const fails: [string, string][] = [
+    // An authorization is of the call itself only byte for byte.
+    ["auth root that is the call in another normalization", "the destination is not the one you confirmed"],
+    ["auth root that is the call with another error code", "the destination is not the one you confirmed"],
+    // A function name is read as written.
+    ["call to a function name with a byte-order mark", "call \ufefftransfer is not part of this action"],
+    // A trust limit is positive.
+    ["trust removed", "the transaction removes a trustline"],
+    ["trust with a negative limit", "the transaction removes a trustline"],
+  ];
+  for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
+  assertEquals(byName.get("soroban swap with a footprint ok")?.ok, true);
+});
+
 // ------------------------------------------------------------------------------------------------ offline transactions
 
 function tx(ops: xdr.Operation[], source = user, timeout = 300, memo?: Memo) {

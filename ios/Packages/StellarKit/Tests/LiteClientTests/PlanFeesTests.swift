@@ -4,7 +4,8 @@ import StellarCore
 import XCTest
 
 /// A plan's fees as the phone works them out (DESIGN-stellar-parity §4.3, §4.4): built steps from their own transaction,
-/// unbuilt ones from their ceiling, nothing above the pinned cap, and "Paid by DyorHQ" only where the phone can check it.
+/// unbuilt ones from their ceiling, nothing the verifier's fee caps refuse, and "Paid by DyorHQ" only where the phone can
+/// check it.
 final class PlanFeesTests: XCTestCase {
     private let user = try! StellarSigner(seed: [UInt8](repeating: 7, count: 32)).address
     private let friend = try! StellarSigner(seed: [UInt8](repeating: 8, count: 32)).address
@@ -65,6 +66,26 @@ final class PlanFeesTests: XCTestCase {
                                     feePolicy: FeePolicy(maxFee: 299, maxInclusionFeePerOp: 200_000, starterInnerFeeMax: 100))
         XCTAssertThrowsError(try PlanFees(plan: TestPlan.view([TestPlan.step("s1", "Send", xdr: payment(fee: 300), intent: paymentIntent)]), pinned: tight))
         XCTAssertNoThrow(try PlanFees(plan: TestPlan.view([TestPlan.step("s1", "Send", xdr: payment(fee: 299), intent: paymentIntent)]), pinned: tight))
+    }
+
+    func testABuiltStepIsPricedOnlyWithinTheVerifiersFeeCaps() throws {
+        // One payment declaring 0.03 XLM: under the 3 XLM cap, but over the 0.02 XLM one operation may bid. The review
+        // can't show a fee the runner would refuse.
+        let plan = TestPlan.view([TestPlan.step("s1", "Send", xdr: payment(fee: 300_000), intent: paymentIntent)])
+        XCTAssertThrowsError(try PlanFees(plan: plan, pinned: pinned)) { error in
+            XCTAssertEqual(error as? PlanRunner.Failure, .refused(step: "Send", reason: "The inclusion fee is above the limit."))
+        }
+        // Each shared vector the verifiers refuse for its fee (the cap, the resource fee's range, the inclusion bid),
+        // PlanFees refuses for the same reason.
+        let feeReasons: Set = ["the network fee is above the limit", "the resource fee is out of range", "the inclusion fee is above the limit"]
+        let refused = try SharedVectors.all().filter { $0.expect.reason.map(feeReasons.contains) ?? false }
+        XCTAssertGreaterThanOrEqual(refused.count, 4)
+        for v in refused {
+            let step = TestPlan.view([TestPlan.step("s1", v.name, xdr: v.envelope, intent: v.intent)])
+            XCTAssertThrowsError(try PlanFees(plan: step, pinned: v.pinned), v.name) { error in
+                XCTAssertEqual(error as? PlanRunner.Failure, .refused(step: v.name, reason: SharedVectors.swiftReason(v.expect.reason ?? "")), v.name)
+            }
+        }
     }
 
     func testDyorHQPaysOnlyWhereThePhoneCanCheckIt() throws {
