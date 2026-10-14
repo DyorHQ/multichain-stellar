@@ -158,5 +158,6 @@
     "source": "Kraken",
     "network": "mainnet",
     "note": "Testnet assets have no market. XLM and USDC are valued at mainnet market prices."
-  }
+  },
+  "inviteRequired": false
 }

@@ -111,6 +111,9 @@ public struct LiteConfig: Codable, Equatable, Sendable {
     public let faucet: Faucet?
     public let limits: Limits?
     public let pricing: StellarPricing?
+    /// Whether a first sign-in needs an invite code: false on testnet, true on mainnet. Nil from older servers, which
+    /// always ask for one.
+    public let inviteRequired: Bool?
 
     public func asset(_ id: String) -> AssetInfo? { assets.first { $0.id == id || $0.contract == id } }
 }
@@ -145,6 +148,9 @@ public struct AccountView: Codable, Equatable, Sendable {
     /// The account's XLM and what it must keep; nil while the account doesn't exist.
     public let xlm: StellarXLMPosition?
     public let firstFunding: StellarFirstFunding?
+    /// "owner" (the session's own account) or "public" (the viewer's account, without a session: on-chain facts only).
+    /// Nil from older servers.
+    public let view: String?
 
     public func balance(_ asset: String) -> Int64 { balances.first { $0.asset == asset }?.units ?? 0 }
 }
@@ -427,6 +433,8 @@ public struct StellarLaunchDetail: Codable, Equatable, Sendable {
     public let economics: Economics?
     /// At most 300 prices in the quote asset, oldest first.
     public let pricePoints: [Point]?
+    /// "owner" or "public" (no session: `you` has no cost basis or P&L, and is nil without a viewer).
+    public let view: String?
 }
 
 public struct TradeQuote: Codable, Equatable, Sendable {
@@ -482,6 +490,8 @@ public struct StellarMomentDetail: Codable, Equatable, Sendable {
     public let you: You?
     /// What the creator has been paid, in base units of the Moment's quote asset.
     public let creatorEarned: String?
+    /// "owner" or "public" (no session: `you.spent` is nil, and `you` is nil without a viewer).
+    public let view: String?
 }
 
 /// A Moment edition (an NFT) in the user's account.
@@ -611,9 +621,15 @@ public struct AuthChallenge: Codable, Equatable, Sendable {
     public let expiresAt: String
 }
 
+/// `auth/verify` and `auth/refresh`: a session.
 public struct AuthResult: Codable, Equatable, Sendable {
     public struct Tester: Codable, Equatable, Sendable { public let address: String; public let label: String? }
+    /// The access token (an hour), sent as `authorization: Bearer …`.
     public let token: String
     public let expiresAt: String
     public let tester: Tester
+    /// Renews the session once (`LiteAPI.refresh`); each use hands out its successor. Lapses 30 days after it was
+    /// issued. Nil from older servers.
+    public let refreshToken: String?
+    public let refreshExpiresAt: String?
 }

@@ -2,6 +2,7 @@
 // same shapes (ios/Packages/StellarKit/Sources/LiteClient/Models*.swift), and backend/tests/fixtures/api/ holds an
 // example of each. Types only: a route module annotates what it answers with these, so the compiler holds the server
 // to the contract. A field marked "added" is new in the parity API: the phone also decodes payloads without it.
+// `Routes` gives every route its auth class (public, viewer or session: docs/API-lite.md §0), checked at the end.
 
 // ------------------------------------------------------------------------------------------------ conventions
 
@@ -158,7 +159,11 @@ export type ErrorCode =
   | "upload_budget"
   | "bridge_relay_limit"
   // added: the local media stand-in's second upload to one path
-  | "already_uploaded";
+  | "already_uploaded"
+  // added: sessions without gating (DESIGN-stellar-parity §6.13, §6.18)
+  | "refresh_invalid"
+  | "refresh_reused"
+  | "address_required";
 
 /** A contract's own refusal, named in `simulation_failed`'s detail. Stable across contract versions, and always
  *  `<area>.<reason>`: an ErrorCode never holds a dot, so the two can't be confused. */
@@ -210,8 +215,11 @@ export interface ChallengeRequest {
 }
 
 export interface AuthChallenge {
+  /** Single use, 5 minutes; 16 to 64 of A–Z, a–z, 0–9, `_` and `-`. */
   nonce: string;
-  /** The exact text the phone signs (SEP-53): product, network, address, nonce and time, one per line. */
+  /** The exact text the phone signs (SEP-53), at most 512 bytes, five lines and nothing else:
+   *  `DyorHQ Lite sign-in` / `Network: <network>` / `Address: <address>` / `Nonce: <nonce>` / `Issued: <IsoTime>`.
+   *  The phone refuses to sign any other text. */
   message: string;
   expiresAt: IsoTime;
 }
@@ -221,16 +229,35 @@ export interface VerifyRequest {
   nonce: string;
   /** Base64 ed25519 signature of the SEP-53 digest of `message`. */
   signature: string;
-  /** A first sign-in only. */
+  /** A first sign-in only, where `LiteConfig.inviteRequired`. An existing tester's code is ignored, not consumed. */
   inviteCode?: string;
 }
 
 export interface AuthResult {
-  /** The Lite session token, sent as `authorization: Bearer …`. */
+  /** The Lite access token (a JWT, 1 hour), sent as `authorization: Bearer …`. */
   token: string;
   expiresAt: IsoTime;
   tester: { address: AccountAddress; label: string | null };
+  /** Added: `lrt_` + 32 random bytes in base64url. Single use: `auth/refresh` rotates it. A sign-in starts a family. */
+  refreshToken?: string;
+  /** Added: 30 days from issue, renewed by every refresh. */
+  refreshExpiresAt?: IsoTime;
 }
+
+/** POST /v1/auth/refresh: answers an `AuthResult` with the token's successor. 401 `refresh_invalid` (unknown, expired
+ *  or revoked) or `refresh_reused` (already used: its whole family is revoked). */
+export interface RefreshRequest {
+  address: AccountAddress;
+  refreshToken: string;
+}
+
+/** POST /v1/auth/signout: revokes the token's family. 204 for any token, known or not. */
+export interface SignoutRequest {
+  refreshToken: string;
+}
+
+/** Which answer a viewer route gave: the token's own account, or the public view of `?address=` (no token). */
+export type View = "owner" | "public";
 
 // ------------------------------------------------------------------------------------------------ config (public)
 
@@ -323,6 +350,8 @@ export interface LiteConfig {
   limits?: Limits;
   /** Added. */
   pricing?: Pricing;
+  /** Added: whether a first sign-in needs an invite code: false on testnet, true on mainnet. */
+  inviteRequired?: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------ fees (public)
@@ -371,9 +400,10 @@ export interface XlmPosition {
 export interface FirstFunding {
   needsXlm: boolean;
   suggestXlm: Stroops;
-  starterSwap: "available" | "used" | "unavailable";
-  /** Testnet only. */
-  faucet: { amount: string; usedToday: boolean } | null;
+  /** Null in the public view (DyorHQ's records, not the ledger's). */
+  starterSwap: "available" | "used" | "unavailable" | null;
+  /** Testnet only. `usedToday` is null in the public view. */
+  faucet: { amount: string; usedToday: boolean | null } | null;
 }
 
 export interface AccountView {
@@ -388,6 +418,8 @@ export interface AccountView {
   xlm?: XlmPosition | null;
   /** Added. */
   firstFunding?: FirstFunding;
+  /** Added. Public view: launch balances are the indexed ones. */
+  view?: View;
 }
 
 /** POST /v1/account/activate: a plan to run, or the account when there is nothing to do. */
@@ -607,6 +639,8 @@ export interface AssetResult {
 
 export interface AssetSearch {
   results: AssetResult[];
+  /** Added. Public view: `held` is about `?address=`, or false without it. */
+  view?: View;
 }
 
 /** GET /v1/prices: kept for older clients. */
@@ -646,13 +680,13 @@ export interface EarnPosition {
   bTokens?: Units;
   /** Added. */
   poolName?: string;
+  /** Added: null in the public view (DyorHQ's history), as are `withdrawn` and `earned`. */
+  deposited?: Units | null;
   /** Added. */
-  deposited?: Units;
+  withdrawn?: Units | null;
   /** Added. */
-  withdrawn?: Units;
-  /** Added. */
-  earned?: Units;
-  /** Added: false when deposits from before the server recorded them are missing. */
+  earned?: Units | null;
+  /** Added: false when deposits from before the server recorded them are missing, and in the public view. */
   earnedComplete?: boolean;
   /** Added. */
   supplyApy?: Fraction;
@@ -671,9 +705,11 @@ export interface LaunchHolding {
   change24h: Fraction | null;
   phase: LaunchPhase;
   progress: Fraction;
+  /** Null in the public view (DyorHQ's history), as is `pnlUsd`. */
   costBasisUsd: Usd;
   pnlUsd: Usd;
-  /** The live balance couldn't be read; this is the indexed one. */
+  /** The live balance couldn't be read; this is the indexed one. False in the public view, which reads only the
+   *  indexed balances. */
   stale: boolean;
 }
 
@@ -704,6 +740,8 @@ export interface Holdings {
   totals: { spot: Usd; earn: Usd; launch: Usd; moments: Usd; total: Usd; complete: boolean };
   change24h: { usd: Usd; pct: Fraction | null; complete: boolean };
   parts: { spot: PartStatus; earn: PartStatus; launch: PartStatus; moments: PartStatus };
+  /** Added. */
+  view?: View;
 }
 
 export interface Stats {
@@ -798,6 +836,8 @@ export interface LaunchBoard {
   nextCursor?: string | null;
   /** Added. */
   counts?: { explore: number; graduated: number };
+  /** Added. */
+  view?: View;
 }
 
 export interface LaunchTrade {
@@ -859,12 +899,14 @@ export interface LaunchDetail {
   };
   /** Added. */
   creatorFees?: CreatorFees;
-  /** Added. */
-  you?: { balance: Units; costBasisQuote: Units | null; pnlQuote: Units | null; isCreator: boolean };
+  /** Added. Public view: `?address=`'s indexed balance with no cost basis or P&L, or null without `?address=`. */
+  you?: { balance: Units; costBasisQuote: Units | null; pnlQuote: Units | null; isCreator: boolean } | null;
   /** Added. */
   economics?: { feeBps: number; protocolShareBps: number; creatorFeeBps: number; supply: Units; phantom: Units; threshold: Units };
   /** Added: at most 300. */
   pricePoints?: { t: IsoTime; price: QuotePrice }[];
+  /** Added. */
+  view?: View;
 }
 
 export interface TradeQuoteRequest {
@@ -992,6 +1034,8 @@ export interface MomentRow {
 
 export interface MomentFeed {
   moments: MomentRow[];
+  /** Added. */
+  view?: View;
 }
 
 export interface MomentDetail {
@@ -999,14 +1043,18 @@ export interface MomentDetail {
   collectors: { collector: AccountAddress; quantity: number; firstTokenId: number; ts: IsoTime }[];
   /** Added. */
   collectorsSummary?: { count: number; largest: { address: AccountAddress; editions: number } | null };
-  /** Added. */
-  you?: { editions: number[]; spent: Units };
+  /** Added. Public view: `spent` is null (DyorHQ's history), and `you` is null without `?address=`. */
+  you?: { editions: number[]; spent: Units | null } | null;
   /** Added: base units of the Moment's quote asset. */
   creatorEarned?: Units;
+  /** Added. */
+  view?: View;
 }
 
 export interface OwnedEditions {
   editions: Edition[];
+  /** Added. */
+  view?: View;
 }
 
 export interface MyMoments {
@@ -1085,6 +1133,8 @@ export interface EarnMarkets {
 
 export interface EarnPositions {
   positions: EarnPosition[];
+  /** Added. */
+  view?: View;
 }
 
 export interface EarnHistory {
@@ -1233,79 +1283,138 @@ export interface CashTracked {
 
 // ------------------------------------------------------------------------------------------------ routes
 
-/** Every route: its auth ("public" routes take no token and are cacheable; "upload" takes no session token, only the
- *  signed token in its own path), query, body and answer. */
+/** Who may call a route (docs/API-lite.md §0; DESIGN-stellar-parity §6.0 and §6.18).
+ *  - "public": no token, nothing about any account; cacheable (`Cache-Control: public, max-age=30`).
+ *  - "viewer": a session is optional. With a valid Bearer token, the owner view of its account (`view: "owner"`). With
+ *    no `Authorization` header, the public view of `?address=G…` (`view: "public"`): on-chain facts only, every
+ *    DyorHQ-history field null, cacheable for 15 s. A route about an account answers 400 `address_required` without
+ *    either. A token that is present but invalid or expired gets 401, so the phone renews instead of getting less.
+ *  - "session": a valid Bearer token: DyorHQ's history and every write or plan.
+ *  - "upload": the local media stand-in's upload, public but for the signed token in its own path. */
+export type AuthClass = "public" | "viewer" | "session" | "upload";
+
+/** A viewer route's public view: the account it shows. */
+type ViewerQuery = { address?: AccountAddress };
+
+/** Every route: its auth class, query, body and answer. */
 export interface Routes {
   "POST /v1/auth/challenge": { auth: "public"; body: ChallengeRequest; response: AuthChallenge };
   "POST /v1/auth/verify": { auth: "public"; body: VerifyRequest; response: AuthResult };
+  "POST /v1/auth/refresh": { auth: "public"; body: RefreshRequest; response: AuthResult };
+  /** 204, no body. */
+  "POST /v1/auth/signout": { auth: "public"; body: SignoutRequest; response: void };
   "GET /v1/config": { auth: "public"; response: LiteConfig };
   "GET /v1/fees": { auth: "public"; response: Fees };
   "GET /v1/markets": { auth: "public"; response: Markets };
   "GET /v1/markets/:id": { auth: "public"; response: MarketDetail };
   "GET /v1/markets/:id/history": { auth: "public"; query: { range: Period }; response: PriceHistory };
-  "GET /v1/assets": { auth: "jwt"; query: { q: string }; response: AssetSearch };
-  "GET /v1/prices": { auth: "jwt"; response: Prices };
-  "GET /v1/account": { auth: "jwt"; response: AccountView };
-  "POST /v1/account/activate": { auth: "jwt"; response: ActivationResult };
-  "POST /v1/account/trust": { auth: "jwt"; body: TrustRequest; response: PlanView };
-  "POST /v1/account/faucet": { auth: "jwt"; response: FaucetResult };
-  "GET /v1/recipient/:address": { auth: "jwt"; query: { asset: AssetId }; response: Recipient };
-  "POST /v1/send": { auth: "jwt"; body: SendRequest; response: PlanView };
-  "GET /v1/holdings": { auth: "jwt"; response: Holdings };
-  "GET /v1/portfolio": { auth: "jwt"; query: { period: Period }; response: Portfolio };
-  "POST /v1/plans/:plan/steps/:step/build": { auth: "jwt"; response: PlanView };
-  "POST /v1/tx/submit": { auth: "jwt"; body: SubmitRequest; response: Submitted };
-  "GET /v1/tx/:hash": { auth: "jwt"; response: TxStatus };
-  "POST /v1/swap/quote": { auth: "jwt"; body: SwapQuoteRequest; response: SwapQuote };
-  "POST /v1/swap/build": { auth: "jwt"; body: SwapBuildRequest; response: PlanView };
-  "GET /v1/earn/markets": { auth: "jwt"; response: EarnMarkets };
-  "GET /v1/earn/positions": { auth: "jwt"; response: EarnPositions };
-  "GET /v1/earn/history": { auth: "jwt"; query: { pool: ContractAddress; asset: ContractAddress; range: "week" | "month" }; response: EarnHistory };
-  "POST /v1/earn/build": { auth: "jwt"; body: EarnBuildRequest; response: PlanView };
+  "GET /v1/assets": { auth: "viewer"; query: { q: string } & ViewerQuery; response: AssetSearch };
+  "GET /v1/prices": { auth: "public"; response: Prices };
+  "GET /v1/account": { auth: "viewer"; query: ViewerQuery; response: AccountView };
+  "POST /v1/account/activate": { auth: "session"; response: ActivationResult };
+  "POST /v1/account/trust": { auth: "session"; body: TrustRequest; response: PlanView };
+  "POST /v1/account/faucet": { auth: "session"; response: FaucetResult };
+  "GET /v1/recipient/:address": { auth: "session"; query: { asset: AssetId }; response: Recipient };
+  "POST /v1/send": { auth: "session"; body: SendRequest; response: PlanView };
+  "GET /v1/holdings": { auth: "viewer"; query: ViewerQuery; response: Holdings };
+  "GET /v1/portfolio": { auth: "session"; query: { period: Period }; response: Portfolio };
+  "POST /v1/plans/:plan/steps/:step/build": { auth: "session"; response: PlanView };
+  "POST /v1/tx/submit": { auth: "session"; body: SubmitRequest; response: Submitted };
+  "GET /v1/tx/:hash": { auth: "session"; response: TxStatus };
+  "POST /v1/swap/quote": { auth: "session"; body: SwapQuoteRequest; response: SwapQuote };
+  "POST /v1/swap/build": { auth: "session"; body: SwapBuildRequest; response: PlanView };
+  "GET /v1/earn/markets": { auth: "public"; response: EarnMarkets };
+  "GET /v1/earn/positions": { auth: "viewer"; query: ViewerQuery; response: EarnPositions };
+  "GET /v1/earn/history": { auth: "public"; query: { pool: ContractAddress; asset: ContractAddress; range: "week" | "month" }; response: EarnHistory };
+  "POST /v1/earn/build": { auth: "session"; body: EarnBuildRequest; response: PlanView };
   "GET /v1/launches": {
-    auth: "jwt";
+    auth: "viewer";
     query: {
       section?: "explore" | "graduated";
       sort?: "newest" | "market_cap" | "near_graduation" | "new" | "hot" | "graduated";
       q?: string;
       limit?: number;
       cursor?: string;
-    };
+    } & ViewerQuery;
     response: LaunchBoard;
   };
-  "GET /v1/launches/:token": { auth: "jwt"; query: { candles?: "1m" | "5m" | "1h" | "1d" }; response: LaunchDetail };
-  "POST /v1/launches/:token/quote": { auth: "jwt"; body: TradeQuoteRequest; response: TradeQuote };
-  "POST /v1/launches/metadata": { auth: "jwt"; body: LaunchMetadataRequest; response: MetadataUri };
-  "POST /v1/launches/build": { auth: "jwt"; body: LaunchBuildRequest; response: PlanView };
-  "GET /v1/economics": { auth: "jwt"; response: Economics };
-  "GET /v1/launchpad/me": { auth: "jwt"; response: MyLaunchpad };
-  "GET /v1/moments": { auth: "jwt"; query: { filter?: "all" | "collecting" | "closed"; limit?: number }; response: MomentFeed };
-  "GET /v1/moments/owned": { auth: "jwt"; response: OwnedEditions };
-  "GET /v1/moments/mine": { auth: "jwt"; response: MyMoments };
-  "GET /v1/moments/:id": { auth: "jwt"; response: MomentDetail };
-  "POST /v1/moments/metadata": { auth: "jwt"; body: MomentMetadataRequest; response: MomentMetadata };
-  "POST /v1/moments/build": { auth: "jwt"; body: MomentBuildRequest; response: PlanView };
-  "POST /v1/media/upload-url": { auth: "jwt"; body: UploadRequest; response: UploadTicket };
+  "GET /v1/launches/:token": { auth: "viewer"; query: { candles?: "1m" | "5m" | "1h" | "1d" } & ViewerQuery; response: LaunchDetail };
+  "POST /v1/launches/:token/quote": { auth: "session"; body: TradeQuoteRequest; response: TradeQuote };
+  "POST /v1/launches/metadata": { auth: "session"; body: LaunchMetadataRequest; response: MetadataUri };
+  "POST /v1/launches/build": { auth: "session"; body: LaunchBuildRequest; response: PlanView };
+  "GET /v1/economics": { auth: "public"; response: Economics };
+  "GET /v1/launchpad/me": { auth: "session"; response: MyLaunchpad };
+  "GET /v1/moments": { auth: "viewer"; query: { filter?: "all" | "collecting" | "closed"; limit?: number } & ViewerQuery; response: MomentFeed };
+  "GET /v1/moments/owned": { auth: "viewer"; query: ViewerQuery; response: OwnedEditions };
+  "GET /v1/moments/mine": { auth: "session"; response: MyMoments };
+  "GET /v1/moments/:id": { auth: "viewer"; query: ViewerQuery; response: MomentDetail };
+  "POST /v1/moments/metadata": { auth: "session"; body: MomentMetadataRequest; response: MomentMetadata };
+  "POST /v1/moments/build": { auth: "session"; body: MomentBuildRequest; response: PlanView };
+  "POST /v1/media/upload-url": { auth: "session"; body: UploadRequest; response: UploadTicket };
   /** The local media stand-in. The token is the object's path and expiry (10 minutes), signed with HMAC-SHA256 under
    *  LITE_JWT_SECRET; a path takes one upload. 204, no body. */
   "PUT /v1/local-media/upload/:token": { auth: "upload"; body: MediaBytes; response: void };
   /** `<folder>/<owner>/<file>`: `uploads/G…/<uuid>.<ext>`, or a metadata JSON under `launches/` or `moments/`. */
   "GET /v1/local-media/lite-media/:folder/:owner/:file": { auth: "public"; response: MediaBytes };
   "GET /v1/activity": {
-    auth: "jwt";
+    auth: "session";
     query: { section?: Section; kind?: string; period?: Period; market?: string; limit?: number };
     response: Activity;
   };
-  "POST /v1/bridge/quote": { auth: "jwt"; body: BridgeQuoteRequest; response: BridgeQuote };
-  "POST /v1/bridge/start": { auth: "jwt"; body: BridgeStartRequest; response: BridgeStart };
-  "POST /v1/bridge/:id/source": { auth: "jwt"; body: BridgeTxRequest; response: { id: string; status: string } };
-  "POST /v1/bridge/:id/claimed": { auth: "jwt"; body: BridgeTxRequest; response: { id: string; status: "completed" } };
-  "GET /v1/bridge/:id": { auth: "jwt"; response: BridgeStatus };
-  "GET /v1/cash/anchors": { auth: "jwt"; query: { country?: string }; response: CashAnchors };
-  "POST /v1/cash/track": { auth: "jwt"; body: CashTrackRequest; response: CashTracked };
+  "POST /v1/bridge/quote": { auth: "session"; body: BridgeQuoteRequest; response: BridgeQuote };
+  "POST /v1/bridge/start": { auth: "session"; body: BridgeStartRequest; response: BridgeStart };
+  "POST /v1/bridge/:id/source": { auth: "session"; body: BridgeTxRequest; response: { id: string; status: string } };
+  "POST /v1/bridge/:id/claimed": { auth: "session"; body: BridgeTxRequest; response: { id: string; status: "completed" } };
+  "GET /v1/bridge/:id": { auth: "session"; response: BridgeStatus };
+  "GET /v1/cash/anchors": { auth: "session"; query: { country?: string }; response: CashAnchors };
+  "POST /v1/cash/track": { auth: "session"; body: CashTrackRequest; response: CashTracked };
 }
 
 export type RouteKey = keyof Routes;
 export type ResponseOf<K extends RouteKey> = Routes[K]["response"];
+/** The routes of one auth class. */
+export type RoutesOf<A extends AuthClass> = { [K in RouteKey]: Routes[K]["auth"] extends A ? K : never }[RouteKey];
 /** The routes that take no token at all. */
-export type PublicRoute = { [K in RouteKey]: Routes[K]["auth"] extends "public" ? K : never }[RouteKey];
+export type PublicRoute = RoutesOf<"public">;
+/** The routes a session is optional for. */
+export type ViewerRoute = RoutesOf<"viewer">;
+export type SessionRoute = RoutesOf<"session">;
+
+// The classes, route for route, as DESIGN-stellar-parity §6.0 and §6.18 draw them: a route moved into or out of the
+// public or the viewer class fails `deno check` here. Every other route but the upload is a session route.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Holds<T extends true> = T;
+export type PublicClassIsExact = Holds<
+  Same<
+    PublicRoute,
+    | "POST /v1/auth/challenge"
+    | "POST /v1/auth/verify"
+    | "POST /v1/auth/refresh"
+    | "POST /v1/auth/signout"
+    | "GET /v1/config"
+    | "GET /v1/fees"
+    | "GET /v1/markets"
+    | "GET /v1/markets/:id"
+    | "GET /v1/markets/:id/history"
+    | "GET /v1/prices"
+    | "GET /v1/economics"
+    | "GET /v1/earn/markets"
+    | "GET /v1/earn/history"
+    | "GET /v1/local-media/lite-media/:folder/:owner/:file"
+  >
+>;
+export type ViewerClassIsExact = Holds<
+  Same<
+    ViewerRoute,
+    | "GET /v1/account"
+    | "GET /v1/holdings"
+    | "GET /v1/earn/positions"
+    | "GET /v1/moments/owned"
+    | "GET /v1/launches"
+    | "GET /v1/launches/:token"
+    | "GET /v1/moments"
+    | "GET /v1/moments/:id"
+    | "GET /v1/assets"
+  >
+>;
+export type UploadClassIsExact = Holds<Same<RoutesOf<"upload">, "PUT /v1/local-media/upload/:token">>;

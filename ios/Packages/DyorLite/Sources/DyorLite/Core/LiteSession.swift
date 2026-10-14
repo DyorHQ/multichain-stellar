@@ -648,7 +648,7 @@ public final class LiteSession {
         if let api = error as? LiteAPIError {
             switch api {
             case .transport: return .offline
-            case let .server(_, code, message):
+            case let .server(_, code, message, _):
                 switch code {
                 case "bad_invite": return .inviteRejected
                 case "access_revoked": return .accessRevoked

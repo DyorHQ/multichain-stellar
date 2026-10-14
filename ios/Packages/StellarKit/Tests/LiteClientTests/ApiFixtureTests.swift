@@ -33,7 +33,7 @@ final class ApiFixtureTests: XCTestCase {
     }
 
     // The bodies LiteAPI unwraps (its own wrappers are private). A list comes under one of these keys.
-    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let anchors: [T]?; let results: [T]? }
+    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let anchors: [T]?; let results: [T]?; let view: String? }
     private struct EarnMarkets: Codable { let markets: [EarnMarket]; let note: String? }
     private struct Metadata: Codable { let uri: String; let posterUrl: String? }
     private struct Active: Codable { let status: String; let account: AccountView }
@@ -47,12 +47,15 @@ final class ApiFixtureTests: XCTestCase {
     private static let fixtures: [String: (RoundTrip, unmodelled: [String])] = [
         "auth-challenge": (roundTrip(AuthChallenge.self), []),
         "auth-verify": (roundTrip(AuthResult.self), []),
+        "auth-verify.legacy": (roundTrip(AuthResult.self), []),
+        "auth-refresh": (roundTrip(AuthResult.self), []),
         "config": (roundTrip(LiteConfig.self), ["contracts.soroswapFactory", "contracts.aquariusRouter", "contracts.cctp"]),
         "config.legacy": (roundTrip(LiteConfig.self), ["contracts.soroswapFactory", "contracts.aquariusRouter", "contracts.cctp"]),
         "fees": (roundTrip(StellarFees.self), []),
         "account": (roundTrip(AccountView.self), []),
         "account.legacy": (roundTrip(AccountView.self), []),
         "account.missing": (roundTrip(AccountView.self), []),
+        "account.public": (roundTrip(AccountView.self), []),
         "account-activate": ({ data in
             let result = try JSONDecoder().decode(ActivationResult.self, from: data)
             XCTAssertNil(result.plan)
@@ -76,11 +79,14 @@ final class ApiFixtureTests: XCTestCase {
         "prices": (roundTrip(StellarPrices.self), []),
         "holdings": (roundTrip(StellarHoldings.self), []),
         "holdings.partial": (roundTrip(StellarHoldings.self), []),
+        // StellarHoldings (Models+Portfolio.swift) doesn't keep the public view's `view` yet.
+        "holdings.public": (roundTrip(StellarHoldings.self), ["view"]),
         "portfolio": (roundTrip(StellarPortfolio.self), []),
         "launches": (roundTrip(StellarLaunchBoard.self), []),
         "launches.legacy": (roundTrip(StellarLaunchBoard.self), []),
         "launch": (roundTrip(StellarLaunchDetail.self), []),
         "launch.legacy": (roundTrip(StellarLaunchDetail.self), []),
+        "launch.public": (roundTrip(StellarLaunchDetail.self), []),
         "launch-quote": (roundTrip(TradeQuote.self), []),
         "launch-quote.legacy": (roundTrip(TradeQuote.self), []),
         "launch-quote-sell.legacy": (roundTrip(TradeQuote.self), []),
@@ -91,8 +97,10 @@ final class ApiFixtureTests: XCTestCase {
         "moments.legacy": (roundTrip(Listed<StellarMoment>.self), []),
         "moment": (roundTrip(StellarMomentDetail.self), []),
         "moment.legacy": (roundTrip(StellarMomentDetail.self), []),
+        "moment.public": (roundTrip(StellarMomentDetail.self), []),
         "moments-owned": (roundTrip(Listed<StellarEdition>.self), []),
         "moments-owned.legacy": (roundTrip(Listed<StellarEdition>.self), []),
+        "moments-owned.public": (roundTrip(Listed<StellarEdition>.self), []),
         "moments-mine": (roundTrip(StellarMomentsMine.self), []),
         "moment-metadata": (roundTrip(Metadata.self), []),
         "moment-metadata.legacy": (roundTrip(Metadata.self), []),
@@ -101,6 +109,7 @@ final class ApiFixtureTests: XCTestCase {
         "earn-markets.legacy": (roundTrip(EarnMarkets.self), []),
         "earn-positions": (roundTrip(Listed<EarnPosition>.self), []),
         "earn-positions.legacy": (roundTrip(Listed<EarnPosition>.self), []),
+        "earn-positions.public": (roundTrip(Listed<EarnPosition>.self), []),
         "earn-history": (roundTrip(StellarEarnHistory.self), []),
         "activity": (roundTrip(Listed<StellarActivityItem>.self), []),
         "activity.legacy": (roundTrip(Listed<StellarActivityItem>.self), []),
@@ -116,6 +125,8 @@ final class ApiFixtureTests: XCTestCase {
         "error": (roundTrip(ErrorEnvelope.self), []),
         "error.legacy": (roundTrip(ErrorEnvelope.self), []),
         "error-contract": (roundTrip(ErrorEnvelope.self), []),
+        "error-refresh-reused": (roundTrip(ErrorEnvelope.self), []),
+        "error-address-required": (roundTrip(ErrorEnvelope.self), []),
     ]
 
     /// Every fixture decodes, today's payloads included, and keeps every field it carries: an optional whose name is
@@ -143,6 +154,7 @@ final class ApiFixtureTests: XCTestCase {
     /// The fields added for the parity API read as their values; today's payloads leave them nil.
     func testNewFieldsDecodeAndOldPayloadsLeaveThemNil() throws {
         let config = try ApiFixtures.decode("config", as: LiteConfig.self)
+        XCTAssertEqual(config.inviteRequired, false)
         XCTAssertEqual(config.fees?.maxFee, "30000000")
         XCTAssertEqual(config.limits?.momentWindowSecs, [3600, 2592000])
         XCTAssertEqual(config.pricing?.source, "Kraken")
@@ -150,16 +162,20 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(config.asset("BUSDC")?.listed, false)
         XCTAssertEqual(config.asset("BUSDC")?.priceRef, "USDC")
         let oldConfig = try ApiFixtures.decode("config.legacy", as: LiteConfig.self)
+        XCTAssertNil(oldConfig.inviteRequired)
         XCTAssertNil(oldConfig.fees)
         XCTAssertNil(oldConfig.deployment)
         XCTAssertNil(oldConfig.asset("XLM")?.priceRef)
 
         let account = try ApiFixtures.decode("account", as: AccountView.self)
+        XCTAssertEqual(account.view, "owner")
+        XCTAssertEqual(account.firstFunding?.starterSwap, "unavailable")
         XCTAssertEqual(account.xlm?.spendable, "99985000000")
         XCTAssertEqual(account.xlm?.reserves.subentries, 1)
         XCTAssertEqual(account.firstFunding?.faucet?.usedToday, false)
         XCTAssertEqual(account.balances.last?.kind, "launch")
         XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).xlm)
+        XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).view)
         let missing = try ApiFixtures.decode("account.missing", as: AccountView.self)
         XCTAssertFalse(missing.exists)
         XCTAssertNil(missing.xlm)
@@ -237,6 +253,55 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertNil(try ApiFixtures.decode("bridge-quote", as: StellarBridgeQuote.self).etaSeconds)
     }
 
+    /// Sessions (refresh tokens) and the public views of the viewer routes: on-chain facts kept, DyorHQ's history nil.
+    func testSessionsAndPublicViewsDecode() throws {
+        let verify = try ApiFixtures.decode("auth-verify", as: AuthResult.self)
+        XCTAssertEqual(verify.refreshToken?.hasPrefix("lrt_"), true)
+        XCTAssertNotNil(verify.refreshExpiresAt.flatMap(ISO8601DateFormatter.lite.date(from:)))
+        let refreshed = try ApiFixtures.decode("auth-refresh", as: AuthResult.self)
+        XCTAssertNotEqual(refreshed.token, verify.token)
+        XCTAssertNotEqual(refreshed.refreshToken, verify.refreshToken)
+        let legacy = try ApiFixtures.decode("auth-verify.legacy", as: AuthResult.self)
+        XCTAssertNil(legacy.refreshToken)
+        XCTAssertNil(legacy.refreshExpiresAt)
+
+        let account = try ApiFixtures.decode("account.public", as: AccountView.self)
+        XCTAssertEqual(account.view, "public")
+        XCTAssertEqual(account.xlm?.spendable, "99985000000")
+        XCTAssertEqual(account.firstFunding?.needsXlm, false)
+        XCTAssertNil(account.firstFunding?.starterSwap)
+        XCTAssertNil(account.firstFunding?.faucet?.usedToday)
+        XCTAssertEqual(account.firstFunding?.faucet?.amount, "10000")
+
+        let holdings = try ApiFixtures.decode("holdings.public", as: StellarHoldings.self)
+        XCTAssertEqual(holdings.earn.first?.supplied, "1000012340")
+        XCTAssertNil(holdings.earn.first?.earned)
+        XCTAssertEqual(holdings.earn.first?.earnedComplete, false)
+        XCTAssertEqual(holdings.launch.first?.balance, "12000000000000")
+        XCTAssertNil(holdings.launch.first?.costBasisUsd)
+        XCTAssertNotNil(holdings.totals.total)
+
+        let positions = try ApiFixtures.decode("earn-positions.public", as: Listed<EarnPosition>.self)
+        XCTAssertEqual(positions.view, "public")
+        XCTAssertNil(positions.positions?.first?.deposited)
+        XCTAssertEqual(try ApiFixtures.decode("earn-positions", as: Listed<EarnPosition>.self).view, "owner")
+        XCTAssertEqual(try ApiFixtures.decode("moments-owned.public", as: Listed<StellarEdition>.self).editions?.map(\.tokenId), [7, 8])
+
+        let launch = try ApiFixtures.decode("launch.public", as: StellarLaunchDetail.self)
+        XCTAssertEqual(launch.view, "public")
+        XCTAssertEqual(launch.you?.balance, "12000000000000")
+        XCTAssertNil(launch.you?.costBasisQuote)
+        XCTAssertNil(launch.you?.pnlQuote)
+        XCTAssertEqual(try ApiFixtures.decode("launch", as: StellarLaunchDetail.self).view, "owner")
+
+        let moment = try ApiFixtures.decode("moment.public", as: StellarMomentDetail.self)
+        XCTAssertEqual(moment.view, "public")
+        XCTAssertEqual(moment.you?.editions, [9])
+        XCTAssertNil(moment.you?.spent)
+        XCTAssertEqual(try ApiFixtures.decode("moment", as: StellarMomentDetail.self).you?.spent, "10000000")
+        XCTAssertNil(try ApiFixtures.decode("moment.legacy", as: StellarMomentDetail.self).view)
+    }
+
     /// Every key path that holds a value ("steps[].intent.kind"); nulls add nothing.
     private static func paths(_ json: Any, _ prefix: String = "") -> Set<String> {
         var out = Set<String>()
@@ -274,6 +339,44 @@ final class LiteAPIRouteTests: XCTestCase {
         try await expect("GET", "/v1/markets/XLM/history?range=week", token: false, fixture: "market-history") {
             _ = try await $0.marketHistory("XLM", range: .week)
         }
+        try await expect("GET", "/v1/economics", token: false, fixture: "economics") { _ = try await $0.economics() }
+        try await expect("GET", "/v1/earn/markets", token: false, fixture: "earn-markets") { _ = try await $0.earnMarkets() }
+        try await expect("GET", "/v1/earn/history?pool=CPOOL&asset=CXLM&range=week", token: false, fixture: "earn-history") {
+            _ = try await $0.earnHistory(pool: "CPOOL", asset: "CXLM", range: .week)
+        }
+        try await expect("GET", "/v1/prices", token: false, fixture: "prices") { _ = try await $0.prices() }
+    }
+
+    /// Without a session, the viewer routes ask for the viewer's public view, and the session routes ask nothing.
+    func testViewerReadsWithoutASessionAskForThePublicView() async throws {
+        api = LiteAPI(baseURL: URL(string: base)!, session: StubServer.session)
+        let viewer = "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH"
+        try await expect("GET", "/v1/launches?section=explore&sort=newest", token: false, fixture: "launches") {
+            _ = try await $0.launchBoard(section: "explore", sort: "newest")
+        }
+        await api.setViewer(address: viewer)
+        try await expect("GET", "/v1/account?address=\(viewer)", token: false, fixture: "account.public") {
+            let account = try await $0.account()
+            XCTAssertEqual(account.view, "public")
+        }
+        try await expect("GET", "/v1/holdings?address=\(viewer)", token: false, fixture: "holdings.public") { _ = try await $0.holdings() }
+        try await expect("GET", "/v1/earn/positions?address=\(viewer)", token: false, fixture: "earn-positions.public") { _ = try await $0.earnPositions() }
+        try await expect("GET", "/v1/moments/owned?address=\(viewer)", token: false, fixture: "moments-owned.public") { _ = try await $0.ownedEditions() }
+        try await expect("GET", "/v1/launches?section=explore&sort=newest&address=\(viewer)", token: false, fixture: "launches") {
+            _ = try await $0.launchBoard(section: "explore", sort: "newest")
+        }
+        try await expect("GET", "/v1/launches?sort=new&address=\(viewer)", token: false, fixture: "launches.legacy") { _ = try await $0.launches(sort: "new") }
+        try await expect("GET", "/v1/launches/CTOKEN?candles=5m&address=\(viewer)", token: false, fixture: "launch.public") { _ = try await $0.launch("CTOKEN") }
+        try await expect("GET", "/v1/moments?address=\(viewer)", token: false, fixture: "moments") { _ = try await $0.moments() }
+        try await expect("GET", "/v1/moments/3?address=\(viewer)", token: false, fixture: "moment.public") { _ = try await $0.moment(3) }
+        try await expect("GET", "/v1/assets?q=ECAT&address=\(viewer)", token: false, fixture: "assets") { _ = try await $0.searchAssets("ECAT") }
+
+        StubServer.serve(try ApiFixtures.data("portfolio"))
+        do {
+            _ = try await api.portfolio(period: .week)
+            XCTFail("a session read went out without a session")
+        } catch LiteAPIError.notSignedIn {}
+        XCTAssertNil(StubServer.taken())
     }
 
     func testSignedInReads() async throws {
@@ -293,7 +396,6 @@ final class LiteAPIRouteTests: XCTestCase {
         }
         try await expect("GET", "/v1/launches?sort=new", fixture: "launches.legacy") { _ = try await $0.launches(sort: "new") }
         try await expect("GET", "/v1/launches/CTOKEN?candles=5m", fixture: "launch") { _ = try await $0.launch("CTOKEN") }
-        try await expect("GET", "/v1/economics", fixture: "economics") { _ = try await $0.economics() }
         try await expect("GET", "/v1/launchpad/me", fixture: "launchpad-me") { _ = try await $0.myLaunchpad() }
         try await expect("GET", "/v1/moments", fixture: "moments.legacy") { _ = try await $0.moments() }
         try await expect("GET", "/v1/moments?filter=collecting&limit=20", fixture: "moments") {
@@ -302,17 +404,12 @@ final class LiteAPIRouteTests: XCTestCase {
         try await expect("GET", "/v1/moments/3", fixture: "moment") { _ = try await $0.moment(3) }
         try await expect("GET", "/v1/moments/owned", fixture: "moments-owned") { _ = try await $0.ownedEditions() }
         try await expect("GET", "/v1/moments/mine", fixture: "moments-mine") { _ = try await $0.myMoments() }
-        try await expect("GET", "/v1/earn/markets", fixture: "earn-markets") { _ = try await $0.earnMarkets() }
         try await expect("GET", "/v1/earn/positions", fixture: "earn-positions") { _ = try await $0.earnPositions() }
-        try await expect("GET", "/v1/earn/history?pool=CPOOL&asset=CXLM&range=week", fixture: "earn-history") {
-            _ = try await $0.earnHistory(pool: "CPOOL", asset: "CXLM", range: .week)
-        }
         try await expect("GET", "/v1/activity", fixture: "activity.legacy") { _ = try await $0.activity() }
         try await expect("GET", "/v1/activity?section=launch&period=day&limit=50", fixture: "activity") {
             let items = try await $0.activity(section: "launch", period: .day, limit: 50)
             XCTAssertEqual(items.count, 4)
         }
-        try await expect("GET", "/v1/prices", fixture: "prices") { _ = try await $0.prices() }
         try await expect("GET", "/v1/tx/abc", fixture: "tx-status") { _ = try await $0.txStatus("abc") }
         try await expect("GET", "/v1/launches/CTOKEN", fixture: "launch") { _ = try await $0.launch("CTOKEN", candles: nil) }
         try await expect("GET", "/v1/cash/anchors?country=GH", fixture: "cash-anchors") { _ = try await $0.anchors(country: "GH") }
@@ -361,18 +458,33 @@ final class LiteAPIRouteTests: XCTestCase {
         try await expect("GET", "/v1/bridge/b1", fixture: "bridge-status") { _ = try await $0.bridgeStatus(id: "b1") }
     }
 
-    /// A contract's refusal is reported by its stable code; any other refusal by the API's.
+    /// A contract's refusal is reported by its stable code; any other refusal by the API's. Each carries its facts.
     func testErrorsCarryTheirCodes() async throws {
-        for (fixture, status, code) in [("error-contract", 422, "launch.slippage"), ("error", 409, "not_enough_xlm_for_fee"), ("error.legacy", 429, "budget_exhausted")] {
+        let cases: [(String, Int, String, [String: String]?)] = [
+            ("error-contract", 422, "launch.slippage", ["contractCode": "launch.slippage", "raw": "HostError: Error(Contract, #7)"]),
+            ("error", 409, "not_enough_xlm_for_fee", ["need": "510000", "spendable": "400000"]),
+            ("error.legacy", 429, "budget_exhausted", nil),
+            ("error-address-required", 400, "address_required", nil),
+        ]
+        for (fixture, status, code, detail) in cases {
             StubServer.serve(try ApiFixtures.data(fixture), status: status)
             do {
                 _ = try await api.quoteTrade(token: "CTOKEN", buy: true, amount: 1)
                 XCTFail("\(fixture) didn't throw")
-            } catch let LiteAPIError.server(gotStatus, gotCode, message) {
+            } catch let LiteAPIError.server(gotStatus, gotCode, message, gotDetail) {
                 XCTAssertEqual(gotStatus, status)
                 XCTAssertEqual(gotCode, code)
                 XCTAssertFalse(message.isEmpty)
+                XCTAssertEqual(gotDetail, detail, fixture)
             }
+        }
+        // Numbers and booleans in a detail are written out; nested values are left out.
+        StubServer.serve(Data(#"{"error":{"code":"fee_too_high","message":"High.","detail":{"fee":"40000000","n":3,"ok":true,"x":{"y":1}}}}"#.utf8), status: 422)
+        do {
+            _ = try await api.quoteTrade(token: "CTOKEN", buy: true, amount: 1)
+            XCTFail("fee_too_high didn't throw")
+        } catch let error as LiteAPIError {
+            XCTAssertEqual(error.detail, ["fee": "40000000", "n": "3", "ok": "true"])
         }
     }
 

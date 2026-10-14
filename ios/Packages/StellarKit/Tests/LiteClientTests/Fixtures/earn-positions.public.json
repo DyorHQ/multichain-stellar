@@ -1,0 +1,18 @@
+{
+  "positions": [
+    {
+      "pool": "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF",
+      "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "code": "XLM",
+      "supplied": "1000012340",
+      "poolName": "Blend TestnetV2",
+      "deposited": null,
+      "withdrawn": null,
+      "earned": null,
+      "earnedComplete": false,
+      "supplyApy": 0.031,
+      "valueUsd": 19.01
+    }
+  ],
+  "view": "public"
+}

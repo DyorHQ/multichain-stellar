@@ -1,0 +1,148 @@
+{
+  "launch": {
+    "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+    "creator": "GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN",
+    "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "name": "E2E Cat",
+    "symbol": "ECAT",
+    "uri": "https://example.supabase.co/storage/v1/object/public/lite-media/launches/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/aef9135a-6c53-435a-a2e4-5bb339faa0e1.json",
+    "supply": "10000000000000000",
+    "quoteReserve": "289000000000",
+    "tokenReserve": "6920415224913495",
+    "realQuote": "39000000000",
+    "threshold": "93000000000",
+    "progress": 0.4193,
+    "completed": false,
+    "graduated": false,
+    "pair": null,
+    "lastPrice": "0.0000417",
+    "volume": "61000000000",
+    "trades": 12,
+    "createdAt": "2026-10-13T03:41:00.000Z",
+    "quoteCode": "XLM",
+    "image": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/b4e32bb4-0296-4ba8-a4c8-9ebd74f07d5e.png",
+    "description": "A cat that runs end-to-end tests.",
+    "links": {
+      "website": "https://ecat.dyorhq.fun",
+      "x": "https://x.com/ecat",
+      "telegram": null
+    },
+    "burned": "0",
+    "circulating": "10000000000000000",
+    "phase": "curve",
+    "priceQuote": "0.0000417",
+    "priceUsd": 0.0000079,
+    "change24h": 0.12,
+    "isNew": false,
+    "marketCapQuote": "41700",
+    "marketCapUsd": 7927.17,
+    "volume24hQuote": "2100",
+    "volume24hUsd": 399.21,
+    "holders": 5,
+    "holdersComplete": true,
+    "feeBps": 100,
+    "protocolShareBps": 5000,
+    "creatorFeeBps": 100,
+    "poolFeeBps": null,
+    "lookAlike": false,
+    "graduatedAt": null,
+    "lastTradeAt": "2026-10-14T09:29:00.000Z"
+  },
+  "curve": {
+    "quoteReserve": "289000000000",
+    "tokenReserve": "6920415224913495",
+    "realQuote": "39000000000",
+    "threshold": "93000000000",
+    "creatorFees": "3900000",
+    "completed": false,
+    "graduated": false,
+    "pair": null
+  },
+  "trades": [
+    {
+      "trader": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+      "side": "buy",
+      "quoteAmount": "500000000",
+      "tokenAmount": "12000000000000",
+      "price": "0.0000417",
+      "txHash": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "ts": "2026-10-14T09:29:00.000Z",
+      "venue": "curve"
+    },
+    {
+      "trader": "GDFIMZHHSBGAIJUCBALCYGEO2GQKDVWJW4C3LFFLLINXU23OPVEXRITR",
+      "side": "sell",
+      "quoteAmount": "100000000",
+      "tokenAmount": "2410000000000",
+      "price": "0.0000415",
+      "txHash": "b9bd2da960151e052b2e46fa97cb612b77e135ceab17e96f0083a5af72bf3f81",
+      "ts": "2026-10-14T09:01:00.000Z",
+      "venue": "curve"
+    }
+  ],
+  "candles": [
+    {
+      "t": "2026-10-14T09:11:00.000Z",
+      "o": "0.0000409",
+      "h": "0.0000415",
+      "l": "0.0000409",
+      "c": "0.0000415",
+      "v": "100000000"
+    },
+    {
+      "t": "2026-10-14T09:26:00.000Z",
+      "o": "0.0000415",
+      "h": "0.0000417",
+      "l": "0.0000415",
+      "c": "0.0000417",
+      "v": "500000000"
+    }
+  ],
+  "stats": {
+    "volume24hQuote": "2100",
+    "volume24hUsd": 399.21,
+    "holders": 5,
+    "holdersComplete": true,
+    "marketCapQuote": "41700",
+    "marketCapUsd": 7927.17,
+    "priceQuote": "0.0000417",
+    "priceUsd": 0.0000079,
+    "change24h": 0.12
+  },
+  "creatorFees": {
+    "unclaimed": "3900000",
+    "claimed": "1200000",
+    "quote": "XLM",
+    "unclaimedUsd": 0.07,
+    "claimedUsd": 0.02
+  },
+  "you": {
+    "balance": "12000000000000",
+    "costBasisQuote": null,
+    "pnlQuote": null,
+    "isCreator": false
+  },
+  "economics": {
+    "feeBps": 100,
+    "protocolShareBps": 5000,
+    "creatorFeeBps": 100,
+    "supply": "10000000000000000",
+    "phantom": "250000000000",
+    "threshold": "93000000000"
+  },
+  "pricePoints": [
+    {
+      "t": "2026-10-13T03:41:00.000Z",
+      "price": "0.000025"
+    },
+    {
+      "t": "2026-10-14T09:01:00.000Z",
+      "price": "0.0000415"
+    },
+    {
+      "t": "2026-10-14T09:29:00.000Z",
+      "price": "0.0000417"
+    }
+  ],
+  "view": "public"
+}

@@ -49,14 +49,15 @@ public struct StellarFirstFunding: Codable, Equatable, Sendable {
     /// Testnet's faucet: its amount in XLM, and whether today's tap is used.
     public struct Faucet: Codable, Equatable, Sendable {
         public let amount: String
-        public let usedToday: Bool
+        /// Nil in the public view (DyorHQ's records, not the ledger's).
+        public let usedToday: Bool?
     }
 
     public let needsXlm: Bool
     /// How much XLM to send, in stroops.
     public let suggestXlm: String
-    /// "available", "used" or "unavailable".
-    public let starterSwap: String
+    /// "available", "used" or "unavailable"; nil in the public view (DyorHQ's records, not the ledger's).
+    public let starterSwap: String?
     /// Nil off testnet.
     public let faucet: Faucet?
 }

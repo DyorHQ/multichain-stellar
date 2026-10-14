@@ -86,5 +86,6 @@
       "amount": "10000",
       "usedToday": false
     }
-  }
+  },
+  "view": "owner"
 }

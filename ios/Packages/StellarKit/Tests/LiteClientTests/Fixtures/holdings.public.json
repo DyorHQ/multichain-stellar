@@ -1,0 +1,157 @@
+{
+  "address": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+  "exists": true,
+  "asOf": "2026-10-14T09:41:00.000Z",
+  "pricing": {
+    "kind": "reference",
+    "source": "Kraken",
+    "network": "mainnet",
+    "note": "Testnet assets have no market. XLM and USDC are valued at mainnet market prices."
+  },
+  "xlm": {
+    "balance": "100000000000",
+    "minBalance": "15000000",
+    "sellingLiabilities": "0",
+    "spendable": "99985000000",
+    "baseReserve": "5000000",
+    "reserves": {
+      "base": 2,
+      "subentries": 1,
+      "sponsoring": 0,
+      "sponsored": 0
+    }
+  },
+  "spot": [
+    {
+      "id": "XLM",
+      "kind": "registry",
+      "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "classic": "native",
+      "code": "XLM",
+      "name": "Stellar Lumens",
+      "decimals": 7,
+      "balance": "100000000000",
+      "enabled": true,
+      "verified": true,
+      "badges": [],
+      "note": "Test XLM",
+      "logo": "XLM",
+      "priceUsd": 0.1901,
+      "valueUsd": 1901,
+      "change24h": -0.0123
+    },
+    {
+      "id": "USDC",
+      "kind": "registry",
+      "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      "code": "USDC",
+      "name": "USD Coin",
+      "decimals": 7,
+      "balance": "52300000",
+      "enabled": true,
+      "verified": true,
+      "badges": [],
+      "note": "Circle test USDC (testanchor, CCTP)",
+      "logo": "USDC",
+      "priceUsd": 0.9999,
+      "valueUsd": 5.2295,
+      "change24h": 0.0001
+    },
+    {
+      "id": "AQUA:GAX2PVUCCLITL6T6ESGOJFHA234KIOUSINBZ2BNLPK47PYFS5MCZL2LO",
+      "kind": "classic",
+      "contract": "CALSEGHTOL4ZUKIQHT6VNWR74V3DJD6H4Y4KL3KJKOPL3TL32INSNHUU",
+      "classic": "AQUA:GAX2PVUCCLITL6T6ESGOJFHA234KIOUSINBZ2BNLPK47PYFS5MCZL2LO",
+      "code": "AQUA",
+      "name": null,
+      "decimals": 7,
+      "balance": "250000000",
+      "enabled": true,
+      "verified": false,
+      "badges": [
+        "unverified"
+      ],
+      "note": null,
+      "logo": null,
+      "priceUsd": null,
+      "valueUsd": null,
+      "change24h": null
+    }
+  ],
+  "earn": [
+    {
+      "pool": "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF",
+      "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "code": "XLM",
+      "supplied": "1000012340",
+      "poolName": "Blend TestnetV2",
+      "deposited": null,
+      "withdrawn": null,
+      "earned": null,
+      "earnedComplete": false,
+      "supplyApy": 0.031,
+      "valueUsd": 19.01
+    }
+  ],
+  "launch": [
+    {
+      "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "symbol": "ECAT",
+      "name": "E2E Cat",
+      "image": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/b4e32bb4-0296-4ba8-a4c8-9ebd74f07d5e.png",
+      "balance": "12000000000000",
+      "priceUsd": 0.0000079,
+      "valueUsd": 9.48,
+      "change24h": 0.12,
+      "phase": "curve",
+      "progress": 0.4193,
+      "costBasisUsd": null,
+      "pnlUsd": null,
+      "stale": false
+    }
+  ],
+  "moments": {
+    "count": 2,
+    "editions": [
+      {
+        "tokenId": 7,
+        "momentId": 3,
+        "title": "Harbour at dusk",
+        "mediaUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/7dedfd8a-9584-4cd0-a43a-cd036723818b.mp4",
+        "posterUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/27601021-cbcb-4512-a8e3-69978e581185.jpg",
+        "mediaType": "video",
+        "contract": "CDOYEDV4D3XQ7IP6R2SQXR5IIQYQRYLIVV53XSPTFKSNHUE22QKQ2JFT"
+      },
+      {
+        "tokenId": 8,
+        "momentId": 3,
+        "title": "Harbour at dusk",
+        "mediaUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/7dedfd8a-9584-4cd0-a43a-cd036723818b.mp4",
+        "posterUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/27601021-cbcb-4512-a8e3-69978e581185.jpg",
+        "mediaType": "video",
+        "contract": "CDOYEDV4D3XQ7IP6R2SQXR5IIQYQRYLIVV53XSPTFKSNHUE22QKQ2JFT"
+      }
+    ]
+  },
+  "totals": {
+    "spot": 1906.2295,
+    "earn": 19.01,
+    "launch": 9.48,
+    "moments": 0,
+    "total": 1934.7195,
+    "complete": true
+  },
+  "change24h": {
+    "usd": -22.63,
+    "pct": -0.0116,
+    "complete": false
+  },
+  "parts": {
+    "spot": "ok",
+    "earn": "ok",
+    "launch": "ok",
+    "moments": "ok"
+  },
+  "view": "public"
+}
