@@ -85,6 +85,26 @@ final class Router {
     /// the Perps order / close / margin / TP/SL reviews, Bridge) and every approved send or deletion no sheet covers
     /// (`holdingLinks`). RootView's gate waits until it is 0, so a link never tears one down.
     var linkHolds = 0
+    #if STELLAR_LITE
+    /// The network on screen (internal builds, docs/DESIGN-network-switch.md): the root shows its screens and remembers it
+    /// per account. A Monad-only destination switches back to Monad first (`ensureMonad`).
+    var network: AppNetwork = .monad
+    /// Stellar's tab, while Stellar is on screen: its tab bar and the side menu's Stellar rows.
+    var stellarTab: StellarTab = .home
+    /// The network sheet asked for with either Home's chip, which the root presents (origin `.home`). Profile presents its
+    /// own, from its Network row.
+    var networkSheet: NetworkSheetRequest?
+    /// Set with a network swap: the new Home's chip takes VoiceOver's focus as it appears, then clears it (§6).
+    var focusesNetworkChip = false
+
+    /// A Monad-only destination switches to Monad first, at once and with no sheet (§2.6 rule 3): a Moment link, a
+    /// notification's screen (a banner's too, through `open(route:)`), Portfolio, Swap, Perps, a launch, a Moment, and the
+    /// menu's Monad sections.
+    func ensureMonad() {
+        guard network != .monad else { return }
+        network = .monad
+    }
+    #endif
 
     /// Every URL handed to the app. This parses and stores; nothing navigates until the gate delivers. A URL on our
     /// hosts that isn't a Moment link gets a notice; anything else (Privy's OAuth callback on the `dyorhq` scheme, say)
@@ -126,6 +146,9 @@ final class Router {
     /// Opens the pending link's Moment: the menu and whatever is presented close, and the Moments tab pushes it.
     func deliverPendingLink() {
         guard let link = pendingLink else { return }
+        #if STELLAR_LITE
+        ensureMonad()
+        #endif
         pendingLink = nil
         menuOpen = false
         presented = nil
@@ -138,12 +161,18 @@ final class Router {
     /// wallet), and the engine refuses it too.
     func openSwap(tokenIn: Token? = nil, tokenOut: Token? = nil) {
         guard SwapEngine.isTradablePair(tokenIn, tokenOut) else { return }
+        #if STELLAR_LITE
+        ensureMonad()
+        #endif
         pendingSwap = (tokenIn, tokenOut)
         tradeMode = .swap
         tab = .trade
     }
 
     func openPerp(id: Int) {
+        #if STELLAR_LITE
+        ensureMonad()
+        #endif
         pendingPerpMarket = id
         tradeMode = .perps
         tab = .trade
@@ -154,6 +183,10 @@ final class Router {
         pendingLaunchReference = nil
         pendingLaunch = launch
         tab = .launch
+        #if STELLAR_LITE
+        // Last only to keep the lines above as LaunchpadCurveRoutingTests reads them: in one call the order changes nothing.
+        ensureMonad()
+        #endif
     }
 
     /// Opens a launch's page by reference, for a coin whose launch couldn't be read: the page reads it. The last request
@@ -162,6 +195,10 @@ final class Router {
         pendingLaunch = nil
         pendingLaunchReference = reference
         tab = .launch
+        #if STELLAR_LITE
+        // Last only to keep the lines above as LaunchpadCurveRoutingTests reads them: in one call the order changes nothing.
+        ensureMonad()
+        #endif
     }
 
     /// Opens the Launch page of a coin on a launchpad's curve, where it trades: from its launch, or by reference when its
@@ -181,16 +218,28 @@ final class Router {
     }
 
     func openMoment(_ moment: MomentInfo) {
+        #if STELLAR_LITE
+        ensureMonad()
+        #endif
         pendingMoment = moment
         tab = .moments
     }
 
     /// Opens a Moment by its link on the Moments tab, whose page reads it first (`MomentLinkView`): for a screen showing a
     /// Moment as it saved it when last read, which its page mustn't show as current.
+    #if STELLAR_LITE
+    // The #else body is build 23's, which MomentsSpeedTests reads whole; this one switches to Monad first.
+    func openMoment(_ link: MomentLink) {
+        ensureMonad()
+        pendingMomentLink = link
+        tab = .moments
+    }
+    #else
     func openMoment(_ link: MomentLink) {
         pendingMomentLink = link
         tab = .moments
     }
+    #endif
 
     /// Follows a tapped row of the notification center to its screen.
     func open(_ notification: AppNotification) {
@@ -202,6 +251,9 @@ final class Router {
     /// Perps as it was.
     func open(route: NotificationRoute, reference: String? = nil) {
         guard route != .none else { return }
+        #if STELLAR_LITE
+        ensureMonad()
+        #endif
         presented = nil
         switch route {
         case .none: break
@@ -219,6 +271,14 @@ final class Router {
     /// Opens a section from the side menu: tabs switch (and the Trade tab picks its mode), the rest present.
     func open(_ item: MenuItem) {
         menuOpen = false
+        #if STELLAR_LITE
+        // On Stellar its four sections are its tabs. News and Get Help are both networks'; every other section is Monad's.
+        if network == .stellar, let stellarTab = item.stellarTab {
+            self.stellarTab = stellarTab
+            return
+        }
+        if item != .news, item != .help { ensureMonad() }
+        #endif
         switch item {
         case .home: tab = .home
         case .spot: tradeMode = .swap; tab = .trade
@@ -228,6 +288,9 @@ final class Router {
         case .portfolio: presented = .portfolio
         case .news: presented = .news
         case .help: presented = .help
+        #if STELLAR_LITE
+        case .earn: break // listed on Stellar only, where it opens Stellar's Earn tab above
+        #endif
         }
     }
 }
@@ -281,6 +344,10 @@ enum VolumePeriod: String, CaseIterable, Identifiable {
 /// The sections listed in the side menu, in display order.
 enum MenuItem: String, CaseIterable, Identifiable {
     case home, spot, perps, launch, moments, news, portfolio, help
+    #if STELLAR_LITE
+    /// Stellar's Earn tab, lending on Blend: listed on Stellar only (`items(for:)`).
+    case earn
+    #endif
     var id: String { rawValue }
 
     /// The section's name in the menu, in the app's language.
@@ -294,6 +361,9 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .news: return tr("News")
         case .portfolio: return tr("Portfolio")
         case .help: return tr("Get Help")
+        #if STELLAR_LITE
+        case .earn: return Self.earnTitle
+        #endif
         }
     }
 
@@ -307,6 +377,9 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .news: return "newspaper"
         case .portfolio: return "chart.pie"
         case .help: return "questionmark.circle"
+        #if STELLAR_LITE
+        case .earn: return "leaf"
+        #endif
         }
     }
 
@@ -321,6 +394,51 @@ enum MenuItem: String, CaseIterable, Identifiable {
         case .news: return tr("Crypto headlines")
         case .portfolio: return tr("Volume, fees and P&L across DyorHQ")
         case .help: return tr("Support and community")
+        #if STELLAR_LITE
+        case .earn: return subtitle(on: .stellar)
+        #endif
         }
     }
 }
+#if STELLAR_LITE
+
+extension MenuItem {
+    /// The side menu's rows on `network` (§3.4): Monad's sections as in build 23; on Stellar its four tabs, then News and
+    /// Get Help.
+    static func items(for network: AppNetwork) -> [MenuItem] {
+        switch network {
+        case .monad: return [.home, .spot, .perps, .launch, .moments, .news, .portfolio, .help]
+        case .stellar: return [.home, .earn, .launch, .moments, .news, .help]
+        }
+    }
+
+    /// The Stellar tab the row opens on Stellar; nil for a row that presents a screen there (News, Get Help), or isn't
+    /// listed there.
+    var stellarTab: StellarTab? {
+        switch self {
+        case .home: return .home
+        case .earn: return .earn
+        case .launch: return .launch
+        case .moments: return .moments
+        case .spot, .perps, .news, .portfolio, .help: return nil
+        }
+    }
+
+    /// Stellar's Earn, the row's name (and the tab's).
+    static var earnTitle: String {
+        liteTr(LocalizedStringResource("stellarTab.earn", defaultValue: "Earn", table: "Lite", comment: "[tight] The Stellar section for lending to earn interest: its side menu row and its tab"))
+    }
+
+    /// What the section holds on `network`, under its name in the menu: on Stellar, its tabs' own lines.
+    func subtitle(on network: AppNetwork) -> String {
+        guard network == .stellar else { return subtitle }
+        switch self {
+        case .home: return liteTr(LocalizedStringResource("Balance and activity", table: "Lite", comment: "The side menu on Stellar: what its Home holds, under the row's name"))
+        case .earn: return liteTr(LocalizedStringResource("Lend XLM and USDC on Blend", table: "Lite", comment: "The side menu on Stellar: what Earn does, under the row's name. “Blend” is a lending protocol's name"))
+        case .launch: return liteTr(LocalizedStringResource("Launch and trade coins on Stellar", table: "Lite", comment: "The side menu on Stellar: what its Launch tab does, under the row's name"))
+        case .moments: return liteTr(LocalizedStringResource("Collect editions on Stellar", table: "Lite", comment: "The side menu on Stellar: what its Moments tab does, under the row's name"))
+        case .spot, .perps, .news, .portfolio, .help: return subtitle
+        }
+    }
+}
+#endif

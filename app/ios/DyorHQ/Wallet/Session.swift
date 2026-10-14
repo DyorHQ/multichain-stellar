@@ -386,12 +386,23 @@ final class Session {
         try await requirePrivy().email.sendCode(to: email.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    #if STELLAR_LITE
+    /// What one email + password yields: the normalized email, the password seed S, the server pepper p, and the v2
+    /// wallet.
+    private struct PasswordKeys {
+        let email: String
+        let seed: Data
+        let pepper: Data
+        let wallet: Secp256k1Account
+    }
+    #else
     /// What one email + password yields: the normalized email, the password seed S, and the v2 wallet.
     private struct PasswordKeys {
         let email: String
         let seed: Data
         let wallet: Secp256k1Account
     }
+    #endif
 
     /// Derive the v2 wallet (see `EmailWallet`): the slow seed and the key math run off the main actor; `pepper`
     /// fetches the server pepper for (e, t) — hashes, never the password or the seed.
@@ -406,7 +417,11 @@ final class Session {
         guard let wallet = await Task.detached(priority: .userInitiated, operation: {
             EmailWallet.v2Account(seed: seed, pepper: p)
         }).value else { throw SessionError.passwordDerivationFailed }
+        #if STELLAR_LITE
+        return PasswordKeys(email: normalizedEmail, seed: seed, pepper: p, wallet: wallet)
+        #else
         return PasswordKeys(email: normalizedEmail, seed: seed, wallet: wallet)
+        #endif
     }
 
     /// The legacy (pre-v2) wallet for the password seed S, off the main actor.
@@ -469,6 +484,9 @@ final class Session {
         let keys = try await derivePassword(email: email, password: password, pepper: pepper)
         guard try await verify(keys.email, keys.wallet) else { throw SessionError.emailNotVerified }
         await commitPasswordWallet(keys.wallet, email: keys.email)
+        #if STELLAR_LITE
+        LiteKeyBootstrap.didDeriveEmailWallet(seed: keys.seed, pepper: keys.pepper, evm: keys.wallet.address)
+        #endif
         return .signedIn
     }
 
@@ -596,9 +614,15 @@ final class Session {
             throw SessionError.emailAlreadyBound(bound)
         }
         await commitPasswordWallet(keys.wallet, email: keys.email)
+        #if STELLAR_LITE
+        LiteKeyBootstrap.didDeriveEmailWallet(seed: keys.seed, pepper: keys.pepper, evm: keys.wallet.address)
+        #endif
     }
 
     func signOut() async {
+        #if STELLAR_LITE
+        if let address { LiteKeyBootstrap.forget(evm: address) }
+        #endif
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
         mera.forget()
@@ -632,6 +656,10 @@ final class Session {
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
         mera.forget()
+        #if STELLAR_LITE
+        // Before the UserDefaults wipe below: it holds the Stellar address the Lite Keychain items are filed under.
+        if let address { LiteKeyBootstrap.forget(evm: address) }
+        #endif
         wallet = nil
         if let bundle = Bundle.main.bundleIdentifier {
             // The store as a new install finds it, with App Lock saved as a new install has it (`AppLockStore`, R4): the

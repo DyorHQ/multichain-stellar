@@ -10,3 +10,5 @@ xcuserdata/
 .swiftpm/
 # Archive/export output of scripts/testflight.sh
 build/
+# The internal (Lite) project's spec, generated from project.yml by Internal/generate.py
+project-internal.json

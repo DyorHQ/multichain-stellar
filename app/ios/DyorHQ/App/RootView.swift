@@ -36,7 +36,11 @@ struct RootView: View {
                 if let required = env.updateGate.required {
                     UpdateRequiredView(minimum: required)
                 } else {
+                    #if STELLAR_LITE
+                    NetworkRoot()
+                    #else
                     MainTabView()
+                    #endif
                 }
             }
         }
@@ -308,6 +312,15 @@ enum AppTab: String, CaseIterable, Identifiable {
 /// opens outside the tabs (Portfolio, News, Get Help, Profile) as full-screen covers.
 struct MainTabView: View {
     @Environment(Router.self) private var router
+    #if STELLAR_LITE
+    /// False under the network root, which presents the covers above the swap between the networks (`AppCovers`), so the
+    /// menu and Profile stay up through a switch.
+    let hostsCovers: Bool
+
+    init(hostsCovers: Bool = true) {
+        self.hostsCovers = hostsCovers
+    }
+    #endif
 
     var body: some View {
         @Bindable var router = router
@@ -319,6 +332,9 @@ struct MainTabView: View {
             Tab("Moments", systemImage: "camera.aperture", value: .moments) { MomentsView() }
         }
         .sensoryFeedback(.selection, trigger: router.tab)
+        #if STELLAR_LITE
+        .modifier(AppCovers(isHosting: hostsCovers))
+        #else
         .fullScreenCover(isPresented: $router.menuOpen) { SideMenuView() }
         .fullScreenCover(item: $router.presented) { screen in
             switch screen {
@@ -329,5 +345,6 @@ struct MainTabView: View {
             case .notifications: NotificationCenterView()
             }
         }
+        #endif
     }
 }

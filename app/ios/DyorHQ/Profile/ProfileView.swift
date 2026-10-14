@@ -23,6 +23,14 @@ struct ProfileView: View {
     @State private var confirmForget = false
     @State private var signingOut = false
     @State private var showDeleteAccount = false
+    #if STELLAR_LITE
+    @Environment(Router.self) private var router
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The network sheet, opened from the Network row (origin `.profile`).
+    @State private var networkSheet: NetworkSheetRequest?
+    /// Stellar's Receive or Send, while Stellar is the network.
+    @State private var stellarWalletSheet: StellarWalletSheet?
+    #endif
 
     /// Sign-out removes the signing key from this device, so say what that means for each kind of wallet: an imported
     /// key exists nowhere else unless the user saved it, so it must never read as "your wallet stays with your account".
@@ -44,6 +52,9 @@ struct ProfileView: View {
             List {
                 if let account = session.account { header(account) }
 
+                #if STELLAR_LITE
+                walletSection
+                #else
                 Section {
                     Button { showReceive = true } label: { SettingsRow("Receive", symbol: "qrcode", tint: .accent) }
                     Button { showSend = true } label: { SettingsRow("Send", symbol: "paperplane", tint: .accent) }
@@ -54,6 +65,7 @@ struct ProfileView: View {
                 } footer: {
                     if !session.canSign { Text("Sign in to send from this address.") }
                 }
+                #endif
 
                 Section("Settings") {
                     NavigationLink { SocialProfileView() } label: {
@@ -95,10 +107,14 @@ struct ProfileView: View {
                     Link(destination: SupportLinks.privacy) { SettingsRow("Privacy Policy", symbol: "hand.raised", tint: .accent) }
                 }
 
+                #if STELLAR_LITE
+                networkSection
+                #else
                 Section("Network") {
                     LabeledContent("Chain", value: tr("Monad mainnet"))
                     LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
                 }
+                #endif
 
                 // A passkey account keeps nothing on the device that the passkey can't bring back, so signing out of one
                 // is forgetting this device: the whole local copy is erased (`AccountDeletion.eraseThisDevice`), and the
@@ -145,6 +161,10 @@ struct ProfileView: View {
             .sheet(isPresented: $showSend) { SendSheet() }
             .sheet(isPresented: $showAppearance) { AppearanceSheet() }
             .sheet(isPresented: $showDeleteAccount) { DeleteAccountView() }
+            #if STELLAR_LITE
+            .networkSheet($networkSheet) { commitFromProfile($0) }
+            .stellarWalletSheet($stellarWalletSheet)
+            #endif
             .confirmationDialog(session.canSign ? "Sign out of DyorHQ?" : "Stop watching this address?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button(session.canSign ? "Sign Out" : "Stop Watching", role: .destructive) {
                     let address = session.address
@@ -212,6 +232,97 @@ struct ProfileView: View {
         }
     }
 }
+#if STELLAR_LITE
+
+extension ProfileView {
+    /// Profile › Wallet: build 23's on Monad. On Stellar it follows the network (§3.5, open question 5): Receive and Send
+    /// are Stellar's, Recent Activity goes (Stellar Home lists the activity), and the footer names the network. The
+    /// account's header above keeps its Monad address.
+    @ViewBuilder private var walletSection: some View {
+        if router.network == .stellar {
+            Section {
+                // Stellar's deposit (its address and QR code) and withdraw sheets: Monad's would show the Monad address.
+                Button { stellarWalletSheet = .deposit } label: { SettingsRow("Receive", symbol: "qrcode", tint: .accent) }
+                Button { stellarWalletSheet = .withdraw } label: { SettingsRow("Send", symbol: "paperplane", tint: .accent) }
+                    .disabled(!session.canSign)
+            } header: {
+                Text("Wallet")
+            } footer: {
+                if AppNetwork.stellar.isTestnet {
+                    Paragraph(LocalizedStringResource("On the Stellar testnet.", table: "Lite", comment: "Profile › Wallet's footer when Stellar is the network: its rows are for Stellar's test network"))
+                }
+            }
+        } else {
+            Section {
+                Button { showReceive = true } label: { SettingsRow("Receive", symbol: "qrcode", tint: .accent) }
+                Button { showSend = true } label: { SettingsRow("Send", symbol: "paperplane", tint: .accent) }
+                    .disabled(!session.canSign)
+                NavigationLink { RecentActivityView() } label: { SettingsRow("Recent Activity", symbol: "clock.arrow.circlepath", tint: .accent) }
+            } header: {
+                Text("Wallet")
+            } footer: {
+                if !session.canSign { Text("Sign in to send from this address.") }
+            }
+        }
+    }
+
+    /// Profile › Network where the network control exists (§3.5): the Network row, the same chip and the same sheet as on
+    /// Home, then the network's own rows. Build 23's section otherwise.
+    @ViewBuilder private var networkSection: some View {
+        if LiteGate.availability(session: session) != nil {
+            let network = router.network
+            Section {
+                Button {
+                    Haptics.tap()
+                    networkSheet = NetworkSheetRequest(origin: .profile)
+                } label: {
+                    HStack {
+                        SettingsRow("Network", symbol: "network", tint: .accent)
+                        Spacer()
+                        NetworkChip(network: network, interactive: false)
+                    }
+                }
+                .networkControlAccessibility(network)
+                switch network {
+                case .monad:
+                    LabeledContent("Chain", value: tr("Monad mainnet"))
+                    LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
+                case .stellar:
+                    LabeledContent("Chain", value: network.chainLabel)
+                    if let address = session.address { StellarAccountRow(owner: address) }
+                }
+            } header: {
+                Text("Network")
+            } footer: {
+                if network == .stellar, network.isTestnet {
+                    Paragraph(LocalizedStringResource("Testnet balances have no value. DyorHQ pays the Stellar network fees.", table: "Lite", comment: "Profile › Network's footer when Stellar, on its test network, is the network"))
+                }
+            }
+        } else {
+            Section("Network") {
+                LabeledContent("Chain", value: tr("Monad mainnet"))
+                LabeledContent("RPC", value: env.config.rpcURL.host() ?? env.config.rpcURL.absoluteString)
+            }
+        }
+    }
+
+    /// A switch chosen from the Network row, once the sheet has slid down (§2.5): the network changes under Profile at once,
+    /// the row shows its new chip for a moment, and Profile closes onto the new network's Home, whose chip VoiceOver then
+    /// starts on (§6).
+    private func commitFromProfile(_ network: AppNetwork) {
+        withTransaction(\.disablesAnimations, true) {
+            router.network = network
+            if network == .monad { router.tab = .home } else { router.stellarTab = .home }
+        }
+        Task { @MainActor in
+            if !reduceMotion { try? await Task.sleep(for: .milliseconds(400)) }
+            dismiss()
+            try? await Task.sleep(for: .milliseconds(500)) // the cover's dismissal
+            router.focusesNetworkChip = true
+        }
+    }
+}
+#endif
 
 /// A settings row: a symbol in the accent tint, then the title. Matches Apple's own settings rows. The title is a catalog
 /// key when written in the code, or a `String` shown as it is.

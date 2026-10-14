@@ -1,0 +1,19 @@
+# Changes from build 23 (d387a64) that Internal/check-build23.py accepts outside its per-path rules (README.md).
+#
+# An entry is a path and its rule, in shell quoting, then its reason on the indented lines below it:
+#   <path> any                        the file may change in any way (not an app Swift file)
+#   <path> literal "<old>" "<new>"    only lines that swap <old> for <new> differ (a Swift file's after stripping its
+#                                     #if STELLAR_LITE blocks)
+#   <path> keys -"<key>" +"<key>"     a String Catalog: exactly these keys removed (-) and added (+), and every other
+#                                     key, and everything outside its strings, equal as JSON
+# ios/DyorKit/** can't be listed (it never changes), and ios/Internal/** needn't be.
+
+# The committed tagline (c2ee50e): the owner's new brand line, which stays English in every language.
+ios/DyorHQ/Support/GetHelpView.swift literal "The RWA HQ for social trading" "Your All-in-One Crypto App"
+    The tagline: SupportLinks.tagline's literal, read by the welcome screen, Profile's footer and Get Help's About row.
+ios/DyorHQ/Resources/Localizable.xcstrings keys -"The RWA HQ for social trading" +"Your All-in-One Crypto App"
+    The tagline's catalog entry, under its new key; never translated, as before.
+brand/dyorhq-brand-guide.md any
+    The tagline in the brand guide, a document the app doesn't ship.
+brand/dyorhq-design-system.md any
+    The tagline in the design system, a document the app doesn't ship.

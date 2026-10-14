@@ -175,6 +175,9 @@ struct ImportWalletView: View {
     private func runImport() {
         guard let derived else { return }
         let importedSecret = currentInput
+        #if STELLAR_LITE
+        let importedKind = kind
+        #endif
         importing = true
         error = nil
         Task {
@@ -185,6 +188,13 @@ struct ImportWalletView: View {
                 return
             }
             Haptics.success()
+            #if STELLAR_LITE
+            // Lite's Stellar key, from the same secret (SEP-5 for a phrase), while it is still in hand.
+            switch importedKind {
+            case .phrase: LiteKeyBootstrap.didImport(phrase: importedSecret, evm: derived.address)
+            case .key: LiteKeyBootstrap.didImport(privateKey: derived.privateKey, evm: derived.address)
+            }
+            #endif
             // Scrub the secret from memory and the system clipboard now that the key is safely in the Keychain. The
             // field holds a trimmed copy of what was pasted, so compare trimmed: a phrase copied with a trailing space or
             // newline must not stay on the clipboard.

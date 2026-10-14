@@ -21,11 +21,22 @@ struct SideMenuView: View {
                     header
                     profileRow
                     VStack(spacing: 10) {
+                        #if STELLAR_LITE
+                        // The rows follow the network (§3.4): Monad's as in build 23, or Stellar's tabs, News and Get Help.
+                        ForEach(MenuItem.items(for: router.network)) { item in
+                            MenuRow(item: item, isCurrent: isCurrent(item), network: router.network) { open(item) }
+                        }
+                        #else
                         ForEach(MenuItem.allCases) { item in
                             MenuRow(item: item, isCurrent: isCurrent(item)) { open(item) }
                         }
+                        #endif
                     }
+                    #if STELLAR_LITE
+                    networkFooter
+                    #else
                     footer
+                    #endif
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
@@ -88,6 +99,27 @@ struct SideMenuView: View {
             .foregroundStyle(.tertiary)
             .padding(.top, 8)
     }
+    #if STELLAR_LITE
+
+    /// The footer names the network on screen, the menu's only mention of it: build 23's on Monad.
+    @ViewBuilder private var networkFooter: some View {
+        if router.network == .stellar {
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+            Group {
+                if AppNetwork.stellar.isTestnet {
+                    Paragraph(LocalizedStringResource("DyorHQ \(version) · Stellar testnet", table: "Lite", comment: "The side menu's footer on Stellar's test network. %@ is the app's version (1.1)"))
+                } else {
+                    Paragraph(verbatim: "DyorHQ \(version) · \(AppNetwork.stellar.name)")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+            .padding(.top, 8)
+        } else {
+            footer
+        }
+    }
+    #endif
 
     private var displayName: String {
         if let name = social.profile?.display_name, !name.isEmpty { return name }
@@ -118,6 +150,10 @@ struct SideMenuView: View {
     }
 
     private func isCurrent(_ item: MenuItem) -> Bool {
+        #if STELLAR_LITE
+        // On Stellar the "Now" badge follows Stellar's tab.
+        if router.network == .stellar { return item.stellarTab == router.stellarTab }
+        #endif
         switch item {
         case .home: return router.tab == .home
         case .spot: return router.tab == .trade && router.tradeMode == .swap
@@ -125,6 +161,9 @@ struct SideMenuView: View {
         case .launch: return router.tab == .launch
         case .moments: return router.tab == .moments
         case .portfolio, .news, .help: return false
+        #if STELLAR_LITE
+        case .earn: return false
+        #endif
         }
     }
 
@@ -144,6 +183,10 @@ struct SideMenuView: View {
 private struct MenuRow: View {
     let item: MenuItem
     let isCurrent: Bool
+    #if STELLAR_LITE
+    /// The network the menu lists: the row's line under its name follows it.
+    var network: AppNetwork = .monad
+    #endif
     let action: () -> Void
 
     var body: some View {
@@ -156,7 +199,11 @@ private struct MenuRow: View {
                     .background(Color.brand.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title).font(.body.weight(.semibold)).foregroundStyle(.primary)
+                    #if STELLAR_LITE
+                    Text(item.subtitle(on: network)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    #else
                     Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    #endif
                 }
                 Spacer()
                 if isCurrent {

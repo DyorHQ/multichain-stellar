@@ -133,6 +133,9 @@ struct HomeView: View {
     /// wallet's Total Volume across DyorHQ for the selected period, with the period switch right under it.
     private var heroCard: some View {
         VStack(alignment: .leading, spacing: 14) {
+            #if STELLAR_LITE
+            if showsNetworkChip { NetworkChipRow(network: .monad) }
+            #endif
             HStack(alignment: .top, spacing: 12) {
                 // The total and the day's move in it wait for every part of the wallet (`HomeModel.totalValue`).
                 let unread = model.totalValue == nil
@@ -174,9 +177,20 @@ struct HomeView: View {
                 splitStat(.moments, model.momentsValue, .allocationMoments)
             }
         }
+        #if STELLAR_LITE
+        // 10 on top with the chip row, whose 44 pt row puts the capsule 16 from the card's edge (§3.2).
+        .padding(EdgeInsets(top: showsNetworkChip ? 10 : 16, leading: 16, bottom: 16, trailing: 16))
+        #else
         .padding(16)
+        #endif
         .cardBackground()
     }
+    #if STELLAR_LITE
+
+    /// The network chip heads the balance card where the network control exists (§2.1): an internal build with the Lite
+    /// API, the owner's switch on, an account signed in. The rest of the card is build 23's.
+    private var showsNetworkChip: Bool { LiteGate.availability(session: session) != nil }
+    #endif
 
     /// Today's move in dollars, from the value-weighted 24h change.
     private var changeAmount: Double {
