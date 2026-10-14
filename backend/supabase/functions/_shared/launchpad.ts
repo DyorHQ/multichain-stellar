@@ -21,8 +21,8 @@ function quoteAsset(id: string) {
 }
 
 // ------------------------------------------------------------------------------------------------ markets and search
-// Launch tokens in the markets and in asset search (docs/DESIGN-stellar-parity.md §6.6). Not written yet, so both list
-// only the registry's assets: shorter lists, with nothing standing in for the launches.
+// Launch tokens in the markets and in asset search (docs/DESIGN-stellar-parity.md §6.6). Until these are written, both
+// list only the registry's assets: shorter lists, with nothing standing in for the launches.
 
 /** Listed, priced launch tokens as market rows (kind "launch"), by 24h USD volume, then newest. */
 export function launchMarketRows(): Promise<Record<string, unknown>[]> {
