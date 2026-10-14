@@ -20,9 +20,25 @@ public struct Intent: Codable, Equatable, Sendable {
     public let calls: [Call]?
     public let ops: [String]?
     public let trust: [String]?
-    public let display: [String: JSONValue]?
+    public let display: [String: StellarJSON]?
+    /// The destination the user typed or confirmed: a G… or C… address, or for `bridge_out` the Monad address as 0x-hex.
+    /// Absent from older servers' intents.
+    public let to: String?
+    /// The memo the user typed or confirmed. Absent when the transaction carries none, and from older servers' intents.
+    public let memo: Memo?
 
-    public init(kind: String, summary: String, spend: [String: String], receive: [String: String]? = nil, calls: [Call]? = nil, ops: [String]? = nil, trust: [String]? = nil, display: [String: JSONValue]? = nil) {
+    /// A transaction memo as the user confirmed it.
+    public struct Memo: Codable, Equatable, Sendable {
+        /// "text", "id" or "hash".
+        public let type: String
+        public let value: String
+        public init(type: String, value: String) {
+            self.type = type
+            self.value = value
+        }
+    }
+
+    public init(kind: String, summary: String, spend: [String: String], receive: [String: String]? = nil, calls: [Call]? = nil, ops: [String]? = nil, trust: [String]? = nil, display: [String: StellarJSON]? = nil, to: String? = nil, memo: Memo? = nil) {
         self.kind = kind
         self.summary = summary
         self.spend = spend
@@ -31,11 +47,13 @@ public struct Intent: Codable, Equatable, Sendable {
         self.ops = ops
         self.trust = trust
         self.display = display
+        self.to = to
+        self.memo = memo
     }
 }
 
 /// A JSON scalar (display fields).
-public enum JSONValue: Codable, Equatable, Sendable {
+public enum StellarJSON: Codable, Equatable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)

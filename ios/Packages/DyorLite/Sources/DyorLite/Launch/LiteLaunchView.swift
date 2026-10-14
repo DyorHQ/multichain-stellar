@@ -73,7 +73,7 @@ struct LiteLaunchView: View {
 struct LaunchRow: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.liteStyle) private var style
-    let launch: Launch
+    let launch: StellarLaunch
 
     var body: some View {
         HStack(spacing: 12) {
@@ -90,7 +90,7 @@ struct LaunchRow: View {
             Spacer()
             VStack(alignment: .trailing) {
                 Text(tr("\(launch.trades) trades")).font(.caption).foregroundStyle(.secondary)
-                Text(verbatim: "\(Amount.format(launch.volume, maxFraction: 0)) \(store.asset(launch.quote)?.code ?? "")").font(.caption.monospacedDigit())
+                Text(verbatim: "\(StellarAmount.format(launch.volume, maxFraction: 0)) \(store.asset(launch.quote)?.code ?? "")").font(.caption.monospacedDigit())
             }
         }
     }
@@ -101,7 +101,7 @@ struct LaunchDetailView: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.liteStyle) private var style
     let token: String
-    @State private var detail: LaunchDetail?
+    @State private var detail: StellarLaunchDetail?
     @State private var buying = true
     @State private var amount = ""
     @State private var preview: TradeQuote?
@@ -136,8 +136,8 @@ struct LaunchDetailView: View {
         }
     }
 
-    private func quoteID(_ d: LaunchDetail) -> String { store.asset(d.launch.quote)?.id ?? d.launch.quote }
-    private func quoteCode(_ d: LaunchDetail) -> String { store.asset(d.launch.quote)?.code ?? "" }
+    private func quoteID(_ d: StellarLaunchDetail) -> String { store.asset(d.launch.quote)?.id ?? d.launch.quote }
+    private func quoteCode(_ d: StellarLaunchDetail) -> String { store.asset(d.launch.quote)?.code ?? "" }
 
     private func load() async {
         do {
@@ -146,7 +146,7 @@ struct LaunchDetailView: View {
         } catch { self.error = describe(error) }
     }
 
-    private func header(_ d: LaunchDetail) -> some View {
+    private func header(_ d: StellarLaunchDetail) -> some View {
         LiteCard {
             HStack(spacing: 12) {
                 AssetBadge(code: d.launch.symbol, size: 52)
@@ -168,7 +168,7 @@ struct LaunchDetailView: View {
     }
 
     @ViewBuilder
-    private func chart(_ d: LaunchDetail) -> some View {
+    private func chart(_ d: StellarLaunchDetail) -> some View {
         let points = d.candles.reversed().compactMap { c -> PricePoint? in
             guard let t = c.t.liteDate, let v = Double(c.c) else { return nil }
             return PricePoint(time: t, price: v)
@@ -186,7 +186,7 @@ struct LaunchDetailView: View {
         }
     }
 
-    private func trade(_ d: LaunchDetail) -> some View {
+    private func trade(_ d: StellarLaunchDetail) -> some View {
         LiteCard {
             Picker(String(), selection: $buying) {
                 Text(tr("Buy")).tag(true)
@@ -199,23 +199,23 @@ struct LaunchDetailView: View {
                 .onChange(of: amount) { _, _ in preview = nil }
             if let q = preview {
                 if buying {
-                    Text(tr("You get about \(Amount.format(q.tokensOut ?? "0")) \(d.launch.symbol)")).font(.subheadline)
+                    Text(tr("You get about \(StellarAmount.format(q.tokensOut ?? "0")) \(d.launch.symbol)")).font(.subheadline)
                     if let s = q.snipeFee, s != "0" {
-                        LiteInlineError(message: tr("Opening-seconds anti-snipe fee applies: \(Amount.format(s)) \(quoteCode(d))"))
+                        LiteInlineError(message: tr("Opening-seconds anti-snipe fee applies: \(StellarAmount.format(s)) \(quoteCode(d))"))
                     }
                 } else {
-                    Text(tr("You get about \(Amount.format(q.quoteOut ?? "0")) \(quoteCode(d))")).font(.subheadline)
+                    Text(tr("You get about \(StellarAmount.format(q.quoteOut ?? "0")) \(quoteCode(d))")).font(.subheadline)
                 }
             }
             if let error { LiteInlineError(message: error) }
-            LitePrimaryButton(title: preview == nil ? tr("Get price") : tr("Review"), busy: busy, enabled: Amount.parse(amount) != nil) {
+            LitePrimaryButton(title: preview == nil ? tr("Get price") : tr("Review"), busy: busy, enabled: StellarAmount.parse(amount) != nil) {
                 Task { await tradeTapped(d) }
             }
         }
     }
 
-    private func tradeTapped(_ d: LaunchDetail) async {
-        guard let units = Amount.parse(amount) else { return }
+    private func tradeTapped(_ d: StellarLaunchDetail) async {
+        guard let units = StellarAmount.parse(amount) else { return }
         busy = true
         defer { busy = false }
         error = nil
@@ -236,7 +236,7 @@ struct LaunchDetailView: View {
         }
     }
 
-    private func completed(_ d: LaunchDetail) -> some View {
+    private func completed(_ d: StellarLaunchDetail) -> some View {
         LiteCard {
             LiteParagraph(tr("This launch hit its target and is moving to Soroswap.")).font(.subheadline)
             LitePrimaryButton(title: tr("Graduate now (free)"), busy: busy) {
@@ -247,7 +247,7 @@ struct LaunchDetailView: View {
         }
     }
 
-    private func graduated(_ d: LaunchDetail) -> some View {
+    private func graduated(_ d: StellarLaunchDetail) -> some View {
         LiteCard {
             LiteParagraph(tr("Trading on Soroswap. Liquidity is locked forever.")).font(.subheadline)
             HStack {
@@ -256,14 +256,14 @@ struct LaunchDetailView: View {
             }
             .buttonBorderShape(.capsule)
             if d.launch.creator == store.address, let fees = d.curve?.creatorFees, fees != "0" {
-                Button(tr("Claim \(Amount.format(fees)) \(quoteCode(d)) creator fees")) {
+                Button(tr("Claim \(StellarAmount.format(fees)) \(quoteCode(d)) creator fees")) {
                     Task { prepared = try? await store.launchPlan(LiteAPI.LaunchRequest(action: "claim", token: token), spend: nil) }
                 }
             }
         }
     }
 
-    private func trades(_ d: LaunchDetail) -> some View {
+    private func trades(_ d: StellarLaunchDetail) -> some View {
         LiteCard {
             Text(tr("Trades")).font(.headline)
             ForEach(Array(d.trades.prefix(20).enumerated()), id: \.offset) { _, t in
@@ -273,7 +273,7 @@ struct LaunchDetailView: View {
                         .font(.caption.weight(.bold))
                     Text(verbatim: shortAddress(t.trader)).font(.caption.monospaced())
                     Spacer()
-                    Text(verbatim: "\(Amount.format(t.quoteAmount)) \(quoteCode(d))").font(.caption.monospacedDigit())
+                    Text(verbatim: "\(StellarAmount.format(t.quoteAmount)) \(quoteCode(d))").font(.caption.monospacedDigit())
                 }
             }
         }
@@ -348,7 +348,7 @@ struct CreateLaunchSheet: View {
         do {
             var uri = ""
             if let imageData { uri = try await store.uploadImage(jpeg(imageData), contentType: "image/jpeg") }
-            let buy = Amount.parse(initialBuy) ?? 0
+            let buy = StellarAmount.parse(initialBuy) ?? 0
             var req = LiteAPI.LaunchRequest(action: "create", quote: quote, name: name, symbol: symbol.uppercased(), uri: uri, creatorFeeBps: Int(creatorFee * 100))
             req.amount = String(buy)
             req.minOut = "0"

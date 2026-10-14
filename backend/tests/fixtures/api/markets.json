@@ -1,0 +1,96 @@
+{
+  "asOf": "2026-10-14T09:41:00.000Z",
+  "pricing": {
+    "kind": "reference",
+    "source": "Kraken",
+    "network": "mainnet",
+    "note": "Testnet assets have no market. XLM and USDC are valued at mainnet market prices."
+  },
+  "rows": [
+    {
+      "id": "XLM",
+      "kind": "registry",
+      "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "classic": "native",
+      "code": "XLM",
+      "name": "Stellar Lumens",
+      "decimals": 7,
+      "logo": "XLM",
+      "image": null,
+      "verified": true,
+      "badges": [],
+      "note": "Test XLM",
+      "priceUsd": 0.1901,
+      "change24h": -0.0123,
+      "isNew": false,
+      "volume24hUsd": 3712345.2,
+      "marketCapUsd": null,
+      "priceSource": {
+        "kind": "reference",
+        "market": "Kraken XLM/USD",
+        "at": "2026-10-14T09:40:00.000Z"
+      },
+      "stale": false,
+      "launch": null
+    },
+    {
+      "id": "USDC",
+      "kind": "registry",
+      "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+      "classic": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+      "code": "USDC",
+      "name": "USD Coin",
+      "decimals": 7,
+      "logo": "USDC",
+      "image": null,
+      "verified": true,
+      "badges": [],
+      "note": "Circle test USDC (testanchor, CCTP)",
+      "priceUsd": 0.9999,
+      "change24h": 0.0001,
+      "isNew": false,
+      "volume24hUsd": 912003.5,
+      "marketCapUsd": null,
+      "priceSource": {
+        "kind": "reference",
+        "market": "Kraken USDC/USD",
+        "at": "2026-10-14T09:40:00.000Z"
+      },
+      "stale": false,
+      "launch": null
+    },
+    {
+      "id": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "kind": "launch",
+      "contract": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "classic": null,
+      "code": "ECAT",
+      "name": "E2E Cat",
+      "decimals": 7,
+      "logo": null,
+      "image": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/b4e32bb4-0296-4ba8-a4c8-9ebd74f07d5e.png",
+      "verified": true,
+      "badges": [
+        "launch"
+      ],
+      "note": null,
+      "priceUsd": 0.0000079,
+      "change24h": 0.12,
+      "isNew": false,
+      "volume24hUsd": 399.21,
+      "marketCapUsd": 7927.17,
+      "priceSource": {
+        "kind": "curve",
+        "quote": "XLM",
+        "quotePrice": "0.0000417",
+        "at": "2026-10-14T09:29:00.000Z"
+      },
+      "stale": false,
+      "launch": {
+        "phase": "curve",
+        "progress": 0.4193,
+        "pair": null
+      }
+    }
+  ]
+}

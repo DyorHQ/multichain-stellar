@@ -1,0 +1,106 @@
+{
+  "items": [
+    {
+      "type": "tx",
+      "id": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "kind": "launch_buy",
+      "summary": "Buy ECAT with 50 XLM",
+      "status": "success",
+      "at": "2026-10-14T09:29:00.000Z",
+      "display": {
+        "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+        "symbol": "ECAT",
+        "quote": "XLM",
+        "amount": "500000000",
+        "minOut": "11880000000000"
+      },
+      "section": "launch",
+      "hash": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "feeCharged": "41210",
+      "feePayer": "user",
+      "result": {
+        "amountOut": "12000000000000"
+      },
+      "ref": {
+        "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V"
+      },
+      "symbol": "ECAT",
+      "name": "E2E Cat",
+      "title": "Bought ECAT",
+      "subtitle": "1,200,000 ECAT for 50 XLM",
+      "usd": 9.5
+    },
+    {
+      "type": "tx",
+      "id": "c3a436e46b4a0dcb674825bff51c9977e2b3766663a5bfdf84e2f71b7649a793",
+      "kind": "swap",
+      "summary": "Swap 10 XLM for at least 1.8843341 USDC",
+      "display": {
+        "venue": "soroswap",
+        "sell": "XLM",
+        "buy": "USDC",
+        "amountIn": "100000000",
+        "minOut": "18843366"
+      },
+      "status": "success",
+      "at": "2026-10-14T09:11:00.000Z",
+      "section": "spot",
+      "hash": "c3a436e46b4a0dcb674825bff51c9977e2b3766663a5bfdf84e2f71b7649a793",
+      "feeCharged": "41210",
+      "feePayer": "user",
+      "result": {
+        "amountOut": "18938032"
+      },
+      "ref": null,
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "title": "Swapped",
+      "subtitle": "XLM → USDC",
+      "usd": 1.9
+    },
+    {
+      "type": "bridge",
+      "id": "c69ef4a0-421e-418d-a93b-92081f4a0fcb",
+      "kind": "monad_to_stellar",
+      "summary": "Moved USDC from Monad",
+      "amount": "12500000",
+      "status": "completed",
+      "at": "2026-10-13T07:41:00.000Z",
+      "display": null,
+      "section": "bridge",
+      "hash": null,
+      "feeCharged": null,
+      "feePayer": null,
+      "result": null,
+      "ref": null,
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "title": "Bridged USDC",
+      "subtitle": "Monad → Stellar",
+      "usd": 12.5
+    },
+    {
+      "type": "cash",
+      "id": "d77e0470-cc55-4be3-af10-ba7f5dbd99f0",
+      "kind": "deposit",
+      "summary": "Added USDC",
+      "amount": "50",
+      "display": {
+        "asset": "USDC"
+      },
+      "status": "completed",
+      "at": "2026-10-12T09:41:00.000Z",
+      "section": "cash",
+      "hash": null,
+      "feeCharged": null,
+      "feePayer": null,
+      "result": null,
+      "ref": null,
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "title": "Added USDC",
+      "subtitle": "Stellar Test Anchor",
+      "usd": 50
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "markets": [
+    {
+      "pool": "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF",
+      "poolName": "Blend TestnetV2",
+      "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "code": "XLM",
+      "decimals": 7,
+      "supplyApy": 0.031,
+      "borrowApy": 0.054,
+      "utilization": 0.61,
+      "totalSupplied": 18234567.12,
+      "note": "Test XLM"
+    },
+    {
+      "pool": "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF",
+      "poolName": "Blend TestnetV2",
+      "asset": "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU",
+      "code": "USDC",
+      "decimals": 7,
+      "supplyApy": 0.048,
+      "borrowApy": 0.071,
+      "utilization": 0.72,
+      "totalSupplied": 1203344.5,
+      "note": "Only Blend's testnet pool uses it; mainnet has one USDC"
+    }
+  ],
+  "note": "Testnet rates are set by test activity, not real markets."
+}

@@ -23,7 +23,7 @@ struct LiteSearchSheet: View {
         return rows.filter { row in matches([row.code, row.name, row.asset, row.contract]) }
     }
 
-    private var launches: [Launch] {
+    private var launches: [StellarLaunch] {
         (store?.launches ?? []).filter { launch in matches([launch.symbol, launch.name, launch.token]) }
     }
 
@@ -42,7 +42,7 @@ struct LiteSearchSheet: View {
                     Section(tr("My Holdings")) {
                         ForEach(holdings) { row in
                             pickRow(code: row.code, name: LiteTitles.assetName(id: row.asset, name: row.name),
-                                    trailing: Amount.format(row.units, maxFraction: 4)) { .holding(asset: row.asset) }
+                                    trailing: StellarAmount.format(row.units, maxFraction: 4)) { .holding(asset: row.asset) }
                         }
                     }
                 }

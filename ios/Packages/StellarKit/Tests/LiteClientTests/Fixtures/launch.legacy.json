@@ -1,0 +1,71 @@
+{
+  "launch": {
+    "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+    "creator": "GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN",
+    "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "name": "E2E Cat",
+    "symbol": "ECAT",
+    "uri": "https://example.supabase.co/storage/v1/object/public/lite-media/launches/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/aef9135a-6c53-435a-a2e4-5bb339faa0e1.json",
+    "supply": "10000000000000000",
+    "quoteReserve": "289000000000",
+    "tokenReserve": "6920415224913495",
+    "realQuote": "39000000000",
+    "threshold": "93000000000",
+    "progress": 0.4193,
+    "completed": false,
+    "graduated": false,
+    "pair": null,
+    "lastPrice": "0.0000417",
+    "volume": "61000000000",
+    "trades": 12,
+    "createdAt": "2026-10-13T03:41:00.000Z"
+  },
+  "curve": {
+    "quoteReserve": "289000000000",
+    "tokenReserve": "6920415224913495",
+    "realQuote": "39000000000",
+    "threshold": "93000000000",
+    "creatorFees": "3900000",
+    "completed": false,
+    "graduated": false,
+    "pair": null
+  },
+  "trades": [
+    {
+      "trader": "GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH",
+      "side": "buy",
+      "quoteAmount": "500000000",
+      "tokenAmount": "12000000000000",
+      "price": "0.0000417",
+      "txHash": "e8c10a640996c1bfdf8c8c69989b344dce8daeefdfd356454c630f4357999225",
+      "ts": "2026-10-14T09:29:00.000Z"
+    },
+    {
+      "trader": "GDFIMZHHSBGAIJUCBALCYGEO2GQKDVWJW4C3LFFLLINXU23OPVEXRITR",
+      "side": "sell",
+      "quoteAmount": "100000000",
+      "tokenAmount": "2410000000000",
+      "price": "0.0000415",
+      "txHash": "b9bd2da960151e052b2e46fa97cb612b77e135ceab17e96f0083a5af72bf3f81",
+      "ts": "2026-10-14T09:01:00.000Z"
+    }
+  ],
+  "candles": [
+    {
+      "t": "2026-10-14T09:11:00.000Z",
+      "o": "0.0000409",
+      "h": "0.0000415",
+      "l": "0.0000409",
+      "c": "0.0000415",
+      "v": "100000000"
+    },
+    {
+      "t": "2026-10-14T09:26:00.000Z",
+      "o": "0.0000415",
+      "h": "0.0000417",
+      "l": "0.0000415",
+      "c": "0.0000417",
+      "v": "500000000"
+    }
+  ]
+}

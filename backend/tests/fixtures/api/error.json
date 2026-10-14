@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "not_enough_xlm_for_fee",
+    "message": "Not enough XLM for the network fee.",
+    "detail": {
+      "need": "510000",
+      "spendable": "400000"
+    }
+  }
+}

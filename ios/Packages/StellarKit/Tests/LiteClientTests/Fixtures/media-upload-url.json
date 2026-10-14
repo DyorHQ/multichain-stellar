@@ -1,0 +1,5 @@
+{
+  "uploadUrl": "https://example.supabase.co/storage/v1/object/upload/sign/lite-media/uploads/GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH/2ee7e3d3-c466-4197-a5fc-f0b1a79e24cd.jpg?token=fixture-upload-token",
+  "publicUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH/2ee7e3d3-c466-4197-a5fc-f0b1a79e24cd.jpg",
+  "path": "uploads/GCLJGH5ZEKQ4G5FLKD6Z5667CUAWQZCNZRMDZLSZKARC6GMOTN46BNYH/2ee7e3d3-c466-4197-a5fc-f0b1a79e24cd.jpg"
+}

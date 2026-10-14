@@ -5,7 +5,9 @@ import FoundationNetworking
 import StellarCore
 
 public enum LiteAPIError: Error, Equatable, LocalizedError {
-    /// The API refused: its code (`not_invited`, `budget_exhausted`, …) and plain-language message.
+    /// The API refused: its code (`not_invited`, `not_enough_xlm_for_fee`, …) and plain-language message. When a
+    /// contract refused (`simulation_failed` naming one), the code is the contract's stable code (`launch.slippage`,
+    /// `moment.sold_out`, …), so the app can word it.
     case server(status: Int, code: String, message: String)
     case notSignedIn
     case transport(String)
@@ -73,7 +75,10 @@ public actor LiteAPI {
 
     /// `timeout`: how long a request may take before it fails as offline; reads made while someone waits pass less.
     public func config(timeout: TimeInterval = 60) async throws -> LiteConfig { try await request("GET", "config", authenticated: false, timeout: timeout) }
+    /// Public, like `config` and the markets: none of them reads anything about the user.
+    public func fees(timeout: TimeInterval = 60) async throws -> StellarFees { try await request("GET", "fees", authenticated: false, timeout: timeout) }
     public func account(timeout: TimeInterval = 60) async throws -> AccountView { try await request("GET", "account", timeout: timeout) }
+    public func holdings(timeout: TimeInterval = 60) async throws -> StellarHoldings { try await request("GET", "holdings", timeout: timeout) }
     public func activate() async throws -> ActivationResult { try await request("POST", "account/activate", body: [String: String]()) }
     public func enable(asset: String) async throws -> PlanView { try await request("POST", "account/trust", body: ["asset": asset]) }
     public func faucet() async throws -> AnyJSON { try await request("POST", "account/faucet", body: [String: String]()) }
@@ -88,22 +93,56 @@ public actor LiteAPI {
         return try await request("POST", "send", body: body)
     }
 
+    /// Whether `address` can receive `asset` (a registry id or token contract) before a send is reviewed.
+    public func recipient(_ address: String, asset: String) async throws -> StellarRecipient {
+        try await request("GET", Self.path("recipient/\(Self.segment(address))", ["asset": asset]))
+    }
+
     public func buildStep(planId: String, stepId: String) async throws -> PlanView {
-        try await request("POST", "plans/\(planId)/steps/\(stepId)/build", body: [String: String]())
+        try await request("POST", "plans/\(Self.segment(planId))/steps/\(Self.segment(stepId))/build", body: [String: String]())
     }
 
     public func submit(planId: String, stepId: String, signedXdr: String) async throws -> TxStatus {
         try await request("POST", "tx/submit", body: ["planId": planId, "stepId": stepId, "signedXdr": signedXdr])
     }
 
-    public func txStatus(_ hash: String) async throws -> TxStatus { try await request("GET", "tx/\(hash)") }
+    public func txStatus(_ hash: String) async throws -> TxStatus { try await request("GET", "tx/\(Self.segment(hash))") }
 
     public func quoteSwap(sell: String, buy: String, amount: Int64, slippageBps: Int) async throws -> SwapQuote {
         struct Body: Encodable { let sell: String; let buy: String; let amount: String; let slippageBps: Int }
         return try await request("POST", "swap/quote", body: Body(sell: sell, buy: buy, amount: String(amount), slippageBps: slippageBps))
     }
 
-    public func buildSwap(quoteId: String) async throws -> PlanView { try await request("POST", "swap/build", body: ["quoteId": quoteId]) }
+    /// `venue`: one of the quote's `routes` ("sdex", "soroswap", "aquarius"); nil builds the best.
+    public func buildSwap(quoteId: String, venue: String? = nil) async throws -> PlanView {
+        var body = ["quoteId": quoteId]
+        if let venue { body["venue"] = venue }
+        return try await request("POST", "swap/build", body: body)
+    }
+
+    /// Top Tokens, in Popular order. Public: it shows while the session is locked.
+    public func markets(timeout: TimeInterval = 60) async throws -> StellarMarkets {
+        try await request("GET", "markets", authenticated: false, timeout: timeout)
+    }
+
+    /// A token page: a registry id ("XLM") or a launch token's contract. Public.
+    public func market(_ id: String) async throws -> StellarMarketDetail { try await request("GET", "markets/\(Self.segment(id))", authenticated: false) }
+
+    /// A token's USD price over a period. Public.
+    public func marketHistory(_ id: String, range: VolumePeriodKey) async throws -> StellarPriceHistory {
+        try await request("GET", Self.path("markets/\(Self.segment(id))/history", ["range": range.rawValue]), authenticated: false)
+    }
+
+    /// Search by code or name, or exactly by a C… id or `CODE:G…`. Signed in, so results say what the user holds.
+    public func searchAssets(_ query: String) async throws -> [StellarAssetResult] {
+        struct R: Decodable { let results: [StellarAssetResult] }
+        let r: R = try await request("GET", Self.path("assets", ["q": query]))
+        return r.results
+    }
+
+    public func portfolio(period: VolumePeriodKey) async throws -> StellarPortfolio {
+        try await request("GET", Self.path("portfolio", ["period": period.rawValue]))
+    }
 
     public func earnMarkets() async throws -> [EarnMarket] {
         struct R: Decodable { let markets: [EarnMarket] }
@@ -117,22 +156,33 @@ public actor LiteAPI {
         return r.positions
     }
 
+    /// `range`: `.week` or `.month`.
+    public func earnHistory(pool: String, asset: String, range: VolumePeriodKey) async throws -> StellarEarnHistory {
+        try await request("GET", Self.path("earn/history", ["pool": pool, "asset": asset, "range": range.rawValue]))
+    }
+
     public func buildEarn(deposit: Bool, pool: String, asset: String, amount: Int64) async throws -> PlanView {
         try await request("POST", "earn/build", body: ["action": deposit ? "deposit" : "withdraw", "pool": pool, "asset": asset, "amount": String(amount)])
     }
 
-    public func launches(sort: String) async throws -> [Launch] {
-        struct R: Decodable { let launches: [Launch] }
-        let r: R = try await request("GET", "launches?sort=\(sort)")
+    public func launches(sort: String) async throws -> [StellarLaunch] {
+        struct R: Decodable { let launches: [StellarLaunch] }
+        let r: R = try await request("GET", Self.path("launches", ["sort": sort]))
         return r.launches
     }
 
-    public func launch(_ token: String, candles: String? = "5m") async throws -> LaunchDetail {
-        try await request("GET", "launches/\(token)" + (candles.map { "?candles=\($0)" } ?? ""))
+    /// A page of the board. `section`: "explore" or "graduated"; `sort`: "newest", "market_cap" or "near_graduation";
+    /// `query` searches names and tickers; `cursor` is the previous page's `nextCursor`.
+    public func launchBoard(section: String, sort: String, query: String? = nil, limit: Int? = nil, cursor: String? = nil) async throws -> StellarLaunchBoard {
+        try await request("GET", Self.path("launches", ["section": section, "sort": sort, "q": query, "limit": limit.map(String.init), "cursor": cursor]))
+    }
+
+    public func launch(_ token: String, candles: String? = "5m") async throws -> StellarLaunchDetail {
+        try await request("GET", Self.path("launches/\(Self.segment(token))", ["candles": candles]))
     }
 
     public func quoteTrade(token: String, buy: Bool, amount: Int64) async throws -> TradeQuote {
-        try await request("POST", "launches/\(token)/quote", body: ["side": buy ? "buy" : "sell", "amount": String(amount)])
+        try await request("POST", "launches/\(Self.segment(token))/quote", body: ["side": buy ? "buy" : "sell", "amount": String(amount)])
     }
 
     public struct LaunchRequest: Encodable, Sendable {
@@ -161,6 +211,19 @@ public actor LiteAPI {
 
     public func buildLaunch(_ r: LaunchRequest) async throws -> PlanView { try await request("POST", "launches/build", body: r) }
 
+    /// Writes a coin's metadata (`imageUrl` from `uploadTicket`; links https) and returns the URI to launch it with.
+    public func launchMetadata(name: String, symbol: String, description: String? = nil, imageUrl: String? = nil, website: String? = nil, x: String? = nil, telegram: String? = nil) async throws -> String {
+        struct Body: Encodable { let name: String; let symbol: String; let description: String?; let imageUrl: String?; let website: String?; let x: String?; let telegram: String? }
+        struct R: Decodable { let uri: String }
+        let r: R = try await request("POST", "launches/metadata", body: Body(name: name, symbol: symbol, description: description, imageUrl: imageUrl, website: website, x: x, telegram: telegram))
+        return r.uri
+    }
+
+    /// The launchpad's and the Moments contract's terms, read live from the contracts.
+    public func economics() async throws -> StellarEconomics { try await request("GET", "economics") }
+
+    public func myLaunchpad() async throws -> StellarMyLaunchpad { try await request("GET", "launchpad/me") }
+
     public func uploadTicket(contentType: String, bytes: Int) async throws -> UploadTicket {
         struct Body: Encodable { let contentType: String; let bytes: Int }
         return try await request("POST", "media/upload-url", body: Body(contentType: contentType, bytes: bytes))
@@ -177,24 +240,36 @@ public actor LiteAPI {
         guard (200..<300).contains(response.statusCode) else { throw LiteAPIError.server(status: response.statusCode, code: "upload_failed", message: "The upload didn't finish. Try again.") }
     }
 
-    public func moments() async throws -> [Moment] {
-        struct R: Decodable { let moments: [Moment] }
-        let r: R = try await request("GET", "moments")
+    /// `filter`: "all", "collecting" or "closed"; nil asks for the server's default (all).
+    public func moments(filter: String? = nil, limit: Int? = nil) async throws -> [StellarMoment] {
+        struct R: Decodable { let moments: [StellarMoment] }
+        let r: R = try await request("GET", Self.path("moments", ["filter": filter, "limit": limit.map(String.init)]))
         return r.moments
     }
 
-    public func moment(_ id: Int) async throws -> MomentDetail { try await request("GET", "moments/\(id)") }
+    public func moment(_ id: Int) async throws -> StellarMomentDetail { try await request("GET", "moments/\(id)") }
 
-    public func ownedEditions() async throws -> [OwnedEdition] {
-        struct R: Decodable { let editions: [OwnedEdition] }
+    public func ownedEditions() async throws -> [StellarEdition] {
+        struct R: Decodable { let editions: [StellarEdition] }
         let r: R = try await request("GET", "moments/owned")
         return r.editions
     }
+
+    public func myMoments() async throws -> StellarMomentsMine { try await request("GET", "moments/mine") }
 
     public func momentMetadata(title: String, description: String, mediaUrl: String, video: Bool) async throws -> String {
         struct R: Decodable { let uri: String }
         let r: R = try await request("POST", "moments/metadata", body: ["title": title, "description": description, "mediaUrl": mediaUrl, "mediaType": video ? "video" : "image"])
         return r.uri
+    }
+
+    /// Writes a Moment's metadata and returns its URI and poster. `mediaType`: "image" or "video"; a video needs
+    /// `posterUrl` (a frame the phone uploaded). `takenOn`: "2026-10-14".
+    public func momentMetadata(title: String, description: String?, mediaUrl: String, mediaType: String, posterUrl: String?, place: String?, takenOn: String?) async throws -> (uri: String, posterUrl: String?) {
+        struct Body: Encodable { let title: String; let description: String?; let mediaUrl: String; let mediaType: String; let posterUrl: String?; let place: String?; let takenOn: String? }
+        struct R: Decodable { let uri: String; let posterUrl: String? }
+        let r: R = try await request("POST", "moments/metadata", body: Body(title: title, description: description, mediaUrl: mediaUrl, mediaType: mediaType, posterUrl: posterUrl, place: place, takenOn: takenOn))
+        return (r.uri, r.posterUrl)
     }
 
     public func buildPublishMoment(uri: String, price: Int64, quote: String, maxEditions: Int, windowSecs: Int) async throws -> PlanView {
@@ -207,17 +282,22 @@ public actor LiteAPI {
         return try await request("POST", "moments/build", body: Body(momentId: momentId, quantity: quantity))
     }
 
+    /// `amount`: in the sending side's base units (6 decimals on Monad, 7 on Stellar).
+    public func bridgeQuote(toStellar: Bool, amount: String) async throws -> StellarBridgeQuote {
+        try await request("POST", "bridge/quote", body: ["direction": toStellar ? "monad_to_stellar" : "stellar_to_monad", "amount": amount])
+    }
+
     public func bridgeStart(toStellar: Bool, amount: String, monadAddress: String) async throws -> BridgeStart {
         try await request("POST", "bridge/start", body: ["direction": toStellar ? "monad_to_stellar" : "stellar_to_monad", "amount": amount, "monadAddress": monadAddress])
     }
 
-    public func bridgeSource(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(id)/source", body: ["txHash": txHash]) }
-    public func bridgeClaimed(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(id)/claimed", body: ["txHash": txHash]) }
-    public func bridgeStatus(id: String) async throws -> BridgeStatus { try await request("GET", "bridge/\(id)") }
+    public func bridgeSource(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/source", body: ["txHash": txHash]) }
+    public func bridgeClaimed(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/claimed", body: ["txHash": txHash]) }
+    public func bridgeStatus(id: String) async throws -> BridgeStatus { try await request("GET", "bridge/\(Self.segment(id))") }
 
     public func anchors(country: String) async throws -> [AnchorInfo] {
         struct R: Decodable { let anchors: [AnchorInfo] }
-        let r: R = try await request("GET", "cash/anchors?country=\(country)")
+        let r: R = try await request("GET", Self.path("cash/anchors", ["country": country]))
         return r.anchors
     }
 
@@ -227,20 +307,54 @@ public actor LiteAPI {
         let _: AnyJSON = try await request("POST", "cash/track", body: body)
     }
 
-    public func activity() async throws -> [ActivityItem] {
-        struct R: Decodable { let items: [ActivityItem] }
-        let r: R = try await request("GET", "activity")
+    /// Every filter is optional: `section` ("spot", "earn", "launch", …), `kind` ("launch_buy", …), `market` (a token
+    /// or an Earn market).
+    public func activity(section: String? = nil, kind: String? = nil, period: VolumePeriodKey? = nil, market: String? = nil, limit: Int? = nil) async throws -> [StellarActivityItem] {
+        struct R: Decodable { let items: [StellarActivityItem] }
+        let r: R = try await request("GET", Self.path("activity", ["section": section, "kind": kind, "period": period?.rawValue, "market": market, "limit": limit.map(String.init)]))
         return r.items
     }
 
-    public func prices() async throws -> Prices { try await request("GET", "prices") }
+    public func prices() async throws -> StellarPrices { try await request("GET", "prices") }
 
     // ---------------------------------------------------------------------------------------------- transport
 
     private struct ErrorBody: Decodable {
-        struct Inner: Decodable { let code: String; let message: String }
+        struct Inner: Decodable {
+            let code: String
+            let message: String
+            /// Anything: `{contractCode}` when a contract refused, other facts otherwise.
+            let detail: AnyJSON?
+
+            var contractCode: String? {
+                guard case let .object(fields)? = detail, case let .string(code)? = fields["contractCode"] else { return nil }
+                return code
+            }
+        }
+
         let error: Inner
     }
+
+    /// `path?name=value&…`, each value escaped; nil values are left out, the rest kept in order.
+    static func path(_ path: String, _ query: KeyValuePairs<String, String?>) -> String {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+?#")
+        let items = query.compactMap { name, value in
+            value.flatMap { $0.addingPercentEncoding(withAllowedCharacters: allowed) }.map { "\(name)=\($0)" }
+        }
+        return items.isEmpty ? path : path + "?" + items.joined(separator: "&")
+    }
+
+    /// A value as one path segment: everything but ASCII letters, digits and `-._~` escaped, so a pasted address can't
+    /// add a query, a fragment or segments of its own. Empty, or dots alone, it would name the route above, so it throws.
+    static func segment(_ value: String) throws -> String {
+        guard value.contains(where: { $0 != "." }), let escaped = value.addingPercentEncoding(withAllowedCharacters: unreserved) else {
+            throw LiteAPIError.decoding("a URL")
+        }
+        return escaped
+    }
+
+    private static let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
     func request<T: Decodable>(_ method: String, _ path: String, authenticated: Bool = true, timeout: TimeInterval = 60) async throws -> T {
         try await request(method, path, body: Optional<[String: String]>.none, authenticated: authenticated, timeout: timeout)
@@ -264,7 +378,7 @@ public actor LiteAPI {
         guard (200..<300).contains(response.statusCode) else {
             if let e = try? JSONDecoder().decode(ErrorBody.self, from: data) {
                 if response.statusCode == 401 { token = nil }
-                throw LiteAPIError.server(status: response.statusCode, code: e.error.code, message: e.error.message)
+                throw LiteAPIError.server(status: response.statusCode, code: e.error.contractCode ?? e.error.code, message: e.error.message)
             }
             throw LiteAPIError.server(status: response.statusCode, code: "http_\(response.statusCode)", message: "DyorHQ on Stellar answered \(response.statusCode).")
         }

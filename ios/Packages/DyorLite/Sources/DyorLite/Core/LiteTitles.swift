@@ -14,7 +14,7 @@ enum LiteTitles {
     /// launchpad.ts, moments.ts, bridge.ts). The units are the server's: a payment's amount is written out
     /// (account.ts, fromStroops); every other amount is in base units of a 7-decimal Stellar asset. Amounts read as
     /// holdings write them, with at most 4 decimals.
-    static func intent(kind: String, display: [String: JSONValue]?) -> String? {
+    static func intent(kind: String, display: [String: StellarJSON]?) -> String? {
         let d = display ?? [:]
         switch kind {
         case "activate":
@@ -79,13 +79,13 @@ enum LiteTitles {
     /// An Activity row's title: a transaction by its intent; a bridge transfer by its direction (its amount is in base
     /// units of the sending side's USDC: 6 decimals on Monad, 7 on Stellar); a cash transfer by its kind, with the
     /// amount the anchor wrote out and the asset when the server says them.
-    static func activity(_ item: ActivityItem) -> String? {
+    static func activity(_ item: StellarActivityItem) -> String? {
         switch item.type {
         case "tx":
             return intent(kind: item.kind, display: item.display)
         case "bridge":
             let fromMonad = item.kind == "monad_to_stellar"
-            let amount = units(item.amount.map(JSONValue.string), decimals: fromMonad ? 6 : 7, positive: true)
+            let amount = units(item.amount.map(StellarJSON.string), decimals: fromMonad ? 6 : 7, positive: true)
             switch item.kind {
             case "monad_to_stellar": return amount.map { tr("Move \($0) USDC from Monad") } ?? tr("Move USDC from Monad")
             case "stellar_to_monad": return amount.map { tr("Send \($0) USDC to Monad") } ?? tr("Send USDC to Monad")
@@ -93,7 +93,7 @@ enum LiteTitles {
             }
         case "cash":
             let asset = text(item.display?["asset"]).map { $0 == "native" ? "XLM" : $0 }
-            let amount = written(item.amount.map(JSONValue.string), positive: true)
+            let amount = written(item.amount.map(StellarJSON.string), positive: true)
             switch (item.kind, amount, asset) {
             case let ("deposit", amount?, asset?): return tr("Add \(amount) \(asset)")
             case let ("deposit", nil, asset?): return tr("Add \(asset)")
@@ -135,7 +135,7 @@ enum LiteTitles {
 
     // MARK: Reading display fields
 
-    private static func text(_ value: JSONValue?) -> String? {
+    private static func text(_ value: StellarJSON?) -> String? {
         switch value {
         case .string(let text)?: text.isEmpty ? nil : text
         case .number?: value?.text
@@ -144,7 +144,7 @@ enum LiteTitles {
     }
 
     /// An amount in base units, as holdings write it.
-    private static func units(_ value: JSONValue?, decimals: Int = 7, positive: Bool = false) -> String? {
+    private static func units(_ value: StellarJSON?, decimals: Int = 7, positive: Bool = false) -> String? {
         let raw: Int64?
         switch value {
         case .string(let text)?: raw = Int64(text)
@@ -152,16 +152,16 @@ enum LiteTitles {
         default: raw = nil
         }
         guard let raw, raw >= 0, !positive || raw > 0 else { return nil }
-        return Amount.format(raw, decimals: decimals, maxFraction: 4)
+        return StellarAmount.format(raw, decimals: decimals, maxFraction: 4)
     }
 
     /// An amount the server or an anchor wrote out ("10.5"), as holdings write it.
-    private static func written(_ value: JSONValue?, positive: Bool = false) -> String? {
-        guard let text = text(value), let units = Amount.parse(text), !positive || units > 0 else { return nil }
-        return Amount.format(units, maxFraction: 4)
+    private static func written(_ value: StellarJSON?, positive: Bool = false) -> String? {
+        guard let text = text(value), let units = StellarAmount.parse(text), !positive || units > 0 else { return nil }
+        return StellarAmount.format(units, maxFraction: 4)
     }
 
-    private static func count(_ value: JSONValue?) -> Int? {
+    private static func count(_ value: StellarJSON?) -> Int? {
         switch value {
         case .number(let number)? where number >= 1 && number < 1_000_000 && number == number.rounded(): Int(number)
         case .string(let text)?: Int(text).flatMap { $0 >= 1 ? $0 : nil }

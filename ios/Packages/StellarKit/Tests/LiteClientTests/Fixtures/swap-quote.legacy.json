@@ -1,0 +1,27 @@
+{
+  "quoteId": "d5886566-dc19-4259-aa17-607202c4170c",
+  "sell": "XLM",
+  "buy": "USDC",
+  "amountIn": "100000000",
+  "slippageBps": 50,
+  "best": {
+    "venue": "soroswap",
+    "amountOut": "18938032",
+    "path": [
+      "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+    ],
+    "minOut": "18843341"
+  },
+  "alternatives": [
+    {
+      "venue": "sdex",
+      "amountOut": "18911200",
+      "path": [
+        "native",
+        "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+      ]
+    }
+  ],
+  "expiresAt": "2026-10-14T09:42:00.000Z"
+}

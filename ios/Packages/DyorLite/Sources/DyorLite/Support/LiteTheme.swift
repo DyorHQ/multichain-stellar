@@ -235,7 +235,7 @@ struct AmountInput: View {
                     #endif
                 Text(verbatim: code).font(.headline).foregroundStyle(.secondary)
                 if let maxUnits {
-                    Button(tr("Max")) { text = Amount.format(maxUnits, maxFraction: 7).replacingOccurrences(of: ",", with: "") }
+                    Button(tr("Max")) { text = StellarAmount.format(maxUnits, maxFraction: 7).replacingOccurrences(of: ",", with: "") }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
@@ -244,7 +244,7 @@ struct AmountInput: View {
         }
     }
 
-    var units: Int64? { Amount.parse(text) }
+    var units: Int64? { StellarAmount.parse(text) }
 }
 
 /// A sheet's header where the sheet has no navigation bar (DyorHQ `SheetHeader`): a bold title on the left and a round

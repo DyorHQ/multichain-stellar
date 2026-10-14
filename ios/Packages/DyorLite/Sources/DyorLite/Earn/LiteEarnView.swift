@@ -78,7 +78,7 @@ struct LiteEarnView: View {
 
     /// What the account has supplied, per asset, or "Nothing yet".
     private var earning: String {
-        store.positions.isEmpty ? tr("Nothing yet") : store.positions.map { "\(Amount.format($0.supplied, maxFraction: 2)) \($0.code)" }.joined(separator: " · ")
+        store.positions.isEmpty ? tr("Nothing yet") : store.positions.map { "\(StellarAmount.format($0.supplied, maxFraction: 2)) \($0.code)" }.joined(separator: " · ")
     }
 }
 
@@ -110,7 +110,7 @@ struct EarnMarketSheet: View {
                     }
                     LabeledContent(tr("Pool utilization"), value: percent(market.utilization))
                     LabeledContent(tr("In this pool"), value: "\(market.totalSupplied.formatted(.number.precision(.fractionLength(0)).locale(LiteL10n.locale))) \(market.code)")
-                    if let position { LabeledContent(tr("Yours"), value: "\(Amount.format(position.supplied)) \(market.code)") }
+                    if let position { LabeledContent(tr("Yours"), value: "\(StellarAmount.format(position.supplied)) \(market.code)") }
                 } header: {
                     Text(verbatim: LiteEarnView.name(of: market, in: store))
                 } footer: {
@@ -129,11 +129,11 @@ struct EarnMarketSheet: View {
                 if let error { Section { LiteInlineError(message: error) } }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: Amount.parse(amount) != nil) {
+                LitePrimaryButton(title: tr("Review"), busy: busy, enabled: StellarAmount.parse(amount) != nil) {
                     Task {
                         busy = true
                         defer { busy = false }
-                        do { prepared = try await store.earnPlan(deposit: deposit, market: market, amount: Amount.parse(amount) ?? 0) } catch { self.error = describe(error) }
+                        do { prepared = try await store.earnPlan(deposit: deposit, market: market, amount: StellarAmount.parse(amount) ?? 0) } catch { self.error = describe(error) }
                     }
                 }
                 .padding()

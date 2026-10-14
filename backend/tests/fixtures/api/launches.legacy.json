@@ -1,0 +1,25 @@
+{
+  "launches": [
+    {
+      "token": "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V",
+      "creator": "GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN",
+      "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      "name": "E2E Cat",
+      "symbol": "ECAT",
+      "uri": "https://example.supabase.co/storage/v1/object/public/lite-media/launches/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/aef9135a-6c53-435a-a2e4-5bb339faa0e1.json",
+      "supply": "10000000000000000",
+      "quoteReserve": "289000000000",
+      "tokenReserve": "6920415224913495",
+      "realQuote": "39000000000",
+      "threshold": "93000000000",
+      "progress": 0.4193,
+      "completed": false,
+      "graduated": false,
+      "pair": null,
+      "lastPrice": "0.0000417",
+      "volume": "61000000000",
+      "trades": 12,
+      "createdAt": "2026-10-13T03:41:00.000Z"
+    }
+  ]
+}
