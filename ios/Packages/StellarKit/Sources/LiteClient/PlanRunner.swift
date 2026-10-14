@@ -4,8 +4,25 @@ import FoundationNetworking
 #endif
 import StellarCore
 
+/// What the plan runner needs from the Lite API: build a step, submit it, follow it. `LiteAPI` is one; tests pass fakes.
+public protocol PlanBackend: Sendable {
+    func buildStep(planId: String, stepId: String) async throws -> PlanView
+    func submit(planId: String, stepId: String, signedXdr: String) async throws -> TxStatus
+    func txStatus(_ hash: String) async throws -> TxStatus
+}
+
+extension LiteAPI: PlanBackend {}
+
+/// Recognises launch tokens on chain: the contracts among `contracts` whose code is the pinned launch-token WASM.
+/// `ContractInspector` is one; tests pass fakes.
+public protocol LaunchTokenInspecting: Sendable {
+    func launchTokens(among contracts: [String], pinned: PinnedContracts) async throws -> Set<String>
+}
+
+extension ContractInspector: LaunchTokenInspecting {}
+
 /// Runs a plan the way the phone must: for each step, build it if the API hasn't yet, decode it, verify it against
-/// its intent AND against the limits the user confirmed on screen, sign it, submit it, wait for the ledger.
+/// its intent AND against the limits and fees the user confirmed on screen, sign it, submit it, wait for the ledger.
 /// Mirrors the Pro app's TransactionRun contract: a failed step stops the plan, and what was sent is reported.
 public struct PlanRunner: Sendable {
     public enum Event: Sendable, Equatable {
@@ -18,6 +35,8 @@ public struct PlanRunner: Sendable {
     public enum Failure: Error, Equatable, LocalizedError {
         case refused(step: String, reason: String)
         case overLimit(asset: String)
+        /// The step's fee came out above the one the user confirmed (a step built after the review, or rebuilt).
+        case feeAboveConfirmed(step: String)
         case failedOnChain(step: String, hash: String, error: String?)
         case timedOut(step: String, hash: String)
 
@@ -25,30 +44,42 @@ public struct PlanRunner: Sendable {
             switch self {
             case let .refused(step, reason): return "Not signed: \(step) didn't pass the checks (\(reason)). Nothing was sent."
             case .overLimit: return "Not signed: this would spend more than you confirmed. Nothing was sent."
+            case let .feeAboveConfirmed(step): return "Not signed: the network fee for \(step) went up since you confirmed. Nothing was sent."
             case let .failedOnChain(step, _, error): return "\(step) failed on the network\(error.map { " (\($0))" } ?? "")."
             case let .timedOut(step, _): return "\(step) was sent; confirmation not seen yet."
             }
         }
     }
 
-    public let api: LiteAPI
+    public let api: any PlanBackend
     public let user: String
     public let pinned: PinnedContracts
-    public let inspector: ContractInspector
+    public let inspector: any LaunchTokenInspecting
+    /// The clock the expiry check reads.
+    public var now: @Sendable () -> Date = { Date() }
 
-    public init(api: LiteAPI, user: String, pinned: PinnedContracts, inspector: ContractInspector) {
+    public init(api: any PlanBackend, user: String, pinned: PinnedContracts, inspector: any LaunchTokenInspecting) {
         self.api = api
         self.user = user
         self.pinned = pinned
         self.inspector = inspector
     }
 
+    /// A runner that reads launch tokens' code through the pinned RPC (§5.5).
+    public init(api: any PlanBackend, user: String, pinned: PinnedContracts) {
+        self.init(api: api, user: user, pinned: pinned, inspector: ContractInspector(pinned: pinned))
+    }
+
     /// `limits`: the most the user confirmed spending across the whole plan, per asset contract id (base units). An
-    /// asset not listed may not be spent at all. `signer` is asked once per step (it may prompt Face ID or a passkey).
+    /// asset not listed may not be spent at all. `fees`: the network fees the user confirmed, per step
+    /// (`PlanFees(plan:pinned:)`, worked out when the review opened); a step whose fee comes out higher, or that the
+    /// user confirmed as paid by DyorHQ and no longer is, is refused. `signer` is asked once per step (it may prompt
+    /// Face ID or a passkey).
     @discardableResult
     public func run(
         _ plan: PlanView,
         limits: [String: Int64],
+        fees: PlanFees,
         signer: @Sendable () async throws -> StellarSigner,
         onEvent: @Sendable (Event) -> Void = { _ in }
     ) async throws -> [TxStatus] {
@@ -60,6 +91,9 @@ public struct PlanRunner: Sendable {
             if step.xdr == nil {
                 onEvent(.building(stepId: step.id, label: step.label))
                 current = try await api.buildStep(planId: plan.planId, stepId: step.id)
+                guard current.steps.indices.contains(index), current.steps[index].id == step.id else {
+                    throw Failure.refused(step: step.label, reason: "the plan changed")
+                }
                 step = current.steps[index]
             }
             guard let xdr = step.xdr, let intent = step.intent else { throw Failure.refused(step: step.label, reason: "missing transaction") }
@@ -70,13 +104,20 @@ public struct PlanRunner: Sendable {
             } catch {
                 throw Failure.refused(step: step.label, reason: "\(error)")
             }
-            var verifier = TxVerifier(user: user, pinned: pinned)
-            verifier.verifiedLaunchTokens = try await inspector.launchTokens(among: (intent.calls ?? []).map(\.contract), pinned: pinned)
+            var verifier = TxVerifier(user: user, pinned: pinned, now: now)
+            let candidates = (intent.calls ?? []).map(\.contract) + (envelope.transaction.footprint?.contracts ?? [])
+            verifier.verifiedLaunchTokens = try await inspector.launchTokens(among: candidates, pinned: pinned)
             let outflow: [String: Int64]
             do {
                 outflow = try verifier.verify(envelope, intent: intent)
             } catch let f as VerificationFailure {
                 throw Failure.refused(step: step.label, reason: f.reason)
+            }
+            // The step's fee and payer, from its own transaction, against what the user confirmed.
+            let checked = try PlanFees.step(step, envelope: envelope, pinned: pinned)
+            guard let confirmed = fees.step(step.id), checked.maxFee <= confirmed.maxFee,
+                  confirmed.payer == .user || checked.payer == confirmed.payer else {
+                throw Failure.feeAboveConfirmed(step: step.label)
             }
             for (asset, amount) in outflow {
                 spent[asset, default: 0] += amount
@@ -94,6 +135,18 @@ public struct PlanRunner: Sendable {
             results.append(settled)
         }
         return results
+    }
+
+    /// The same run, with the fees worked out from `plan` and the pins as it starts: an unbuilt step may then cost
+    /// up to its ceiling (or the pinned cap). For callers that don't show the fees yet.
+    @discardableResult
+    public func run(
+        _ plan: PlanView,
+        limits: [String: Int64],
+        signer: @Sendable () async throws -> StellarSigner,
+        onEvent: @Sendable (Event) -> Void = { _ in }
+    ) async throws -> [TxStatus] {
+        try await run(plan, limits: limits, fees: PlanFees(plan: plan, pinned: pinned), signer: signer, onEvent: onEvent)
     }
 
     private func waitFor(_ hash: String, step: String) async throws -> TxStatus {
@@ -118,6 +171,11 @@ public struct ContractInspector: Sendable {
     public init(rpcURL: URL, session: URLSession = .shared) {
         self.rpcURL = rpcURL
         self.session = session
+    }
+
+    /// An inspector on the build's pinned RPC: what the phone uses, whatever RPC the server's config names (§5.5).
+    public init(pinned: PinnedContracts, session: URLSession = .shared) {
+        self.init(rpcURL: pinned.rpcURL, session: session)
     }
 
     public func launchTokens(among contracts: [String], pinned: PinnedContracts) async throws -> Set<String> {

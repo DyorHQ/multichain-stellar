@@ -23,7 +23,8 @@ let package = Package(
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             resources: [.copy("Keys/bip39-english.txt")]
         ),
-        .target(name: "LiteClient", dependencies: ["StellarCore"]),
+        // LiteAPI's SEP-53 self-check hashes with swift-crypto where CryptoKit is missing (Linux CI).
+        .target(name: "LiteClient", dependencies: ["StellarCore", .product(name: "Crypto", package: "swift-crypto")]),
         .target(name: "StellarKit", dependencies: ["StellarCore", "LiteClient"]),
         .testTarget(name: "StellarCoreTests", dependencies: ["StellarCore"], resources: [.copy("Vectors")]),
         // The API fixtures are read from the source tree (#filePath), so they are no resources of the target.

@@ -19,8 +19,11 @@ public enum Asset: Equatable, Hashable {
 public enum SCAddress: Equatable, Hashable {
     case account(String)
     case contract(String)
-    case other(Int32)
+    /// A muxed account, a claimable balance or a liquidity pool: never a party the app signs for. Kept whole, so two
+    /// of them compare as their bytes do.
+    case other(type: Int32, body: [UInt8])
 
+    /// A G… or C… address; nil for every other kind.
     public var string: String? {
         switch self {
         case .account(let s), .contract(let s): return s
@@ -165,13 +168,51 @@ public struct TimeBounds: Equatable {
     public let maxTime: UInt64
 }
 
+/// A transaction's memo. Text is kept as its bytes: the network doesn't require UTF-8.
+public enum StellarMemo: Equatable {
+    case none
+    case text([UInt8])
+    case id(UInt64)
+    case hash([UInt8])
+    case returnHash([UInt8])
+}
+
+/// A ledger entry's key, as a Soroban footprint lists it. Only the kinds a restore may name are decoded in full.
+public enum StellarLedgerKey: Equatable {
+    case account(String)
+    case contractData(contract: SCAddress, key: SCVal, durability: Int32)
+    case contractCode(hash: [UInt8])
+    /// Trustlines, offers, data, claimable balances, pools, config settings and TTL entries.
+    case other(Int32)
+}
+
+/// The ledger entries a Soroban transaction reads and writes (for a restore: the entries it brings back).
+public struct StellarFootprint: Equatable {
+    public let readOnly: [StellarLedgerKey]
+    public let readWrite: [StellarLedgerKey]
+
+    /// The contracts whose data the footprint names, in order, each once.
+    public var contracts: [String] {
+        var seen = Set<String>()
+        return (readOnly + readWrite).compactMap { key -> String? in
+            guard case let .contractData(.contract(id), _, _) = key, seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
+}
+
 public struct Transaction: Equatable {
+    /// The source: a G-address, or an M-address for a muxed source (which is never the user's own G-address).
     public let source: String
     public let fee: UInt32
     public let sequence: Int64
     public let timeBounds: TimeBounds?
+    public let memo: StellarMemo
     public let operations: [Operation]
+    /// A Soroban transaction's resource fee; nil for a classic transaction.
     public let resourceFee: Int64?
+    /// A Soroban transaction's footprint; nil for a classic transaction.
+    public let footprint: StellarFootprint?
 }
 
 public struct DecoratedSignature: Equatable {
@@ -220,14 +261,15 @@ enum XDRDecode {
         return StrKey.accountID(try r.fixed(32))
     }
 
-    /// Muxed accounts resolve to their underlying G-address (the id is dropped: Lite never uses muxed sources).
+    /// A muxed account is its M-address (SEP-23: the key, then the id), as stellar-sdk writes it: it never equals a
+    /// G-address, so a payment to one never counts as a payment to the account the user confirmed.
     static func muxedAccount(_ r: inout XDRReader) throws -> String {
         let t = try r.int32()
         switch t {
         case 0: return StrKey.accountID(try r.fixed(32))
         case 0x100:
-            _ = try r.uint64()
-            return StrKey.accountID(try r.fixed(32))
+            let id = try r.fixed(8)
+            return StrKey.encode(.muxed, try r.fixed(32) + id)
         default: throw XDRError.unsupported("muxed account type \(t)")
         }
     }
@@ -255,18 +297,12 @@ enum XDRDecode {
         switch t {
         case 0: return .account(try accountID(&r))
         case 1: return .contract(StrKey.contractID(try r.fixed(32)))
-        case 2:
-            _ = try r.uint64()
-            _ = try r.fixed(32)
-            return .other(2)
+        case 2: return .other(type: 2, body: try r.fixed(8) + r.fixed(32))
         case 3:
             let v = try r.int32()
             guard v == 0 else { throw XDRError.unsupported("claimable balance id \(v)") }
-            _ = try r.fixed(32)
-            return .other(3)
-        case 4:
-            _ = try r.fixed(32)
-            return .other(4)
+            return .other(type: 3, body: try r.fixed(32))
+        case 4: return .other(type: 4, body: try r.fixed(32))
         default: throw XDRError.unsupported("address type \(t)")
         }
     }
@@ -412,21 +448,22 @@ enum XDRDecode {
         }
     }
 
-    static func memo(_ r: inout XDRReader) throws {
+    static func memo(_ r: inout XDRReader) throws -> StellarMemo {
         let t = try r.int32()
         switch t {
-        case 0: return
-        case 1: _ = try r.variable(max: 28, "memo")
-        case 2: _ = try r.uint64()
-        case 3, 4: _ = try r.fixed(32)
+        case 0: return .none
+        case 1: return .text(try r.variable(max: 28, "memo"))
+        case 2: return .id(try r.uint64())
+        case 3: return .hash(try r.fixed(32))
+        case 4: return .returnHash(try r.fixed(32))
         default: throw XDRError.unsupported("memo type \(t)")
         }
     }
 
-    static func ledgerKey(_ r: inout XDRReader) throws {
+    static func ledgerKey(_ r: inout XDRReader) throws -> StellarLedgerKey {
         let t = try r.int32()
         switch t {
-        case 0: _ = try accountID(&r)
+        case 0: return .account(try accountID(&r))
         case 1:
             _ = try accountID(&r)
             let at = try r.int32()
@@ -451,31 +488,29 @@ enum XDRDecode {
             _ = try r.int32()
             _ = try r.fixed(32)
         case 5: _ = try r.fixed(32)
-        case 6:
-            _ = try scAddress(&r)
-            _ = try scVal(&r)
-            _ = try r.int32()
-        case 7: _ = try r.fixed(32)
+        case 6: return .contractData(contract: try scAddress(&r), key: try scVal(&r), durability: try r.int32())
+        case 7: return .contractCode(hash: try r.fixed(32))
         case 8: _ = try r.int32()
         case 9: _ = try r.fixed(32)
         default: throw XDRError.unsupported("ledger key \(t)")
         }
+        return .other(t)
     }
 
-    /// SorobanTransactionData; returns the resource fee.
-    static func sorobanData(_ r: inout XDRReader) throws -> Int64 {
+    /// SorobanTransactionData: the footprint and the resource fee.
+    static func sorobanData(_ r: inout XDRReader) throws -> (footprint: StellarFootprint, resourceFee: Int64) {
         let ext = try r.int32()
         switch ext {
         case 0: break
         case 1: _ = try r.array(max: 1_000, "archived entries") { r in try r.uint32() }
         default: throw XDRError.unsupported("soroban data ext \(ext)")
         }
-        _ = try r.array(max: 1_000, "read-only footprint") { r in try ledgerKey(&r) }
-        _ = try r.array(max: 1_000, "read-write footprint") { r in try ledgerKey(&r) }
+        let readOnly = try r.array(max: 1_000, "read-only footprint") { r in try ledgerKey(&r) }
+        let readWrite = try r.array(max: 1_000, "read-write footprint") { r in try ledgerKey(&r) }
         _ = try r.uint32() // instructions
         _ = try r.uint32() // disk read bytes
         _ = try r.uint32() // write bytes
-        return try r.int64()
+        return (StellarFootprint(readOnly: readOnly, readWrite: readWrite), try r.int64())
     }
 
     static func transaction(_ r: inout XDRReader) throws -> Transaction {
@@ -483,15 +518,15 @@ enum XDRDecode {
         let fee = try r.uint32()
         let seq = try r.int64()
         let tb = try preconditions(&r)
-        try memo(&r)
+        let memo = try memo(&r)
         let ops = try r.array(max: 100, "operations") { r in try operation(&r) }
         let ext = try r.int32()
-        var resourceFee: Int64?
+        var soroban: (footprint: StellarFootprint, resourceFee: Int64)?
         switch ext {
         case 0: break
-        case 1: resourceFee = try sorobanData(&r)
+        case 1: soroban = try sorobanData(&r)
         default: throw XDRError.unsupported("transaction ext \(ext)")
         }
-        return Transaction(source: source, fee: fee, sequence: seq, timeBounds: tb, operations: ops, resourceFee: resourceFee)
+        return Transaction(source: source, fee: fee, sequence: seq, timeBounds: tb, memo: memo, operations: ops, resourceFee: soroban?.resourceFee, footprint: soroban?.footprint)
     }
 }

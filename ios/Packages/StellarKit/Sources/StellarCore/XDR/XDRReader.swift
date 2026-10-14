@@ -86,7 +86,8 @@ public struct XDRReader {
     }
 }
 
-/// Big-endian XDR writer (only what signing needs: re-encoding an envelope's signatures and the signature base).
+/// Big-endian XDR writer: what signing needs (re-encoding an envelope's signatures and the signature base), the ledger
+/// keys the app reads, and the transactions tests build.
 public struct XDRWriter {
     public private(set) var bytes: [UInt8] = []
     public init() {}
@@ -94,6 +95,13 @@ public struct XDRWriter {
     public mutating func uint32(_ v: UInt32) {
         bytes += [UInt8(v >> 24), UInt8((v >> 16) & 0xff), UInt8((v >> 8) & 0xff), UInt8(v & 0xff)]
     }
+
+    public mutating func uint64(_ v: UInt64) {
+        uint32(UInt32(v >> 32))
+        uint32(UInt32(v & 0xffff_ffff))
+    }
+
+    public mutating func int64(_ v: Int64) { uint64(UInt64(bitPattern: v)) }
 
     public mutating func raw(_ b: [UInt8]) { bytes += b }
 
