@@ -1,0 +1,606 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ · Preparing…" : {
+      "comment" : "The review's progress row: this step's transaction is being built and checked before it is signed. The value is the step (Swap XLM for USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Preparando…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · Préparation…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 준비 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ · 准备中…"
+          }
+        }
+      }
+    },
+    "%@: confirm with %@" : {
+      "comment" : "The review's progress row on a passkey account: this step waits for the passkey prompt. The first value is the step (Swap XLM for USDC), the second the prompt's name (Face ID, Touch ID, Passcode)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@: confirm with %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: confirma con %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ : confirmez avec %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@: %2$@로 확인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@：使用 %2$@ 确认"
+          }
+        }
+      }
+    },
+    "%lld steps · each asks for your passkey" : {
+      "comment" : "The Stellar review, above Confirm, on a passkey account: how many transactions the action signs, each with its own passkey prompt",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "new",
+                  "value" : "%lld step · it asks for your passkey"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "new",
+                  "value" : "%lld steps · each asks for your passkey"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld paso · pide tu llave de acceso"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld pasos · cada uno pide tu llave de acceso"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld étape · elle demande votre clé d'accès"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld étapes · chacune demande votre clé d'accès"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld단계 · 단계마다 패스키 필요"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld 个步骤 · 每步都需要你的通行密钥"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Add XLM" : {
+      "comment" : "Button in the Stellar review when the account's XLM is short: opens Deposit to add XLM. XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir XLM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter des XLM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 추가"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 XLM"
+          }
+        }
+      }
+    },
+    "DyorHQ pays this one: your account's setup." : {
+      "comment" : "The Stellar review, under the network fee DyorHQ pays: it pays the fee of the account's setup only. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta la paga DyorHQ: la configuración de tu cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paie celui-ci : la configuration de votre compte."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 수수료는 DyorHQ가 부담합니다: 계정 설정."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这笔由 DyorHQ 支付：你的账户设置。"
+          }
+        }
+      }
+    },
+    "DyorHQ pays this one: your first swap into XLM. After it, you pay each network fee in XLM." : {
+      "comment" : "The Stellar review, under the network fee DyorHQ pays for an account's first swap into XLM (it holds none yet): after it the user pays their own fees. DyorHQ and XLM are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta la paga DyorHQ: tu primer intercambio a XLM. Después, pagas cada comisión de red en XLM."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paie celui-ci : votre premier échange vers XLM. Ensuite, vous payez chaque frais de réseau en XLM."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 수수료는 DyorHQ가 부담합니다: 첫 XLM 스왑. 이후에는 네트워크 수수료를 매번 XLM으로 직접 냅니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这笔由 DyorHQ 支付：你第一次兑换为 XLM。此后，每笔网络费用都由你以 XLM 支付。"
+          }
+        }
+      }
+    },
+    "DyorHQ pays this reserve." : {
+      "comment" : "The Stellar review on mainnet, under the asset the account's setup enables: DyorHQ pays the XLM Stellar holds for it. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paga esta reserva."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paie cette réserve."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 예치금은 DyorHQ가 부담합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此储备由 DyorHQ 支付。"
+          }
+        }
+      }
+    },
+    "Enable" : {
+      "comment" : "The Stellar review: a row for an asset this transaction enables (a Stellar trustline), so the account can hold it. The value is the asset's code (USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사용 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用"
+          }
+        }
+      }
+    },
+    "Enable %@. Holds %@ XLM while enabled." : {
+      "comment" : "VoiceOver: the review's row for an asset this transaction enables. The first value is its code (USDC), the second an amount of XLM (0.5)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Enable %1$@. Holds %2$@ XLM while enabled."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar %1$@. Retiene %2$@ XLM mientras esté activado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer %1$@. Bloque %2$@ XLM tant qu'il est activé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 사용 설정. 사용하는 동안 %2$@ XLM이 묶입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 %1$@。启用期间占用 %2$@ XLM。"
+          }
+        }
+      }
+    },
+    "Memo" : {
+      "comment" : "The Stellar review: the memo this transaction carries, as the recipient (an exchange, a cash provider) asked for it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Memo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mémo"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "메모"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备注"
+          }
+        }
+      }
+    },
+    "Not enough XLM for Stellar's minimum balance." : {
+      "comment" : "The Stellar review: the account's XLM pays the fee, but not the minimum balance Stellar keeps for what this transaction adds. Stellar and XLM are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM para el saldo mínimo de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM pour le solde minimum de Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 최소 잔액을 유지할 XLM이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足以满足 Stellar 的最低余额。"
+          }
+        }
+      }
+    },
+    "Not enough XLM for the network fee." : {
+      "comment" : "The Stellar review: the account's XLM can't pay this transaction's network fee (and what it spends). XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM para la comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM pour les frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크 수수료를 낼 XLM이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足以支付网络费用。"
+          }
+        }
+      }
+    },
+    "Paid by DyorHQ" : {
+      "comment" : "The review's Max network fee row, when DyorHQ pays this transaction's network fee (a new account's setup, or a first swap into XLM). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo paga DyorHQ"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Payés par DyorHQ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 부담"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由 DyorHQ 支付"
+          }
+        }
+      }
+    },
+    "Restore archived data for %@" : {
+      "comment" : "The Stellar review: a step that first brings back data the Stellar network archived. The value is what it belongs to (a coin's symbol, an asset's code)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar datos archivados de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurer les données archivées de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@의 보관된 데이터 복원"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复 %@ 的归档数据"
+          }
+        }
+      }
+    },
+    "Stellar holds %@ XLM of your balance while %@ is enabled. It's returned if you remove it." : {
+      "comment" : "The Stellar review, under an asset this transaction enables: the minimum balance Stellar keeps for it. The first value is an amount of XLM (0.5), the second the asset's code (USDC)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Stellar holds %1$@ XLM of your balance while %2$@ is enabled. It's returned if you remove it."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar retiene %1$@ XLM de tu saldo mientras %2$@ esté activado. Se te devuelve si lo quitas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar bloque %1$@ XLM de votre solde tant que %2$@ est activé. Ils vous sont rendus si vous le retirez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@을(를) 사용하는 동안 Stellar가 잔액 중 %1$@ XLM을 보관합니다. 제거하면 돌려받습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 %2$@ 期间，Stellar 会占用你余额中的 %1$@ XLM。移除后会退还。"
+          }
+        }
+      }
+    },
+    "You need about %@ XLM and can spend %@ XLM. Your account keeps %@ XLM to stay open." : {
+      "comment" : "The Stellar review, when the account's XLM is short. The values are amounts of XLM: what the transaction needs, what the account can spend, and the minimum balance Stellar keeps in it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You need about %1$@ XLM and can spend %2$@ XLM. Your account keeps %3$@ XLM to stay open."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Necesitas unos %1$@ XLM y puedes gastar %2$@ XLM. Tu cuenta guarda %3$@ XLM para seguir abierta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il vous faut environ %1$@ XLM et vous pouvez dépenser %2$@ XLM. Votre compte garde %3$@ XLM pour rester ouvert."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "약 %1$@ XLM이 필요하며 %2$@ XLM을 쓸 수 있습니다. 계정을 유지하려면 %3$@ XLM이 남아 있어야 합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要约 %1$@ XLM，可用 %2$@ XLM。你的账户需保留 %3$@ XLM 才能保持开通。"
+          }
+        }
+      }
+    },
+    "You pay at most" : {
+      "comment" : "The Stellar review: the most this transaction may spend of an asset (the contract may take less)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pagas como máximo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous payez au plus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최대 지불 금액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你最多支付"
+          }
+        }
+      }
+    },
+    "Your phone checks every transaction against this review before it signs, and refuses anything else." : {
+      "comment" : "The Stellar review sheet, under what the transaction does: the phone signs only what this review shows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu teléfono comprueba cada transacción con esta revisión antes de firmarla y rechaza cualquier otra cosa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre téléphone vérifie chaque transaction par rapport à ce récapitulatif avant de la signer, et refuse tout le reste."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "휴대폰은 서명하기 전에 모든 거래를 이 검토 내용과 대조하고, 그 밖의 것은 모두 거부합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的手机会在签名前将每笔交易与此确认页核对，并拒绝任何不符的内容。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
