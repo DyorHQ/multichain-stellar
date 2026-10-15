@@ -7,7 +7,7 @@ import { setTestEnv, SPONSOR } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
 const { env } = await import("../../supabase/functions/_shared/env.ts");
-const { MAINNET, networkByName, TESTNET } = await import("../../supabase/functions/_shared/networks.ts");
+const { MAINNET, networkByName, TESTNET, withDeployment } = await import("../../supabase/functions/_shared/networks.ts");
 const { DEPLOYMENTS } = await import("../../supabase/functions/_shared/deployments/index.ts");
 
 const KEEPER = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(4) as any);
@@ -200,14 +200,16 @@ Deno.test("fee policy (§4.2): testnet's values, mainnet's copies", () => {
 });
 
 // ------------------------------------------------------------------------------------------------ the indexer
-// Whether it may clear its tables follows LITE_NETWORK and LITE_INDEXER_ALLOW_RESET (lite-indexer/jobs/reset.ts); its
-// run follows the order and the budget of §6.1 (lite-indexer/index.ts).
+// Whether it may clear its tables follows LITE_NETWORK and LITE_INDEXER_ALLOW_RESET (lite-indexer/jobs/reset.ts), as
+// its main_events job runs it: both generations, each from its own cursor (lite-indexer/v2_events.ts
+// indexGenerations); its run follows the order and the budget of §6.1 (lite-indexer/index.ts).
 
 const { fakeSql } = await import("../fixtures/routes/harness.ts");
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const { rpcServer } = await import("../../supabase/functions/_shared/stellar.ts");
-const { deploymentKey, indexEvents } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
-const { INDEXED_TABLES, resetAllowed } = await import("../../supabase/functions/lite-indexer/jobs/reset.ts");
+const { deploymentKey } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
+const { indexGenerations, V1_CURSOR, V2_CURSOR, v2Key } = await import("../../supabase/functions/lite-indexer/v2_events.ts");
+const { resetAllowed } = await import("../../supabase/functions/lite-indexer/jobs/reset.ts");
 const { BUDGET_MS, JOBS, LATE_MS, runJobs } = await import("../../supabase/functions/lite-indexer/index.ts");
 
 type Row = Record<string, unknown>;
@@ -232,25 +234,35 @@ function rpcAt(latest: number): void {
   server.getEvents = () => Promise.resolve({ events: [], latestLedger: latest, cursor: "" });
 }
 
-/** indexEvents() with this cursor row in lite.indexer_cursors and RPC at `latest`; the queries it sent. */
-async function indexWith(cursor: Row | null, latest: number): Promise<{ result?: unknown; error?: string; queries: string[] }> {
+/** The main_events job (indexGenerations) with these rows in lite.indexer_cursors, on a database with contracts v2's
+ *  tables, and RPC at `latest`; the queries it sent. */
+async function indexWith(cursors: Row[], latest: number): Promise<{ result?: Row; error?: string; queries: string[] }> {
   const queries: string[] = [];
-  replaceSql(fakeSql((q) => {
+  replaceSql(fakeSql((q, p) => {
     queries.push(q);
-    if (q.startsWith("select ledger, cursor, network_id from lite.indexer_cursors")) return cursor ? [cursor] : [];
-    if (q.startsWith("select t from unnest")) return INDEXED_TABLES.slice(0, 4).map((t) => ({ t }));
-    if (q.startsWith("truncate ") || q.startsWith("insert into lite.indexer_cursors")) return [];
+    if (q === "select to_regclass(?) is not null as present") return [{ present: true }];
+    if (q.startsWith("select name, ledger, cursor, network_id from lite.indexer_cursors")) return cursors;
+    if (q.startsWith("select t from unnest")) return (p[0] as string[]).slice(0, 4).map((t) => ({ t }));
+    if (/^(truncate|delete from|insert into lite\.indexer_cursors) /.test(q)) return [];
     throw new Error(`unexpected query: ${q}`);
   }));
   rpcAt(latest);
   try {
-    return { result: await indexEvents(), queries };
+    return { result: await indexGenerations() as unknown as Row, queries };
   } catch (err) {
     return { error: (err as Error).message, queries };
   }
 }
 
+const v1Cursor = (ledger: number, key: string): Row => ({ name: V1_CURSOR, ledger, cursor: "c", network_id: key });
 const truncates = (queries: string[]) => queries.filter((q) => q.startsWith("truncate "));
+const deletes = (queries: string[]) => queries.filter((q) => q.startsWith("delete from "));
+/** What another v1 deployment clears: v1's rows only, v2's stay (v2_events.ts clearV1). */
+const V1_ROWS_CLEARED = [
+  "delete from lite.launches where generation = 1",
+  "delete from lite.moments where generation = 1",
+  "delete from lite.watch_groups g where not exists (select 1 from lite.watch_contracts w where w.group_id = g.id)",
+];
 const quiet = async <T>(fn: () => Promise<T>): Promise<T> => {
   const warn = console.warn;
   console.warn = () => {};
@@ -276,30 +288,35 @@ Deno.test("the indexer never wipes off testnet without LITE_INDEXER_ALLOW_RESET"
   const key = deploymentKey(MAINNET);
   // An RPC behind the indexed ledger is waited for, flag or not.
   for (const allow of [undefined, "1"]) {
-    const lagging = await withEnvAsync({ ...mainnet, LITE_INDEXER_ALLOW_RESET: allow }, () => quiet(() => indexWith({ ledger: 5_000, cursor: "c", network_id: key }, 1_000)));
-    assertEquals([truncates(lagging.queries), lagging.result], [[], { events: 0, latest: 1_000, reset: false }]);
+    const lagging = await withEnvAsync({ ...mainnet, LITE_INDEXER_ALLOW_RESET: allow }, () => quiet(() => indexWith([v1Cursor(5_000, key)], 1_000)));
+    assertEquals([truncates(lagging.queries), deletes(lagging.queries)], [[], []]);
+    assertEquals(lagging.result, { v1: { skipped: "rpc behind" }, v2: { skipped: "rpc behind" }, latest: 1_000, reset: false });
   }
-  // Other contracts: refused without the flag, cleared with it.
-  const refused = await withEnvAsync(mainnet, () => indexWith({ ledger: 990, cursor: "c", network_id: "other" }, 1_000));
-  assertEquals(truncates(refused.queries), []);
+  // Other v1 contracts: refused without the flag; with it, v1's rows go and v2's stay.
+  const refused = await withEnvAsync(mainnet, () => indexWith([v1Cursor(990, "other")], 1_000));
+  assertEquals([truncates(refused.queries), deletes(refused.queries)], [[], []]);
   assert(refused.error?.includes("LITE_INDEXER_ALLOW_RESET=1"), refused.error);
-  const allowed = await withEnvAsync({ ...mainnet, LITE_INDEXER_ALLOW_RESET: "1" }, () => quiet(() => indexWith({ ledger: 990, cursor: "c", network_id: "other" }, 1_000)));
-  assertEquals(truncates(allowed.queries), ["truncate lite.launch_trades, lite.launches, lite.moment_collects, lite.moments"]);
-  assertEquals(allowed.result, { events: 0, latest: 1_000, reset: true });
+  const allowed = await withEnvAsync({ ...mainnet, LITE_INDEXER_ALLOW_RESET: "1" }, () => quiet(() => indexWith([v1Cursor(990, "other")], 1_000)));
+  assertEquals([truncates(allowed.queries), deletes(allowed.queries)], [[], V1_ROWS_CLEARED]);
+  assertEquals(allowed.result, { v1: { events: 0, restarted: true }, v2: { skipped: "no v2 deployment" }, latest: 1_000, reset: false });
 });
 
-Deno.test("on testnet the indexer starts over after a reset or a redeploy, clearing only tables that exist", async () => {
+Deno.test("on testnet the indexer starts over after a reset (both generations) or a v1 redeploy (v1's rows only)", async () => {
   const testnet = { LITE_NETWORK: "testnet", STELLAR_RPC_URL: "https://rpc.invalid", LITE_INDEXER_ALLOW_RESET: undefined };
-  const backwards = await withEnvAsync(testnet, () => quiet(() => indexWith({ ledger: 5_000, cursor: "c", network_id: deploymentKey(TESTNET) }, 1_000)));
-  assertEquals(truncates(backwards.queries).length, 1);
-  assertEquals(backwards.result, { events: 0, latest: 1_000, reset: true });
-  const redeployed = await withEnvAsync(testnet, () => quiet(() => indexWith({ ledger: 990, cursor: "c", network_id: "other" }, 1_000)));
-  assertEquals(truncates(redeployed.queries).length, 1);
+  const v1Key = deploymentKey(TESTNET);
+  const v2Cursor = (ledger: number): Row => ({ name: V2_CURSOR, ledger, cursor: "c2", network_id: v2Key(withDeployment(TESTNET, "testnet")) });
+  // The ledger went backwards: every indexed table of both generations is cleared, the ones that exist only.
+  const backwards = await withEnvAsync(testnet, () => quiet(() => indexWith([v1Cursor(5_000, v1Key), v2Cursor(5_000)], 1_000)));
+  assertEquals(truncates(backwards.queries).length, 2);
+  assertEquals(backwards.result, { v1: { skipped: "reset" }, v2: { skipped: "reset" }, latest: 1_000, reset: true });
+  // Other v1 contracts: v1's rows go, v2's stay, and both read on.
+  const redeployed = await withEnvAsync(testnet, () => quiet(() => indexWith([v1Cursor(990, "other"), v2Cursor(990)], 1_000)));
+  assertEquals([truncates(redeployed.queries), deletes(redeployed.queries)], [[], V1_ROWS_CLEARED]);
   assert(redeployed.queries.some((q) => q.startsWith("insert into lite.indexer_cursors")), "indexes again");
-  assertEquals(redeployed.result, { events: 0, latest: 1_000, reset: true });
+  assertEquals(redeployed.result, { v1: { events: 0, restarted: true }, v2: { events: 0, restarted: false }, latest: 1_000, reset: false });
   // The same contracts: nothing cleared.
-  const same = await withEnvAsync(testnet, () => indexWith({ ledger: 990, cursor: "c", network_id: deploymentKey(TESTNET) }, 1_000));
-  assertEquals([truncates(same.queries), (same.result as { reset: boolean }).reset], [[], false]);
+  const same = await withEnvAsync(testnet, () => indexWith([v1Cursor(990, v1Key), v2Cursor(990)], 1_000));
+  assertEquals([truncates(same.queries), deletes(same.queries), same.result?.reset], [[], [], false]);
 });
 
 Deno.test("indexer jobs run in §6.1's order; the ones after bridges are late", () => {
