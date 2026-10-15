@@ -73,6 +73,11 @@ alter table lite.launches add column if not exists creator_fees_due numeric not 
 alter table lite.launches add column if not exists holder_fees_total numeric not null default 0;
 -- The treasury the keeper last saw excluded from this launch's rewards (exclude_treasury after a treasury change, V2).
 alter table lite.launches add column if not exists treasury_checked text;
+-- The keeper's last look at the launch: graduation while completed, exclude_treasury once graduated; and its last
+-- claim_protocol_fees or sweep_protocol attempt. Each queue takes the rows looked at longest ago (or never) first, so
+-- launches it can't move never hold up the others (lite-indexer/v2_keeper.ts).
+alter table lite.launches add column if not exists keeper_checked_at timestamptz;
+alter table lite.launches add column if not exists fees_checked_at timestamptz;
 
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'launches_generation_check' and conrelid = 'lite.launches'::regclass) then
@@ -142,6 +147,8 @@ alter table lite.moments add column if not exists expiry_creator_share numeric;
 alter table lite.moments add column if not exists expiry_treasury_share numeric;
 -- The NFT's frozen edition size (its `closed` event).
 alter table lite.moments add column if not exists edition_size int;
+-- The keeper's last look at the Moment (graduation or expiry), as on launches.
+alter table lite.moments add column if not exists keeper_checked_at timestamptz;
 
 -- v1's number stays unique (its ON CONFLICT and the foreign keys use it); v2's rows have none, so it can't be the
 -- primary key any more. The foreign keys to it are dropped and made again against the unique constraint.
@@ -279,6 +286,10 @@ create table if not exists lite.locker_positions (
   harvests int not null default 0,
   base_out numeric not null default 0,
   quote_out numeric not null default 0,
+  -- The keeper's last look at the position and when it looks again: at harvestable's next_at, or an interval on, when
+  -- it isn't due; ten minutes on when a check failed. Positions with nothing to harvest never hold up the others.
+  checked_at timestamptz,
+  next_check_at timestamptz,
   updated_at timestamptz not null default now()
 );
 create index if not exists locker_positions_ref on lite.locker_positions (ref);

@@ -9,13 +9,16 @@
 //   recoverable failure recorded, then only successes; no Moments mark_stuck (F15); exclude_pool only when its
 //   simulation passes (F2); exclude_treasury on every graduated sharing launch after a treasury change (V2); keeper_skip
 //   honoured on testnet-qa by every job, rescue and expire included, and ignored with a warning elsewhere (V5); a call
-//   that needs anyone's authorization is never sent;
+//   that needs anyone's authorization is never sent; VenueKind goes as its u32, as contracts/common declares it; rows
+//   the keeper can't move (stuck launches, pending Moments, positions with nothing to harvest, failing fee batches, a
+//   view that throws) never hold up the ones behind them;
 // - alerts with synthetic state: the AQUA float, a launch stuck past fallback_delay, a Moment pending an hour and a day
 //   before its backstop, a graduation out of budget; a grad_fail of exec-soroswap's LiquidityTooLow (3, 10304) doesn't
 //   fire PaymentUnavailable's;
 // - TTL upkeep: the graduation and harvest paths (every v2 singleton and WASM, Soroswap's factory and pair code) checked
 //   every run, archived ones restored in a transaction of their own before anything graduates; v2's quotes, per-launch
-//   and per-Moment entries, unvested positions and owed fees in the rotation;
+//   and per-Moment entries, unvested positions and owed fees in the rotation; every fee under the cap (each WASM alone,
+//   25 days at most a transaction), a failing transaction stopping neither the others nor the rotation;
 // - the indexer's jobs: v2 runs inside them, each part whatever the others do.
 import { Account, Address, Keypair, nativeToScVal, Operation, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert@1";
@@ -379,10 +382,10 @@ Deno.test("decoders: the Moment NFT's mint and transfer {token_id}, as OpenZeppe
 
 // ------------------------------------------------------------------------------------------------ the locker and launch tokens
 
-Deno.test("decoders: lock_reg for a launch and a Moment, harvested with take and compounded, owed_credit and owed_paid", () => {
-  const reg = (reference: xdr.ScVal) =>
+Deno.test("decoders: lock_reg for a launch and a Moment (VenueKind by its u32), harvested with take and compounded, owed_credit and owed_paid", () => {
+  const reg = (reference: xdr.ScVal, kind = 0) =>
     ev.decodeLockReg(decoded([sym("lock_reg"), addr(POOL), addr(PAD)], map({
-      kind: vec(sym("Soroswap")),
+      kind: u32(kind),
       lp_token: addr(POOL),
       lp: i128(9_300n),
       base: addr(TOKEN),
@@ -405,6 +408,7 @@ Deno.test("decoders: lock_reg for a launch and a Moment, harvested with take and
     principal: 9_300n,
   });
   assertEquals([reg(vec(sym("Moment"), addr(NFT))).refKind, reg(vec(sym("Moment"), addr(NFT))).ref], ["moment", NFT]);
+  assertEquals([1, 2, 3, 9].map((kind) => reg(vec(sym("Launch"), addr(TOKEN)), kind).kind), ["Aquarius", "HoldOnly", "QaFail", "9"]);
   assertEquals(ev.decodeHarvested(decoded([sym("harvested"), addr(POOL)], map({
     lp_burned: i128(12n),
     base_out: i128(1_200n),
@@ -416,6 +420,20 @@ Deno.test("decoders: lock_reg for a launch and a Moment, harvested with take and
   }))), { pool: POOL, lpBurned: 12n, baseOut: 1_200n, quoteOut: 34n, growth: 20n, take: 20n, compounded: 0n, principal: 9_300n });
   assertEquals(ev.decodeOwed(decoded([sym("owed_credit"), addr(G(22)), addr(USDC)], map({ amount: i128(5n), owed: i128(15n) }))), { account: G(22), asset: USDC, amount: 5n, owed: 15n });
   assertEquals(ev.decodeOwed(decoded([sym("owed_paid"), addr(G(22)), addr(USDC)], map({ amount: i128(15n) }))), { account: G(22), asset: USDC, amount: 15n, owed: null });
+});
+
+Deno.test("VenueKind crosses the wire as its u32, as contracts/common declares it and the deploy kit encodes it", async () => {
+  // dyor_common::VenueKind is #[repr(u32)] with explicit values: read them from the source, not from a copy.
+  const source = await Deno.readTextFile(new URL("../../../contracts/common/src/types.rs", import.meta.url));
+  const body = source.match(/#\[repr\(u32\)\]\s*pub enum VenueKind \{([^}]*)\}/)![1];
+  const declared = [...body.matchAll(/^\s*(\w+) = (\d+),/gm)].map(([, name, value]) => [name, Number(value)]);
+  const values: [string, number][] = k.VENUE_KINDS.map((name, i) => [name, i]);
+  assertEquals(declared, values);
+  const { VENUE_KIND_VALUE } = await import("../../scripts/lib/v2-constructors.ts");
+  assertEquals(Object.entries(VENUE_KIND_VALUE), values);
+  assertEquals(k.venueKindArg("soroswap").toXDR("base64"), u32(0).toXDR("base64"));
+  assertEquals(k.venueKindArg("aquarius").toXDR("base64"), u32(1).toXDR("base64"));
+  assertEquals([0, 1, 2, 3, 4].map((n) => k.venueKindName(BigInt(n) as unknown)), ["Soroswap", "Aquarius", "HoldOnly", "QaFail", "4"]);
 });
 
 Deno.test("decoders: a launch token's reward events in both assets, the quote and the token itself (F1); excluded", () => {
@@ -761,10 +779,11 @@ Deno.test("keeper: a call that asks for anyone's authorization is refused", () =
 // ------------------------------------------------------------------------------------------------ keeper runs
 
 /** The keeper's chain in a test: simulations and views answered by contract, function and first argument; every send
- *  and restore kept and confirmed; the paths as `path` says (all live by default). */
+ *  and restore kept and confirmed; the paths as `path` says (all live by default). exclude_pool's VenueKind is converted
+ *  as the host converts it: anything but a VenueKind's u32 fails before the contract runs. */
 class FakeChain implements Chain {
   sent: { job: string; contract: string; fn: string; target: string }[] = [];
-  simulated: { contract: string; fn: string; target: string }[] = [];
+  simulated: { contract: string; fn: string; target: string; kind?: string }[] = [];
   restored: string[] = [];
   pathChecks = 0;
   path: PathReport = { entries: 20, archived: [], restored: false, extended: [] };
@@ -784,9 +803,16 @@ class FakeChain implements Chain {
   private target(args: xdr.ScVal[]): string {
     return args.length && args[0].switch().name === "scvAddress" ? Address.fromScVal(args[0]).toString() : args.length ? String(native(args[args.length - 1])) : "";
   }
-  simulate(contract: string, fn: string, args: xdr.ScVal[]) {
-    const target = fn === "exclude_pool" ? Address.fromScVal(args[2]).toString() : this.target(args);
-    this.simulated.push({ contract, fn, target });
+  simulate(contract: string, fn: string, args: xdr.ScVal[]): Promise<Sim> {
+    if (fn !== "exclude_pool") {
+      const target = this.target(args);
+      this.simulated.push({ contract, fn, target });
+      return Promise.resolve(this.simAnswer(contract, fn, target));
+    }
+    const target = Address.fromScVal(args[2]).toString();
+    const kind = args[0].switch().name === "scvU32" ? k.VENUE_KINDS[args[0].u32()] : undefined;
+    this.simulated.push({ contract, fn, target, kind });
+    if (!kind) return Promise.resolve({ ok: false, error: "HostError: Error(Value, UnexpectedType)", code: null });
     return Promise.resolve(this.simAnswer(contract, fn, target));
   }
   send(job: KeeperJobV2, contract: string, fn: string, _args: xdr.ScVal[], target: string) {
@@ -831,10 +857,23 @@ function keeperDb(state: KeeperState): [string, unknown[]][] {
     }
     if (q.startsWith("update lite.pool_candidates")) return [];
     if (q.startsWith("insert into lite.keeper_alerts")) return [{ kind: p[0] }];
+    if (LOOKS.some((look) => q.startsWith(look))) return [];
+    unexpected.push(q);
     throw new Error(`unexpected query: ${q}`);
   }));
   return writes;
 }
+
+/** The writes that record the keeper's looks at its queues' rows. */
+const LOOKS = [
+  "update lite.launches set keeper_checked_at = now() where token = ?",
+  "update lite.moments set keeper_checked_at = now() where nft = ?",
+  "update lite.locker_positions set checked_at = now(), next_check_at = ? where pool = ?",
+  "update lite.launches set fees_checked_at = now() where token",
+];
+/** Queries a fake database didn't expect: the keeper logs a row's error and goes on, so the tests look here. */
+const unexpected: string[] = [];
+const looks = (writes: [string, unknown[]][], look: number) => writes.filter(([q]) => q.startsWith(LOOKS[look])).map(([, p]) => p);
 
 const L_FALLBACK = C(50);
 const L_RESCUE = C(51);
@@ -904,8 +943,9 @@ async function withDeployment<T>(name: string | undefined, fn: () => Promise<T>)
 
 Deno.test("keeper run: with nothing held off, each due job is sent once (graduate, fallback, mark_stuck, rescue, expire, harvest)", async () => {
   const { chain, state } = everyJob();
-  keeperDb(state);
+  const writes = keeperDb(state);
   await withDeployment("testnet-qa", () => k.keeperV2(QA_NET, chain));
+  assertEquals(unexpected.splice(0), []);
   assertEquals(chain.sent.map((s) => [s.job, s.target]), [
     ["graduate_fallback", L_FALLBACK],
     ["rescue", L_RESCUE],
@@ -918,6 +958,10 @@ Deno.test("keeper run: with nothing held off, each due job is sent once (graduat
   // The failing stack's Moment is expired on its own contract.
   assertEquals(chain.sent.find((s) => s.target === M_EXPIRE)!.contract, C(8));
   assertFalse(chain.sent.some((s) => s.fn === "mark_stuck" && (s.target === M_GRAD || s.target === M_EXPIRE)), "Moments have no mark_stuck");
+  // Every row looked at is recorded, so the queues turn; the harvested position is looked at again an interval on.
+  assertEquals(looks(writes, 0), [[L_FALLBACK], [L_RESCUE], [L_MARK], [L_GRAD]]);
+  assertEquals(looks(writes, 1), [[M_GRAD], [M_EXPIRE]]);
+  assertEquals(looks(writes, 2), [[new Date(NOW + DURATION_SETS_V2["testnet-qa"].launch.harvest_interval * 1000), M_POOL]]);
 });
 
 Deno.test("keeper run: on testnet-qa, keeper_skip holds off every job, rescue and expire included, by launch token or Moment NFT (V5)", async () => {
@@ -966,41 +1010,181 @@ Deno.test("keeper run: after a treasury change, every graduated sharing launch i
 });
 
 Deno.test("keeper run: exclude_pool is sent only when its simulation passes; a pool under the floor is checked again in an hour (F2)", async () => {
-  const pool = (n: number) => ({ pool: C(n), token: TOKEN, other: XLM, kind: "soroswap" });
+  const pool = (n: number, kind = "soroswap") => ({ pool: C(n), token: TOKEN, other: XLM, kind });
   const answers: Record<string, Sim> = {
     [C(80)]: { ok: true, value: true, auth: 0 },
     [C(81)]: aborted(10_214),
     [C(82)]: aborted(10_209),
     [C(83)]: { ok: true, value: false, auth: 0 },
+    [C(84)]: { ok: true, value: true, auth: 0 },
   };
   const chain = new FakeChain((_c, fn, target) => (fn === "exclude_pool" ? answers[target] : fine), (_c, fn) => (fn === "treasury" ? G(5) : undefined));
-  const writes = keeperDb({ pools: [pool(80), pool(81), pool(82), pool(83)] });
+  const writes = keeperDb({ pools: [pool(80), pool(81), pool(82), pool(83), pool(84, "aquarius")] });
   await k.keeperV2(NET, chain);
-  assertEquals(chain.sent.map((s) => [s.job, s.target]), [["exclude_pool", C(80)]]);
+  assertEquals(unexpected.splice(0), []);
+  // VenueKind goes as its u32 (the fake converts it as the host does), so every simulation reaches the contract.
+  assertEquals(chain.simulated.map((s) => s.kind), ["Soroswap", "Soroswap", "Soroswap", "Soroswap", "Aquarius"]);
+  assertEquals(chain.sent.map((s) => [s.job, s.target]), [["exclude_pool", C(80)], ["exclude_pool", C(84)]]);
   const updates = writes.filter(([q]) => q.startsWith("update lite.pool_candidates")).map(([, p]) => [p[p.length - 2], p[0], p[1]]);
-  assertEquals(updates, [[C(80), "excluded", null], [C(81), "below_floor", "1 hour"], [C(82), "rejected", null], [C(83), "excluded", null]]);
+  assertEquals(updates, [[C(80), "excluded", null], [C(81), "below_floor", "1 hour"], [C(82), "rejected", null], [C(83), "excluded", null], [C(84), "excluded", null]]);
 });
 
-Deno.test("keeper run: fees go out in batches of up to 20 launches per quote, and launch tokens' protocol shares are swept, at most every 10 minutes", async () => {
-  const run = async (lastSweep: Date | null) => {
-    const chain = new FakeChain(() => fine, () => undefined);
-    replaceSql(fakeSql((q) => {
+Deno.test("keeper run: fees go out in batches of up to 20 launches per quote, and launch tokens' protocol shares are swept, at most every 10 minutes; each try is recorded, so batches that keep failing never hold up the others", async () => {
+  const run = async (lastSweep: Date | null, fails: (fn: string, target: string) => boolean = () => false) => {
+    const chain = new FakeChain((c, fn, target) => (fails(fn, fn === "sweep_protocol" ? c : target) ? aborted() : fine), () => undefined);
+    const selects: string[] = [];
+    const tries: unknown[] = [];
+    replaceSql(fakeSql((q, p) => {
       if (q.startsWith("select to_regclass(")) return [{ present: true }];
       if (q.startsWith("select max(created_at) as at from lite.keeper_log where job in ('claim_protocol_fees', 'sweep_protocol')")) return [{ at: lastSweep }];
       if (q.startsWith("select token, quote from lite.launches")) {
+        selects.push(q);
         return [...Array.from({ length: 21 }, (_, i) => ({ token: C(100 + i), quote: XLM })), { token: C(130), quote: USDC }];
       }
-      if (q.startsWith("select distinct r.token from lite.launch_rewards")) return [{ token: C(100) }];
+      if (q.startsWith("select r.token from lite.launch_rewards")) {
+        selects.push(q);
+        return [{ token: C(100) }, { token: C(101) }];
+      }
+      if (q.startsWith(LOOKS[3])) {
+        tries.push(p[0]);
+        return [];
+      }
+      unexpected.push(q);
       throw new Error(`unexpected query: ${q}`);
     }));
-    return { report: await k.keeperV2Fees(NET, chain), sent: chain.sent.map((s) => [s.job, s.target]) };
+    return { report: await k.keeperV2Fees(NET, chain), sent: chain.sent.map((s) => [s.job, s.target]), selects, tries };
   };
-  const all = [["claim_protocol_fees", USDC], ["claim_protocol_fees", XLM], ["claim_protocol_fees", XLM], ["sweep_protocol", C(100)]];
-  assertEquals((await run(null)).sent, all);
+  const all = [["claim_protocol_fees", USDC], ["claim_protocol_fees", XLM], ["claim_protocol_fees", XLM], ["sweep_protocol", C(100)], ["sweep_protocol", C(101)]];
+  const first = await run(null);
+  assertEquals(first.sent, all);
+  // Both queues take the launches tried longest ago first, and each try is recorded.
+  assert(first.selects.every((q) => q.includes("order by") && q.includes("fees_checked_at nulls first")));
+  assertEquals(first.tries, [[C(130)], Array.from({ length: 20 }, (_, i) => C(100 + i)), [C(120)], C(100), C(101)]);
   assertEquals((await run(new Date(NOW - 11 * MIN))).sent, all);
+  // The USDC batch and C(100)'s sweep fail: the batches and the sweep after them still go out, and they were tried.
+  const failing = await run(null, (fn, target) => (fn === "claim_protocol_fees" && target.includes(C(130))) || (fn === "sweep_protocol" && target === C(100)));
+  assertEquals(failing.sent, [["claim_protocol_fees", XLM], ["claim_protocol_fees", XLM], ["sweep_protocol", C(101)]]);
+  assertEquals(failing.tries.length, 5);
   // A sweep 5 minutes ago: nothing this run.
   const recent = await run(new Date(NOW - 5 * MIN));
   assertEquals([recent.sent, recent.report], [[], { skipped: "swept less than 10 minutes ago" }]);
+  assertEquals(unexpected.splice(0), []);
+});
+
+/** A queue's table in a test: rows looked at longest ago (or never) first, then in `order`; a look records when (and
+ *  `set`), and answers what the update does. */
+function queue<T extends { order: number; looked?: number }>(rows: T[], due: (r: T) => boolean = () => true) {
+  let clock = 0;
+  return {
+    rows,
+    take: (limit: number) => rows.filter(due).sort((a, b) => (a.looked ?? -1) - (b.looked ?? -1) || a.order - b.order).slice(0, limit),
+    look: (r: T | undefined, set: Partial<T> = {}): Row[] => {
+      if (r) Object.assign(r, { looked: ++clock }, set);
+      return [];
+    },
+  };
+}
+
+Deno.test("keeper run: positions with nothing to harvest never hold up the others; each look sets the next one", async () => {
+  const secs = (ms: number) => BigInt(Math.floor(ms / 1000));
+  const interval = DURATION_SETS_V2.production.launch.harvest_interval * 1000;
+  const pool = (i: number) => C(100 + i);
+  const positions = queue(
+    Array.from({ length: 12 }, (_, i) => ({ pool: pool(i), ref_kind: "launch", ref: C(130 + i), order: i, next: null as Date | null })),
+    (r) => !r.next || r.next.getTime() <= NOW,
+  );
+  const harvestable = (target: string): unknown[] => {
+    if (target === pool(0)) return [10n, 2n, 0n, 0n, secs(NOW + 30 * MIN)]; // its interval runs another 30 minutes
+    if (target === pool(10)) throw new Error("harvestable: Error(Contract, #10605)");
+    if (target === pool(11)) return [10n, 2n, 0n, 0n, secs(NOW)];
+    return [0n, 0n, 0n, 0n, secs(NOW - MIN)]; // nothing to burn: no trade since the last harvest
+  };
+  const chain = new FakeChain(() => fine, (_c, fn, target) => (fn === "harvestable" ? harvestable(target) : fn === "treasury" ? G(5) : undefined));
+  const selects: string[] = [];
+  replaceSql(fakeSql((q, p) => {
+    if (q.startsWith("select to_regclass(")) return [{ present: true }];
+    if (q === "select kind, target, jobs, until from lite.keeper_skip") return [];
+    if (q.startsWith("select pool, ref_kind, ref from lite.locker_positions")) {
+      selects.push(q);
+      return positions.take(Number(p[p.length - 1]));
+    }
+    if (q.startsWith(LOOKS[2])) return positions.look(positions.rows.find((r) => r.pool === p[1]), { next: p[0] as Date | null });
+    if (q.startsWith("select")) return [];
+    unexpected.push(q);
+    throw new Error(`unexpected query: ${q}`);
+  }));
+  // The first run looks at the 10 positions registered first: none is due.
+  await k.keeperV2(NET, chain);
+  assertEquals(chain.sent, []);
+  assert(selects[0].includes("kind not in ('HoldOnly', 'QaFail')") && selects[0].includes("next_check_at is null or next_check_at <= now()"));
+  // The next run reaches the two behind them: one throws and is looked at again in 10 minutes, one is harvested.
+  await k.keeperV2(NET, chain);
+  assertEquals(chain.sent.map((s) => [s.job, s.target]), [["harvest", C(141)]]);
+  assertEquals(positions.rows.map((r) => r.next!.getTime() - NOW), [30 * MIN, ...Array(9).fill(interval), 10 * MIN, interval]);
+  assertEquals(unexpected.splice(0), []);
+});
+
+Deno.test("keeper run: launches and Moments the keeper can't move (stuck on their venue, a view that throws) never hold up newer ones", async () => {
+  const secs = (ms: number) => BigInt(Math.floor(ms / 1000));
+  const launch = (i: number) => C(100 + i);
+  const moment = (i: number) => C(150 + i);
+  const launches = queue(Array.from({ length: 25 }, (_, i) => ({ token: launch(i), order: i })));
+  const moments = queue(Array.from({ length: 22 }, (_, i) => ({
+    nft: moment(i),
+    contract: MOMENTS,
+    deadline: new Date(NOW + 60 * MIN),
+    durations: { stuck_expiry: 604_800, pending_backstop: 2_592_000 },
+    order: i,
+  })));
+  // The 20 launches completed first are stuck with their failure recorded, their fallback and rescue days away; the 20
+  // Moments pending first abort (nothing to record). One launch's status throws.
+  const chain = new FakeChain(
+    (c, fn, target) => {
+      if (fn !== "graduate") return aborted();
+      if (c === MOMENTS) return target === moment(20) || target === moment(21) ? graduated() : aborted();
+      return Number(launches.rows.find((r) => r.token === target)!.order) >= 20 ? graduated() : failed();
+    },
+    (_c, fn, target) => {
+      if (fn === "status") {
+        if (target === launch(3)) throw new Error("status: rpc down");
+        return { phase: 1, stuck_since: secs(NOW - MIN), mark_stuck_at: secs(NOW - 2 * MIN), fallback_at: secs(NOW + 60 * MIN), rescue_public_at: secs(NOW + 24 * 60 * MIN) };
+      }
+      if (fn === "ledger") return { state: 1, completed_at: secs(NOW - MIN), stuck_since: 0n };
+      if (fn === "treasury") return G(5);
+      throw new Error(`no view ${fn}`);
+    },
+  );
+  const warned: string[] = [];
+  const warn = console.warn;
+  console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
+  replaceSql(fakeSql((q, p) => {
+    if (q.startsWith("select to_regclass(")) return [{ present: true }];
+    if (q === "select kind, target, jobs, until from lite.keeper_skip") return [];
+    if (q.startsWith("select token from lite.launches where generation = 2 and contract = ? and phase = 'completed'")) {
+      assert(q.includes("order by keeper_checked_at nulls first"));
+      return launches.take(Number(p[p.length - 1]));
+    }
+    if (q.startsWith("select nft, contract, deadline, durations from lite.moments")) {
+      assert(q.includes("order by keeper_checked_at nulls first"));
+      return moments.take(Number(p[p.length - 1]));
+    }
+    if (q.startsWith(LOOKS[0])) return launches.look(launches.rows.find((r) => r.token === p[0]));
+    if (q.startsWith(LOOKS[1])) return moments.look(moments.rows.find((r) => r.nft === p[0]));
+    if (q.startsWith("select")) return [];
+    unexpected.push(q);
+    throw new Error(`unexpected query: ${q}`);
+  }));
+  try {
+    await k.keeperV2(NET, chain);
+    assertEquals(chain.sent, [], "nothing to send for the 20 launches and 20 Moments looked at first");
+    assert(warned.some((w) => w.includes(`keeper: launch ${launch(3)}:`) && w.includes("rpc down")));
+    // The next run takes the ones never looked at first, and graduates them.
+    await k.keeperV2(NET, chain);
+    assertEquals(chain.sent.map((s) => s.target), [launch(20), launch(21), launch(22), launch(23), launch(24), moment(20), moment(21)]);
+    assertEquals(unexpected.splice(0), []);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 // ------------------------------------------------------------------------------------------------ alerts
@@ -1216,8 +1400,9 @@ Deno.test("TTL upkeep: Soroswap's code is read from the factory's instance and P
 });
 
 /** RPC behind an upkeep run: the entries `liveUntil` has, live until then (absent ones archived), the keeper's account,
- *  and every simulation, send and status of its transactions, which it keeps. */
-function upkeepRpc(liveUntil: Map<string, number>, latest: number): Transaction[] {
+ *  and every simulation, send and status of its transactions, which it keeps. A transaction `fails` picks fails its
+ *  simulation, so it is never sent. */
+function upkeepRpc(liveUntil: Map<string, number>, latest: number, fails: (tx: Transaction) => boolean = () => false): Transaction[] {
   const sent: Transaction[] = [];
   const keeperAccount = Keypair.fromPublicKey(SPONSOR.publicKey()).xdrAccountId();
   rpcAnswer = (method, params) => {
@@ -1254,6 +1439,7 @@ function upkeepRpc(liveUntil: Map<string, number>, latest: number): Transaction[
       }
       case "simulateTransaction": {
         const tx = TransactionBuilder.fromXDR(params.transaction, TESTNET.passphrase) as Transaction;
+        if (fails(tx)) return { latestLedger: latest, error: "HostError: Error(Budget, ExceededLimit)" };
         const fp = (tx.toEnvelope().v1().tx().ext().sorobanData() as xdr.SorobanTransactionData).resources().footprint();
         const data = new SorobanDataBuilder().setReadOnly(fp.readOnly()).setReadWrite(fp.readWrite()).setResources(0, 500, 0).build();
         return { latestLedger: latest, minResourceFee: "20000", transactionData: data.toXDR("base64"), results: [{ auth: [], xdr: xdr.ScVal.scvVoid().toXDR("base64") }], events: [] };
@@ -1316,13 +1502,17 @@ Deno.test("TTL upkeep run: the paths are checked every run whatever perRun; an a
   try {
     const policy = { thresholdDays: 10, extendToDays: 30, perRun: path.length + 1, idleDays: 90 };
     const report = await ttl.upkeep([offPath, ...path], policy, Date.now() + 10_000);
-    assertEquals([report.checked, report.restored, report.low, report.extended, report.missing, report.hashes.length], [path.length + 1, 1, 1, 2, 1, 2]);
-    // First the restore of the archived WASM alone, then one extension of it and the low instance.
-    assertEquals(sent.map((t) => t.operations[0].type), ["restoreFootprint", "extendFootprintTtl"]);
+    assertEquals([report.checked, report.restored, report.low, report.extended, report.missing, report.hashes.length], [path.length + 1, 1, 1, 2, 1, 4]);
+    // First the restore of the archived WASM alone; then the WASM alone, from the minimum TTL a restore leaves (counted
+    // as none), 25 days and then the rest; then the low instance.
+    assertEquals(sent.map((t) => t.operations[0].type), ["restoreFootprint", "extendFootprintTtl", "extendFootprintTtl", "extendFootprintTtl"]);
     assertEquals([keyIds(footprint(sent[0]).readWrite()), keyIds(footprint(sent[0]).readOnly())], [[code.key.toXDR("base64")], []]);
-    assertEquals(keyIds(footprint(sent[1]).readOnly()), [code.key.toXDR("base64"), low.key.toXDR("base64")]);
-    assertEquals((sent[1].operations[0] as any).extendTo, 30 * DAY_LEDGERS);
-    assertEquals(logged, [{ restored: ["code launchTokenV2"] }, { entries: ["code launchTokenV2", "instance launchpad-v2"] }]);
+    assertEquals(sent.slice(1).map((t) => [keyIds(footprint(t).readOnly()), (t.operations[0] as any).extendTo]), [
+      [[code.key.toXDR("base64")], 25 * DAY_LEDGERS],
+      [[code.key.toXDR("base64")], 30 * DAY_LEDGERS],
+      [[low.key.toXDR("base64")], 30 * DAY_LEDGERS],
+    ]);
+    assertEquals(logged, [{ restored: ["code launchTokenV2"] }, { entries: ["code launchTokenV2"] }, { entries: ["code launchTokenV2"] }, { entries: ["instance launchpad-v2"] }]);
 
     // All live: a perRun of 1 still checks the whole path, and sends nothing.
     for (const e of path) liveUntil.set(e.key.toXDR("base64"), latest + 20 * DAY_LEDGERS);
@@ -1348,9 +1538,90 @@ Deno.test("TTL upkeep before a graduation: upkeepPath restores the path's archiv
   try {
     const report = await ttl.upkeepPath(path, TESTNET.ttlPolicy, Date.now() + 10_000);
     assertEquals(report, { entries: path.length, archived: ["code soroswap pair"], restored: true, extended: ["code soroswap pair", "instance soroswap factory"] });
-    assertEquals(sent.map((t) => t.operations[0].type), ["restoreFootprint", "extendFootprintTtl"]);
+    assertEquals(sent.map((t) => t.operations[0].type), ["restoreFootprint", "extendFootprintTtl", "extendFootprintTtl", "extendFootprintTtl"]);
     assertEquals(keyIds(footprint(sent[0]).readWrite()), [pairCode.key.toXDR("base64")]);
+    assertEquals(sent.slice(1).map((t) => keyIds(footprint(t).readOnly())), [[pairCode.key.toXDR("base64")], [pairCode.key.toXDR("base64")], [factory.key.toXDR("base64")]]);
   } finally {
+    rpcAnswer = null;
+  }
+});
+
+Deno.test("TTL plans: each WASM alone, at most CODE_STEP_DAYS more a transaction; data entries DATA_PER_TX to one; restores of WASMs one by one", () => {
+  const code = (n: number) => ({ key: ttl.codeKey(H(n)), left: n * DAY_LEDGERS });
+  const data = (n: number) => ({ key: ttl.instanceKey(C(n)), left: 3 * DAY_LEDGERS });
+  const isCode = (e: { key: xdr.LedgerKey }) => e.key.switch().name === "contractCode";
+  assertEquals(ttl.codeSteps(0, 30 * DAY_LEDGERS), [25 * DAY_LEDGERS, 30 * DAY_LEDGERS]);
+  assertEquals(ttl.codeSteps(9 * DAY_LEDGERS, 30 * DAY_LEDGERS), [30 * DAY_LEDGERS]);
+  assertEquals(ttl.codeSteps(2 * DAY_LEDGERS, 150 * DAY_LEDGERS).map((s) => s / DAY_LEDGERS), [27, 52, 77, 102, 127, 150]);
+  const low = [code(1), ...Array.from({ length: 45 }, (_, i) => data(100 + i)), code(2)];
+  const plan = ttl.extensionPlan(low, (e) => e.left, 150);
+  // Every WASM transaction holds one WASM and adds at most 25 days; data entries never share one with a WASM.
+  const reached = new Map<string, number>();
+  for (const step of plan.filter((x) => isCode(x.entries[0]))) {
+    assertEquals(step.entries.length, 1);
+    const id = step.entries[0].key.toXDR("base64");
+    const from = reached.get(id) ?? step.entries[0].left;
+    assert(step.extendTo - from <= ttl.CODE_STEP_DAYS * DAY_LEDGERS, `a step adds ${(step.extendTo - from) / DAY_LEDGERS} days`);
+    reached.set(id, step.extendTo);
+  }
+  assertEquals([...reached.values()], [150 * DAY_LEDGERS, 150 * DAY_LEDGERS]);
+  const dataSteps = plan.filter((x) => !isCode(x.entries[0]));
+  assertEquals(dataSteps.map((x) => [x.entries.length, x.extendTo]), [[20, 150 * DAY_LEDGERS], [20, 150 * DAY_LEDGERS], [5, 150 * DAY_LEDGERS]]);
+  assert(dataSteps.every((x) => !x.entries.some(isCode)));
+  assertEquals(ttl.restorePlan(low).map((g) => [g.length, g.some(isCode)]), [[1, true], [1, true], [20, false], [20, false], [5, false]]);
+});
+
+Deno.test("TTL upkeep run: a whole path gone low together goes out in fee-sized transactions, the path first; one that fails stops neither the others nor the rotation, three in a row stop the run", async () => {
+  const latest = 5_400_000;
+  const path = ttl.v2PathEntries(QA_NET, SOROSWAP_CODE);
+  const offPath = [
+    ...Array.from({ length: 25 }, (_, i) => ({ key: ttl.instanceKey(C(180 + i)), label: `instance ${i}` })),
+    { key: ttl.codeKey(H(30)), label: "code v1 launchpad" },
+  ];
+  const all = [...path, ...offPath];
+  const id = (e: { key: xdr.LedgerKey }) => e.key.toXDR("base64");
+  // Entries extended together run low together: all of them 2 days from archiving.
+  const liveUntil = new Map(all.map((e) => [id(e), latest + 2 * DAY_LEDGERS]));
+  const nft = id(path.find((e) => e.label === "code momentNft")!);
+  let failing = (ids: string[]) => ids.includes(nft);
+  const sent = upkeepRpc(liveUntil, latest, (tx) => failing(keyIds(footprint(tx).readOnly())));
+  const checks: string[][] = [];
+  replaceSql(fakeSql((q, p) => {
+    if (q.startsWith("select key, checked_at from lite.ttl_checks")) return [];
+    if (q.startsWith("select to_regclass(")) return [{ present: true }];
+    if (q.startsWith("insert into lite.ttl_checks")) {
+      checks.push(p[0] as string[]);
+      return [];
+    }
+    if (q.startsWith("insert into lite.keeper_log") || q.startsWith("delete from lite.ttl_checks")) return [];
+    throw new Error(`unexpected query: ${q}`);
+  }));
+  const warn = console.warn;
+  const warned: string[] = [];
+  console.warn = (...a: unknown[]) => void warned.push(a.join(" "));
+  try {
+    const policy = { thresholdDays: 10, extendToDays: 30, perRun: 400, idleDays: 90 };
+    const report = await ttl.upkeep([...offPath, ...path], policy, Date.now() + 60_000);
+    const steps = sent.map((t) => [keyIds(footprint(t).readOnly()), (t.operations[0] as any).extendTo / DAY_LEDGERS]);
+    // The path's WASMs but the failing one, each alone: to 27 days (25 more), then 30.
+    const pathCodes = path.filter((e) => e.key.switch().name === "contractCode" && id(e) !== nft).flatMap((e) => [[[id(e)], 27], [[id(e)], 30]]);
+    assertEquals(steps.slice(0, pathCodes.length), pathCodes);
+    // Then the path's 10 data entries together; then the rotation's WASM alone and its 25 instances, 20 and 5.
+    assertEquals(steps.slice(pathCodes.length).map(([ids, days]) => [(ids as string[]).length, days]), [[10, 30], [1, 27], [1, 30], [20, 30], [5, 30]]);
+    assertEquals(report.extended, all.length - 1);
+    assert(warned.some((w) => w.includes("ttl: extension failed") && w.includes("code momentNft")));
+    // The failing WASM keeps its old check time, so it comes first next run.
+    assertFalse(checks.flat().includes(nft));
+    assertEquals(checks.flat().length, all.length - 1);
+
+    // Three failures in a row: the run stops there.
+    sent.length = 0;
+    failing = () => true;
+    const stopped = await ttl.upkeep([...offPath, ...path], policy, Date.now() + 60_000);
+    assertEquals([stopped.extended, sent.length], [0, 0]);
+    assertEquals(warned.filter((w) => w.includes("ttl: extension failed")).length, 1 + 3);
+  } finally {
+    console.warn = warn;
     rpcAnswer = null;
   }
 });

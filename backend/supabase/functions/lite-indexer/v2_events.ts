@@ -31,7 +31,7 @@ import { decodeMove, metadataFromJson } from "./handlers/moments.ts";
 import { cursorLedger, deploymentKey, handle as handleV1 } from "./jobs/main_events.ts";
 import { clearIndexed, resetAllowed } from "./jobs/reset.ts";
 import { CAUGHT_UP_LEDGERS, decodeTokenEvent, GROUP_SIZE, ledgerOf, mergeGroups, type Position, RETENTION_MARGIN } from "./jobs/watch.ts";
-import { fireAlert, gradFailAlert } from "./v2_keeper.ts";
+import { fireAlert, gradFailAlert, venueKindName } from "./v2_keeper.ts";
 
 type Event = rpc.Api.EventResponse;
 type Sql = postgres.Sql | postgres.TransactionSql;
@@ -49,8 +49,6 @@ export function timeOf(secs: unknown): Date | null {
   const n = Number(secs ?? 0);
   return n > 0 ? new Date(n * 1000) : null;
 }
-/** A #[contracttype] unit enum (VenueKind) as scValToNative gives it: ["Soroswap"]. */
-const variantName = (v: unknown): string => (Array.isArray(v) ? String(v[0]) : String(v));
 
 // ------------------------------------------------------------------------------------------------ launchpad-v2
 
@@ -397,6 +395,7 @@ export function decodeWithdrawn({ topics, data }: Decodable) {
 export interface LockRegistered {
   pool: string;
   owner: string;
+  /** The VenueKind by name: Soroswap, Aquarius, HoldOnly or QaFail. */
   kind: string;
   lpToken: string;
   lp: bigint;
@@ -409,14 +408,14 @@ export interface LockRegistered {
   principal: bigint;
 }
 
-/** lock_reg [lock_reg, pool, owner] {kind, lp_token, lp, base, quote, reference, harvest_bps, principal}; reference is
- *  PositionRef::Launch(token) or PositionRef::Moment(nft). */
+/** lock_reg [lock_reg, pool, owner] {kind, lp_token, lp, base, quote, reference, harvest_bps, principal}; kind is the
+ *  VenueKind's u32, kept by name; reference is PositionRef::Launch(token) or PositionRef::Moment(nft). */
 export function decodeLockReg({ topics, data }: Decodable): LockRegistered {
   const reference = data.reference as unknown[];
   return {
     pool: text(topics[1]),
     owner: text(topics[2]),
-    kind: variantName(data.kind),
+    kind: venueKindName(data.kind),
     lpToken: text(data.lp_token),
     lp: big(data.lp),
     base: text(data.base),

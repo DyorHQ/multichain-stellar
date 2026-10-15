@@ -4,7 +4,8 @@
 // run, each quote's settings in the launchpad and Moments, and the launchpad's entries of every live launch and the
 // Moments still collecting. A launch with no trade in `idleDays` and no holders is left to archive, which bounds what
 // spam launches can cost. Each run checks the entries checked longest ago first, at most `perRun`, and extends those
-// under the threshold while it has time.
+// under the threshold while it has time, in transactions whose fee stays under the cap: each WASM alone, a few weeks at
+// a time (extensionPlan).
 //
 // Contracts v2 (docs/DESIGN-stellar-contracts-v2.md §13) adds its singletons, every WASM its deployment uploaded, the
 // quotes' settings, and per launch, Moment, locked position, unvested collector and owed balance the entries their
@@ -81,25 +82,26 @@ export interface TtlReport {
   hashes: string[];
 }
 
-/** Extends every entry below `thresholdDays` to `extendToDays`, in batches: `contracts`' instances and WASMs and the
- *  WASMs in `extraCodeHashes`. For a deploy (deploy-contracts.ts), from the account it names. */
+/** Extends every entry below `thresholdDays` to `extendToDays`, in fee-sized transactions (extensionPlan):
+ *  `contracts`' instances and WASMs and the WASMs in `extraCodeHashes`. For a deploy, from the account it names. */
 export async function keepAlive(contracts: string[], extraCodeHashes: string[] = [], thresholdDays = 10, extendToDays = 30, payer: Keypair = keeper()): Promise<TtlReport> {
   if (contracts.length === 0 && extraCodeHashes.length === 0) return { checked: 0, extended: 0, fee: "0", hashes: [] };
   const latest = (await rpcServer().getLatestLedger()).sequence;
   const hashes = new Set([...extraCodeHashes, ...(contracts.length ? await codeHashes(contracts) : [])]);
   const keys = [...contracts.map(instanceKey), ...[...hashes].map(codeKey)];
-  const low: xdr.LedgerKey[] = [];
+  const low: { key: xdr.LedgerKey; left: number }[] = [];
   for (let i = 0; i < keys.length; i += 50) {
     const batch = keys.slice(i, i + 50);
     const r = await rpcServer().getLedgerEntries(...batch);
     for (const e of r.entries) {
-      if ((e.liveUntilLedgerSeq ?? 0) - latest < thresholdDays * DAY) low.push(e.key);
+      const left = (e.liveUntilLedgerSeq ?? 0) - latest;
+      if (left < thresholdDays * DAY) low.push({ key: e.key, left });
     }
   }
   let fee = 0n;
   const sent: string[] = [];
-  for (let i = 0; i < low.length; i += 20) {
-    const prepared = await prepare(await extendTx(payer.publicKey(), low.slice(i, i + 20), extendToDays));
+  for (const step of extensionPlan(low, (e) => e.left, extendToDays)) {
+    const prepared = await prepare(await extendTx(payer.publicKey(), step.entries.map((e) => e.key), step.extendTo));
     prepared.sign(payer);
     const hash = await sendSigned(prepared, "keeper");
     const s = await waitForTx(hash, 40_000);
@@ -111,14 +113,64 @@ export async function keepAlive(contracts: string[], extraCodeHashes: string[] =
   return { checked: keys.length, extended: low.length, fee: fee.toString(), hashes: sent };
 }
 
-/** An ExtendFootprintTTL of `keys` to `extendToDays` from `source`, before simulation. */
-async function extendTx(source: string, keys: xdr.LedgerKey[], extendToDays: number) {
+/** An ExtendFootprintTTL of `keys` to `extendTo` ledgers from now, from `source`, before simulation. */
+async function extendTx(source: string, keys: xdr.LedgerKey[], extendTo: number) {
   const acct = await rpcServer().getAccount(source);
   return new TransactionBuilder(acct, { fee: "100", networkPassphrase: env.network.passphrase })
-    .addOperation(Operation.extendFootprintTtl({ extendTo: extendToDays * DAY }))
+    .addOperation(Operation.extendFootprintTtl({ extendTo }))
     .setSorobanData(new SorobanDataBuilder().setReadOnly(keys).build())
     .setTimeout(120)
     .build();
+}
+
+// ------------------------------------------------------------------------------------------------ fee-sized transactions
+
+/** Days one transaction adds to one WASM, as in the deploy's backend/scripts/lib/ttl-extend.ts. A transaction's fee is a
+ *  uint32, at most 429.4967295 XLM. Testnet's rent on 2026-10-15 is about 0.08 XLM per KB of WASM a day, so a 128 KB
+ *  WASM (the largest the network takes) costs about 10.4 XLM a day: 25 days is about 260 XLM, 340 XLM with prepare's
+ *  headroom. v2's WASMs together (about 26 XLM a day) can't gain even 30 days in one transaction: each goes alone. */
+export const CODE_STEP_DAYS = 25;
+/** Data entries (instances, a launch's or a Moment's entries, each a few hundred bytes) to a transaction. */
+export const DATA_PER_TX = 20;
+
+const isCode = (key: xdr.LedgerKey) => key.switch().name === "contractCode";
+
+/** The relative TTLs (ledgers) a WASM with `left` ledgers to live is extended to, one transaction each: CODE_STEP_DAYS
+ *  more each time, the last one exactly `full`. */
+export function codeSteps(left: number, full: number, stepDays = CODE_STEP_DAYS): number[] {
+  const step = stepDays * DAY;
+  const out: number[] = [];
+  for (let s = Math.max(0, left) + step; s < full; s += step) out.push(s);
+  out.push(full);
+  return out;
+}
+
+/** One ExtendFootprintTTL: `entries` to `extendTo` ledgers from now. */
+export interface Extension<T> {
+  entries: T[];
+  extendTo: number;
+}
+
+/** The transactions that extend `low` to `extendToDays`, in order: each WASM alone, in steps from the ledgers it has
+ *  `left` (codeSteps), then the data entries DATA_PER_TX to a transaction. Each pays only the rent of the days it adds,
+ *  so no fee goes over the cap, however many entries ran low together. */
+export function extensionPlan<T extends { key: xdr.LedgerKey }>(low: T[], left: (e: T) => number, extendToDays: number): Extension<T>[] {
+  const full = extendToDays * DAY;
+  const plan: Extension<T>[] = [];
+  for (const e of low.filter((x) => isCode(x.key))) for (const extendTo of codeSteps(left(e), full)) plan.push({ entries: [e], extendTo });
+  const data = low.filter((x) => !isCode(x.key));
+  for (let i = 0; i < data.length; i += DATA_PER_TX) plan.push({ entries: data.slice(i, i + DATA_PER_TX), extendTo: full });
+  return plan;
+}
+
+/** The transactions that restore `archived`: each WASM alone (a restore writes the whole entry, and one WASM can take
+ *  most of a transaction's write limit), the data entries DATA_PER_TX to a transaction. A restore can't be split in
+ *  days: it always pays the network's minimum TTL. */
+export function restorePlan<T extends { key: xdr.LedgerKey }>(archived: T[]): T[][] {
+  const groups = archived.filter((x) => isCode(x.key)).map((e) => [e]);
+  const data = archived.filter((x) => !isCode(x.key));
+  for (let i = 0; i < data.length; i += DATA_PER_TX) groups.push(data.slice(i, i + DATA_PER_TX));
+  return groups;
 }
 
 // ------------------------------------------------------------------------------------------------ the keeper's rotation
@@ -380,8 +432,9 @@ export interface UpkeepReport {
   hashes: string[];
 }
 
-/** Keys per extension: well inside a transaction's footprint limit. */
-const EXTEND_BATCH = 25;
+/** A run stops sending after this many of its transactions in a row didn't apply (a keeper out of XLM fails them all);
+ *  one that fails alone doesn't stop the ones after it. */
+const FAILURES_IN_A_ROW = 3;
 
 /** Each entry's TTL against the ledger RPC read it at: `live` says whether an entry is live. An entry past its TTL is
  *  archived, even while RPC still returns it: no extension reaches it, and one in a batch would fail that batch's
@@ -412,14 +465,15 @@ async function sendUpkeep(tx: Transaction, detail: Record<string, unknown>, dead
   return { hash, fee: BigInt(s.feeCharged ?? prepared.fee) };
 }
 
-/** Extends `entries` to `extendToDays` from the keeper's account, in one transaction. */
-async function extendEntries(entries: TtlEntry[], extendToDays: number, deadline: number) {
-  const extend = await prepare(await extendTx(keeper().publicKey(), entries.map((e) => e.key), extendToDays));
+/** Extends `entries` to `extendTo` ledgers from now, from the keeper's account, in one transaction. */
+async function extendEntries(entries: TtlEntry[], extendTo: number, deadline: number) {
+  const extend = await prepare(await extendTx(keeper().publicKey(), entries.map((e) => e.key), extendTo));
   return await sendUpkeep(extend, { entries: entries.map((e) => e.label) }, deadline);
 }
 
-/** Restores archived `entries` from the keeper's account, in a transaction of their own: whatever needs them runs in a
- *  later one. A restored entry lives only the network's minimum TTL, so it is extended next. */
+/** Restores archived `entries` (one group of restorePlan) from the keeper's account, in a transaction of their own:
+ *  whatever needs them runs in a later one. A restored entry lives only the network's minimum TTL, so it is extended
+ *  next. */
 export async function restoreEntries(entries: TtlEntry[], deadline: number) {
   const acct = await rpcServer().getAccount(keeper().publicKey());
   const tx = new TransactionBuilder(acct, { fee: "100", networkPassphrase: env.network.passphrase })
@@ -430,11 +484,75 @@ export async function restoreEntries(entries: TtlEntry[], deadline: number) {
   return await sendUpkeep(await prepare(tx), { restored: entries.map((e) => e.label) }, deadline);
 }
 
+type Keyed = TtlEntry & { id: string };
+
+/** Sends `groups` in order, one transaction each, until `deadline`: a transaction that doesn't apply is logged and the
+ *  next one goes on, but after FAILURES_IN_A_ROW in a row the run stops. An entry whose transaction failed sends none
+ *  of its later steps this run (each step adds only CODE_STEP_DAYS). Answers the entries all of whose transactions
+ *  applied, and what they cost. */
+async function sendEach<G extends { entries: Keyed[] }>(
+  groups: G[],
+  deadline: number,
+  what: string,
+  send: (group: G, entries: Keyed[]) => Promise<{ hash: string; fee: bigint } | null>,
+): Promise<{ done: Set<string>; fee: bigint; hashes: string[] }> {
+  const planned = new Map<string, number>();
+  for (const g of groups) for (const e of g.entries) planned.set(e.id, (planned.get(e.id) ?? 0) + 1);
+  const applied = new Map<string, number>();
+  const failed = new Set<string>();
+  const out = { done: new Set<string>(), fee: 0n, hashes: [] as string[] };
+  let inARow = 0;
+  for (const g of groups) {
+    if (Date.now() >= deadline || inARow >= FAILURES_IN_A_ROW) break;
+    const entries = g.entries.filter((e) => !failed.has(e.id));
+    if (!entries.length) continue;
+    let sent: { hash: string; fee: bigint } | null = null;
+    try {
+      sent = await send(g, entries);
+      if (!sent) console.warn(`ttl: ${what} didn't apply`, entries.map((e) => e.label).join(", "));
+    } catch (err) {
+      console.warn(`ttl: ${what} failed`, entries.map((e) => e.label).join(", "), String((err as Error).message ?? err).slice(0, 200));
+    }
+    if (!sent) {
+      inARow++;
+      for (const e of entries) failed.add(e.id);
+      continue;
+    }
+    inARow = 0;
+    out.fee += sent.fee;
+    out.hashes.push(sent.hash);
+    for (const e of entries) applied.set(e.id, (applied.get(e.id) ?? 0) + 1);
+  }
+  for (const [id, n] of applied) if (n === planned.get(id)) out.done.add(id);
+  return out;
+}
+
+/** Restores `archived` (restorePlan), then extends the restored ones (from the network's minimum TTL, counted as none
+ *  left) and the live ones under `policy`'s threshold (extensionPlan), `first` before the others, until `deadline`. */
+async function restoreAndExtend(first: Keyed[], others: Keyed[], archived: Keyed[], ttl: Awaited<ReturnType<typeof readTtl>>, policy: TtlPolicy, deadline: number) {
+  const restores = await sendEach(restorePlan(archived).map((entries) => ({ entries })), deadline, "restore", (_g, part) => restoreEntries(part, deadline));
+  const restored = restores.done;
+  const low = (e: Keyed) => ttl.live(e) && needsExtending(ttl.liveUntil.get(e.id)!, ttl.readAt.get(e.id)!, policy);
+  const left = (e: Keyed) => (restored.has(e.id) ? 0 : ttl.liveUntil.get(e.id)! - ttl.readAt.get(e.id)!);
+  const lowFirst = [...archived.filter((e) => restored.has(e.id)), ...first.filter(low)];
+  const lowOthers = others.filter(low);
+  const plan = [...extensionPlan(lowFirst, left, policy.extendToDays), ...extensionPlan(lowOthers, left, policy.extendToDays)];
+  const extensions = await sendEach(plan, deadline, "extension", (step, part) => extendEntries(part, step.extendTo, deadline));
+  return {
+    restored,
+    /** The entries to extend, the restored ones first. */
+    low: [...lowFirst, ...lowOthers],
+    extended: extensions.done,
+    fee: restores.fee + extensions.fee,
+    hashes: [...restores.hashes, ...extensions.hashes],
+  };
+}
+
 /** One run of the rotation: checks the critical entries (the graduation and harvest paths) every run and the others as
- *  rotation() orders them, within `perRun`; restores the critical ones found archived, in a transaction of their own;
- *  extends the low ones (and those restored) by batch from the keeper's account, one transaction at a time, until
- *  `deadline` (ms since the epoch); and records each check in lite.ttl_checks. A low entry it had no time for keeps its
- *  old check time, so it comes first next run. */
+ *  rotation() orders them, within `perRun`; restores the critical ones found archived, in transactions of their own;
+ *  extends the low ones (and those restored), the critical first, in fee-sized transactions (extensionPlan) from the
+ *  keeper's account, one at a time, until `deadline` (ms since the epoch); and records each check in lite.ttl_checks.
+ *  A low entry it had no time for, or whose extension failed, keeps its old check time, so it comes first next run. */
 export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: number): Promise<UpkeepReport> {
   const all = entries.map((e) => ({ ...e, id: e.key.toXDR("base64") }));
   const ids = [...new Set(all.map((e) => e.id))];
@@ -446,44 +564,16 @@ export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: n
   const report: UpkeepReport = { entries: ids.length, checked: batch.length, low: 0, extended: 0, missing: 0, restored: 0, fee: "0", hashes: [] };
   if (batch.length === 0) return report;
 
-  const { latest, liveUntil, readAt, live } = await readTtl(batch);
-  let fee = 0n;
+  const ttl = await readTtl(batch);
+  const { latest, liveUntil, live } = ttl;
   const archived = critical.filter((e) => !live(e));
-  const restored = new Set<string>();
-  if (archived.length && Date.now() < deadline) {
-    try {
-      const sent = await restoreEntries(archived, deadline);
-      if (sent) {
-        for (const e of archived) restored.add(e.id);
-        fee += sent.fee;
-        report.hashes.push(sent.hash);
-      }
-    } catch (err) {
-      console.warn("ttl: restore failed", archived.map((e) => e.label).join(", "), String((err as Error).message ?? err).slice(0, 200));
-    }
-  }
-  const lowLive = batch.filter((e) => live(e) && needsExtending(liveUntil.get(e.id)!, readAt.get(e.id)!, policy));
-  const low = [...archived.filter((e) => restored.has(e.id)), ...lowLive];
+  const { restored, low, extended, fee, hashes } = await restoreAndExtend(critical, batch.filter((e) => !criticalIds.has(e.id)), archived, ttl, policy, deadline);
   report.restored = restored.size;
-  report.low = lowLive.length;
+  report.low = low.length - restored.size;
   report.missing = batch.filter((e) => !live(e) && !restored.has(e.id)).length;
-
-  const extended = new Set<string>();
-  for (let i = 0; i < low.length && Date.now() < deadline; i += EXTEND_BATCH) {
-    const part = low.slice(i, i + EXTEND_BATCH);
-    try {
-      const sent = await extendEntries(part, policy.extendToDays, deadline);
-      if (!sent) break;
-      for (const e of part) extended.add(e.id);
-      fee += sent.fee;
-      report.hashes.push(sent.hash);
-    } catch (err) {
-      console.warn("ttl: extension failed", String((err as Error).message ?? err).slice(0, 200));
-      break;
-    }
-  }
   report.extended = extended.size;
   report.fee = fee.toString();
+  report.hashes = hashes;
 
   const lowIds = new Set(low.map((e) => e.id));
   const done = batch.filter((e) => !lowIds.has(e.id) || extended.has(e.id));
@@ -505,37 +595,23 @@ export interface PathReport {
   /** Archived when read. While any was, nothing graduates or harvests in this run, restored or not: a restored WASM
    *  is in the module cache from a later ledger. */
   archived: string[];
+  /** Every archived entry was restored. */
   restored: boolean;
   /** Under the threshold (or just restored), extended now rather than in their turn. */
   extended: string[];
 }
 
-/** Checks the paths' `entries` (v2PathEntries) now: restores the archived ones in a transaction of their own, then
- *  extends those under `policy`'s threshold, the restored ones included, until `deadline`. */
+/** Checks the paths' `entries` (v2PathEntries) now: restores the archived ones in transactions of their own, then
+ *  extends those under `policy`'s threshold, the restored ones included, in fee-sized transactions, until `deadline`. */
 export async function upkeepPath(entries: TtlEntry[], policy: TtlPolicy, deadline: number): Promise<PathReport> {
   const all = rotation(entries.map((e) => ({ ...e, id: e.key.toXDR("base64") })), new Map(), Infinity);
   const report: PathReport = { entries: all.length, archived: [], restored: false, extended: [] };
   if (all.length === 0) return report;
-  const { liveUntil, readAt, live } = await readTtl(all);
-  const archived = all.filter((e) => !live(e));
+  const ttl = await readTtl(all);
+  const archived = all.filter((e) => !ttl.live(e));
   report.archived = archived.map((e) => e.label);
-  if (archived.length) {
-    try {
-      report.restored = (await restoreEntries(archived, deadline)) !== null;
-    } catch (err) {
-      console.warn("keeper: the graduation path's restore failed", report.archived.join(", "), String((err as Error).message ?? err).slice(0, 200));
-    }
-  }
-  const low = [...(report.restored ? archived : []), ...all.filter((e) => live(e) && needsExtending(liveUntil.get(e.id)!, readAt.get(e.id)!, policy))];
-  for (let i = 0; i < low.length && Date.now() < deadline; i += EXTEND_BATCH) {
-    const part = low.slice(i, i + EXTEND_BATCH);
-    try {
-      if (!(await extendEntries(part, policy.extendToDays, deadline))) break;
-      report.extended.push(...part.map((e) => e.label));
-    } catch (err) {
-      console.warn("keeper: the graduation path's extension failed", String((err as Error).message ?? err).slice(0, 200));
-      break;
-    }
-  }
+  const { restored, low, extended } = await restoreAndExtend(all, [], archived, ttl, policy, deadline);
+  report.restored = archived.length > 0 && restored.size === archived.length;
+  report.extended = low.filter((e) => extended.has(e.id)).map((e) => e.label);
   return report;
 }

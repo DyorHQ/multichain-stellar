@@ -20,6 +20,10 @@
 //   again a day before its backstop.
 // - lite.keeper_skip (F5, V5): on testnet-qa every job above that acts on a launch or a Moment checks it (graduate,
 //   fallback, mark_stuck, rescue, expire, harvest); anywhere else its rows are ignored, with a warning.
+// - Queues. Each job takes, within its per-run limit, the rows it looked at longest ago (or never) first, records each
+//   look (launches' and Moments' keeper_checked_at, launches' fees_checked_at, positions' and pools' next_check_at),
+//   and goes on past a row that throws. Rows the keeper can't move (a launch stuck on its venue until rescue, a
+//   position with nothing to harvest, a batch its treasury refuses) never hold up the ones behind them.
 // - The paths first (lead note on CT-15): a graduation stays under the per-transaction memory limit only while every
 //   code entry it runs is live; archived code misses the module cache, and the abort can't be recorded. Before it
 //   graduates or harvests anything, the keeper checks the paths' code and instances (_shared/ttl.ts v2PathEntries),
@@ -28,6 +32,7 @@
 //   A graduation whose simulation runs out of budget is alerted.
 import { rpc, type xdr as Xdr } from "@stellar/stellar-sdk";
 import { sql, tableExists } from "../_shared/db.ts";
+import type { VenueKindV2 } from "../_shared/deployments/index.ts";
 import { env } from "../_shared/env.ts";
 import { inclusionFee } from "../_shared/fees.ts";
 import type { NetworkConfig } from "../_shared/networks.ts";
@@ -349,6 +354,13 @@ export function harvestDue(h: unknown[], now: number, floor: bigint): boolean {
   return BigInt(lpToBurn) > 0n && BigInt(growth) > floor && now >= Number(nextAt) * 1000;
 }
 
+/** When to look again at a position that isn't due: at its next_at while its interval runs, else one interval on
+ *  (nothing to burn, or growth not above the floor yet). */
+export function harvestRecheck(h: unknown[], now: number, intervalMs: number): number {
+  const nextAt = Number((h as bigint[])[4]) * 1000;
+  return nextAt > now ? nextAt : now + intervalMs;
+}
+
 /** The harvest floor in the position's √k units: 0 on testnet (A8e). Mainnet's (at least the keeper's fee over the
  *  protocol's share, A10) is deferred with mainnet (§23.2): no v2 runs there. */
 export function harvestFloor(net: Pick<NetworkConfig, "name">): bigint | null {
@@ -472,9 +484,19 @@ export async function fireAlert(a: Alert): Promise<boolean> {
 
 // ------------------------------------------------------------------------------------------------ the jobs
 
-/** VenueKind as a contract argument: the unit variant's name. */
-function venueKindArg(kind: "soroswap" | "aquarius"): Xdr.ScVal {
-  return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(kind === "soroswap" ? "Soroswap" : "Aquarius")]);
+/** dyor_common::VenueKind by value (contracts/common/src/types.rs). It is a #[repr(u32)] enum, so it crosses the wire as
+ *  its u32, in arguments and in events alike, as the deploy kit's VenueKindT encodes it. */
+export const VENUE_KINDS: readonly VenueKindV2[] = ["Soroswap", "Aquarius", "HoldOnly", "QaFail"];
+
+/** A VenueKind from an event (scValToNative gives the u32) by name; a value outside the enum as its number. */
+export function venueKindName(v: unknown): string {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 && n < VENUE_KINDS.length ? VENUE_KINDS[n] : String(v);
+}
+
+/** VenueKind as a contract argument: its u32. */
+export function venueKindArg(kind: "soroswap" | "aquarius"): Xdr.ScVal {
+  return xdr.ScVal.scvU32(VENUE_KINDS.indexOf(kind === "soroswap" ? "Soroswap" : "Aquarius"));
 }
 
 /** How long a run may keep sending, from its start, so the jobs after it (bridges, ttl) keep their time. */
@@ -483,6 +505,24 @@ const LAUNCHES_PER_RUN = 20;
 const MOMENTS_PER_RUN = 20;
 const HARVESTS_PER_RUN = 10;
 const POOLS_PER_RUN = 10;
+/** A row whose check failed (a view that threw, a simulation or a send that didn't go through) is looked at again
+ *  this much later. */
+const RETRY_MS = 10 * 60_000;
+
+/** Runs `job` on each row in turn while `timeLeft()`, each whatever the others do: an error is logged and the next row
+ *  goes on. Every queue takes the rows it looked at longest ago (or never) first and records each look, so rows the
+ *  keeper can't move this run (a launch stuck on its venue, a position with nothing to harvest, a view that throws)
+ *  never hold up the ones after them. */
+async function eachRow<T>(rows: T[], timeLeft: () => boolean, label: (row: T) => string, job: (row: T) => Promise<void>): Promise<void> {
+  for (const row of rows) {
+    if (!timeLeft()) break;
+    try {
+      await job(row);
+    } catch (err) {
+      console.warn(`keeper: ${label(row)}:`, String((err as Error).message ?? err).slice(0, 200));
+    }
+  }
+}
 
 export interface KeeperV2Report {
   sent: { job: KeeperJobV2 | "restore"; target: string; ok: boolean }[];
@@ -542,18 +582,23 @@ export async function keeperV2(net: NetworkConfig = env.network, chain: Chain = 
   const pad = d.contracts.launchpadV2;
   const stacks = [d.contracts.momentsV2, ...(d.qa ? [d.qa.momentsV2QaFail] : [])];
   const floor = harvestFloor(net);
+  const intervalMs = d.durations.launch.harvest_interval * 1000;
+  // Each queue takes the rows the keeper looked at longest ago (or never) first, and records each look (eachRow).
   const launches = await sql()`
-    select token from lite.launches where generation = 2 and contract = ${pad} and phase = 'completed' order by completed_at nulls first limit ${LAUNCHES_PER_RUN}`;
+    select token from lite.launches where generation = 2 and contract = ${pad} and phase = 'completed'
+     order by keeper_checked_at nulls first, completed_at limit ${LAUNCHES_PER_RUN}`;
   const moments = await sql()`
     select nft, contract, deadline, durations from lite.moments
      where generation = 2 and contract = any(${stacks}::text[])
        and (state = 'graduation_pending' or (state = 'collecting' and deadline <= now()))
-     order by deadline limit ${MOMENTS_PER_RUN}`;
+     order by keeper_checked_at nulls first, deadline limit ${MOMENTS_PER_RUN}`;
+  // The locker harvests neither HoldOnly nor QaFail positions.
   const positions = floor === null ? [] : await sql()`
     select pool, ref_kind, ref from lite.locker_positions
-     where locker = ${d.contracts.lpLocker}
+     where locker = ${d.contracts.lpLocker} and kind not in ('HoldOnly', 'QaFail')
        and coalesce(last_harvest_at, registered_at) <= now() - make_interval(secs => ${d.durations.launch.harvest_interval})
-     order by coalesce(last_harvest_at, registered_at) limit ${HARVESTS_PER_RUN}`;
+       and (next_check_at is null or next_check_at <= now())
+     order by checked_at nulls first, coalesce(last_harvest_at, registered_at) limit ${HARVESTS_PER_RUN}`;
 
   // The paths before anything runs them: with an entry archived nothing graduates or harvests this run.
   let pathLive = true;
@@ -566,24 +611,24 @@ export async function keeperV2(net: NetworkConfig = env.network, chain: Chain = 
   }
 
   // Launches waiting for graduation.
-  for (const l of pathLive ? launches : []) {
-    if (!timeLeft()) break;
+  await eachRow(pathLive ? launches : [], timeLeft, (l) => `launch ${l.token}`, async (l) => {
     const token = String(l.token);
+    await sql()`update lite.launches set keeper_checked_at = now() where token = ${token}`;
     const skip = (job: SkipJob) => skips.skipped("launch", token, job);
     const st = launchStatusOf(await chain.view(pad, "status", [sv.addr(token)]));
     const now = chain.now();
     await alert(stuckAlert(token, st.stuckSince, d.durations.launch.fallback_delay * 1000, now));
     const sim = simulator("launch", pad, token);
-    if (st.phase === PHASE_COMPLETED && (await restoredFirst(sim, token, skip))) continue;
+    if (st.phase === PHASE_COMPLETED && (await restoredFirst(sim, token, skip))) return;
     const decision = await decideLaunch(st, now, sim, skip);
     if (decision) await send(decision.fn, pad, decision.fn, [sv.addr(token)], token);
-  }
+  });
 
   // Moments waiting for graduation, and those past their deadline (both stacks on testnet-qa).
-  for (const m of pathLive ? moments : []) {
-    if (!timeLeft()) break;
+  await eachRow(pathLive ? moments : [], timeLeft, (m) => `Moment ${m.nft}`, async (m) => {
     const nft = String(m.nft);
     const contract = String(m.contract);
+    await sql()`update lite.moments set keeper_checked_at = now() where nft = ${nft}`;
     const skip = (job: SkipJob) => skips.skipped("moment", nft, job);
     const ledger = await chain.view(contract, "ledger", [sv.addr(nft)]);
     const durations = (m.durations ?? {}) as Record<string, number>;
@@ -598,30 +643,42 @@ export async function keeperV2(net: NetworkConfig = env.network, chain: Chain = 
     const now = chain.now();
     for (const a of pendingAlerts(nft, status, now)) await alert(a);
     const sim = simulator("moment", contract, nft);
-    if (status.state === STATE_PENDING && (await restoredFirst(sim, nft, skip))) continue;
+    if (status.state === STATE_PENDING && (await restoredFirst(sim, nft, skip))) return;
     const decision = await decideMoment(status, now, sim, skip);
     if (decision) await send(decision.fn, contract, decision.fn, [sv.addr(nft)], nft);
-  }
+  });
 
-  // Harvests, once per interval above the floor.
-  for (const p of pathLive && floor !== null ? positions : []) {
-    if (!timeLeft()) break;
+  // Harvests, once per interval above the floor. Every position looked at gets its next look: at its next_at or an
+  // interval on when it isn't due, an interval on once harvested, RETRY_MS on when a check failed, the next run after a
+  // restore or while keeper_skip holds it.
+  await eachRow(pathLive && floor !== null ? positions : [], timeLeft, (p) => `position ${p.pool}`, async (p) => {
     const pool = String(p.pool);
     const ref = String(p.ref);
-    if (skips.skipped(p.ref_kind === "moment" ? "moment" : "launch", ref, "harvest")) continue;
-    let h: unknown[];
+    let next: number | null = chain.now() + RETRY_MS;
     try {
-      h = await chain.view(d.contracts.lpLocker, "harvestable", [sv.addr(pool)]);
-    } catch {
-      // A kind the locker doesn't harvest (HoldOnly, QaFail) or a pool it can't read now.
-      continue;
+      if (skips.skipped(p.ref_kind === "moment" ? "moment" : "launch", ref, "harvest")) {
+        next = null;
+        return;
+      }
+      // Throws for a pool the locker can't read now: looked at again in RETRY_MS.
+      const h: unknown[] = await chain.view(d.contracts.lpLocker, "harvestable", [sv.addr(pool)]);
+      if (!harvestDue(h, chain.now(), floor!)) {
+        next = harvestRecheck(h, chain.now(), intervalMs);
+        return;
+      }
+      const sim = await chain.simulate(d.contracts.lpLocker, "harvest", [sv.addr(pool)]);
+      if (!sim.ok && sim.restore) {
+        // A graduated launch's Curve, which every harvest reads and nothing writes, may have archived (§13): restored
+        // first, harvested the next run.
+        report.sent.push({ job: "restore", target: ref, ok: await chain.restore(sim.restore, ref) });
+        next = null;
+      } else if (sim.ok && (await send("harvest", d.contracts.lpLocker, "harvest", [sv.addr(pool)], ref))) {
+        next = chain.now() + intervalMs;
+      }
+    } finally {
+      await sql()`update lite.locker_positions set checked_at = now(), next_check_at = ${next === null ? null : new Date(next)} where pool = ${pool}`;
     }
-    if (!harvestDue(h, chain.now(), floor!)) continue;
-    const sim = await chain.simulate(d.contracts.lpLocker, "harvest", [sv.addr(pool)]);
-    // A graduated launch's Curve, which every harvest reads and nothing writes, may have archived (§13): restored first.
-    if (!sim.ok && sim.restore) report.sent.push({ job: "restore", target: ref, ok: await chain.restore(sim.restore, ref) });
-    else if (sim.ok) await send("harvest", d.contracts.lpLocker, "harvest", [sv.addr(pool)], ref);
-  }
+  });
 
   // After a treasury change, every graduated sharing launch excludes the new treasury from its holder rewards (V2).
   if (timeLeft()) {
@@ -629,16 +686,16 @@ export async function keeperV2(net: NetworkConfig = env.network, chain: Chain = 
     const graduated = await sql()`
       select token from lite.launches
        where generation = 2 and contract = ${pad} and phase = 'graduated' and holder_sharing and treasury_checked is distinct from ${treasury}
-       order by graduated_at limit ${LAUNCHES_PER_RUN}`;
-    for (const g of graduated) {
-      if (!timeLeft()) break;
+       order by keeper_checked_at nulls first, graduated_at limit ${LAUNCHES_PER_RUN}`;
+    await eachRow(graduated, timeLeft, (g) => `exclude_treasury ${g.token}`, async (g) => {
       const token = String(g.token);
+      await sql()`update lite.launches set keeper_checked_at = now() where token = ${token}`;
       const sim = await chain.simulate(token, "exclude_treasury", []);
-      if (!sim.ok) continue;
+      if (!sim.ok) return;
       // False: it is excluded already (from birth, or by a harvest or sweep since).
-      if (sim.value === true && !(await send("exclude_treasury", token, "exclude_treasury", [], token))) continue;
+      if (sim.value === true && !(await send("exclude_treasury", token, "exclude_treasury", [], token))) return;
       await sql()`update lite.launches set treasury_checked = ${treasury} where token = ${token}`;
-    }
+    });
   }
 
   // Other pools of sharing launches, only when exclude_pool's simulation passes the floor (F2).
@@ -647,22 +704,27 @@ export async function keeperV2(net: NetworkConfig = env.network, chain: Chain = 
       select c.pool, c.token, c.other, c.kind from lite.pool_candidates c join lite.launches l on l.token = c.token
        where l.generation = 2 and l.contract = ${pad} and c.status in ('pending', 'below_floor') and (c.next_check_at is null or c.next_check_at <= now())
        order by c.next_check_at nulls first limit ${POOLS_PER_RUN}`;
-    for (const c of pools) {
-      if (!timeLeft()) break;
+    await eachRow(pools, timeLeft, (c) => `exclude_pool ${c.pool}`, async (c) => {
       const token = String(c.token);
       const pool = String(c.pool);
-      const args = [venueKindArg(c.kind as "soroswap" | "aquarius"), sv.addr(String(c.other)), sv.addr(pool)];
-      const sim = await chain.simulate(token, "exclude_pool", args);
-      let verdict = poolVerdict(sim);
-      if (verdict === "send") verdict = (await send("exclude_pool", token, "exclude_pool", args, pool)) ? "excluded" : "retry";
-      const status = verdict === "retry" ? null : verdict;
-      const recheck = verdict === "below_floor" ? "1 hour" : verdict === "retry" ? "10 minutes" : null;
-      await sql()`
-        update lite.pool_candidates set status = coalesce(${status}, status), checked_at = now(),
-               next_check_at = case when ${recheck}::interval is null then null else now() + ${recheck}::interval end,
-               error = ${sim.ok ? null : sim.error.slice(0, 200)}
-         where pool = ${pool} and token = ${token}`;
-    }
+      let verdict: "excluded" | "below_floor" | "rejected" | "retry" = "retry";
+      let error: string | null = null;
+      try {
+        const args = [venueKindArg(c.kind as "soroswap" | "aquarius"), sv.addr(String(c.other)), sv.addr(pool)];
+        const sim = await chain.simulate(token, "exclude_pool", args);
+        if (!sim.ok) error = sim.error.slice(0, 200);
+        const v = poolVerdict(sim);
+        verdict = v === "send" ? ((await send("exclude_pool", token, "exclude_pool", args, pool)) ? "excluded" : "retry") : v;
+      } finally {
+        const status = verdict === "retry" ? null : verdict;
+        const recheck = verdict === "below_floor" ? "1 hour" : verdict === "retry" ? "10 minutes" : null;
+        await sql()`
+          update lite.pool_candidates set status = coalesce(${status}, status), checked_at = now(),
+                 next_check_at = case when ${recheck}::interval is null then null else now() + ${recheck}::interval end,
+                 error = ${error}
+           where pool = ${pool} and token = ${token}`;
+      }
+    });
   }
 
   // The Aquarius executor's float, where the deployment has it.
@@ -688,24 +750,30 @@ export async function keeperV2Fees(net: NetworkConfig = env.network, chain: Chai
   const until = chain.now() + RUN_MS;
   const report: KeeperV2Report = { sent: [], alerts: [], skippedRows: 0 };
   const pad = d.contracts.launchpadV2;
+  const timeLeft = () => chain.now() < until;
+  // Both take the launches whose fees the keeper tried longest ago (or never) first, so batches that keep failing (a
+  // treasury that can't take an asset) never hold up the others.
   const due = await sql()`
     select token, quote from lite.launches
-     where generation = 2 and contract = ${pad} and (protocol_fees_due > 0 or launch_fee_due > 0) order by quote, token limit 200`;
-  for (const b of feeBatches(due.map((r) => ({ token: String(r.token), quote: String(r.quote) })))) {
-    if (chain.now() >= until) break;
+     where generation = 2 and contract = ${pad} and (protocol_fees_due > 0 or launch_fee_due > 0)
+     order by fees_checked_at nulls first, quote, token limit 200`;
+  const batches = feeBatches(due.map((r) => ({ token: String(r.token), quote: String(r.quote) })));
+  await eachRow(batches, timeLeft, (b) => `claim_protocol_fees ${b.quote}`, async (b) => {
+    await sql()`update lite.launches set fees_checked_at = now() where token = any(${b.tokens}::text[])`;
     const args = [sv.vec(b.tokens.map((t) => sv.addr(t)))];
-    if (!(await chain.simulate(pad, "claim_protocol_fees", args)).ok) continue;
+    if (!(await chain.simulate(pad, "claim_protocol_fees", args)).ok) return;
     report.sent.push({ job: "claim_protocol_fees", target: b.quote, ok: await chain.send("claim_protocol_fees", pad, "claim_protocol_fees", args, b.quote) });
-  }
+  });
   const sweeps = await sql()`
-    select distinct r.token from lite.launch_rewards r join lite.launches l on l.token = r.token
-     where l.generation = 2 and l.contract = ${pad} and r.to_protocol + r.stranded > r.swept order by r.token limit 20`;
-  for (const r of sweeps) {
-    if (chain.now() >= until) break;
+    select r.token from lite.launch_rewards r join lite.launches l on l.token = r.token
+     where l.generation = 2 and l.contract = ${pad} and r.to_protocol + r.stranded > r.swept
+     group by r.token, l.fees_checked_at order by l.fees_checked_at nulls first, r.token limit 20`;
+  await eachRow(sweeps, timeLeft, (r) => `sweep_protocol ${r.token}`, async (r) => {
     const token = String(r.token);
-    if (!(await chain.simulate(token, "sweep_protocol", [])).ok) continue;
+    await sql()`update lite.launches set fees_checked_at = now() where token = ${token}`;
+    if (!(await chain.simulate(token, "sweep_protocol", [])).ok) return;
     report.sent.push({ job: "sweep_protocol", target: token, ok: await chain.send("sweep_protocol", token, "sweep_protocol", [], token) });
-  }
+  });
   return report;
 }
 
