@@ -9,19 +9,17 @@
     "auth": true
   },
   "response": {
-    "status": 200,
+    "status": 502,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store"
     },
     "body": {
-      "route": "cctp",
-      "direction": "stellar_to_monad",
-      "amountIn": "10000000",
-      "amountOut": "1000000",
-      "fee": "0",
-      "etaSeconds": 120,
-      "note": "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar."
+      "error": {
+        "code": "bridge_quote_failed",
+        "message": "The bridge fee isn't available right now. Try again in a minute.",
+        "detail": null
+      }
     }
   },
   "anonymous": {
