@@ -120,6 +120,26 @@ pub enum GradMode {
     LpTokenNotPool = 12,
     /// Leaves one coin unit unused and burns it, reported truthfully: within the 1 bp dust, so it graduates.
     CoinDust = 13,
+    // Lies that break exactly one of moments-v2's checks, each trapped by that check alone (the review's mutation
+    // run): everything else about the result is true and the pool is fully seeded, so the liquidity, LP and other
+    // checks all pass.
+    /// Seeds every pool coin but reports 10 bp fewer used: only the V9 coin floor catches it.
+    CoinFloorLie = 14,
+    /// Seeds the whole reserve and reports `(reserve − 10, 10)` without sending the 10 back: only the balance delta
+    /// (the I-M2 guard) catches it.
+    DeltaLie = 15,
+    /// Seeds half of moments' reserve and half of its own USDC, returning the other half of the reserve, reported
+    /// truthfully: the pool is full, but more than 1 bp of the reserve went unused. Only the USDC floor catches it.
+    UsdcFloorLie = 16,
+    /// Seeds the real pair honestly but reports the decoy pair (`set_decoy`), whose LP the locker holds: only the
+    /// factory's `get_pair` catches it.
+    DecoyPool = 17,
+    /// Pulls the reserve a second time; moments-v2 authorized one pull, so the host refuses it.
+    DoublePull = 18,
+    /// A donation of `DONATION` USDC lands in the pair before the deposit; the graduator counts it toward the seed and
+    /// returns as much of the reserve to moments-v2, reported truthfully: within the 1 bp dust, so it graduates and
+    /// the treasury is owed the return.
+    UsesDonation = 19,
 }
 
 #[soroban_sdk::contracttype]
@@ -127,9 +147,11 @@ pub enum GradMode {
 enum GradKey {
     Moments,
     CoinWasm,
+    Executor,
     Locker,
     Factory,
     Mode,
+    Decoy,
     LastArgs,
 }
 
@@ -149,6 +171,9 @@ pub enum ExecError {
     PoolNotEmpty = 10_303,
 }
 
+/// The USDC donated to the pool in `UsesDonation`: 0.0005 USDC, half of 1 bp of the 10 USDC reserve.
+const DONATION: i128 = 5_000;
+
 /// The coin salt of §12: `sha256("dyorhq/moment-coin/v2" ‖ nft.to_xdr())`.
 fn coin_salt(e: &Env, nft: &Address) -> BytesN<32> {
     let mut data = Bytes::from_slice(e, b"dyorhq/moment-coin/v2");
@@ -156,19 +181,28 @@ fn coin_salt(e: &Env, nft: &Address) -> BytesN<32> {
     e.crypto().sha256(&data).into()
 }
 
-/// Stands in for moments-graduator (§12), with the interface moments-v2 calls: `graduate`, `coin_address` and
-/// `coin_wasm_hash`.
+/// Stands in for moments-graduator (§12), with the interface moments-v2 calls: `graduate`, `coin_address` and the
+/// configuration views (`moments`, `coin_wasm_hash`, `executor`, `locker`, `soroswap_factory`). Its constructor takes
+/// CT-08's arguments in CT-08's order.
 #[contract]
 pub struct TestGraduator;
 
 #[contractimpl]
 impl TestGraduator {
-    pub fn __constructor(e: Env, moments: Address, coin_wasm_hash: BytesN<32>, locker: Address, factory: Address) {
+    pub fn __constructor(
+        e: Env,
+        moments: Address,
+        coin_wasm_hash: BytesN<32>,
+        executor: Address,
+        locker: Address,
+        soroswap_factory: Address,
+    ) {
         let s = e.storage().instance();
         s.set(&GradKey::Moments, &moments);
         s.set(&GradKey::CoinWasm, &coin_wasm_hash);
+        s.set(&GradKey::Executor, &executor);
         s.set(&GradKey::Locker, &locker);
-        s.set(&GradKey::Factory, &factory);
+        s.set(&GradKey::Factory, &soroswap_factory);
         s.set(&GradKey::Mode, &GradMode::Honest);
     }
 
@@ -176,13 +210,34 @@ impl TestGraduator {
         e.storage().instance().set(&GradKey::Mode, &mode);
     }
 
+    /// The pool `DecoyPool` reports.
+    pub fn set_decoy(e: Env, pool: Address) {
+        e.storage().instance().set(&GradKey::Decoy, &pool);
+    }
+
     /// The arguments of the last graduation that returned a result.
     pub fn last_args(e: Env) -> Option<MomentGradArgs> {
         e.storage().instance().get(&GradKey::LastArgs)
     }
 
+    pub fn moments(e: Env) -> Address {
+        e.storage().instance().get(&GradKey::Moments).unwrap()
+    }
+
     pub fn coin_wasm_hash(e: Env) -> BytesN<32> {
         e.storage().instance().get(&GradKey::CoinWasm).unwrap()
+    }
+
+    pub fn executor(e: Env) -> Address {
+        e.storage().instance().get(&GradKey::Executor).unwrap()
+    }
+
+    pub fn locker(e: Env) -> Address {
+        e.storage().instance().get(&GradKey::Locker).unwrap()
+    }
+
+    pub fn soroswap_factory(e: Env) -> Address {
+        e.storage().instance().get(&GradKey::Factory).unwrap()
     }
 
     pub fn coin_address(e: Env, nft: Address) -> Address {
@@ -204,13 +259,27 @@ impl TestGraduator {
         let this = e.current_contract_address();
         let usdc = TokenClient::new(&e, &a.usdc);
         usdc.transfer(&moments, &this, &a.reserve);
+        if mode == GradMode::DoublePull {
+            usdc.transfer(&moments, &this, &a.reserve);
+        }
         let salt = if mode == GradMode::WrongCoin { coin_salt(&e, &this) } else { coin_salt(&e, &a.nft) };
         let coin_wasm: BytesN<32> = e.storage().instance().get(&GradKey::CoinWasm).unwrap();
         let coin = e.deployer().with_current_contract(salt).deploy_v2(
             coin_wasm,
             (moments.clone(), a.name.clone(), a.symbol.clone(), SUPPLY, this.clone(), a.pool_coins),
         );
-        let pair = SoroswapFactoryClient::new(&e, &factory).create_pair(&coin, &a.usdc);
+        // As exec-soroswap does: a pair someone created earlier is used as it is.
+        let factory = SoroswapFactoryClient::new(&e, &factory);
+        let pair = if factory.pair_exists(&coin, &a.usdc) {
+            factory.get_pair(&coin, &a.usdc)
+        } else {
+            factory.create_pair(&coin, &a.usdc)
+        };
+        if mode == GradMode::UsesDonation {
+            // Nobody can create the pair before the coin exists (Soroswap's pair reads both tokens' symbols when it is
+            // initialized), so the graduator's own USDC plays a donation that lands before the deposit.
+            usdc.transfer(&this, &pair, &DONATION);
+        }
 
         let coin_in = match mode {
             GradMode::CoinsShort => a.pool_coins - a.pool_coins / 1_000,
@@ -218,13 +287,19 @@ impl TestGraduator {
             _ => a.pool_coins,
         };
         let usdc_in = match mode {
-            GradMode::UsdcDust => a.reserve / 2,
+            GradMode::UsdcDust | GradMode::UsdcFloorLie => a.reserve / 2,
             GradMode::UsdcUnreported => a.reserve - 10,
+            // The donation already in the pair makes up the rest.
+            GradMode::UsesDonation => a.reserve - usdc.balance(&pair),
             _ => a.reserve,
         };
         let coin_token = TokenClient::new(&e, &coin);
         coin_token.transfer(&this, &pair, &coin_in);
         usdc.transfer(&this, &pair, &usdc_in);
+        if mode == GradMode::UsdcFloorLie {
+            // Its own USDC fills the pool up to the whole reserve.
+            usdc.transfer(&this, &pair, &(a.reserve - usdc_in));
+        }
         let lp_to = if mode == GradMode::LpElsewhere { this.clone() } else { locker };
         let liquidity = SoroswapPairClient::new(&e, &pair).deposit(&lp_to);
         if coin_in < a.pool_coins {
@@ -241,14 +316,23 @@ impl TestGraduator {
         let (pool, lp_token) = match mode {
             GradMode::WrongPool => (this.clone(), this.clone()),
             GradMode::LpTokenNotPool => (pair.clone(), coin.clone()),
+            GradMode::DecoyPool => {
+                let decoy = get(GradKey::Decoy);
+                (decoy.clone(), decoy)
+            }
             _ => (pair.clone(), pair),
         };
         let (usdc_used, usdc_returned) = match mode {
             GradMode::UsdcSumWrong => (usdc_in, returned + 1),
             GradMode::UsdcUnreported => (a.reserve, 0),
+            GradMode::DeltaLie => (a.reserve - 10, 10),
             _ => (usdc_in, returned),
         };
-        let coin_used = if mode == GradMode::CoinsOver { a.pool_coins + 1 } else { coin_in };
+        let coin_used = match mode {
+            GradMode::CoinsOver => a.pool_coins + 1,
+            GradMode::CoinFloorLie => a.pool_coins - a.pool_coins / 1_000,
+            _ => coin_in,
+        };
         e.storage().instance().set(&GradKey::LastArgs, &a);
         Ok(MomentGradResult { coin, pool, lp_token, liquidity, coin_used, usdc_used, usdc_returned })
     }
@@ -320,7 +404,8 @@ fn setup_with(durations: MomentsDurations) -> T {
     );
     let nft_wasm = e.deployer().upload_contract_wasm(moment_nft::WASM);
     let coin_wasm = e.deployer().upload_contract_wasm(moment_coin::WASM);
-    let graduator = e.register(TestGraduator, (id.clone(), coin_wasm.clone(), locker.clone(), factory.clone()));
+    let graduator =
+        e.register(TestGraduator, (id.clone(), coin_wasm.clone(), executor.clone(), locker.clone(), factory.clone()));
     e.register_at(
         &id,
         MomentsV2,
@@ -452,10 +537,15 @@ impl T {
 
     /// Alice collects until the Moment completes (it must be 20 editions or fewer away).
     fn complete(&self, nft: &Address) -> CollectResult {
+        self.complete_by(&self.alice, nft)
+    }
+
+    /// `who` collects until the Moment completes.
+    fn complete_by(&self, who: &Address, nft: &Address) -> CollectResult {
         let m = self.m().get_moment(nft);
         let l = self.m().ledger(nft);
         let gross = mul_div_up(m.threshold - l.reserve, BPS as i128, m.reserve_bps as i128);
-        let r = self.collect(&self.alice, nft, mul_div_up(gross, 1, m.price) as u32);
+        let r = self.collect(who, nft, mul_div_up(gross, 1, m.price) as u32);
         assert_eq!(self.m().ledger(nft).state, State::GraduationPending);
         r
     }
@@ -1167,7 +1257,8 @@ fn the_external_base_is_https_and_at_most_256_bytes() {
 
 // ------------------------------------------------------------------------------------------------ the constructor
 
-/// The constructor's arguments, editable before a deployment.
+/// The constructor's arguments, editable before a deployment, and what the graduator says it is wired to (`None`:
+/// the deployment's own peers, as it should be).
 struct Args {
     usdc: Address,
     locker_interval: u64,
@@ -1175,6 +1266,10 @@ struct Args {
     policy: Policy,
     durations: MomentsDurations,
     ttl: TtlPolicy,
+    graduator_moments: Option<Address>,
+    graduator_executor: Option<Address>,
+    graduator_locker: Option<Address>,
+    graduator_factory: Option<Address>,
 }
 
 /// Deploys moments-v2 in a fresh environment with `edit` applied to valid arguments, as `setup_with` does. Returns
@@ -1191,12 +1286,24 @@ fn construct(edit: impl FnOnce(&Env, &mut Args)) -> Result<Address, std::string:
         policy: testnet_policy(&a, &a),
         durations: PRODUCTION_MOMENTS_DURATIONS,
         ttl: TESTNET_TTL_POLICY,
+        graduator_moments: None,
+        graduator_executor: None,
+        graduator_locker: None,
+        graduator_factory: None,
     };
     edit(&e, &mut args);
     let id = Address::generate(&e);
+    // The executor and the Soroswap factory moments-v2 is given are `a`.
     let locker = e.register(lp_locker::WASM, (vec![&e, id.clone()], a.clone(), None::<Address>, args.locker_interval));
     let coin_wasm = e.deployer().upload_contract_wasm(moment_coin::WASM);
-    let graduator = e.register(TestGraduator, (id.clone(), coin_wasm, locker.clone(), a.clone()));
+    let wiring = (
+        args.graduator_moments.unwrap_or(id.clone()),
+        coin_wasm,
+        args.graduator_executor.unwrap_or(a.clone()),
+        args.graduator_locker.unwrap_or(locker.clone()),
+        args.graduator_factory.unwrap_or(a.clone()),
+    );
+    let graduator = e.register(TestGraduator, wiring);
     let nft_wasm = e.deployer().upload_contract_wasm(moment_nft::WASM);
     let deployed = catch_unwind(AssertUnwindSafe(|| {
         e.register_at(
@@ -1278,13 +1385,29 @@ fn the_constructor_refuses_a_locker_with_another_harvest_interval() {
 }
 
 #[test]
+fn the_constructor_refuses_a_graduator_wired_to_other_peers() {
+    // Lead ruling after review: the graduator must serve this moments-v2, with this constructor's locker, executor
+    // and Soroswap factory, so a mis-wired stack can't be deployed.
+    assert!(construct(|_, _| {}).is_ok());
+    let edits: [fn(&Env, &mut Args); 4] = [
+        |e, a| a.graduator_moments = Some(Address::generate(e)),
+        |e, a| a.graduator_executor = Some(Address::generate(e)),
+        |e, a| a.graduator_locker = Some(Address::generate(e)),
+        |e, a| a.graduator_factory = Some(Address::generate(e)),
+    ];
+    for edit in edits {
+        assert!(refused_with(construct(edit), Error::InvalidConfig));
+    }
+}
+
+#[test]
 fn the_constructor_refuses_invalid_arguments() {
     // USDC must be a Stellar Asset Contract: an address with nothing behind it or a Wasm token is refused.
     assert!(refused_with(construct(|e, a| a.usdc = Address::generate(e)), Error::InvalidConfig));
     assert!(refused_with(
         construct(|e, a| a.usdc = e.register(
             TestGraduator,
-            (a.usdc.clone(), BytesN::from_array(e, &[0; 32]), a.usdc.clone(), a.usdc.clone())
+            (a.usdc.clone(), BytesN::from_array(e, &[0; 32]), a.usdc.clone(), a.usdc.clone(), a.usdc.clone())
         )),
         Error::InvalidConfig
     ));
@@ -1764,6 +1887,110 @@ fn coins_left_within_one_bp_are_accepted() {
     assert_eq!(t.coin(&coin).total_supply(), pool_coins - 1);
 }
 
+/// A Soroswap pair of two other assets whose LP outweighs any Moment's, all of it held by the locker: what
+/// `DecoyPool` reports.
+fn decoy_pair(t: &T) -> Address {
+    let (x, y) = (
+        t.e.register_stellar_asset_contract_v2(Address::generate(&t.e)).address(),
+        t.e.register_stellar_asset_contract_v2(Address::generate(&t.e)).address(),
+    );
+    let pair = soroswap_factory::Client::new(&t.e, &t.factory).create_pair(&x, &y);
+    for asset in [&x, &y] {
+        StellarAssetClient::new(&t.e, asset).mint(&pair, &(1_000_000 * ONE));
+    }
+    soroswap_pair::Client::new(&t.e, &pair).deposit(&t.locker);
+    pair
+}
+
+/// A completed Moment whose graduator answers with `mode`, a lie only one of moments-v2's checks catches: the attempt
+/// aborts with `GraduationInvalid` and nothing of it is kept, and the same Moment graduates once the graduator tells
+/// the truth. Each of the tests below fails if its check is removed (the review's mutation run).
+fn assert_only_one_check_catches(mode: GradMode) {
+    let t = setup();
+    // UsdcFloorLie fills half the pool from the graduator's own USDC; DecoyPool reports a pair whose LP the locker
+    // holds, so the LP check passes.
+    StellarAssetClient::new(&t.e, &t.usdc).mint(&t.graduator, &T10);
+    t.grad().set_decoy(&decoy_pair(&t));
+    let nft = t.publish();
+    t.complete(&nft);
+    let before = t.ledger(&nft);
+    let held = t.usdc_of(&t.id);
+    let coin = t.m().get_moment(&nft).coin;
+    t.grad().set_mode(&mode);
+    assert_eq!(t.try_graduate(&nft), Err(err(Error::GraduationInvalid)));
+    assert_eq!((t.ledger(&nft), t.usdc_of(&t.id), coin.exists()), (before, held, false));
+    t.grad().set_mode(&GradMode::Honest);
+    assert!(matches!(t.graduate(&nft), GraduationOutcome::Graduated(_)));
+}
+
+#[test]
+fn only_the_coin_floor_catches_coins_reported_unused_that_the_pool_took() {
+    // V9: every pool coin seeded, 10 bp fewer reported used.
+    assert_only_one_check_catches(GradMode::CoinFloorLie);
+}
+
+#[test]
+fn only_the_balance_delta_catches_usdc_reported_returned_but_kept() {
+    // I-M2: the reserve seeded, (reserve − 10, 10) reported, the 10 never sent back.
+    assert_only_one_check_catches(GradMode::DeltaLie);
+}
+
+#[test]
+fn only_the_usdc_floor_catches_a_reserve_mostly_returned() {
+    // Half the reserve returned and reported truthfully, the pool topped up from the graduator's own USDC.
+    assert_only_one_check_catches(GradMode::UsdcFloorLie);
+}
+
+#[test]
+fn only_the_factory_check_catches_a_decoy_pool() {
+    // The real pair seeded, a decoy pair (its LP at the locker) reported as the pool.
+    assert_only_one_check_catches(GradMode::DecoyPool);
+}
+
+#[test]
+fn the_pre_authorization_covers_exactly_one_pull_of_the_reserve() {
+    // moments-v2 holds more than two reserves, so only the authorization's scope stops a second pull: the host refuses
+    // it, which is a recoverable failure the Moment records (origin 99), with nothing moved.
+    let t = setup();
+    let nft = t.publish();
+    t.complete(&nft);
+    let other = t.publish();
+    t.collect(&t.bob, &other, 10);
+    assert!(t.usdc_of(&t.id) >= 2 * T10);
+    let before = t.ledger(&nft);
+    let held = t.usdc_of(&t.id);
+    t.grad().set_mode(&GradMode::DoublePull);
+    let refused = GradFailure { origin: ORIGIN_HOST, code: ScErrorCode::InvalidAction as u32 };
+    assert_eq!(t.graduate(&nft), GraduationOutcome::Failed(refused));
+    assert_eq!(t.ledger(&nft), Ledger { stuck_since: t.now(), ..before });
+    assert_eq!(t.usdc_of(&t.id), held);
+}
+
+#[test]
+fn usdc_a_graduation_returns_is_owed_to_the_treasury() {
+    // A USDC donation lands in the pair before the deposit; the graduator counts it toward the seed and returns as
+    // much of the reserve, within the 1 bp dust. moments-v2 books the return for the treasury.
+    let t = setup();
+    let nft = t.publish();
+    t.complete(&nft);
+    let coin = t.m().get_moment(&nft).coin;
+    StellarAssetClient::new(&t.e, &t.usdc).mint(&t.graduator, &DONATION);
+    let held = t.usdc_of(&t.id);
+    t.grad().set_mode(&GradMode::UsesDonation);
+    let outcome = t.graduate(&nft);
+    let pair = soroswap_factory::Client::new(&t.e, &t.factory).get_pair(&coin, &t.usdc);
+    assert_eq!(outcome, GraduationOutcome::Graduated(pair.clone()));
+    let l = t.ledger(&nft);
+    assert_eq!((l.reserve, l.treasury_claimable), (0, DONATION));
+    // The pool still holds the whole reserve's worth.
+    assert_eq!(t.usdc_of(&pair), T10);
+    // I-M2: the pool took the reserve less the donation; the rest stays here, owed to the treasury.
+    assert_eq!(t.usdc_of(&t.id), held - (T10 - DONATION));
+    assert_eq!(t.usdc_of(&t.id), l.creator_claimable + l.platform_claimable + l.treasury_claimable);
+    assert_eq!(t.m().withdraw_treasury(&nft), DONATION);
+    assert_eq!(t.usdc_of(&t.treasury), DONATION);
+}
+
 // ------------------------------------------------------------------------------------------------ harvests
 
 #[test]
@@ -2080,6 +2307,32 @@ fn vesting_boundaries_with_the_production_durations() {
 #[test]
 fn vesting_boundaries_with_the_testnet_qa_durations() {
     vesting_boundaries(TESTNET_QA_MOMENTS_DURATIONS);
+}
+
+#[test]
+fn collecting_twice_adds_both_entitlements_and_both_vest() {
+    let t = setup();
+    let nft = t.publish();
+    let first = t.collect(&t.alice, &nft, 3);
+    let second = t.collect(&t.alice, &nft, 2);
+    let alice = first.entitlement + second.entitlement;
+    assert!(first.entitlement > 0 && second.entitlement > 0);
+    assert_eq!(t.m().position(&nft, &t.alice), Position { entitlement: alice, claimed: 0 });
+    let last = t.complete_by(&t.bob, &nft);
+    let entitlements = t.ledger(&nft).entitlements;
+    assert_eq!(entitlements, alice + last.entitlement);
+    t.graduate(&nft);
+    let m = t.m().get_moment(&nft);
+    // Everything vested: both collects' coins reach Alice, and the coins ever minted are exactly S.
+    t.advance(CREATOR_PERIODS * t.durations.vest_period);
+    assert_eq!(t.m().claim(&t.alice, &nft), (alice, 0));
+    assert_eq!(t.m().claim(&t.bob, &nft), (last.entitlement, 0));
+    assert_eq!(t.m().claim(&t.creator, &nft), (0, alloc_of(&m)));
+    let coin = t.coin(&m.coin);
+    assert_eq!(coin.balance(&t.alice), alice);
+    assert_eq!(t.m().position(&nft, &t.alice), Position { entitlement: alice, claimed: alice });
+    assert_eq!(t.ledger(&nft).minted_by_vesting, alloc_of(&m) + entitlements);
+    assert_eq!(coin.total_supply(), SUPPLY);
 }
 
 #[test]

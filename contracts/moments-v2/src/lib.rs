@@ -134,7 +134,8 @@ pub enum Error {
     /// A graduation result failed moments-v2's own checks after the graduator accepted it (an abort).
     GraduationInvalid = 10_731,
     /// A constructor argument outside the rules: USDC not a Stellar Asset Contract, invalid durations or TTL policy,
-    /// a locker whose `harvest_interval` differs from the durations' (F6), or an invalid external base.
+    /// a locker whose `harvest_interval` differs from the durations' (F6), an invalid external base, or a graduator
+    /// wired to another moments-v2, locker, executor or Soroswap factory.
     InvalidConfig = 10_732,
     /// `harvest_payees` for a launch's position: launchpad-v2 answers those (lead ruling during CT-04).
     WrongReference = 10_733,
@@ -198,10 +199,15 @@ pub struct PublishParams {
 // ------------------------------------------------------------------------------------------------ client traits
 // What moments-v2 calls that dyor-common's traits don't declare.
 
-/// The graduator's view of the coin code it deploys. The terms carry it (§9.1), so the constructor reads it once.
-#[contractclient(name = "GraduatorCoinWasmClient")]
-pub trait GraduatorCoinWasm {
+/// moments-graduator's configuration views (its constructor arguments, §12). The constructor checks the wiring
+/// against its own arguments and reads the coin code the terms carry (§9.1).
+#[contractclient(name = "GraduatorConfigClient")]
+pub trait GraduatorConfig {
+    fn moments(e: Env) -> Address;
     fn coin_wasm_hash(e: Env) -> BytesN<32>;
+    fn executor(e: Env) -> Address;
+    fn locker(e: Env) -> Address;
+    fn soroswap_factory(e: Env) -> Address;
 }
 
 /// A Moment NFT's SEP-50 metadata, read at graduation: the coin takes the Moment's name and symbol.
@@ -247,8 +253,10 @@ impl MomentsV2 {
     /// Every peer is a constructor argument (§3.4): the deploy script precomputes the ids, deploying the locker and
     /// the graduator first. Both pauses start off. Refuses with `InvalidPolicy` a policy outside §9.2's rules, and
     /// with `InvalidConfig` a USDC that isn't a Stellar Asset Contract, invalid durations or TTL policy, a locker whose
-    /// `harvest_interval()` differs from `durations.harvest_interval` (F6), or an external base that isn't https or is
-    /// longer than 256 bytes. The coin's WASM hash, part of the terms, is read from the graduator.
+    /// `harvest_interval()` differs from `durations.harvest_interval` (F6), an external base that isn't https or is
+    /// longer than 256 bytes, or a graduator wired to anything but this contract and this constructor's locker,
+    /// executor and Soroswap factory (lead ruling after review), so a mis-wired stack can't be deployed. The coin's
+    /// WASM hash, part of the terms, is read from the graduator.
     #[allow(clippy::too_many_arguments)]
     pub fn __constructor(
         e: Env,
@@ -273,10 +281,15 @@ impl MomentsV2 {
             && validate_ttl_policy(&e, &ttl)
             && base_ok(&e, &external_base)
             && LockerClient::new(&e, &locker).harvest_interval() == durations.harvest_interval;
-        if !valid {
+        let g = GraduatorConfigClient::new(&e, &graduator);
+        let wired = g.moments() == e.current_contract_address()
+            && g.locker() == locker
+            && g.executor() == executor
+            && g.soroswap_factory() == soroswap_factory;
+        if !valid || !wired {
             panic_with_error!(&e, Error::InvalidConfig);
         }
-        let coin_wasm_hash = GraduatorCoinWasmClient::new(&e, &graduator).coin_wasm_hash();
+        let coin_wasm_hash = g.coin_wasm_hash();
         storage::set_config(
             &e,
             &Config {
