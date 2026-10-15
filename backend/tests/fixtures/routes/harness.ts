@@ -162,17 +162,21 @@ export const routeRows: Responder = (q) => {
   if (q === "select * from lite.launches where token = ?") return [];
   // The launch board and a launch's page (launchpad.ts launchQuery): the board lists LAUNCH_ROW, and TOKEN has no page.
   if (q.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total")) return q.includes("where l.token = ?") ? [] : [LAUNCH_ROW];
-  if (q.startsWith("select * from lite.moments order by created_at desc")) return [MOMENT_ROW];
   // The Moments feed lists MOMENT_ROW; nobody holds an edition, published one or collected (moments.ts).
   if (q.startsWith("select * from lite.moments where listed and title is not null")) return [MOMENT_ROW];
   if (q.includes("from lite.moment_editions e join lite.moments m")) return [];
   if (q.startsWith("select * from lite.moments where creator = ?")) return [];
   if (q.includes("from lite.moment_collects c join lite.moments m")) return [];
+  // Nobody holds a launch token (holdings.ts).
+  if (q.startsWith("select l.*, coalesce(tb.balance, 0) as indexed_balance")) return [];
   if (q === "select * from lite.moments where id = ?") return [];
   if (q.startsWith("update lite.bridge_transfers set dest_tx")) return [];
-  if (q.startsWith("select hash, kind, intent, status, ledger, created_at from lite.tx_log where address = ?")) {
+  // GET /v1/activity (activity.ts): one swap logged before migration 05 (no section, fee or result), a transfer to
+  // Monad and an anchor deposit.
+  if (q.startsWith("select hash, address, kind, intent, status, ledger, created_at, section, fee_charged, fee_payer, result from lite.tx_log t where t.address = ?")) {
     return [{
       hash: "ab".repeat(32),
+      address: USER.publicKey(),
       kind: "swap",
       intent: { summary: "Swap 50 XLM for at least 9.5 USDC", display: { venue: "soroswap", sell: "XLM", buy: "USDC" } },
       status: "success",
@@ -180,10 +184,10 @@ export const routeRows: Responder = (q) => {
       created_at: at("2026-10-13T08:00:00.000Z"),
     }];
   }
-  if (q.startsWith("select id, direction, amount, status, created_at from lite.bridge_transfers where address = ?")) {
-    return [{ id: BRIDGE_ID, direction: "stellar_to_monad", amount: "10000000", status: "attesting", created_at: at("2026-10-13T07:30:00.000Z") }];
+  if (q.startsWith("select id, direction, amount, status, source_tx, dest_tx, created_at from lite.bridge_transfers b where b.address = ?")) {
+    return [{ id: BRIDGE_ID, direction: "stellar_to_monad", amount: "10000000", status: "attesting", source_tx: null, dest_tx: null, created_at: at("2026-10-13T07:30:00.000Z") }];
   }
-  if (q.startsWith("select id, anchor, kind, asset, amount, status, created_at from lite.anchor_transfers where address = ?")) {
+  if (q.startsWith("select id, anchor, kind, asset, amount, status, created_at from lite.anchor_transfers c where c.address = ?")) {
     return [{ id: "5d0c1b7e-0000-4000-8000-000000000003", anchor: "testanchor.stellar.org", kind: "deposit", asset: "USDC", amount: null, status: "incomplete", created_at: at("2026-10-13T07:00:00.000Z") }];
   }
   if (q.startsWith("select token, quote, last_price from lite.launches where last_price is not null")) {
@@ -252,7 +256,7 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "bridge-status-unknown", method: "GET", path: "/v1/bridge/nope", auth: true },
   { name: "cash-anchors", method: "GET", path: "/v1/cash/anchors?country=gh", auth: true },
   { name: "cash-track-unknown-anchor", method: "POST", path: "/v1/cash/track", body: { anchor: "example.com", kind: "deposit", asset: "USDC", anchorTxId: "1" }, auth: true },
-  { name: "activity", method: "GET", path: "/v1/activity", auth: true },
+  { name: "activity", method: "GET", path: "/v1/activity", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.10: section, hash, fees, result, ref, names, words and usd" },
   { name: "prices", method: "GET", path: "/v1/prices", auth: false, volatile: ["at"] },
   { name: "no-route", method: "GET", path: "/v1/nope", auth: false },
 ];
