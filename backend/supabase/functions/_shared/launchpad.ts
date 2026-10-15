@@ -901,7 +901,7 @@ registerBuilder("launch_claim", launchClaimStep);
 
 /** Launch market rows are kept this long per isolate. */
 const MARKET_TTL_MS = 15_000;
-/** The markets take at most this many launches, the newest. */
+/** The markets take at most this many launches: those traded in the last 24 hours first, then the newest. */
 const MARKET_LAUNCHES_MAX = 500;
 
 let marketCache: { at: number; rows: Record<string, unknown>[] } | null = null;
@@ -939,7 +939,9 @@ export async function launchMarketRows(now: number = Date.now()): Promise<Record
   if (marketCache && now - marketCache.at < MARKET_TTL_MS && now >= marketCache.at) return marketCache.rows;
   try {
     const net = env.network;
-    const rows = await launchQuery(sql()`where l.listed`, sql()`order by l.created_at desc, l.token`, MARKET_LAUNCHES_MAX, 0, new Date(now - DAY));
+    const dayAgo = new Date(now - DAY);
+    const traded = sql()`order by coalesce(l.last_trade_at > ${dayAgo}, false) desc, l.created_at desc, l.token`;
+    const rows = await launchQuery(sql()`where l.listed`, traded, MARKET_LAUNCHES_MAX, 0, dayAgo);
     const p = await priceContext(rows, net, now);
     const out = rows
       .map((r) => ({ row: launchRowOf(r, p), stale: quoteUsd(assetById(net, String(r.quote)), p).stale }))
