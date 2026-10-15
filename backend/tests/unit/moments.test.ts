@@ -315,9 +315,9 @@ Deno.test("the feed: listed Moments with a title, newest first; collecting, or c
   await m.feed("closed", 20, NOW);
   const feeds = seen.filter((s) => s.q.startsWith("select * from lite.moments"));
   assertEquals(feeds.map((s) => s.q), [
-    "select * from lite.moments where listed and title is not null order by created_at desc, id desc limit ?",
-    "select * from lite.moments where listed and title is not null and deadline > ? and (max_editions = 0 or minted < max_editions) order by created_at desc, id desc limit ?",
-    "select * from lite.moments where listed and title is not null and not (deadline > ? and (max_editions = 0 or minted < max_editions)) order by created_at desc, id desc limit ?",
+    "select * from lite.moments where listed and title is not null and id is not null order by created_at desc, id desc limit ?",
+    "select * from lite.moments where listed and title is not null and id is not null and deadline > ? and (max_editions = 0 or minted < max_editions) order by created_at desc, id desc limit ?",
+    "select * from lite.moments where listed and title is not null and id is not null and not (deadline > ? and (max_editions = 0 or minted < max_editions)) order by created_at desc, id desc limit ?",
   ]);
   assertEquals(feeds[1].params, [new Date(NOW), 20]);
   assertEquals(m.filterArg(null), "all");

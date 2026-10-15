@@ -2,7 +2,9 @@
 // collected in XLM or USDC, with no coin and no graduation. The board, a Moment's page and an account's editions read
 // what the indexer recorded (lite-indexer/handlers/moments.ts); My Moments adds DyorHQ's own history. The metadata JSON
 // is written by the API to lite-media, so the URI on chain always resolves to something we checked, and only the
-// Moments a creator published with their own metadata are listed.
+// Moments a creator published with their own metadata are listed. This is the retired generation 1
+// (DESIGN-stellar-contracts-v2 §17): lite.moments holds v2's Moments too (moments_v2.ts serves those), and every read
+// here is v1's only.
 import type { ContractErrorCode, Edition, MomentDetail, MomentRow, MomentState, MyMoments, View } from "./contract.ts";
 import { num, sql } from "./db.ts";
 import { env } from "./env.ts";
@@ -181,13 +183,20 @@ export function filterArg(v: string | null): MomentFilter {
   throw bad("bad_arg", "filter is all, collecting or closed.");
 }
 
+/** v1's Moments: lite.moments holds v2's too (migration 20261015000012), keyed by their NFT address with no number. A
+ *  v1 Moment has its contract's number, which holds on a database without that migration too, where every row is
+ *  v1's. The reads by number, and the editions and collects joined on it, are v1's already. */
+function v1Moment() {
+  return sql()`id is not null`;
+}
+
 /** GET /v1/moments: listed Moments, newest first. `closed` holds the sold out ones and those whose window closed. */
 export async function feed(filter: MomentFilter, limit: number, now: number = Date.now(), net: NetworkConfig = env.network): Promise<MomentRow[]> {
   const at = new Date(now);
   const collecting = sql()`deadline > ${at} and (max_editions = 0 or minted < max_editions)`;
   const where = filter === "collecting" ? sql()`and ${collecting}` : filter === "closed" ? sql()`and not (${collecting})` : sql()``;
   const [rows, prices] = await Promise.all([
-    sql()`select * from lite.moments where listed and title is not null ${where} order by created_at desc, id desc limit ${limit}`,
+    sql()`select * from lite.moments where listed and title is not null and ${v1Moment()} ${where} order by created_at desc, id desc limit ${limit}`,
     referencePrices(now, net),
   ]);
   return rows.map((r) => momentRowOf(r, prices, now, net));
@@ -257,7 +266,7 @@ function addTo(map: Record<string, string>, key: string, amount: bigint): void {
  *  totals: editions held, the Moments they're from, what the user spent collecting and earned publishing, per quote. */
 export async function mine(user: string, now: number = Date.now(), net: NetworkConfig = env.network): Promise<MyMoments> {
   const [createdRows, heldRows, spentRows, prices] = await Promise.all([
-    sql()`select * from lite.moments where creator = ${user} and title is not null order by created_at desc, id desc limit 200`,
+    sql()`select * from lite.moments where creator = ${user} and title is not null and ${v1Moment()} order by created_at desc, id desc limit 200`,
     sql()`
       select e.token_id, e.contract, m.* from lite.moment_editions e join lite.moments m on m.id = e.moment_id
        where e.owner = ${user} and m.title is not null
