@@ -1,6 +1,7 @@
 target/
 *.wasm
 !testdata/*.wasm
-dist/
+# dist/ is committed (DESIGN-stellar-contracts-v2 §22): the 13 WASMs ./build.sh writes, and their SHA256SUMS.
+!dist/*.wasm
 .soroban/
 test_snapshots/
