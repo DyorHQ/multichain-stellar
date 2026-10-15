@@ -104,7 +104,7 @@ public enum LiteReadStatus: Equatable, Sendable {
 /// A new coin, as Create fills it in (`LiteStore.launchCreatePlan`).
 public struct StellarLaunchForm: Equatable, Sendable {
     public var name: String
-    /// A–Z and 0–9, 2 to 10 characters.
+    /// The ticker as typed: 2 to 10 ASCII letters or digits, which Create sends upper-cased (`LiteStore.launchSymbol`).
     public var symbol: String
     public var description: String?
     /// https links only (the server refuses the rest).

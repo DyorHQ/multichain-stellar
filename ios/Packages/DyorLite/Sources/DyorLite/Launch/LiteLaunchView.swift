@@ -341,7 +341,7 @@ struct CreateLaunchSheet: View {
         defer { busy = false }
         error = nil
         do {
-            let form = StellarLaunchForm(name: name, symbol: symbol.uppercased(), quote: quote, creatorFeeBps: Int(creatorFee * 100),
+            let form = StellarLaunchForm(name: name, symbol: symbol, quote: quote, creatorFeeBps: Int(creatorFee * 100),
                                          developerBuy: StellarAmount.parse(initialBuy) ?? 0)
             prepared = try await store.launchCreatePlan(form, image: imageData.map(jpeg))
         } catch {

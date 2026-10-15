@@ -254,6 +254,24 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(tally.prompts, 0, "claiming signs nothing")
     }
 
+    /// A refused claim reads the account again too: an account the phone last read as unclaimed, whose claim the server
+    /// already holds, loses "Fund with Friendbot" at the first refusal instead of offering it again.
+    func testARefusedClaimHidesFriendbot() async throws {
+        server.update { $0.claimed = false }
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        await store.refreshAccount()
+        XCTAssertTrue(store.canClaimFriendbot)
+        server.update { $0.claimed = true }
+        do {
+            try await store.faucet()
+            XCTFail("a second claim went through")
+        } catch {
+            XCTAssertEqual(LiteErrorText.describe(error), "You already claimed your test XLM.")
+        }
+        XCTAssertEqual(store.account?.firstFunding?.faucet?.claimed, true, "the account is read again after the refusal")
+        XCTAssertFalse(store.canClaimFriendbot)
+    }
+
     /// Home's actions are Monad's: adding cash is removed until mainnet, and so is its tile.
     func testHomeHasNoAddCash() {
         XCTAssertEqual(LiteHomeAction.all.map(\.id), [.bridge, .deposit, .withdraw, .swap])
@@ -286,17 +304,23 @@ final class LiteStoreTests: XCTestCase {
         for symbol in ["ECAT", "ecat", "AB", "ABCDEFGHIJ", "ECAT2", " ECAT "] {
             XCTAssertTrue(LiteStore.isLaunchSymbol(symbol), symbol)
         }
-        for symbol in ["E", "ABCDEFGHIJK", "EC-AT", "EC AT", "ÉCAT", "ßCAT", "ıCAT", "ＥＣＡＴ", "🐱CAT", ""] {
+        for symbol in ["E", "ABCDEFGHIJK", "EC-AT", "EC AT", "ÉCAT", "ßCAT", "ıCAT", "ＥＣＡＴ", "🐱CAT", "", "ßcat", "ﬁre", "ıcat"] {
             XCTAssertFalse(LiteStore.isLaunchSymbol(symbol), symbol)
+            XCTAssertNil(LiteStore.launchSymbol(symbol), symbol)
         }
+        // Sent upper-cased, once checked as typed: upper-casing first would turn "ßcat" into "SSCAT", "ﬁre" into "FIRE"
+        // and "ıcat" into "ICAT", tickers the user never typed.
+        XCTAssertEqual(["ecat", " ecat2 ", "AB", "aBcDeFgHiJ"].map(LiteStore.launchSymbol), ["ECAT", "ECAT2", "AB", "ABCDEFGHIJ"])
         let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: true, tally: tally))
         server.forget()
-        let form = StellarLaunchForm(name: "E Cat", symbol: "ÉCAT", quote: "XLM", creatorFeeBps: 0)
-        do {
-            _ = try await store.launchCreatePlan(form, image: Data([0xFF, 0xD8]))
-            XCTFail("a ticker outside ASCII went out")
-        } catch let LiteAPIError.server(status, code, _, _) {
-            XCTAssertEqual([String(status), code], ["422", "bad_symbol"])
+        for symbol in ["ÉCAT", "ßcat"] {
+            let form = StellarLaunchForm(name: "E Cat", symbol: symbol, quote: "XLM", creatorFeeBps: 0)
+            do {
+                _ = try await store.launchCreatePlan(form, image: Data([0xFF, 0xD8]))
+                XCTFail("a ticker outside ASCII went out: \(symbol)")
+            } catch let LiteAPIError.server(status, code, _, _) {
+                XCTAssertEqual([String(status), code], ["422", "bad_symbol"], symbol)
+            }
         }
         XCTAssertEqual(server.paths, [], "nothing uploaded, written or built")
         XCTAssertEqual(tally.prompts, 0)

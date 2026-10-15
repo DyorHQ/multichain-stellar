@@ -6,30 +6,28 @@
 // account that existed before it signed in claims once (its fee is Friendbot's: `external`), then is refused too. The
 // public account view answers any address with no token, the claim left null.
 import { Horizon, Keypair, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
+import { friendbotFund } from "../../../supabase/functions/_shared/account.ts";
+import { loadAccount } from "../../../supabase/functions/_shared/stellar.ts";
 import type { E2E } from "../lite_e2e.ts";
 import { client, expectFeePaidBy, expectRefusal, logged, setUp, signIn } from "./auth.ts";
 
-const FRIENDBOT = "https://friendbot.stellar.org";
-
-/** An account Friendbot funds outside DyorHQ, as a wallet made elsewhere is. */
+/** An account the network's Friendbot funds outside DyorHQ, as a wallet made elsewhere is: on the ledger once this
+ *  answers. */
 async function friendbotAccount(): Promise<Keypair> {
   const kp = Keypair.random();
-  const res = await fetch(`${FRIENDBOT}?addr=${kp.publicKey()}`);
-  if (!res.ok) throw new Error(`Friendbot: ${res.status}`);
-  await res.body?.cancel();
+  await friendbotFund(kp.publicKey());
   return kp;
 }
 
 /** Gives `to` Friendbot's grant through an account of the test's own, merged into it: not DyorHQ's faucet. */
 async function topUp(t: E2E, to: string): Promise<void> {
   const funder = await friendbotAccount();
-  const horizon = new Horizon.Server(t.config.horizonUrl);
-  const tx = new TransactionBuilder(await horizon.loadAccount(funder.publicKey()), { fee: "1000", networkPassphrase: t.config.passphrase })
+  const tx = new TransactionBuilder((await loadAccount(funder.publicKey()))!, { fee: "1000", networkPassphrase: t.config.passphrase })
     .addOperation(Operation.accountMerge({ destination: to }))
     .setTimeout(60)
     .build();
   tx.sign(funder);
-  await horizon.submitTransaction(tx);
+  await new Horizon.Server(t.config.horizonUrl).submitTransaction(tx);
 }
 
 export default async function fees(t: E2E): Promise<string> {
