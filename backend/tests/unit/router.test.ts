@@ -46,8 +46,8 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/tx/:hash", `/v1/tx/${"ab".repeat(32)}`, false],
   ["POST /v1/swap/quote", "/v1/swap/quote", false],
   ["POST /v1/swap/build", "/v1/swap/build", false],
-  // Market data reads the reference cache and needs no session (§6.6). Economics (WP-14) and Earn's markets and
-  // history (WP-15) still sign in until those packages serve them without a session.
+  // Market data reads the reference cache and needs no session (§6.6), nor do Earn's markets and rate history
+  // (§6.10). Economics (WP-14) still signs in until that package serves it without a session.
   ["GET /v1/markets", "/v1/markets", true],
   ["GET /v1/markets/:id", "/v1/markets/XLM", true],
   ["GET /v1/markets/:id/history", "/v1/markets/XLM/history", true],
@@ -59,10 +59,10 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/launches/metadata", "/v1/launches/metadata", false],
   ["GET /v1/economics", "/v1/economics", false],
   ["GET /v1/launchpad/me", "/v1/launchpad/me", false],
-  ["GET /v1/earn/markets", "/v1/earn/markets", false],
+  ["GET /v1/earn/markets", "/v1/earn/markets", true],
   ["GET /v1/earn/positions", "/v1/earn/positions", false],
   ["POST /v1/earn/build", "/v1/earn/build", false],
-  ["GET /v1/earn/history", "/v1/earn/history", false],
+  ["GET /v1/earn/history", "/v1/earn/history", true],
   ["GET /v1/moments", "/v1/moments", false],
   ["GET /v1/moments/owned", "/v1/moments/owned", false],
   ["GET /v1/moments/mine", "/v1/moments/mine", false],
@@ -82,13 +82,16 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
+/** Viewer routes whose handlers serve the public view (§6.0). Earn's positions read Blend's pools, which the route
+ *  harness can't reach: earn.test.ts covers their public view with a stand-in for the pool. */
+const PUBLIC_VIEWS = ["GET /v1/earn/positions"];
+
 /** Registered in their final place, answering 501 until written. */
 const NOT_WRITTEN = [
   "GET /v1/recipient/:address",
   "POST /v1/launches/metadata",
   "GET /v1/economics",
   "GET /v1/launchpad/me",
-  "GET /v1/earn/history",
   "GET /v1/moments/mine",
   "PUT /v1/local-media/upload/:token",
   "GET /v1/local-media/lite-media/*path",
@@ -222,13 +225,14 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  // Viewer routes pass the guard without a header, but until their packages serve the public view (WP-10, WP-14,
-  // WP-15, WP-16, WP-18) their handlers still ask for a session, as before.
-  Deno.test("without a session, every route answers 401 but the open ones", async () => {
+  // Viewer routes pass the guard without a header. Those whose handlers serve the public view (PUBLIC_VIEWS) need
+  // ?address= there; until their packages serve it (WP-10, WP-14, WP-16, WP-18) the others still ask for a session.
+  Deno.test("without a session, every route answers 401 but the open ones and the public views", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
       const text = await res.text();
-      if (open) assertNotEquals(res.status, 401, spec);
+      if (PUBLIC_VIEWS.includes(spec)) assertEquals([res.status, JSON.parse(text).error.code], [400, "address_required"], spec);
+      else if (open) assertNotEquals(res.status, 401, spec);
       else assertEquals([res.status, JSON.parse(text).error.message], [401, "Sign in on Stellar to continue."], spec);
     }
   });
