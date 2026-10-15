@@ -20,14 +20,15 @@
 // In order: the reviewed-hash gate (F13) and the constructor guard (L-d) before anything touches the network; the
 // testnet-qa accounts, QA asset and trustlines; the preflight (L-e); the Aquarius decision and AQUA float (V8, ruling
 // a); the planned ids (L-c) and the re-run check; uploads; the executors, the locker, the graduator, launchpad-v2 and
-// moments-v2 (§3.4); the admin's configuration with venue ids read back from venues() (F8); 30 days of TTL for every
-// instance and WASM (L-g); the deployment file; the next steps (L-h). A dry run prints the plan and sends nothing;
-// --offline also skips the read-only network checks. A run that failed halfway can be run again: what is already
-// on chain and matches the plan is skipped, and anything that differs is refused.
+// moments-v2 (§3.4); the wiring read-back (lib/wiring-v2.ts: every contract at its planned id, then the executors,
+// the factory and the locker read back with views, refused on any mismatch); the admin's configuration with venue
+// ids read back from venues() (F8); 75 days of TTL (past the 2026-12-16 testnet reset) for every instance and WASM
+// and for the Soroswap factory's instance, factory WASM and pair WASM (L-g); the deployment file; the next steps (L-h). A dry run prints the plan
+// and sends nothing; --offline also skips the read-only network checks. A run that failed halfway can be run again:
+// what is already on chain and matches the plan is skipped, and anything that differs is refused.
 import { Buffer } from "node:buffer";
-import { Address, Asset, Keypair, Operation, scValToNative } from "@stellar/stellar-sdk";
+import { Address, Asset, Keypair, nativeToScVal, Operation, scValToNative } from "@stellar/stellar-sdk";
 import { TESTNET } from "../supabase/functions/_shared/networks.ts";
-import { keepAlive } from "../supabase/functions/_shared/ttl.ts";
 import {
   acquireAqua,
   afterFailedFunding,
@@ -70,7 +71,10 @@ import {
   fmtUnits,
   fmtXlm,
   invoke,
+  MIN_DEPLOYER_XLM,
+  MIN_DEPLOYER_XLM_FLOAT,
   preflight,
+  type ChainReader,
   readOnlyChain,
   renderCheck,
   send,
@@ -109,6 +113,17 @@ import {
 } from "./lib/v2-profile.ts";
 import { constructorGuard, type GuardResult } from "./lib/wasm-spec.ts";
 import { runSmoke, type SmokeDeployment, SmokeError } from "./lib/smoke-v2.ts";
+import { CODE_STEP_DAYS, extendTtl } from "./lib/ttl-extend.ts";
+import {
+  describeWiringCheck,
+  readBackWiring,
+  renderWiringRow,
+  routerFactoryCheck,
+  wiringChecks,
+  type WiringPlan,
+  wiringProblems,
+  wiringVerdict,
+} from "./lib/wiring-v2.ts";
 
 export const USAGE =
   "usage: deploy-contracts-v2.ts --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius off|auto] [--fund-aqua-float] [--generation n]\n" +
@@ -176,8 +191,9 @@ export interface DeployCtx {
   deploymentsDir: string;
   /** The network; null when offline. */
   chain: Chain | null;
-  /** Extends every given instance and WASM to 30 days, paid by `payer` (ttl.ts keepAlive). */
-  keepAlive(contracts: string[], codeHashes: string[], payer: Keypair): Promise<{ extended: number; fee: string }>;
+  /** Extends every given instance and WASM with less than TTL_THRESHOLD_DAYS left to TTL_EXTEND_DAYS, paid by `payer`
+   *  (lib/ttl-extend.ts: each WASM alone, in steps a transaction's fee can pay). */
+  keepAlive(contracts: string[], codeHashes: string[], payer: Keypair, label?: (key: string) => string): Promise<{ extended: number; fee: string }>;
   now(): Date;
   /** The smoke's waits; real time by default. */
   sleep?(ms: number): Promise<void>;
@@ -188,20 +204,22 @@ export interface DeployCtx {
 export function realCtx(): DeployCtx {
   const env = (n: string) => Deno.env.get(n);
   const root = repoRoot();
+  const io = consoleIo();
+  const chain = testnetChain({
+    rpcUrl: env("STELLAR_RPC_URL")?.trim() || TESTNET.rpcUrl,
+    horizonUrl: TESTNET.horizonUrl,
+    friendbotUrl: TESTNET.friendbotUrl!,
+  });
   return {
-    io: consoleIo(),
+    io,
     env,
     secretsDir: secretsDir(env),
     root,
     deploymentsDir: `${root}backend/supabase/functions/_shared/deployments`,
-    chain: testnetChain({
-      rpcUrl: env("STELLAR_RPC_URL")?.trim() || TESTNET.rpcUrl,
-      horizonUrl: TESTNET.horizonUrl,
-      friendbotUrl: TESTNET.friendbotUrl!,
-    }),
-    keepAlive: async (contracts, hashes, payer) => {
-      const r = await keepAlive(contracts, hashes, 31, 30, payer);
-      return { extended: r.extended, fee: r.fee };
+    chain,
+    keepAlive: async (contracts, hashes, payer, label) => {
+      const r = await extendTtl(chain, payer, contracts, hashes, TTL_EXTEND_DAYS, TTL_THRESHOLD_DAYS, (l) => io.out(`    ${l}`), label);
+      return { extended: r.extended, fee: r.fee.toString() };
     },
     now: () => new Date(),
   };
@@ -284,8 +302,20 @@ async function qaKeys(ctx: DeployCtx, dryRun: boolean): Promise<Keys> {
 
 // ------------------------------------------------------------------------------------------------ the plan
 
-/** 30 days of ledgers: what the TTL step extends every instance and WASM to (ttl.ts keepAlive with extendToDays 30). */
-export const TTL_EXTEND_LEDGERS = 30 * 17_280;
+/** The TTL step (L-g) extends every v2 instance and WASM, and the Soroswap factory's instance and the factory and pair
+ *  WASMs, to 75 days: every entry with less than 75 days left (the Soroswap ones have more today, so they are
+ *  skipped). Testnet resets on 2026-12-16 (docs/ARCHITECTURE.md), 62 days after 2026-10-15: longer buys nothing.
+ *  Testnet's max_entry_ttl (CONFIG_SETTING_STATE_ARCHIVAL, read 2026-10-15) is 3,110,400 ledgers, 180 days. A
+ *  transaction's fee is at most 429 XLM, so each WASM goes alone in steps of CODE_STEP_DAYS (lib/ttl-extend.ts). The
+ *  rent is paid by the deployer: about 26 XLM a day for testnet's ~318 KB of v2 WASM at the 2026-10-15 rates, so
+ *  about 2,000 XLM on the first run with the uploads, the instances and the admin calls (MIN_DEPLOYER_XLM covers it). Per-launch tokens, Moment NFTs and
+ *  coins start at the network minimum (7 days): the keeper's TTL upkeep keeps them alive. */
+export const TTL_EXTEND_DAYS = 75;
+export const TTL_THRESHOLD_DAYS = 75;
+/** 75 days of ledgers (17,280 a day): the read-back's target past the ledger before the extension. */
+export const TTL_EXTEND_LEDGERS = TTL_EXTEND_DAYS * 17_280;
+/** Testnet's max_entry_ttl as read on 2026-10-15; TTL_EXTEND_LEDGERS must stay under it (a test checks). */
+export const TESTNET_MAX_ENTRY_TTL = 3_110_400;
 
 const CAMEL: Record<SingletonName, string> = {
   "exec-soroswap": "execSoroswap",
@@ -455,7 +485,10 @@ function treasuryAssets(plan: Plan): string[] {
   return out;
 }
 
-const minDeployerXlm = (plan: Plan) => (plan.opts.fundAquaFloat ? 2_500n : 1_000n) * STROOPS_PER_XLM;
+const minDeployerXlm = (plan: Plan) => (plan.opts.fundAquaFloat ? MIN_DEPLOYER_XLM_FLOAT : MIN_DEPLOYER_XLM) * STROOPS_PER_XLM;
+
+/** The wiring read-back's inputs: the planned ids and the network's Soroswap factory. */
+const wiringPlan = (plan: Plan): WiringPlan => ({ ids: plan.constructorPlan.ids, soroswapFactory: network().soroswapFactory });
 
 function printPlan(io: Io, plan: Plan) {
   const { profile, economics: e, keys } = plan;
@@ -522,11 +555,20 @@ function printPlan(io: Io, plan: Plan) {
     }
   }
   say();
+  say("After the constructors, before anything else is sent: the wiring read-back (views by simulation, no transaction)");
+  say("  every planned contract must be at its planned id with the planned configuration (the re-run check), then:");
+  for (const c of wiringChecks(wiringPlan(plan))) say(`    ${describeWiringCheck(c)}`);
+  say("  any mismatch stops the run there: no admin call, no TTL step and no deployment file. Before anything is sent, the");
+  say("  Soroswap router's get_factory() must be the factory above (read-only; skipped with --offline)");
+  say();
   say("After the constructors, signed by the admin");
   say(`  set_quote for ${lp.quotes.map((q) => q.asset).join(", ")}, with venue ids read back from venues() (F8)`);
   say("  set_launch_fee, set_fees and set_venue_enabled only where the chain differs from the economics file (the");
   say("  constructor already takes the launch fee, starts at §14.1's fees and enables every initial venue)");
-  say("  then every v2 instance and WASM is extended to 30 days, paid by the deployer");
+  say(`  then every v2 instance and WASM, and the Soroswap factory's instance and its factory and pair WASMs, are extended`);
+  say(`  to ${TTL_EXTEND_DAYS} days (past the 2026-12-16 testnet reset) where they have less, paid by the deployer (about 26 XLM`);
+  say(`  a day; about 2,000 XLM for the whole first run), each WASM alone in ${CODE_STEP_DAYS}-day steps (a transaction's fee is at most 429 XLM): 25 to 30`);
+  say("  transactions");
   say(`  and backend/supabase/functions/_shared/deployments/${profile.deploymentFile} is written`);
 }
 
@@ -543,7 +585,7 @@ export async function main(args: string[], ctx: DeployCtx): Promise<number> {
     if (smoke && !opts.smoke) throw new Error("SMOKE=1 is set: run the smoke with --smoke, or unset SMOKE for this deploy");
     const net = ctx.env("LITE_NETWORK");
     if (net && net !== "testnet") throw new Error(`LITE_NETWORK is ${net}: v2 deploys to testnet only (unset it)`);
-    // The TTL step (_shared/ttl.ts) reads the functions' network settings: keep them on testnet's own deployment.
+    // The functions' network settings (_shared) stay on testnet's own deployment while this runs.
     const liteDeployment = ctx.env("LITE_DEPLOYMENT");
     if (liteDeployment && liteDeployment !== "testnet") throw new Error(`LITE_DEPLOYMENT is ${liteDeployment}: unset it for this script`);
     if (opts.fundAquaFloat && profile.name !== "testnet") throw new Error("--fund-aqua-float is for the owner's testnet; testnet-qa acquires its float with --aquarius auto");
@@ -666,8 +708,12 @@ async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<n
   if (!plan.keys.deployKey) blockers.push("no deploy key");
   say();
   if (!reader) {
-    say("Network checks: skipped (--offline)");
+    say("Network checks: skipped (--offline): the Soroswap router's factory, the preflight, what is already on chain and the wiring read-back");
   } else {
+    say("Soroswap factory (read-only)");
+    const router = await routerFactoryCheck((id, fn, args) => reader.view(id, fn, args), TESTNET.contracts.soroswapRouter, network().soroswapFactory);
+    say(`  ${router.line}`);
+    if (!router.ok) blockers.push("the Soroswap router's factory");
     say("Preflight (read-only)");
     const lines = plan.keys.qaEphemeral ? [] : await preflight({
       chain: reader,
@@ -705,6 +751,16 @@ async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<n
         if (r.state === "conflict") blockers.push(`${r.name} differs on chain`);
         say(`  ${r.state === "absent" ? "to deploy" : r.state === "deployed" ? "deployed, matches: skipped" : "✗ differs:"}  ${r.name} ${r.id}`);
         if (r.state === "conflict") for (const d of r.differences) say(`      ${d}`);
+      }
+      // The wiring read-back can run only once every contract is there (a re-run); otherwise the deploy runs it.
+      if (rec.every((r) => r.state === "deployed")) {
+        say("Wiring read-back (views, no transaction)");
+        const rows = await readBackWiring(wiringPlan(plan), (id, fn, args) => reader.view(id, fn, args));
+        if (wiringVerdict(rows) === "unreadable") say("  (a view couldn't be read; nothing differs so far: run it again)");
+        for (const r of rows) say(`  ${renderWiringRow(r)}`);
+        if (wiringProblems(rows).length) blockers.push("the wiring read-back");
+      } else {
+        say(`Wiring read-back: runs after the constructors (${wiringChecks(wiringPlan(plan)).length} checks, listed above)`);
       }
     } else {
       say("Already on chain: not checked until every WASM is in contracts/dist");
@@ -778,6 +834,9 @@ async function deploy(
     return states;
   };
   let states = await reconcileOrRefuse(plan);
+  // The factory the plan wires everything to, as the Soroswap router names it (read-only), before anything is sent.
+  const router = await routerFactoryCheck((id, fn, args) => chain.view(id, fn, args), TESTNET.contracts.soroswapRouter, network().soroswapFactory, { sleep: ctx.sleep });
+  if (!router.ok) throw new Error(`${router.line.slice(2)}: networks.ts must name the router's factory; nothing was sent`);
   say();
   say("Deploying");
 
@@ -871,7 +930,13 @@ async function deploy(
     done(`deployed ${c.contract} ${id.id}`, await createContract(chain, deployer, wasm, saltFor(plan.profile.name, plan.opts.generation, c.contract), encodeArgs(c), id.id));
   }
 
-  // 6. The float, now that exec-aquarius exists.
+  // 6. The wiring read-back, before anything else is sent: every planned contract at its planned id with the planned
+  //    configuration (the re-run check again), then the executors, the factory and the locker read back with views
+  //    (simulation, no transaction; lib/wiring-v2.ts). Any mismatch stops the run here: no float, no admin call, no
+  //    TTL step and no deployment file. A re-run skips the deployed contracts and reads the wiring again.
+  await requireWiring(plan, chain, reconcileOrRefuse, say, ctx.sleep);
+
+  // 7. The float, now that exec-aquarius exists.
   if (plan.aqua.enabled) {
     const execId = plan.ids.get("exec-aquarius")!.id;
     if (aquaHeld > 0n) done(`sent ${fmtUnits(aquaHeld)} AQUA to exec-aquarius`, await fundFloat(chain, deployer, plan.fixtures, execId, aquaHeld));
@@ -880,7 +945,7 @@ async function deploy(
     say(`  AQUA float ${fmtUnits(float)} of a ${fmtUnits(target)} target${float < target ? ": fund exec-aquarius " + execId + " with AQUA (or re-run with --fund-aqua-float)" : " ✓"}`);
   }
 
-  // 7. The admin's configuration, with venue ids read back from venues() (F8).
+  // 8. The admin's configuration, with venue ids read back from venues() (F8).
   const launchpad = plan.ids.get("launchpad-v2")!.id;
   const assets = quoteAssets(plan);
   const state = await readLaunchpadState((fn, args) => chain.view(launchpad, fn, args), [...assets.values()]);
@@ -891,34 +956,42 @@ async function deploy(
   const quotesRead: Record<string, unknown> = {};
   for (const [k, a] of assets) quotesRead[k] = scValToNative(await chain.view(launchpad, "quote_economics", [new Address(a).toScVal()]));
 
-  // 8. TTL: 30 days for every v2 instance and WASM, paid by the deployer (L-g). keepAlive doesn't say whether each of
-  //    its batches applied, so every entry's live-until ledger is read back: each must be at least 30 days past the
-  //    ledger before the extension (an extension applied at ledger A sets A + 30 days).
-  const contracts = [...plan.ids.values()].map((p) => p.id);
-  const hashes = plan.wasms.map((w) => w.sha256!);
+  // 9. TTL: 75 days for every v2 instance and WASM, and for the Soroswap factory's instance and the factory and pair
+  //    WASMs where they have less (ExtendFootprintTTL is permissionless), paid by the deployer (L-g). The step's own
+  //    report isn't trusted: every entry's live-until ledger is read back, and each must be at least 75 days past the
+  //    ledger before the extension (an extension applied at ledger A sets A + 75 days).
+  const soroswap = await soroswapTtlEntries(chain, network().soroswapFactory);
+  for (const n of soroswap.notes) say(`  note: ${n}`);
+  const contracts = [...new Set([...[...plan.ids.values()].map((p) => p.id), ...soroswap.contracts])];
+  const hashes = [...new Set([...plan.wasms.map((w) => w.sha256!), ...soroswap.hashes])];
+  const label = (k: string) => {
+    const p = [...plan.ids.values()].find((x) => x.id === k);
+    if (p) return `${p.name} ${k}`;
+    const w = plan.wasms.find((x) => x.sha256 === k);
+    return w ? `${WASMS[w.key].file} code` : soroswap.labels.get(k) ?? k;
+  };
   const ttlFrom = await chain.latestLedger();
-  const ttl = await ctx.keepAlive(contracts, hashes, deployer);
+  let ttl: { extended: number; fee: string };
+  try {
+    ttl = await ctx.keepAlive(contracts, hashes, deployer, label);
+  } catch (e) {
+    throw new Error(`the TTL step stopped (${(e as Error).message}). Everything else is deployed. Run the same command again: it skips what is there and goes on with the TTL step.`);
+  }
   fees += BigInt(ttl.fee);
-  say(`  extended ${ttl.extended} instance and WASM entries to 30 days, paid by the deployer (fee at most ${fmtXlm(BigInt(ttl.fee))})`);
+  say(`  extended ${ttl.extended} instance and WASM entries to ${TTL_EXTEND_DAYS} days, paid by the deployer (fee ${fmtXlm(BigInt(ttl.fee))})`);
   const target = ttlFrom + TTL_EXTEND_LEDGERS;
   const liveUntil = await chain.liveUntil(contracts, hashes);
   const short = [...liveUntil.entries()].filter(([, l]) => l === null || l < target);
   if (short.length) {
-    const label = (k: string) => {
-      const p = [...plan.ids.values()].find((x) => x.id === k);
-      if (p) return `${p.name} ${k}`;
-      const w = plan.wasms.find((x) => x.sha256 === k);
-      return w ? `${WASMS[w.key].file} code` : k;
-    };
     throw new Error(
-      `the TTL step didn't reach 30 days (live until ledger ${target} or later) for:\n  ${
+      `the TTL step didn't reach ${TTL_EXTEND_DAYS} days (live until ledger ${target} or later) for:\n  ${
         short.map(([k, l]) => `${label(k)}: ${l === null ? "missing" : `live until ${l}`}`).join("\n  ")
       }\nEverything else is deployed. Run the same command again: it skips what is there and retries the TTL step.`,
     );
   }
-  say(`  ✓ every instance and WASM lives until ledger ${target} or later`);
+  say(`  ✓ every instance and WASM lives until ledger ${target} or later (${TTL_EXTEND_DAYS} days)`);
 
-  // 9. The deployment file: ids, the venue table as read, hashes, public roles, durations; never a key.
+  // 10. The deployment file: ids, the venue table as read, hashes, public roles, durations; never a key.
   const file = `${ctx.deploymentsDir}/${plan.profile.deploymentFile}`;
   const record = await deploymentRecord(ctx, plan, venues, quotesRead, startLedger, file);
   await Deno.mkdir(ctx.deploymentsDir, { recursive: true });
@@ -929,7 +1002,78 @@ async function deploy(
   say("Next steps:");
   say(`  1. Send that file to the lead to commit; CT-12 binds the app's pins to it later.`);
   say("  2. Do NOT run the v1 cutover (admin-v2.ts cutover-v1) until the lead says the app serves v2: v1 must keep working until then (§17 steps 6–7).");
+  say(`  3. The v2 contracts and WASMs now live ${TTL_EXTEND_DAYS} days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)`);
+  say("     must still run before testers are invited: every launch token, Moment NFT and Moment coin starts at the network minimum");
+  say("     (about 7 days) and only the keeper extends it.");
   return 0;
+}
+
+/** After the constructors (step 6): every planned contract must be deployed and match the plan, and the wiring read
+ *  back from the chain must match (lib/wiring-v2.ts). Throws, naming each field and both values, on any mismatch. */
+async function requireWiring(
+  plan: Plan,
+  chain: Chain,
+  reconcileOrRefuse: (p: Plan, sentAlready?: boolean) => Promise<Reconciled[]>,
+  say: (l?: string) => void,
+  sleep?: (ms: number) => Promise<void>,
+): Promise<void> {
+  const stop = "the run stopped after the constructors: no admin call, no TTL step and no deployment file";
+  const after = await reconcileOrRefuse(plan, true);
+  const notThere = after.filter((s) => s.state !== "deployed");
+  if (notThere.length) {
+    throw new Error(`${notThere.map((s) => `${s.name} ${s.id}`).join(", ")} not at the planned id after the constructors; ${stop}. Run the same command again.`);
+  }
+  say("  Wiring read-back (views, no transaction)");
+  const rows = await readBackWiring(wiringPlan(plan), (id, fn, args) => chain.view(id, fn, args), { sleep });
+  for (const r of rows) say(`    ${renderWiringRow(r)}`);
+  const problems = wiringProblems(rows);
+  if (wiringVerdict(rows) === "unreadable") {
+    throw new Error(`${stop}:\n  ${problems.join("\n  ")}\nA view couldn't be read; nothing differs so far: run the same command again.`);
+  }
+  if (problems.length) {
+    throw new Error(
+      `the wiring read back from the chain differs from the plan; ${stop}:\n  ${problems.join("\n  ")}\n` +
+        "Don't run it again with these contracts: tell the lead (a fix needs a new --generation).",
+    );
+  }
+}
+
+/** The Soroswap factory's instance, its WASM and the pair WASM (the code of all_pairs(0)), for the TTL step: every
+ *  graduation goes through them, and extending is permissionless. Only entries live on chain are returned (an archived
+ *  one needs a restore, which isn't this kit's to do); anything left out is a note. */
+export async function soroswapTtlEntries(
+  chain: ChainReader,
+  factory: string,
+): Promise<{ contracts: string[]; hashes: string[]; labels: Map<string, string>; notes: string[] }> {
+  const labels = new Map<string, string>();
+  const notes: string[] = [];
+  const factoryCode = await chain.contractWasmHash(factory);
+  if (factoryCode === null) return { contracts: [], hashes: [], labels, notes: [`the Soroswap factory ${factory} isn't on chain: its TTL isn't extended`] };
+  labels.set(factory, `Soroswap factory ${factory}`);
+  labels.set(factoryCode, "Soroswap factory code");
+  const hashes = [factoryCode];
+  try {
+    const pairs = Number(scValToNative(await chain.view(factory, "all_pairs_length", [])));
+    if (pairs > 0) {
+      const pair = String(scValToNative(await chain.view(factory, "all_pairs", [nativeToScVal(0, { type: "u32" })])));
+      const pairCode = await chain.contractWasmHash(pair);
+      if (pairCode && pairCode !== factoryCode) {
+        hashes.push(pairCode);
+        labels.set(pairCode, "Soroswap pair code");
+      } else notes.push("the Soroswap pair WASM wasn't found: its TTL isn't extended");
+    } else notes.push("the Soroswap factory has no pair yet: the pair WASM's TTL isn't extended");
+  } catch (e) {
+    notes.push(`the Soroswap pair WASM couldn't be read (${(e as Error).message}): its TTL isn't extended`);
+  }
+  const latest = await chain.latestLedger();
+  const live = await chain.liveUntil([factory], hashes);
+  const isLive = (k: string) => (live.get(k) ?? -1) >= latest;
+  const contracts = isLive(factory) ? [factory] : [];
+  const kept = hashes.filter(isLive);
+  for (const k of [...(contracts.length ? [] : [factory]), ...hashes.filter((h) => !kept.includes(h))]) {
+    notes.push(`${labels.get(k)} isn't live on chain (archived?): its TTL isn't extended`);
+  }
+  return { contracts, hashes: kept, labels, notes };
 }
 
 async function deploymentRecord(

@@ -55,6 +55,8 @@ import {
   fmtUnits,
   fmtXlm,
   line,
+  MIN_DEPLOYER_XLM,
+  MIN_DEPLOYER_XLM_FLOAT,
   parseEnvelope,
   preflight,
   readOnlyChain,
@@ -319,13 +321,14 @@ async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
         deployer: roles.ADMIN_PUBLIC,
         treasuryAssets: [u.classic],
         platformAssets: [u.classic],
-        minDeployerXlm: (fundAquaFloat ? 2_500n : 1_000n) * STROOPS_PER_XLM,
+        minDeployerXlm: (fundAquaFloat ? MIN_DEPLOYER_XLM_FLOAT : MIN_DEPLOYER_XLM) * STROOPS_PER_XLM,
         assetNames: new Map([[u.classic, "USDC"]]),
       })
     ) add(l);
   }
 
-  // The reviewed WASMs: reported, not fatal before CT-19 writes the file.
+  // The reviewed WASMs: needed, as in the deploy's own gate (F13), which refuses a missing list, a WASM absent from
+  // dist, one the list doesn't name and one whose hash differs.
   const keysOf: WasmKey[] = (Object.keys(WASMS) as WasmKey[]).filter((k) => k !== "qa-exec-fail" && (aquarius === "auto" || k !== "exec-aquarius"));
   const wasms = [];
   for (const k of keysOf) {
@@ -334,7 +337,7 @@ async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
   }
   const reviewedText = await readIfExists(`${ctx.root}${REVIEWED_FILE}`);
   const rev = checkReviewed("testnet", reviewedText, wasms);
-  add(line(rev.ok, "reviewed WASMs", rev.ok ? `contracts/dist matches ${REVIEWED_FILE}` : rev.problems.slice(0, 3).join("; ") + (rev.problems.length > 3 ? `; and ${rev.problems.length - 3} more` : ""), false));
+  add(line(rev.ok, "reviewed WASMs", rev.ok ? `contracts/dist matches ${REVIEWED_FILE}` : rev.problems.slice(0, 3).join("; ") + (rev.problems.length > 3 ? `; and ${rev.problems.length - 3} more` : "")));
 
   // The live Aquarius router against CT-03's fixtures (ruling a).
   if (aquarius === "off") add(line(true, "Aquarius", "off (owner decision O7: Soroswap only), not checked", false));

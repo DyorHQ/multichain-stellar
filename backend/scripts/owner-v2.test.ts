@@ -23,7 +23,8 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { ADMIN_FNS, main as adminMain } from "./admin-v2.ts";
-import { type DeployCtx, main as deployMain } from "./deploy-contracts-v2.ts";
+import { type DeployCtx, main as deployMain, TESTNET_MAX_ENTRY_TTL, TTL_EXTEND_DAYS, TTL_EXTEND_LEDGERS, TTL_THRESHOLD_DAYS } from "./deploy-contracts-v2.ts";
+import { TESTNET } from "../supabase/functions/_shared/networks.ts";
 import { main as ownerMain, type OwnerCtx } from "./owner-v2.ts";
 import { contractIdFor, normalize } from "./lib/contract-ids.ts";
 import { KEYS_FILE, QA_KEYS_FILE, recordingIo, ROLES_FILE } from "./lib/owner-files.ts";
@@ -44,6 +45,11 @@ const XLM = 10_000_000n;
 const SEED = /S[A-Z2-7]{55}/;
 /** Testnet's minimum persistent TTL: what a new entry starts with (about 7 days). */
 const MIN_TTL = 120_960;
+/** The Soroswap factory (networks.ts), its WASM and the pair WASM: the TTL step extends them too. */
+const SOROSWAP_FACTORY = TESTNET.contracts.soroswapFactory;
+const SOROSWAP_FACTORY_CODE = "86285a9234d3f0d687eaf88efe8d5d72172b38c9a86624c9934c0cbf2aff2993";
+const SOROSWAP_PAIR = "CDSQONFE5BS732OYYJINI2L7W4567XRBLJWDD7GPVQZLXLPC4CGA55ZO";
+const SOROSWAP_PAIR_CODE = "8447525edd62f72ffaf52136358034657ea0511a8fec1cd0ebde649f86cca464";
 
 /** The source account's auth entry for a call, its root invocation the call itself (what simulation returns). */
 function sourceAuth(call: xdr.InvokeContractArgs, sub: xdr.SorobanAuthorizedInvocation[] = []): xdr.SorobanAuthorizationEntry {
@@ -131,6 +137,12 @@ class Ledger implements Chain {
     this.addSac(`${AQ.aqua.code}:${AQ.aqua.issuer}`, AQ.aqua.sac);
     this.addSac(USDC_CLASSIC, USDC_SAC);
     this.addSac("native", XLM_SAC);
+    // Testnet's Soroswap factory with one pair, about 94 days left on each (as read on 2026-10-15).
+    this.addContract(SOROSWAP_FACTORY, { kind: "soroswap-factory", wasm: SOROSWAP_FACTORY_CODE, fns: { all_pairs_length: () => 1, all_pairs: () => SOROSWAP_PAIR } });
+    this.addContract(SOROSWAP_PAIR, { kind: "soroswap-pair", wasm: SOROSWAP_PAIR_CODE, fns: {} });
+    // The router names its factory (the deploy checks networks.ts against it).
+    this.addContract(TESTNET.contracts.soroswapRouter, { kind: "soroswap-router", wasm: "soroswap-router", fns: { get_factory: () => SOROSWAP_FACTORY } });
+    for (const k of [SOROSWAP_FACTORY, SOROSWAP_FACTORY_CODE, SOROSWAP_PAIR_CODE]) this.ttl.set(k, this.ledger + 94 * 17_280);
   }
 
   quote(xlmIn: bigint): bigint {
@@ -203,9 +215,14 @@ class Ledger implements Chain {
   liveUntil(contracts: string[], hashes: string[]) {
     return Promise.resolve(new Map([...contracts, ...hashes].map((k) => [k, this.ttl.get(k) ?? null])));
   }
-  /** What ttl.ts keepAlive does when every batch applies: 30 days from now. `skip` entries are left as they were. */
+  /** What ttl.ts keepAlive does when every batch applies: entries with less than TTL_THRESHOLD_DAYS left go to
+   *  TTL_EXTEND_DAYS from now (one ExtendFootprintTTL, which never shortens). `skip` entries are left as they were. */
   extendTtl(contracts: string[], hashes: string[], skip: string[] = []) {
-    for (const k of [...contracts, ...hashes]) if (!skip.includes(k)) this.ttl.set(k, this.ledger + 30 * 17_280);
+    for (const k of [...contracts, ...hashes]) {
+      const now = this.ttl.get(k);
+      if (skip.includes(k) || now === undefined || now - this.ledger >= TTL_THRESHOLD_DAYS * 17_280) continue;
+      this.ttl.set(k, Math.max(now, this.ledger + TTL_EXTEND_LEDGERS));
+    }
   }
   view(id: string, fn: string, args: xdr.ScVal[]) {
     const kind = this.contracts.get(id)?.kind ?? id;
@@ -560,6 +577,13 @@ function assertClean(out: string, secrets: string[]) {
   assertFalse(/[\p{Cf}\p{Zl}\p{Zp}\p{M}\p{Script=Cyrillic}\p{Script=Greek}\u3164]/u.test(out), "an output holds a format, separator, combining or look-alike character");
 }
 
+/** Writes the reviewed list for the kit's dist as it is now (what CT-19's exit writes). */
+async function writeReviewed(k: Kit) {
+  const lines: string[] = [];
+  for (const key of Object.keys(WASMS) as WasmKey[]) lines.push(`${await sha256Hex(await Deno.readFile(`${k.root}contracts/dist/${WASMS[key].file}`))}  dist/${WASMS[key].file}`);
+  await Deno.writeTextFile(`${k.root}contracts/review/reviewed-wasm.sha256`, `${lines.sort().join("\n")}\ncommit 9354d56\n`);
+}
+
 const rolesOf = async (k: Kit): Promise<Record<string, string>> =>
   Object.fromEntries((await Deno.readTextFile(`${k.secrets}/${ROLES_FILE}`)).split("\n").filter((l) => /^[A-Z_]+=G/.test(l)).map((l) => l.split("=") as [string, string]));
 
@@ -680,9 +704,22 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     const keeper = Keypair.random();
     await Deno.writeTextFile(`${k.secrets}/testnet-functions.env`, `LITE_NETWORK=testnet\nSPONSOR_SECRET=${Keypair.random().secret()}\nKEEPER_SECRET=${keeper.secret()}\n`);
     k.ledger.fund(keeper.publicKey(), 250n * XLM);
+    // No reviewed list yet: the deploy's gate would refuse, so check fails on it too (nothing else is wrong).
+    const unreviewed = await owner(k, ["check"]);
+    assertEquals(unreviewed.code, 1, unreviewed.out);
+    assertStringIncludes(unreviewed.out, `✗ reviewed WASMs: contracts/review/reviewed-wasm.sha256 is missing`);
+    assertFalse(unreviewed.out.includes("Everything the deploy needs passes."));
+    assertStringIncludes(unreviewed.out, "✗ Fix the lines above before the deploy.");
+    // The only needed line that fails is the reviewed list's (no "(reported only)" on it).
+    const failing = unreviewed.out.split("\n").filter((l) => l.startsWith("✗ ") && !l.startsWith("✗ Fix") && !l.endsWith("(reported only)"));
+    assertEquals(failing.length, 1, failing.join("\n"));
+    assertStringIncludes(failing[0], "✗ reviewed WASMs");
+    await writeReviewed(k);
     // Aquarius is off by default (O7): the router isn't asked.
     const off = await owner(k, ["check"]);
     assertEquals(off.code, 0, off.out);
+    assertStringIncludes(off.out, "✓ reviewed WASMs: contracts/dist matches contracts/review/reviewed-wasm.sha256");
+    assertStringIncludes(off.out, "Everything the deploy needs passes.");
     assertStringIncludes(off.out, "✓ Aquarius: off (owner decision O7: Soroswap only), not checked");
     assertFalse(off.out.includes("dyor_exec_aquarius.wasm"), "exec-aquarius is not expected with Aquarius off");
     const ok = await owner(k, ["check", "--aquarius", "auto"]);
@@ -693,17 +730,33 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
         "✓ keys file mode is 600",
         "✓ deploy key is ADMIN_PUBLIC's",
         "✓ treasury trusts USDC",
-        "✓ deployer holds at least 1,000 XLM",
+        "✓ deployer holds at least 3,000 XLM",
         "✓ Aquarius router WASM hash matches fixtures.json",
         "✓ Aquarius ConstantPoolHash matches fixtures.json",
         "✓ Aquarius TokenHash matches fixtures.json",
         `✓ keeper key: ${keeper.publicKey()}, 250 XLM`,
-        "✗ reviewed WASMs",
-        "(reported only)",
+        "✓ reviewed WASMs",
       ]
     ) assertStringIncludes(ok.out, line);
-    // 2,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
+    // 4,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
     assertEquals((await owner(k, ["check", "--fund-aqua-float"])).code, 0);
+    // A WASM in dist that differs from the reviewed build fails the check, as it would stop the deploy.
+    const lp = `${k.root}contracts/dist/dyor_launchpad_v2.wasm`;
+    const lpBytes = await Deno.readFile(lp);
+    await Deno.writeFile(lp, Uint8Array.from([...lpBytes, 0]));
+    const drifted = await owner(k, ["check"]);
+    assertEquals(drifted.code, 1, drifted.out);
+    assertStringIncludes(drifted.out, "✗ reviewed WASMs: dyor_launchpad_v2.wasm differs from the reviewed build");
+    assertFalse(drifted.out.includes("Everything the deploy needs passes."));
+    await Deno.writeFile(lp, lpBytes);
+    // A deployer below the TTL step's rent fails it.
+    const roles = await rolesOf(k);
+    const xlmBefore = k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm;
+    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = 2_500n * XLM;
+    const poor = await owner(k, ["check"]);
+    assertEquals(poor.code, 1, poor.out);
+    assertStringIncludes(poor.out, "✗ deployer holds at least 3,000 XLM");
+    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = xlmBefore;
     // A deploy key that isn't the admin's is a failure.
     k.env.DEPLOYER_SECRET = Keypair.random().secret();
     const wrong = await owner(k, ["check"]);
@@ -780,7 +833,17 @@ Deno.test("deploy: the owner's testnet end to end, then an idempotent re-run, th
     // The constructor set the launch fee, the fees and the venues; the admin adds the two quotes.
     assertEquals(log.filter((l) => l.startsWith("invoke")), ["invoke launchpad-v2.set_quote", "invoke launchpad-v2.set_quote"]);
     assertEquals(keptAlive.length, 1);
-    assertEquals([keptAlive[0].contracts.length, keptAlive[0].hashes.length], [6, 9]);
+    // Six v2 instances and nine WASMs, plus the Soroswap factory's instance, the factory WASM and the pair WASM.
+    assertEquals([keptAlive[0].contracts.length, keptAlive[0].hashes.length], [7, 11]);
+    assert(keptAlive[0].contracts.includes(SOROSWAP_FACTORY));
+    assert(keptAlive[0].hashes.includes(SOROSWAP_FACTORY_CODE) && keptAlive[0].hashes.includes(SOROSWAP_PAIR_CODE));
+    for (const k2 of [...keptAlive[0].contracts, ...keptAlive[0].hashes]) assert(k.ledger.ttl.get(k2)! >= k.ledger.ledger + TTL_EXTEND_LEDGERS - 2, `${k2} reaches ${TTL_EXTEND_DAYS} days`);
+    assertStringIncludes(r.out, "extended 18 instance and WASM entries to 75 days");
+    assertStringIncludes(r.out, "(75 days)");
+    assertStringIncludes(r.out, "3. The v2 contracts and WASMs now live 75 days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)");
+    assertStringIncludes(r.out, "must still run before testers are invited");
+    assertStringIncludes(r.out, "✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
+    assertStringIncludes(r.out, "✓ launchpad-v2 venues() Soroswap venue executor is exec-soroswap");
     const roles = await rolesOf(k);
     assertEquals(keptAlive[0].payer, roles.ADMIN_PUBLIC, "the deployer (the admin) pays the TTL");
     assertStringIncludes(r.out, "AQUA float 0 of a 50 target: fund exec-aquarius");
@@ -1655,7 +1718,7 @@ Deno.test("the TTL step is checked: an entry left short fails the run loudly, be
     k.ttlSkip = [launchpadWasm];
     const r = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r.code, 1);
-    assertStringIncludes(r.out, "the TTL step didn't reach 30 days");
+    assertStringIncludes(r.out, "the TTL step didn't reach 75 days");
     assertMatch(r.out, /dyor_launchpad_v2\.wasm code: live until \d+/);
     assertStringIncludes(r.out, "Run the same command again");
     assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file yet");
@@ -1726,6 +1789,258 @@ Deno.test("re-runs compare the instance storage too: a contract with the planned
     const r3 = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r3.code, 1);
     assertStringIncludes(r3.out, `moments-graduator runs WASM ${"ab".repeat(32)}`);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+// ------------------------------------------------------------------------------------------------ the wiring read-back
+
+/** From its `from`-th read on, the view `fn` of each contract of `kind` created after this returns `wrong(right)`.
+ *  The reads before are the constructors' (moments-v2's reads its graduator) and the re-run check's after the
+ *  constructors (one per compared field: it compares with the constructor arguments), so the first wrong read is the
+ *  wiring read-back's: a mis-wiring only the read-back can see, as a wrong constructor builder would make. Returns
+ *  the switch that turns the wrong answers off. */
+function miswire(l: Ledger, kind: string, fn: string, wrong: (right: unknown) => unknown, from = 2) {
+  const instantiate = l.instantiate.bind(l);
+  let active = true;
+  l.instantiate = (k, wasm, id, a) => {
+    const c = instantiate(k, wasm, id, a);
+    if (k === kind) {
+      const right = c.fns[fn];
+      let reads = 0;
+      c.fns[fn] = (x, s) => (active && ++reads >= from ? wrong(right(x, s)) : right(x, s));
+    }
+    return c;
+  };
+  return () => {
+    active = false;
+    l.instantiate = instantiate;
+  };
+}
+
+Deno.test("wiring read-back: a mis-wired executor stops the run after the constructors, naming the field and both values; nothing more is sent", async () => {
+  // [contract kind, view, the wrong answer, the first read that is the read-back's, the refusal]
+  const cases: [string, string, (right: unknown) => unknown, number, string][] = [
+    ["exec-soroswap", "callers", (r) => [(r as string[])[0]], 2, "exec-soroswap callers() is ["],
+    ["exec-soroswap", "factory", () => XLM_SAC, 2, `exec-soroswap factory() is ${XLM_SAC} on chain; the plan has the Soroswap factory ${SOROSWAP_FACTORY}`],
+    ["lp-locker", "soroswap_factory", () => XLM_SAC, 2, `lp-locker soroswap_factory() is ${XLM_SAC} on chain; the plan has the Soroswap factory ${SOROSWAP_FACTORY}`],
+    ["moments-graduator", "soroswap_factory", () => XLM_SAC, 3, `moments-graduator soroswap_factory() is ${XLM_SAC} on chain`],
+    ["moments-graduator", "executor", () => ATTACKER, 3, `moments-graduator executor() is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+    ["launchpad-v2", "config", (r) => ({ ...(r as object), soroswap_factory: XLM_SAC }), 12, `launchpad-v2 config().soroswap_factory is ${XLM_SAC} on chain`],
+    ["launchpad-v2", "venues", (r) => (r as any[]).map((v) => ({ ...v, executor: ATTACKER })), 2, `launchpad-v2 venues() Soroswap venue executor is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+    ["moments-v2", "config", (r) => ({ ...(r as object), executor: ATTACKER }), 12, `moments-v2 config().executor is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+  ];
+  for (const [kind, fn, wrong, from, message] of cases) {
+    const k = await kit();
+    try {
+      await readyOwner(k);
+      const restore = miswire(k.ledger, kind, fn, wrong, from);
+      keptAlive.length = 0;
+      const r = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(r.code, 1, `${kind}.${fn}: ${r.out}`);
+      assertStringIncludes(r.out, "the wiring read back from the chain differs from the plan; the run stopped after the constructors: no admin call, no TTL step and no deployment file");
+      assertStringIncludes(r.out, message);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+      assertFalse(r.out.includes("nothing differs so far"));
+      // Everything was deployed, and nothing was sent after the constructors.
+      const sent = k.ledger.log.filter((l) => l.startsWith("invoke") || l.startsWith("create "));
+      assertEquals(sent.filter((l) => l.startsWith("invoke")), [], `${kind}.${fn}: no admin call`);
+      assertEquals(sent.length, 5, "five contracts deployed");
+      assertEquals(keptAlive.length, 0, "no TTL step");
+      assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file");
+      // The same contracts, read again, still refuse.
+      assertEquals((await deployDefault(k, ["--deployment", "testnet"])).code, 1);
+      // Once the chain shows the planned wiring a re-run goes on from where it stopped: nothing is deployed again.
+      restore();
+      const again = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(again.code, 0, again.out);
+      assertEquals((again.out.match(/already deployed with the planned configuration, skipped/g) ?? []).length, 5);
+      assertStringIncludes(again.out, "✓ moments-v2 config().executor is exec-soroswap");
+      assert(await Deno.stat(`${k.deployments}/testnet-v2.json`));
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, and the dry run lists every check", async () => {
+  const k = await kit();
+  try {
+    const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    for (
+      const s of [
+        "After the constructors, before anything else is sent: the wiring read-back (views by simulation, no transaction)",
+        "    exec-soroswap callers() is exactly launchpad-v2 and moments-graduator",
+        "    exec-soroswap factory() is the Soroswap factory",
+        "    launchpad-v2 config().soroswap_factory is the Soroswap factory",
+        "    lp-locker soroswap_factory() is the Soroswap factory",
+        "    moments-graduator soroswap_factory() is the Soroswap factory",
+        "    moments-graduator executor() is exec-soroswap",
+        "    moments-v2 config().executor is exec-soroswap",
+        "    launchpad-v2 venues() Soroswap venue executor is exec-soroswap",
+        "    qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail",
+        "    launchpad-v2 venues() QaFail venue executor is qa-exec-fail",
+        "    moments-graduator-qa-fail executor() is qa-exec-fail",
+        "    moments-v2-qa-fail config().executor is qa-exec-fail",
+        "    moments-graduator-qa-fail soroswap_factory() is the Soroswap factory",
+        "  any mismatch stops the run there: no admin call, no TTL step and no deployment file",
+        "Wiring read-back: runs after the constructors (25 checks, listed above)",
+        "to 75 days (past the 2026-12-16 testnet reset) where they have less",
+      ]
+    ) assertStringIncludes(dry.out, s);
+    const r = await deployDefault(k, ["--deployment", "testnet-qa"]);
+    assertEquals(r.code, 0, r.out);
+    const after = r.out.split("  Wiring read-back (views, no transaction)\n")[1].split("\n");
+    const section = after.slice(0, after.findIndex((l) => !l.startsWith("    ")));
+    assertEquals(section.length, 25, section.join("\n"));
+    assert(section.every((l) => l.startsWith("    ✓ ")), "25 wiring checks pass");
+    assertStringIncludes(r.out, "✓ qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail");
+    // A re-run's dry run reads the wiring back too, now that every contract is there.
+    const again = await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "Wiring read-back (views, no transaction)\n  ✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
+    assertStringIncludes(again.out, "A real deploy would go ahead.");
+    // The failing stack's own wiring: its executor, mis-wired, is refused like the main one.
+    const k2 = await kit();
+    try {
+      miswire(k2.ledger, "qa-exec-fail", "callers", (r) => [(r as string[])[0]]);
+      const bad = await deployDefault(k2, ["--deployment", "testnet-qa"]);
+      assertEquals(bad.code, 1, bad.out);
+      assertStringIncludes(bad.out, "qa-exec-fail callers() is [");
+      assertStringIncludes(bad.out, "the plan has exactly launchpad-v2 C");
+      assertFalse(await Deno.stat(`${k2.deployments}/testnet-qa-v2.json`).then(() => true, () => false));
+    } finally {
+      await cleanup(k2);
+    }
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: a view that can't be read (twice) stops the run as unreadable, not as a mis-wiring; a re-run goes on", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // exec-soroswap's factory() is rate-limited from its second read on: the re-run check reads it once, the
+    // read-back's read and its one retry both fail.
+    let reads = 0;
+    const restore = miswire(k.ledger, "exec-soroswap", "factory", () => {
+      reads++;
+      throw new Error("rate limited (HTTP 429)");
+    });
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertEquals(reads, 2, "the read-back tried the view twice");
+    assertStringIncludes(r.out, "exec-soroswap factory(): can't read it (rate limited (HTTP 429))");
+    assertStringIncludes(r.out, "A view couldn't be read; nothing differs so far: run the same command again.");
+    assertFalse(r.out.includes("new --generation"), "an unreadable view isn't a mis-wiring");
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("invoke")), [], "no admin call");
+    restore();
+    const again = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "✓ exec-soroswap factory() is the Soroswap factory");
+    // A read that fails once and then answers passes on its retry.
+    const k2 = await kit();
+    try {
+      await readyOwner(k2);
+      let n = 0;
+      miswire(k2.ledger, "lp-locker", "owners", (right) => {
+        if (++n === 1) throw new Error("timeout");
+        return right;
+      });
+      const once = await deployDefault(k2, ["--deployment", "testnet"]);
+      assertEquals(once.code, 0, once.out);
+      assertStringIncludes(once.out, "✓ lp-locker owners() is exactly launchpad-v2 and moments-v2");
+    } finally {
+      await cleanup(k2);
+    }
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: an extra caller or owner is a mis-wiring (exact sets)", async () => {
+  for (const [kind, fn, label] of [["exec-soroswap", "callers", "exec-soroswap callers()"], ["lp-locker", "owners", "lp-locker owners()"]]) {
+    const k = await kit();
+    try {
+      await readyOwner(k);
+      miswire(k.ledger, kind, fn, (right) => [...(right as string[]), ATTACKER]);
+      const r = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(r.code, 1, r.out);
+      assertStringIncludes(r.out, `${label} is [`);
+      assertStringIncludes(r.out, `"${ATTACKER}"] on chain; the plan has exactly launchpad-v2 C`);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("the Soroswap router's get_factory() must be networks.ts's factory: refused before anything is sent; --offline skips it", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => XLM_SAC;
+    const dry = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    assertStringIncludes(dry.out, `✗ the Soroswap router ${TESTNET.contracts.soroswapRouter} get_factory() is ${XLM_SAC}; networks.ts has ${SOROSWAP_FACTORY}`);
+    assertStringIncludes(dry.out, "A real deploy would stop at: the Soroswap router's factory.");
+    const offline = await deployDefault(k, ["--deployment", "testnet", "--dry-run", "--offline"]);
+    assertEquals(offline.code, 0, offline.out);
+    assertFalse(offline.out.includes("get_factory() is"), "not read offline");
+    const mark = k.ledger.log.length;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertStringIncludes(r.out, "networks.ts must name the router's factory; nothing was sent");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => SOROSWAP_FACTORY;
+    const ok = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertStringIncludes(ok.out, `✓ the Soroswap router's get_factory() is networks.ts's Soroswap factory ${SOROSWAP_FACTORY}`);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: a planned contract not at its id after the constructors stops the run before any admin call", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // moments-v2 is created, but the chain doesn't show it afterwards (as a lagging RPC node would).
+    const hash = k.ledger.contractWasmHash.bind(k.ledger);
+    k.ledger.contractWasmHash = (id: string) => (k.ledger.contracts.get(id)?.kind === "moments-v2" ? Promise.resolve(null) : hash(id));
+    keptAlive.length = 0;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertMatch(r.out, /moments-v2 C[A-Z2-7]{55} not at the planned id after the constructors; the run stopped after the constructors/);
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("invoke")), [], "no admin call");
+    assertEquals(keptAlive.length, 0, "no TTL step");
+    assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file");
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("TTL: 75 days (past the 2026-12-16 testnet reset), under testnet's maximum entry TTL; the Soroswap entries are passed only when live", async () => {
+  assertEquals([TTL_EXTEND_DAYS, TTL_THRESHOLD_DAYS, TTL_EXTEND_LEDGERS], [75, 75, 1_296_000]);
+  // 2026-10-15 + 75 days is past 2026-12-16.
+  assert(new Date(Date.UTC(2026, 9, 15) + TTL_EXTEND_DAYS * 86_400_000) > new Date(Date.UTC(2026, 11, 16)));
+  // An extension must stay at or below max_entry_ttl − 1 (3,110,399 on testnet, 2026-10-15).
+  assert(TTL_EXTEND_LEDGERS <= TESTNET_MAX_ENTRY_TTL - 1 - 17_279, "at least a day under the maximum");
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // The pair's code archived: the factory and its code are still extended, and the run says what it left out.
+    k.ledger.ttl.delete(SOROSWAP_PAIR_CODE);
+    keptAlive.length = 0;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 0, r.out);
+    assertStringIncludes(r.out, "note: Soroswap pair code isn't live on chain (archived?): its TTL isn't extended");
+    assert(keptAlive[0].contracts.includes(SOROSWAP_FACTORY) && keptAlive[0].hashes.includes(SOROSWAP_FACTORY_CODE));
+    assertFalse(keptAlive[0].hashes.includes(SOROSWAP_PAIR_CODE));
   } finally {
     await cleanup(k);
   }
