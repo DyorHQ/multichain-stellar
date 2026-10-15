@@ -4,7 +4,7 @@
 // those tests say they are ignored when dist isn't there, and fail on a dist that no longer matches. The smoke itself
 // runs end to end against the in-memory ledger in owner-v2.test.ts.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { SMOKE_CALLS } from "./smoke-v2.ts";
+import { SMOKE_CALLS, snipeWindowOver } from "./smoke-v2.ts";
 import { RUNTIME_CONSTRUCTORS, WASMS, type WasmKey } from "./v2-constructors.ts";
 import { compareParams, constructorGuard, functionParams, readSpec } from "./wasm-spec.ts";
 import { constructors, parseEconomics } from "./v2-constructors.ts";
@@ -120,4 +120,16 @@ Deno.test({
     }
     assertEquals(problems, []);
   },
+});
+
+Deno.test("the smoke's buy waits for the snipe window by size, not for a zero snipe fee", () => {
+  // The completing buy on the XLM curve: 4,324.55532 XLM of net plus 2% fees.
+  const used = 44_128_115_511n;
+  // Inside the window the last step is 30 bps of what the buy spends.
+  assert(!snipeWindowOver((used * 30n) / 10_000n, used));
+  assert(!snipeWindowOver((used * 9_800n) / 10_000n, used));
+  // After it, quote_buy's snipe_fee holds only the floored fees' and the clamp's rounding.
+  assert(snipeWindowOver(0n, used));
+  assert(snipeWindowOver(3n, used));
+  assert(snipeWindowOver(used / 10_000n, used));
 });

@@ -328,10 +328,13 @@ export async function runSmoke(ctx: SmokeCtx): Promise<SmokeResult> {
   if (token !== predicted) throw new SmokeError(`launch returned ${token}, token_address predicted ${predicted}`);
   say(`  token ${token}`);
 
-  // The snipe tax steps down every snipe_step_secs; the buy waits until it is 0 (quote_buy shows it).
+  // The snipe tax steps down every snipe_step_secs; the buy waits until the window is over (quote_buy shows it).
+  // quote_buy's snipe_fee is what's left after the net and the two fees (curve.rs), so after the window it still
+  // holds their rounding and the completing buy's clamp, a few stroops; inside the window it is at least the last
+  // step's 30 bps. Over when it is at most 1 bp of what the buy spends.
   const quote = await waitFor("waiting out the snipe window", SMOKE.snipeWaitMs, async () => {
     const q = (await view(launchpad, "launchpad-v2", "quote_buy", [token, buyer.publicKey(), SMOKE.buyBudget])) as Record<string, bigint>;
-    return BigInt(q.snipe_fee) === 0n ? q : null;
+    return snipeWindowOver(BigInt(q.snipe_fee), BigInt(q.used)) ? q : null;
   });
   say(`  the buy completes the curve: ${fmtUnits(BigInt(quote.used))} XLM in, ${fmtUnits(BigInt(quote.tokens_out))} tokens out`);
   const bought = BigInt(await call("buy (completes the curve)", buyer, launchpad, "launchpad-v2", "buy", [buyer.publicKey(), token, SMOKE.buyBudget, (BigInt(quote.tokens_out) * 99n) / 100n]) as bigint);
@@ -452,6 +455,13 @@ function graduatedPool(outcome: unknown, what: string): string {
     throw new SmokeError(`${what}'s graduation recorded a failure: origin ${f?.origin}, code ${f?.code}`);
   }
   throw new SmokeError(`${what}'s graduation returned ${JSON.stringify(outcome, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`);
+}
+
+/** Whether a quote_buy is past the snipe window: its snipe_fee is rounding only, at most 1 bp of `used`. Inside the
+ *  window it is at least the schedule's last step (30 bps); after it, the curve's floored fees and the completing
+ *  buy's clamp leave a few stroops there. */
+export function snipeWindowOver(snipeFee: bigint, used: bigint): boolean {
+  return snipeFee * 10_000n <= used;
 }
 
 /** The deployment file the smoke reads: testnet-qa's, never the owner's. */
