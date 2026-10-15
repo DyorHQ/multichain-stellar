@@ -24,6 +24,7 @@ import {
   RestorePreamble,
   restoreTx,
   sendSigned,
+  SendUnconfirmed,
   sendUserTx,
   Settled,
   signedBy,
@@ -44,8 +45,9 @@ export interface StepSpec {
   kind: string;
   /** Where activation is sponsored: DyorHQ pays this swap's fee as the account's starter swap (§4.3). */
   starter?: boolean;
-  /** The SDEX route a starter swap takes instead when its own would cost DyorHQ more than starterInnerFeeMax. */
-  fallback?: StepSpec | null;
+  /** The SDEX route a starter swap takes instead when its own would cost DyorHQ more than starterInnerFeeMax, and the
+   *  step's label then. */
+  fallback?: { label: string; spec: StepSpec } | null;
   [k: string]: unknown;
 }
 
@@ -194,16 +196,17 @@ async function starterVerdict(user: string, spec: StepSpec) {
 }
 
 /** Builds a step: the transaction, its fee checks and the verifier's. A starter swap stays DyorHQ's only while it
- *  qualifies and its fee-bump fits starterInnerFeeMax, through its SDEX route if need be; otherwise the user pays it. */
+ *  qualifies and its fee-bump fits starterInnerFeeMax. When its route's doesn't fit, it takes its SDEX route, which
+ *  must qualify too (its own minimum out) and then names the step; failing that, the user pays it. */
 async function build(user: string, step: PlanStep): Promise<PlanStep> {
-  let spec = step.spec;
+  let { label, spec } = step;
   if (spec.starter && !(await starterVerdict(user, spec)).eligible) spec = { ...spec, starter: false, fallback: null };
   let made = await make(user, spec);
   if (spec.starter && !starterFits(made.tx)) {
-    const fallback = spec.fallback ? { ...spec.fallback, starter: true } : null;
-    const alt = fallback ? await make(user, fallback) : null;
+    const fallback = spec.fallback ? { label: spec.fallback.label, spec: { ...spec.fallback.spec, starter: true } } : null;
+    const alt = fallback && (await starterVerdict(user, fallback.spec)).eligible ? await make(user, fallback.spec) : null;
     if (fallback && alt && starterFits(alt.tx)) {
-      spec = fallback;
+      ({ label, spec } = fallback);
       made = alt;
     } else {
       spec = { ...spec, starter: false, fallback: null };
@@ -232,6 +235,7 @@ async function build(user: string, step: PlanStep): Promise<PlanStep> {
   }
   return {
     ...step,
+    label,
     spec,
     status: "built",
     intent,
@@ -421,8 +425,9 @@ async function assertStarter(user: string, spec: StepSpec): Promise<void> {
 
 /** Sends a signed step (§4.8): the hash must be the step's and the signature the user's; the fee must fit the cap and
  *  the verifier must pass it again. Then the user's own transaction is sent as signed, or for an account's setup and
- *  a starter swap the sponsorship is reserved first (and released if nothing was sent). Logged in lite.tx_log with
- *  who pays, the step kind, the section and the declared fee. */
+ *  a starter swap the sponsorship is reserved first. Refused, nothing was sent: the step fails, and the sponsorship is
+ *  released. Unconfirmed (RPC gave no answer), it may land: it counts as sent, keeping its sponsorship, and settling it
+ *  tells. Logged in lite.tx_log with who pays, the step kind, the section and the declared fee. */
 export async function submitStep(user: string, planId: string, stepId: string, signedXdr: string, ip: string): Promise<{ hash: string; status: "pending" }> {
   const plan = await loadPlan(user, planId);
   const idx = plan.steps.findIndex((s) => s.id === stepId);
@@ -459,10 +464,16 @@ export async function submitStep(user: string, planId: string, stepId: string, s
       hash = await sendUserTx(tx);
     }
   } catch (err) {
-    if (sponsorship) await releaseSponsorship(sponsorship);
-    plan.steps[idx] = { ...step, status: "failed", error: (err as Error).message };
-    await savePlan(planId, plan.steps);
-    throw err;
+    if (!(err instanceof SendUnconfirmed)) {
+      if (sponsorship) await releaseSponsorship(sponsorship);
+      plan.steps[idx] = { ...step, status: "failed", error: (err as Error).message };
+      await savePlan(planId, plan.steps);
+      throw err;
+    }
+    // It may land: a failed step could be built and sent again, a released sponsorship paid for twice. Settling it
+    // (trackTx, jobs/settle.ts) settles both: success, or failed once it can no longer land.
+    console.warn("submit: unconfirmed, settled later", JSON.stringify(err.detail).slice(0, 300));
+    hash = err.hash;
   }
   if (sponsorship) await sponsorshipSent(sponsorship, hash);
   const intent = step.intent;

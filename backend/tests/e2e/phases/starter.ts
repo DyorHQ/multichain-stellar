@@ -34,9 +34,10 @@ export default async function starter(t: E2E): Promise<string | null> {
   const kp = Keypair.random();
   const address = kp.publicKey();
   const token = await signIn(t, kp);
-  // Sponsorships are capped per IP and day: the run comes from a TEST-NET-2 address of its own (RFC 5737), so earlier
-  // runs on the same stack don't use up its cap.
-  const from = { "x-forwarded-for": `198.51.100.${1 + Math.floor(Math.random() * 254)}` };
+  // Sponsorships are capped per IP and day, and the API takes the IP Cloudflare gives it (http.ts clientIp). The local
+  // stack has no Cloudflare in front, so the run sets that header itself: a TEST-NET-2 address of its own (RFC 5737),
+  // and earlier runs on the same stack don't use up its cap.
+  const from = { "cf-connecting-ip": `198.51.100.${1 + Math.floor(Math.random() * 254)}` };
   const { api, call } = client(t, token, from);
   const run = (plan: any) => runAs(t, kp, token, plan, [], from);
   const sponsor = t.config.sponsor;

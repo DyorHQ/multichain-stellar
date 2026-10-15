@@ -193,8 +193,14 @@ function swapSpec(req: { sell: string; buy: string; amountIn: string }, r: Price
   return { kind: `swap_${r.venue}`, sell: req.sell, buy: req.buy, amountIn: req.amountIn, minOut: r.minOut, path: r.path, chainXdr: r.chainXdr ?? null };
 }
 
+/** A swap step's label: the venue it goes through. */
+function swapLabel(venue: Venue): string {
+  return `Swap via ${VENUE_NAMES[venue]}`;
+}
+
 /** POST /v1/swap/build: the route of `venue` (the best when absent), after a user-paid trust step when the bought asset
- *  isn't enabled. A starter swap is marked for DyorHQ to pay, with its SDEX route to fall back on (§4.3). */
+ *  isn't enabled. A starter swap is marked for DyorHQ to pay, with its SDEX route to fall back on (§4.3), which the
+ *  plan takes only if that route qualifies too (plans.ts). */
 export async function buildSwap(user: string, quoteId: string, venue?: Venue) {
   if (!/^[0-9a-f-]{36}$/.test(quoteId)) throw notFound("Quote");
   const rows = await sql()`select request, best, alternatives, expires_at from lite.swap_quotes where id = ${quoteId} and address = ${user}`;
@@ -216,9 +222,9 @@ export async function buildSwap(user: string, quoteId: string, venue?: Venue) {
   if (starter.eligible) {
     const sdex = route.venue === "sdex" ? null : routes.find((r) => r.venue === "sdex");
     spec.starter = true;
-    spec.fallback = sdex ? swapSpec(req, sdex) : null;
+    spec.fallback = sdex ? { label: swapLabel("sdex"), spec: swapSpec(req, sdex) } : null;
   }
-  steps.push({ label: `Swap via ${VENUE_NAMES[route.venue]}`, spec });
+  steps.push({ label: swapLabel(route.venue), spec });
   return await createPlan(user, "swap", steps);
 }
 

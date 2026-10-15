@@ -6,7 +6,7 @@ import { LoggedTx, settle } from "../../_shared/plans.ts";
 import { txStatus } from "../../_shared/stellar.ts";
 
 /** A transaction still unseen this long after it was logged has expired without landing (a step is valid for 10
- *  minutes): it failed, and charged nothing. */
+ *  minutes, the keeper's for 2): it failed, too late (Horizon's tx_too_late), and charged nothing. */
 const EXPIRED_MS = 15 * 60_000;
 
 /** Settles the logged transactions the phone stopped polling. Answers how many it settled. */
@@ -19,7 +19,7 @@ export async function settlePending(): Promise<number> {
     let s = await txStatus(r.hash as string);
     if (s.status === "PENDING") {
       if (Date.now() - new Date(r.created_at as Date).getTime() < EXPIRED_MS) continue;
-      s = { status: "FAILED", feeCharged: "0", error: "txNotFound" };
+      s = { status: "FAILED", feeCharged: "0", error: "tx_too_late" };
     }
     await settle(r as unknown as LoggedTx, s);
     n++;
@@ -36,7 +36,7 @@ async function settleKeeperLog(): Promise<number> {
     let s = await txStatus(r.hash as string);
     if (s.status === "PENDING") {
       if (Date.now() - new Date(r.created_at as Date).getTime() < EXPIRED_MS) continue;
-      s = { status: "FAILED", feeCharged: "0", error: "txNotFound" };
+      s = { status: "FAILED", feeCharged: "0", error: "tx_too_late" };
     }
     await sql()`update lite.keeper_log set status = ${s.status === "SUCCESS" ? "success" : "failed"}, ledger = ${s.ledger ?? null},
                 fee_charged = ${s.feeCharged ?? null}, error = ${s.error ?? null}, updated_at = now()

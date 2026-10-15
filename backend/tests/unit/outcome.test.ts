@@ -1,7 +1,8 @@
 // What a settled step delivered and where it counts (docs/DESIGN-stellar-parity.md §6.11, §12.5): amountOut from an
 // SDEX path payment's result (fee-bumped too), Soroswap's Vec<i128>, Aquarius's u128 and the curve's buy and sell; the
-// section of each intent kind; settle() recording status, fee, outcome, the plan step and the sponsorship; and
-// GET /v1/tx/:hash answering the contract's TxStatus (fixture tx-status.json).
+// section of each intent kind; a failure's code as Horizon names it, the names the phone's copy is keyed on (§6.13);
+// settle() recording status, fee, outcome, the plan step and the sponsorship; and GET /v1/tx/:hash answering the
+// contract's TxStatus (fixture tx-status.json), a failure with its code.
 import { Account, Asset, Keypair, nativeToScVal, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assertEquals } from "jsr:@std/assert@1";
 import { fakeSql, setTestEnv, USER } from "../fixtures/routes/harness.ts";
@@ -9,6 +10,7 @@ import { fakeSql, setTestEnv, USER } from "../fixtures/routes/harness.ts";
 setTestEnv();
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const { outcomeOf, sectionOf, settle, trackTx } = await import("../../supabase/functions/_shared/plans.ts");
+const { resultCode } = await import("../../supabase/functions/_shared/stellar.ts");
 
 const fixture = JSON.parse(await Deno.readTextFile(new URL("../fixtures/api/tx-status.json", import.meta.url)));
 
@@ -66,6 +68,52 @@ Deno.test("sections: swaps by their sides, sends spot, setup and restores accoun
   );
 });
 
+/** A transaction result: `code`, or txFailed with these operations' results. */
+function resultOf(code: xdr.TransactionResultResult | xdr.OperationResult[]): xdr.TransactionResult {
+  const result = Array.isArray(code) ? xdr.TransactionResultResult.txFailed(code) : code;
+  return new xdr.TransactionResult({ feeCharged: xdr.Int64.fromString("100"), result, ext: new xdr.TransactionResultExt(0) });
+}
+
+const opResult = (tr: xdr.OperationResultTr) => xdr.OperationResult.opInner(tr);
+const LOW_RESERVE = opResult(xdr.OperationResultTr.changeTrust(xdr.ChangeTrustResult.changeTrustLowReserve()));
+const PAID = opResult(xdr.OperationResultTr.payment(xdr.PaymentResult.paymentSuccess()));
+
+Deno.test("a failure's code is Horizon's (§6.13): the transaction's own, else the first failed operation's, whatever the operation", () => {
+  const code = (r: xdr.TransactionResultResult | xdr.OperationResult[]) => resultCode(resultOf(r));
+  // The fee: not enough XLM for it, or a bid the network has outgrown.
+  assertEquals([code(xdr.TransactionResultResult.txInsufficientBalance()), code(xdr.TransactionResultResult.txInsufficientFee())], ["tx_insufficient_balance", "tx_insufficient_fee"]);
+  // Stellar's minimum balance, whichever operation needed the reserve.
+  assertEquals(code([LOW_RESERVE]), "op_low_reserve");
+  assertEquals(code([opResult(xdr.OperationResultTr.createAccount(xdr.CreateAccountResult.createAccountLowReserve()))]), "op_low_reserve");
+  // Not enough of what is sent.
+  assertEquals(code([opResult(xdr.OperationResultTr.payment(xdr.PaymentResult.paymentUnderfunded()))]), "op_underfunded");
+  assertEquals(code([opResult(xdr.OperationResultTr.pathPaymentStrictSend(xdr.PathPaymentStrictSendResult.pathPaymentStrictSendUnderfunded()))]), "op_underfunded");
+  // The first operation that failed names it.
+  assertEquals(code([PAID, LOW_RESERVE]), "op_low_reserve");
+  // A fee-bump's is its inner transaction's.
+  const bumped = xdr.TransactionResultResult.txFeeBumpInnerFailed(
+    new xdr.InnerTransactionResultPair({
+      transactionHash: Buffer.alloc(32),
+      result: new xdr.InnerTransactionResult({ feeCharged: xdr.Int64.fromString("100"), result: xdr.InnerTransactionResultResult.txFailed([LOW_RESERVE]), ext: new xdr.InnerTransactionResultExt(0) }),
+    }),
+  );
+  assertEquals(code(bumped), "op_low_reserve");
+  // Where Horizon's names aren't the code's own words.
+  assertEquals(
+    [
+      code(xdr.TransactionResultResult.txNoAccount()),
+      code([xdr.OperationResult.opNoAccount()]),
+      code([opResult(xdr.OperationResultTr.createAccount(xdr.CreateAccountResult.createAccountAlreadyExist()))]),
+      code([opResult(xdr.OperationResultTr.pathPaymentStrictSend(xdr.PathPaymentStrictSendResult.pathPaymentStrictSendUnderDestmin()))]),
+      code([opResult(xdr.OperationResultTr.invokeHostFunction(xdr.InvokeHostFunctionResult.invokeHostFunctionTrapped()))]),
+      code([opResult(xdr.OperationResultTr.invokeHostFunction(xdr.InvokeHostFunctionResult.invokeHostFunctionResourceLimitExceeded()))]),
+      code([opResult(xdr.OperationResultTr.restoreFootprint(xdr.RestoreFootprintResult.restoreFootprintInsufficientRefundableFee()))]),
+    ],
+    ["tx_no_source_account", "op_no_source_account", "op_already_exists", "op_under_dest_min", "function_trapped", "resource_limit_exceeded", "insufficient_refundable_fee"],
+  );
+  assertEquals([code(xdr.TransactionResultResult.txBadSeq()), code(xdr.TransactionResultResult.txTooLate())], ["tx_bad_seq", "tx_too_late"]);
+});
+
 /** Records every query; answers the settle's own. */
 function settleDb(steps: unknown[] | null) {
   const seen: { q: string; ps: unknown[] }[] = [];
@@ -94,8 +142,8 @@ Deno.test("settle: the status, ledger, fee charged and amountOut; the plan step 
 
   // A failed one delivers nothing, and fails its step.
   const seen2 = settleDb([{ id: "s1", label: "Swap", spec: { kind: "swap_sdex" }, status: "submitted" }]);
-  const failed = await settle({ ...row, fee_payer: "user" }, { status: "FAILED", ledger: 5_201_235, feeCharged: "100", error: "pathPaymentStrictSendUnderDestmin" });
-  assertEquals([failed.status, failed.result, failed.error], ["failed", { amountOut: null }, "pathPaymentStrictSendUnderDestmin"]);
+  const failed = await settle({ ...row, fee_payer: "user" }, { status: "FAILED", ledger: 5_201_235, feeCharged: "100", error: "op_under_dest_min" });
+  assertEquals([failed.status, failed.result, failed.error], ["failed", { amountOut: null }, "op_under_dest_min"]);
   assertEquals((seen2.find((s) => s.q.startsWith("update lite.plans set steps"))!.ps[0] as { status: string }[])[0].status, "failed");
   assertEquals(seen2.some((s) => s.q.startsWith("update lite.sponsorships")), false);
 });
@@ -145,4 +193,41 @@ Deno.test("GET /v1/tx/:hash settles a landed swap and answers the contract's TxS
   }) as typeof fetch;
   const status = await trackTx(USER.publicKey(), fixture.hash);
   assertEquals(JSON.parse(JSON.stringify(status, (_k, v) => (typeof v === "bigint" ? v.toString() : v))), fixture);
+});
+
+Deno.test("GET /v1/tx/:hash answers a failure with Horizon's code: a trustline Stellar's minimum balance couldn't hold is op_low_reserve", async () => {
+  const seen = settleDb(null);
+  const envelope = new TransactionBuilder(new Account(USER.publicKey(), "1"), { fee: "100", networkPassphrase: "Test SDF Network ; September 2015" })
+    .addOperation(Operation.changeTrust({ asset: new Asset("USDC", Keypair.random().publicKey()) }))
+    .setTimeout(600)
+    .build()
+    .toEnvelope()
+    .toXDR("base64");
+  const meta = new xdr.TransactionMeta(3, new xdr.TransactionMetaV3({ ext: new xdr.ExtensionPoint(0), txChangesBefore: [], operations: [], txChangesAfter: [], sorobanMeta: null }));
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req = input instanceof Request ? input : new Request(String(input), init);
+    const body = await req.json();
+    if (body.method !== "getTransaction") throw new Error(`unexpected RPC ${body.method}`);
+    return Response.json({
+      jsonrpc: "2.0",
+      id: body.id,
+      result: {
+        status: "FAILED",
+        latestLedger: 5_201_300,
+        latestLedgerCloseTime: "1791971000",
+        oldestLedger: 5_100_000,
+        oldestLedgerCloseTime: "1791000000",
+        ledger: 5_201_236,
+        createdAt: "1791970900",
+        applicationOrder: 1,
+        feeBump: false,
+        envelopeXdr: envelope,
+        resultXdr: resultOf([LOW_RESERVE]).toXDR("base64"),
+        resultMetaXdr: meta.toXDR("base64"),
+      },
+    });
+  }) as typeof fetch;
+  const status = await trackTx(USER.publicKey(), fixture.hash);
+  assertEquals(status, { hash: fixture.hash, status: "failed", ledger: 5_201_236, error: "op_low_reserve", feeCharged: "100", feePayer: "user", result: { amountOut: null } });
+  assertEquals(seen.find((s) => s.q.startsWith("update lite.tx_log set status"))!.ps.slice(0, 4), ["failed", 5_201_236, "100", "op_low_reserve"]);
 });

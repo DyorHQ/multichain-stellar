@@ -211,7 +211,9 @@ export class NeedsRestore extends ApiError {
 /** Simulates a Soroban transaction and assembles footprint, resources and auth, with headroom: state can move
  *  between simulation and execution (Blend accrues interest every ledger), and a transaction that runs out of
  *  budget fails on-chain (invokeHostFunctionResourceLimitExceeded). Instructions get +25% (+100k), bytes +20% (+1k)
- *  and the resource fee withResourceMargin(); whoever pays the transaction pays the margin. */
+ *  and the resource fee withResourceMargin(), all in the transaction assembled (rpc.assembleTransaction takes the
+ *  resources and the fee from the simulation it is given). The margin is part of the fee its payer signs for: the
+ *  user's own, for every user transaction (§4.1); the keeper's, for upkeep. */
 export async function prepare(tx: Transaction): Promise<Transaction> {
   let sim: rpc.Api.SimulateTransactionResponse;
   try {
@@ -356,8 +358,22 @@ export function feeBumpFee(inner: Transaction): bigint {
   return feeBumpRate(inner) * BigInt(inner.operations.length + 1) + resourceFee;
 }
 
+/** RPC gave no answer about a transaction it was sent (the connection dropped, it timed out, it answered with an error
+ *  of its own), so the transaction may be on its way. Only an answer of ERROR or TRY_AGAIN_LATER proves that nothing
+ *  was sent; with this one, whether it lands is known only once it settles. `hash` is the transaction's. */
+export class SendUnconfirmed extends ApiError {
+  constructor(readonly hash: string, raw: string) {
+    super(502, "rpc_unavailable", "Stellar RPC didn't confirm it received this transaction.", { hash, raw: raw.slice(0, 300) });
+  }
+}
+
 async function send(tx: Transaction | FeeBumpTransaction, payer: Payer): Promise<string> {
-  const res = await rpcServer().sendTransaction(tx);
+  let res: rpc.Api.SendTransactionResponse;
+  try {
+    res = await rpcServer().sendTransaction(tx);
+  } catch (err) {
+    throw new SendUnconfirmed(tx.hash().toString("hex"), String((err as Error)?.message ?? err));
+  }
   if (res.status === "ERROR") {
     const code = res.errorResult ? resultCode(res.errorResult) : "unknown";
     throw sendError(code, payer, res.errorResult?.toXDR("base64"));
@@ -367,7 +383,58 @@ async function send(tx: Transaction | FeeBumpTransaction, payer: Payer): Promise
   return res.hash;
 }
 
-/** A transaction result's code: the inner transaction's for a fee-bump, the first failed operation's after txFailed. */
+/** "LowReserve" → "low_reserve". */
+const snakeCase = (words: string) => words.replace(/[A-Z]/g, (c, at) => (at > 0 ? "_" : "") + c.toLowerCase());
+
+/** Horizon's names for a transaction's and an operation's own codes, where they aren't tx_ or op_ and the code's words
+ *  in snake case. */
+const HORIZON_CODES: Record<string, string> = {
+  txNoAccount: "tx_no_source_account",
+  txBadMinSeqAgeOrGap: "tx_bad_minseq_age_or_gap",
+  opNoAccount: "op_no_source_account",
+};
+
+/** Horizon's names for an operation's results, by the words after the operation's name, where they aren't op_ and
+ *  those words in snake case. */
+const HORIZON_OP_RESULTS: Record<string, string> = {
+  AlreadyExist: "op_already_exists",
+  OfferCrossSelf: "op_cross_self",
+  OverSendmax: "op_over_source_max",
+  UnderDestmin: "op_under_dest_min",
+  SellNotAuthorized: "sell_not_authorized",
+  BuyNotAuthorized: "buy_not_authorized",
+  BuyNoIssuer: "buy_no_issuer",
+  NotFound: "op_offer_not_found",
+  NotAuthMaintainLiabilities: "op_not_aut_maintain_liabilities",
+  SeqnumTooFar: "op_seq_num_too_far",
+  NoTrustLine: "op_no_trust",
+  TrustNotRequired: "op_not_required",
+  NameNotFound: "op_data_name_not_found",
+  InvalidName: "op_data_invalid_name",
+  NotIssuer: "op_no_issuer",
+  Trapped: "function_trapped",
+  ResourceLimitExceeded: "resource_limit_exceeded",
+  EntryArchived: "entry_archived",
+  InsufficientRefundableFee: "insufficient_refundable_fee",
+};
+
+/** A transaction's or an operation's own code (txBadSeq, opNoAccount) as Horizon names it. */
+function horizonCode(code: string): string {
+  return HORIZON_CODES[code] ?? `${code.slice(0, 2)}_${snakeCase(code.slice(2))}`;
+}
+
+/** An operation's result (changeTrustLowReserve, of a changeTrust) as Horizon names it (op_low_reserve). */
+function horizonOpResult(operation: string, code: string): string {
+  // createPassiveSellOffer answers with manageSellOffer's codes.
+  const name = operation === "createPassiveSellOffer" ? "manageSellOffer" : operation;
+  const words = code.startsWith(name) ? code.slice(name.length) : code;
+  return HORIZON_OP_RESULTS[words] ?? `op_${snakeCase(words)}`;
+}
+
+/** A transaction result's code as Horizon names it, the names the phone's copy is keyed on (§6.13): the inner
+ *  transaction's for a fee-bump; after txFailed, the first failed operation's, whatever its operation
+ *  (changeTrustLowReserve and createAccountLowReserve are op_low_reserve, paymentUnderfunded and
+ *  pathPaymentStrictSendUnderfunded op_underfunded); otherwise the transaction's own (tx_insufficient_balance). */
 export function resultCode(result: xdr.TransactionResult): string {
   const r = result.result();
   const name = r.switch().name;
@@ -376,13 +443,12 @@ export function resultCode(result: xdr.TransactionResult): string {
   }
   if (name === "txFailed") {
     for (const op of (r.results() ?? []) as xdr.OperationResult[]) {
-      if (op.switch().name !== "opInner") return op.switch().name;
-      const inner = op.tr().value() as any;
-      const opName = inner?.switch?.().name as string | undefined;
-      if (opName && !/Success$/.test(opName)) return opName;
+      if (op.switch().name !== "opInner") return horizonCode(op.switch().name);
+      const inner = (op.tr().value() as any)?.switch?.().name as string | undefined;
+      if (inner && !/Success$/.test(inner)) return horizonOpResult(op.tr().switch().name, inner);
     }
   }
-  return name;
+  return horizonCode(name);
 }
 
 /** The refusal a send error stands for (§6.13). RPC refuses a transaction for its fee before it runs: a fee the user can't
@@ -390,9 +456,9 @@ export function resultCode(result: xdr.TransactionResult): string {
  *  bid the network has outgrown is worth another try. What fails when it runs (an operation's own code) is the
  *  transaction's settled error instead. */
 function sendError(code: string, payer: Payer, detail?: string): ApiError {
-  if (code === "txInsufficientBalance" || code === "txInsufficientFee") {
+  if (code === "tx_insufficient_balance" || code === "tx_insufficient_fee") {
     if (payer === "user") return new ApiError(409, "not_enough_xlm_for_fee", "Not enough XLM for the network fee.", { code });
-    if (code === "txInsufficientFee") return new ApiError(503, "network_busy", "The network fee went up. Try again in a minute.", { code });
+    if (code === "tx_insufficient_fee") return new ApiError(503, "network_busy", "The network fee went up. Try again in a minute.", { code });
     if (payer === "sponsor") return new ApiError(429, "sponsor_limit", "DyorHQ's free setup is busy today. Try again tomorrow.", { code });
   }
   return new ApiError(422, "tx_rejected", txErrorMessage(code), { code, ...(detail ? { detail } : {}) });
@@ -400,12 +466,12 @@ function sendError(code: string, payer: Payer, detail?: string): ApiError {
 
 function txErrorMessage(code: string): string {
   switch (code) {
-    case "txBadSeq":
+    case "tx_bad_seq":
       return "This transaction is out of date. It will be rebuilt.";
-    case "txTooLate":
+    case "tx_too_late":
       return "This transaction expired before it was sent. It will be rebuilt.";
-    case "txBadAuth":
-    case "txFeeBumpInnerFailed":
+    case "tx_bad_auth":
+    case "tx_fee_bump_inner_failed":
       return "The signature didn't match. Nothing was sent.";
     default:
       return `The network refused this transaction (${code}).`;
@@ -419,6 +485,7 @@ export interface Settled {
   returnValue?: unknown;
   /** The TransactionResult, base64: what each operation did (an SDEX swap's amount out is only here). */
   resultXdr?: string;
+  /** Why it failed, as Horizon names it (resultCode()). */
   error?: string;
 }
 
@@ -436,7 +503,7 @@ export async function txStatus(hash: string): Promise<Settled> {
     }
     return { status: "SUCCESS", ...settled, returnValue: rv };
   }
-  return { status: "FAILED", ...settled, error: result ? resultCode(result) : "failed" };
+  return { status: "FAILED", ...settled, error: result ? resultCode(result) : "tx_failed" };
 }
 
 export async function waitForTx(hash: string, timeoutMs = 45_000): Promise<Settled> {

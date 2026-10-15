@@ -159,8 +159,15 @@ export function rateLimit(key: string, perMinute: number): void {
   if (buckets.size > 10_000) buckets.clear();
 }
 
+/** The caller's IP, for the rate limits and the sponsorship caps (sponsor.ts keeps only its HMAC). Cloudflare, in front
+ *  of the hosted functions, sets cf-connecting-ip to the address that connected to it, whatever the request said.
+ *  Without it, the right-most X-Forwarded-For entry: the one the nearest proxy appended. Every entry before it is
+ *  whatever the caller sent, so the first is never taken. "unknown" with neither. */
 export function clientIp(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? req.headers.get("cf-connecting-ip") ?? "unknown";
+  const edge = req.headers.get("cf-connecting-ip")?.trim();
+  if (edge) return edge;
+  const forwarded = (req.headers.get("x-forwarded-for") ?? "").split(",").map((s) => s.trim()).filter((s) => s !== "");
+  return forwarded.at(-1) ?? "unknown";
 }
 
 // ---------------------------------------------------------------------------------------------- validation helpers

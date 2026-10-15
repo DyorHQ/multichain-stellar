@@ -1,9 +1,10 @@
 // Rent upkeep (docs/DESIGN-stellar-parity.md §4.8b). Soroban archives any entry whose TTL runs out, and extending a
 // contract instance doesn't extend its WASM. That cost is protocol upkeep, DyorHQ's: the keeper extends, from its own
 // account, the app's contract instances (the launchpad, Moments, every live launch token and its pool), the WASMs they
-// run, and the launchpad's entries of every live launch and the Moments still collecting. A launch with no trade in
-// `idleDays` and no holders is left to archive, which bounds what spam launches can cost. Each run checks the entries
-// checked longest ago first, at most `perRun`, and extends those under the threshold while it has time.
+// run, each quote's settings in the launchpad and Moments, and the launchpad's entries of every live launch and the
+// Moments still collecting. A launch with no trade in `idleDays` and no holders is left to archive, which bounds what
+// spam launches can cost. Each run checks the entries checked longest ago first, at most `perRun`, and extends those
+// under the threshold while it has time.
 import { Address, Keypair, Operation, rpc, SorobanDataBuilder, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
@@ -43,6 +44,20 @@ export function launchKeys(launchpad: string, token: string): xdr.LedgerKey[] {
 export function momentKey(moments: string, id: number): xdr.LedgerKey {
   return persistentKey(moments, variant("Moment", xdr.ScVal.scvU32(id)));
 }
+
+/** A quote's settings, DataKey::Quote(quote), persistent in the launchpad (its economics, which every launch in it
+ *  reads) and in Moments (its rule, which every Moment published in it reads). */
+export function quoteKey(contract: string, quote: string): xdr.LedgerKey {
+  return persistentKey(contract, variant("Quote", new Address(quote).toScVal()));
+}
+
+/** The launchpad's persistent DataKey::ProtocolFees(quote), which every trade in that quote adds to. */
+export function protocolFeesKey(launchpad: string, quote: string): xdr.LedgerKey {
+  return persistentKey(launchpad, variant("ProtocolFees", new Address(quote).toScVal()));
+}
+
+/** The assets launches and Moments are priced in (launchpad.ts, moments.ts). */
+const QUOTES = ["XLM", "USDC"];
 
 /** Code hashes of the given contracts' instances. */
 export async function codeHashes(contracts: string[]): Promise<string[]> {
@@ -105,9 +120,10 @@ export interface TtlEntry {
   label: string;
 }
 
-/** Everything the keeper keeps alive now (§4.8b): the deployment's instances and WASMs; each live launch's token
- *  instance, its pool's after graduation, and its Launch and Curve entries; each Moment still collecting. A launch is
- *  live with a trade in the last `idleDays`, or with holders (traders whose indexed trades leave them tokens). */
+/** Everything the keeper keeps alive now (§4.8b): the deployment's instances and WASMs; each quote's settings in the
+ *  launchpad and Moments, and its protocol fees in the launchpad; each live launch's token instance, its pool's after
+ *  graduation, and its Launch and Curve entries; each Moment still collecting. A launch is live with a trade in the
+ *  last `idleDays`, or with holders (traders whose indexed trades leave them tokens). */
 export async function upkeepEntries(policy: TtlPolicy = env.network.ttlPolicy): Promise<TtlEntry[]> {
   const { contracts: c, deployment: d } = env.network;
   const entries: TtlEntry[] = [];
@@ -115,6 +131,15 @@ export async function upkeepEntries(policy: TtlPolicy = env.network.ttlPolicy): 
   if (c.moments) entries.push({ key: instanceKey(c.moments), label: "instance moments" });
   const code: [string | undefined, string][] = [[d?.launchpadWasmHash, "launchpad"], [d?.momentsWasmHash, "moments"], [d?.launchTokenWasmHash, "launch token"]];
   for (const [hash, name] of code) if (hash) entries.push({ key: codeKey(hash), label: `code ${name}` });
+  // Only set_quote extends a quote's settings, and only a trade with a protocol fee its protocol fees: left alone,
+  // they archive, and the next launch, publish or trade in that quote makes its user pay to restore them (§4.9).
+  for (const q of env.network.assets.filter((a) => QUOTES.includes(a.id))) {
+    if (c.launchpad) {
+      entries.push({ key: quoteKey(c.launchpad, q.contract), label: `quote launchpad ${q.id}` });
+      entries.push({ key: protocolFeesKey(c.launchpad, q.contract), label: `protocol fees ${q.id}` });
+    }
+    if (c.moments) entries.push({ key: quoteKey(c.moments, q.contract), label: `quote moments ${q.id}` });
+  }
   const launches = await sql()`
     select l.token, l.pair from lite.launches l
      where greatest(l.created_at, (select max(t.ts) from lite.launch_trades t where t.token = l.token)) > now() - make_interval(days => ${policy.idleDays})
@@ -159,7 +184,7 @@ export interface UpkeepReport {
   /** Under the threshold. */
   low: number;
   extended: number;
-  /** Not on the ledger: archived (a user's restore brings it back) or not created yet. */
+  /** Not live: not on the ledger (not created yet) or archived (a user's restore brings it back). */
   missing: number;
   fee: string;
   hashes: string[];
@@ -192,9 +217,12 @@ export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: n
       readAt.set(e.key.toXDR("base64"), r.latestLedger);
     }
   }
-  const low = batch.filter((e) => liveUntil.has(e.id) && needsExtending(liveUntil.get(e.id)!, readAt.get(e.id)!, policy));
+  // An entry past its TTL is archived, even while RPC still returns it: no extension reaches it, and one in a batch
+  // would fail that batch's extension on every run.
+  const live = (e: { id: string }) => liveUntil.has(e.id) && liveUntil.get(e.id)! >= readAt.get(e.id)!;
+  const low = batch.filter((e) => live(e) && needsExtending(liveUntil.get(e.id)!, readAt.get(e.id)!, policy));
   report.low = low.length;
-  report.missing = batch.filter((e) => !liveUntil.has(e.id)).length;
+  report.missing = batch.filter((e) => !live(e)).length;
 
   const extended = new Set<string>();
   let fee = 0n;

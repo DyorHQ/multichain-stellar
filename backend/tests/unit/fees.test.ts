@@ -1,9 +1,11 @@
 // Hybrid fees on the server (docs/DESIGN-stellar-parity.md §4, §12.5): the inclusion bid's clamp and the resource-fee
-// margin; minBalance and spendable from Horizon's accounts (a Friendbot one, a sponsored mainnet one, offers' selling
+// margin; prepare() on a simulation recorded from testnet, whose headroom must reach the transaction a step declares;
+// minBalance and spendable from Horizon's accounts (a Friendbot one, a sponsored mainnet one, offers' selling
 // liabilities, an account that sponsors others); assertAffordable's order and codes; the estimates' history, defaults
-// and cap; feeCeiling; the add-funds card; starterSwapEligibility's truth table; and the submit path: a fee above the cap
-// is 422 fee_too_high when a step is built and when it is sent, a user-paid step is sent as signed and logged as the
-// user's, and an activation reserves its sponsorship and releases it when nothing was sent.
+// and cap; feeCeiling; the add-funds card; starterSwapEligibility's truth table; a starter swap's SDEX fallback, taken
+// only when it qualifies; and the submit path: a fee above the cap is 422 fee_too_high when a step is built and when it
+// is sent, a user-paid step is sent as signed and logged as the user's, and an activation reserves its sponsorship,
+// releases it when RPC refused the transaction and keeps it when RPC didn't confirm it.
 import { Account, Address, Asset, Contract, Keypair, nativeToScVal, Operation, SorobanDataBuilder, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import { fakeSql, OTHER, setTestEnv, SPONSOR, USER, XLM_SAC } from "../fixtures/routes/harness.ts";
@@ -11,9 +13,12 @@ import { fakeSql, OTHER, setTestEnv, SPONSOR, USER, XLM_SAC } from "../fixtures/
 setTestEnv();
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const fees = await import("../../supabase/functions/_shared/fees.ts");
-const { classicBalances, withResourceMargin } = await import("../../supabase/functions/_shared/stellar.ts");
-const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
+const { classicBalances, invoke, sorobanDataOf, sv, withInclusionBid, withResourceMargin } = await import("../../supabase/functions/_shared/stellar.ts");
+const { ApiError, clientIp } = await import("../../supabase/functions/_shared/http.ts");
 const { createPlan, registerBuilder, submitStep } = await import("../../supabase/functions/_shared/plans.ts");
+// The send's and the swaps' builders, which register themselves.
+await import("../../supabase/functions/_shared/account.ts");
+await import("../../supabase/functions/_shared/swap.ts");
 const { TESTNET } = await import("../../supabase/functions/_shared/networks.ts");
 type StarterInput = import("../../supabase/functions/_shared/fees.ts").StarterInput;
 
@@ -106,6 +111,109 @@ Deno.test("the inclusion bid: getFeeStats' p90, at least 100, at most half maxIn
 
 Deno.test("the resource fee: the simulation's minimum × 1.15 + 50,000, rounded up", () => {
   assertEquals([withResourceMargin(0n), withResourceMargin(1_000n), withResourceMargin(123n), withResourceMargin(1_000_000n)], [50_000n, 51_150n, 50_142n, 1_200_000n]);
+});
+
+// ------------------------------------------------------------------------------------------------ resource headroom
+
+/** Testnet's Friendbot account. */
+const FRIENDBOT = "GAIH3ULLFQ4DGSECF2AR555KZ4KNDGEKN4AFI4SU2M7B43MGK3QJZNSR";
+const ROUTER = TESTNET.contracts.soroswapRouter;
+
+/** Testnet RPC's answer to simulateTransaction, recorded on 2026-10-15 at ledger 5,201,333, for a 1 XLM transfer
+ *  through the XLM SAC from testnet's Friendbot account to the Soroswap router: the call the send builder makes for
+ *  XLM sent to a contract. The router's XLM balance was archived, so the answer also restores it (the transaction
+ *  data's list of archived entries), and its minimum resource fee pays that rent. */
+const RECORDED_TRANSFER = {
+  transactionData:
+    "AAAAAQAAAAEAAAABAAAAAQAAAAYAAAAB15KLcsJwPM/q9+uf9O9NUEpVqLl5/JtFDqLIQrTRzmEAAAAUAAAAAQAAAAIAAAAAAAAAABB90WssODNIgi6BHveqzxTRmIpvAFRyVNM+Hm2GVuCcAAAABgAAAAHXkotywnA8z+r365/0701QSlWouXn8m0UOoshCtNHOYQAAABAAAAABAAAAAgAAAA8AAAAHQmFsYW5jZQAAAAASAAAAAZNB96A3rdOBHVxq1QCdsN/bmyGg5ds2aKjp92vcpnJPAAAAAQAEFeUAAAFwAAABcAAAAAAAC1br",
+  events: [
+    "AAAAAQAAAAAAAAAAAAAAAgAAAAAAAAADAAAADwAAAAdmbl9jYWxsAAAAAA0AAAAg15KLcsJwPM/q9+uf9O9NUEpVqLl5/JtFDqLIQrTRzmEAAAAPAAAACHRyYW5zZmVyAAAAEAAAAAEAAAADAAAAEgAAAAAAAAAAEH3Rayw4M0iCLoEe96rPFNGYim8AVHJU0z4ebYZW4JwAAAASAAAAAZNB96A3rdOBHVxq1QCdsN/bmyGg5ds2aKjp92vcpnJPAAAACgAAAAAAAAAAAAAAAACYloA=",
+    "AAAAAQAAAAAAAAAB15KLcsJwPM/q9+uf9O9NUEpVqLl5/JtFDqLIQrTRzmEAAAABAAAAAAAAAAQAAAAPAAAACHRyYW5zZmVyAAAAEgAAAAAAAAAAEH3Rayw4M0iCLoEe96rPFNGYim8AVHJU0z4ebYZW4JwAAAASAAAAAZNB96A3rdOBHVxq1QCdsN/bmyGg5ds2aKjp92vcpnJPAAAADgAAAAZuYXRpdmUAAAAAAAoAAAAAAAAAAAAAAAAAmJaA",
+    "AAAAAQAAAAAAAAAB15KLcsJwPM/q9+uf9O9NUEpVqLl5/JtFDqLIQrTRzmEAAAACAAAAAAAAAAIAAAAPAAAACWZuX3JldHVybgAAAAAAAA8AAAAIdHJhbnNmZXIAAAAB",
+  ],
+  minResourceFee: "743147",
+  results: [
+    {
+      auth: [
+        "AAAAAAAAAAAAAAAB15KLcsJwPM/q9+uf9O9NUEpVqLl5/JtFDqLIQrTRzmEAAAAIdHJhbnNmZXIAAAADAAAAEgAAAAAAAAAAEH3Rayw4M0iCLoEe96rPFNGYim8AVHJU0z4ebYZW4JwAAAASAAAAAZNB96A3rdOBHVxq1QCdsN/bmyGg5ds2aKjp92vcpnJPAAAACgAAAAAAAAAAAAAAAACYloAAAAAA",
+      ],
+      xdr: "AAAAAQ==",
+    },
+  ],
+  stateChanges: [
+    {
+      type: "updated",
+      key: "AAAAAAAAAAAQfdFrLDgzSIIugR73qs8U0ZiKbwBUclTTPh5thlbgnA==",
+      before:
+        "AE9dswAAAAAAAAAAEH3Rayw4M0iCLoEe96rPFNGYim8AVHJU0z4ebYZW4JwBIyuRcnOkBAAAAKIAAAHCAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAwAAAAAATOeHAAAAAGrD50YAAAAA",
+      after:
+        "AAAAAAAAAAAAAAAAEH3Rayw4M0iCLoEe96rPFNGYim8AVHJU0z4ebYZW4JwBIyuRcdsNhAAAAKIAAAHCAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAwAAAAAATOeHAAAAAGrD50YAAAAA",
+    },
+    {
+      type: "created",
+      key: "AAAABgAAAAHXkotywnA8z+r365/0701QSlWouXn8m0UOoshCtNHOYQAAABAAAAABAAAAAgAAAA8AAAAHQmFsYW5jZQAAAAASAAAAAZNB96A3rdOBHVxq1QCdsN/bmyGg5ds2aKjp92vcpnJPAAAAAQ==",
+      before: null,
+      after:
+        "AAFVkAAAAAYAAAAAAAAAAdeSi3LCcDzP6vfrn/TvTVBKVai5efybRQ6iyEK00c5hAAAAEAAAAAEAAAACAAAADwAAAAdCYWxhbmNlAAAAABIAAAABk0H3oDet04EdXGrVAJ2w39ubIaDl2zZoqOn3a9ymck8AAAABAAAAEQAAAAEAAAADAAAADwAAAAZhbW91bnQAAAAAAAoAAAAAAAAAAAAAABdH3lGAAAAADwAAAAphdXRob3JpemVkAAAAAAAAAAAAAQAAAA8AAAAIY2xhd2JhY2sAAAAAAAAAAAAAAAA=",
+    },
+  ],
+  latestLedger: 5201333,
+};
+
+/** The headroom prepare() gives the recorded transfer: 267,749 instructions × 1.25 + 100,000; 368 bytes read and 368
+ *  written, each × 1.2 + 1,000; the minimum resource fee, 743,147, × 1.15 + 50,000. */
+const HEADROOM = { instructions: 434_687, readBytes: 1_442, writeBytes: 1_442, resourceFee: 904_620n };
+
+function resourcesOf(tx: Transaction) {
+  const data = sorobanDataOf(tx)!;
+  const r = data.resources();
+  return { instructions: r.instructions(), readBytes: r.diskReadBytes(), writeBytes: r.writeBytes(), resourceFee: BigInt(data.resourceFee().toString()) };
+}
+
+Deno.test("prepare(): the recorded simulation's resources and resource fee reach the assembled transaction with their headroom", async () => {
+  rpc = (method) => {
+    if (method === "simulateTransaction") return RECORDED_TRANSFER;
+    throw new Error(`unexpected RPC ${method}`);
+  };
+  const recorded = new SorobanDataBuilder(RECORDED_TRANSFER.transactionData).build();
+  const r = recorded.resources();
+  assertEquals([r.instructions(), r.diskReadBytes(), r.writeBytes(), recorded.resourceFee().toString()], [267_749, 368, 368, "743147"]);
+
+  const tx = await invoke(new Account(FRIENDBOT, "22096910953218048"), XLM_SAC, "transfer", [sv.addr(FRIENDBOT), sv.addr(ROUTER), sv.i128(ONE)]);
+  assertEquals(resourcesOf(tx), HEADROOM);
+  assertEquals(HEADROOM.resourceFee, withResourceMargin(743_147n));
+  // The fee: the resource fee and the base fee the transaction was built with, 100 for its one operation.
+  assertEquals(tx.fee, (HEADROOM.resourceFee + 100n).toString());
+  // Everything else is the simulation's: the footprint, the archived entry it restores, the authorization.
+  const data = sorobanDataOf(tx)!;
+  assertEquals(data.resources().footprint().toXDR("base64"), r.footprint().toXDR("base64"));
+  assertEquals(data.ext().toXDR("base64"), recorded.ext().toXDR("base64"));
+  assertEquals((tx.operations[0] as Operation.InvokeHostFunction).auth?.map((a) => a.toXDR("base64")), RECORDED_TRANSFER.results[0].auth);
+
+  // A step's inclusion bid changes the fee and nothing else.
+  const bid = withInclusionBid(tx, 250n);
+  assertEquals([resourcesOf(bid), bid.fee], [HEADROOM, (HEADROOM.resourceFee + 250n).toString()]);
+  assertEquals(sorobanDataOf(bid)!.toXDR("base64"), data.toXDR("base64"));
+});
+
+Deno.test("a send built on the recorded simulation declares that headroom, and its maxFee is the fee it declares", async () => {
+  horizonAccounts.set(FRIENDBOT, horizonAccount(FRIENDBOT, { xlm: "100000.0000000" }));
+  rpc = (method) => {
+    if (method === "getFeeStats") return { sorobanInclusionFee: { p90: "100" }, inclusionFee: { p90: "100" }, latestLedger: 1 };
+    if (method === "getLedgerEntries") return accountEntry(FRIENDBOT, 22096910953218048n);
+    if (method === "simulateTransaction") return RECORDED_TRANSFER;
+    throw new Error(`unexpected RPC ${method}`);
+  };
+  replaceSql(fakeSql((q) => {
+    if (q.startsWith("insert into lite.plans")) return [{ id: "3c0e2b9a-0000-4000-8000-000000000005", expires_at: new Date(Date.now() + 1_800_000) }];
+    throw new Error(`unexpected query: ${q}`);
+  }));
+  const plan = await createPlan(FRIENDBOT, "payment", [{ label: "Send", spec: { kind: "payment", asset: "XLM", to: ROUTER, amount: ONE.toString(), memo: null, memoType: null } }]);
+  const [step] = plan.steps;
+  const tx = TransactionBuilder.fromXDR(step.xdr!, PASS) as Transaction;
+  assertEquals(resourcesOf(tx), HEADROOM);
+  const fee = (HEADROOM.resourceFee + 100n).toString();
+  assertEquals([step.stepKind, step.feePayer, step.maxFee, tx.fee, plan.fees!.userMax], ["payment_token", "user", fee, fee, fee]);
 });
 
 Deno.test("minBalance and spendable from Horizon: Friendbot, sponsored mainnet, liabilities, sponsoring", async () => {
@@ -376,6 +484,108 @@ Deno.test("a sponsorship DyorHQ can't give is refused before anything is sent: 4
   assertEquals(seen.some((s) => s.q.startsWith("update lite.sponsorships")), false);
 });
 
+Deno.test("the IP a sponsorship counts against: Cloudflare's, else the right-most X-Forwarded-For entry, never one the caller wrote", () => {
+  const ip = (headers: Record<string, string>) => clientIp(new Request("http://127.0.0.1/lite/v1/tx/submit", { method: "POST", headers }));
+  assertEquals(ip({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.9, 203.0.113.7" }), "203.0.113.7");
+  // A caller's own X-Forwarded-For entries come first; the proxy in front appends the address it saw.
+  assertEquals(ip({ "x-forwarded-for": "198.51.100.9, 203.0.113.7" }), "203.0.113.7");
+  assertEquals(ip({ "x-forwarded-for": "198.51.100.9,203.0.113.7 , " }), "203.0.113.7");
+  assertEquals(ip({ "x-forwarded-for": "203.0.113.7" }), "203.0.113.7");
+  assertEquals([ip({ "cf-connecting-ip": " " }), ip({})], ["unknown", "unknown"]);
+});
+
+Deno.test("a setup RPC didn't confirm may land all the same: it counts as sent, and keeps its sponsorship until it settles", async () => {
+  const user = Keypair.random();
+  const tx = setupTx(user.publicKey());
+  const planId = crypto.randomUUID();
+  const id = "8e1f6d2a-0000-4000-8000-000000000004";
+  const seen = planDb(planId, builtStep(tx, SETUP_INTENT, { stepKind: "activate", feePayer: "sponsor", sponsorReason: "setup" }), (q) => {
+    if (q.startsWith("select id, refusal from lite.reserve_sponsorship(")) return [{ id, refusal: null }];
+    if (q.startsWith("update lite.sponsorships set status = 'sent'")) return [];
+    return null;
+  });
+  rpc = (method) => {
+    if (method !== "sendTransaction") throw new Error(`unexpected RPC ${method}`);
+    throw new Error("upstream request timeout");
+  };
+  tx.sign(user);
+  const hash = tx.hash().toString("hex");
+  assertEquals(await submitStep(user.publicKey(), planId, "s1", tx.toEnvelope().toXDR("base64"), "198.51.100.4"), { hash, status: "pending" });
+  // Never released: settling the transaction settles its sponsorship, success or failed (outcome.test.ts).
+  assertEquals(seen.some((s) => s.q.startsWith("update lite.sponsorships set status = 'released'")), false);
+  assertEquals(seen.find((s) => s.q.startsWith("update lite.sponsorships set status = 'sent'"))?.ps, [hash, id]);
+  const log = seen.find((s) => s.q.startsWith("insert into lite.tx_log"))!;
+  assertEquals([log.ps[0], ...log.ps.slice(7)], [hash, "400", "sponsor", "activate", "account"]);
+  const saved = seen.filter((s) => s.q.startsWith("update lite.plans set steps")).at(-1)!.ps[0] as { status: string; txHash: string }[];
+  assertEquals([saved[0].status, saved[0].txHash], ["submitted", hash]);
+});
+
+// ------------------------------------------------------------------------------------------------ the starter swap
+
+/** A starter swap of 3 USDC into XLM through Soroswap (at least 2 XLM out), with its SDEX route to fall back on, whose
+ *  minimum out is `sdexMinOut`. */
+function starterSpec(sdexMinOut: bigint) {
+  const swap = { sell: "USDC", buy: "XLM", amountIn: (3n * ONE).toString(), chainXdr: null };
+  return {
+    kind: "swap_soroswap",
+    ...swap,
+    minOut: (2n * ONE).toString(),
+    path: [USDC.contract, XLM_SAC],
+    starter: true,
+    fallback: { label: "Swap via SDEX", spec: { kind: "swap_sdex", ...swap, minOut: sdexMinOut.toString(), path: [USDC.classic!, "native"] } },
+  };
+}
+
+/** Activation sponsored; `user` set up by DyorHQ with 3 USDC and no XLM to spend; Soroswap's route simulating at a
+ *  resource fee whose fee-bump (1,085,200 stroops) is above starterInnerFeeMax; no starter used yet. */
+function starterNetwork(user: string) {
+  Deno.env.set("LITE_ACTIVATION", "sponsored");
+  const usdcLine = { balance: "3.0000000", limit: "922337203685.4775807", buying_liabilities: "0.0000000", selling_liabilities: "0.0000000", asset_type: "credit_alphanum4", asset_code: "USDC", asset_issuer: USDC.classic!.split(":")[1], sponsor: SPONSOR.publicKey() };
+  horizonAccounts.set(user, horizonAccount(user, { xlm: "0.0000000", subentries: 1, sponsored: 3, lines: [usdcLine] }));
+  rpc = (method) => {
+    if (method === "getFeeStats") return { sorobanInclusionFee: { p90: "100" }, inclusionFee: { p90: "100" }, latestLedger: 1 };
+    if (method === "getLedgerEntries") return accountEntry(user, 22096910953218048n);
+    if (method === "simulateTransaction") {
+      const data = new SorobanDataBuilder().setResources(2_000_000, 3_000, 1_000).build().toXDR("base64");
+      return { latestLedger: 1, minResourceFee: "900000", transactionData: data, results: [{ auth: [], xdr: xdr.ScVal.scvVoid().toXDR("base64") }], events: [] };
+    }
+    throw new Error(`unexpected RPC ${method}`);
+  };
+  replaceSql(fakeSql((q) => {
+    if (q.startsWith("select 1 from lite.sponsorships where address = ? and kind = 'starter'")) return [];
+    if (q.startsWith("insert into lite.plans")) return [{ id: "3c0e2b9a-0000-4000-8000-000000000006", expires_at: new Date(Date.now() + 1_800_000) }];
+    throw new Error(`unexpected query: ${q}`);
+  }));
+}
+
+Deno.test("a starter swap its own route makes too costly for DyorHQ takes its SDEX route, named for it, when that route qualifies", async () => {
+  const user = Keypair.random().publicKey();
+  starterNetwork(user);
+  try {
+    const plan = await createPlan(user, "swap", [{ label: "Swap via Soroswap", spec: starterSpec(15_000_000n) }]);
+    const [step] = plan.steps;
+    assertEquals([step.label, step.stepKind, step.feePayer, step.sponsorReason], ["Swap via SDEX", "swap_sdex", "sponsor", "starter_swap"]);
+    assertEquals([plan.fees!.userMax, plan.fees!.sponsored], ["0", true]);
+    const op = (TransactionBuilder.fromXDR(step.xdr!, PASS) as Transaction).operations[0] as Operation.PathPaymentStrictSend;
+    assertEquals([op.type, op.destMin], ["pathPaymentStrictSend", "1.5000000"]);
+  } finally {
+    Deno.env.delete("LITE_ACTIVATION");
+  }
+});
+
+Deno.test("an SDEX route out under starterMinXlmOut isn't a starter swap: the step stays the user's, refused for its fee", async () => {
+  const user = Keypair.random().publicKey();
+  starterNetwork(user);
+  try {
+    // 0.5 XLM is under the starter's 1 XLM: nothing marked as DyorHQ's for the user to sign, and the Soroswap route the
+    // user would pay for (1,085,100 stroops) is more than the account can spend.
+    const e = await assertRejects(() => createPlan(user, "swap", [{ label: "Swap via Soroswap", spec: starterSpec(5_000_000n) }]), ApiError);
+    assertEquals([e.status, e.code, e.detail], [409, "not_enough_xlm_for_fee", { need: "1085100", spendable: "0" }]);
+  } finally {
+    Deno.env.delete("LITE_ACTIVATION");
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ restores
 
 const { NeedsRestore } = await import("../../supabase/functions/_shared/stellar.ts");
@@ -388,7 +598,6 @@ function preamble(contracts: string[]) {
   return { minResourceFee: "5000", transactionData: new SorobanDataBuilder().setReadWrite(keys).setResources(0, 2_000, 2_000).build().toXDR("base64") };
 }
 
-const ROUTER = TESTNET.contracts.soroswapRouter;
 /** A contract outside the allowlist. */
 const STRANGER = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
 let archived: string[] = [];
@@ -435,22 +644,70 @@ Deno.test("the rent rotation: each entry once, never-checked first, then the old
   assertEquals([ttl.needsExtending(1_000 + 10 * 17_280 - 1, 1_000, policy), ttl.needsExtending(1_000 + 10 * 17_280, 1_000, policy)], [true, false]);
 });
 
-Deno.test("the keys the keeper keeps alive: a launch's Launch and Curve entries and a Moment's, persistent, in their contracts", () => {
+/** A contract-data key as [contract, durability, the DataKey variant's name and values]. */
+function described(k: xdr.LedgerKey) {
+  const d = k.contractData();
+  return [Address.fromScAddress(d.contract()).toString(), d.durability().name, (d.key().vec() ?? []).map((v) => v.switch().name === "scvSymbol" ? v.sym().toString() : v.switch().name === "scvU32" ? v.u32() : Address.fromScVal(v).toString())];
+}
+
+Deno.test("the keys the keeper keeps alive: a launch's Launch and Curve entries, a Moment's, a quote's settings and protocol fees, persistent, in their contracts", () => {
   const pad = TESTNET.contracts.launchpad!;
+  const moments = TESTNET.contracts.moments!;
   const token = "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V";
-  const described = (k: xdr.LedgerKey) => {
-    const d = k.contractData();
-    return [Address.fromScAddress(d.contract()).toString(), d.durability().name, (d.key().vec() ?? []).map((v) => v.switch().name === "scvSymbol" ? v.sym().toString() : v.switch().name === "scvU32" ? v.u32() : Address.fromScVal(v).toString())];
-  };
   assertEquals(ttl.launchKeys(pad, token).map(described), [[pad, "persistent", ["Launch", token]], [pad, "persistent", ["Curve", token]]]);
-  assertEquals(described(ttl.momentKey(TESTNET.contracts.moments!, 3)), [TESTNET.contracts.moments!, "persistent", ["Moment", 3]]);
+  assertEquals(described(ttl.momentKey(moments, 3)), [moments, "persistent", ["Moment", 3]]);
+  assertEquals(described(ttl.quoteKey(pad, XLM_SAC)), [pad, "persistent", ["Quote", XLM_SAC]]);
+  assertEquals(described(ttl.quoteKey(moments, USDC.contract)), [moments, "persistent", ["Quote", USDC.contract]]);
+  assertEquals(described(ttl.protocolFeesKey(pad, USDC.contract)), [pad, "persistent", ["ProtocolFees", USDC.contract]]);
 });
 
-Deno.test("an upkeep run: checks the oldest first, extends the low entries from the keeper's account, logs it, records each check", async () => {
+Deno.test("what the keeper keeps alive: the deployment's instances and code, each quote's settings and protocol fees, live launches and collecting Moments", async () => {
+  const pad = TESTNET.contracts.launchpad!;
+  const moments = TESTNET.contracts.moments!;
+  const [quiet, graduated, pool] = ["CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V", "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526", ROUTER];
+  replaceSql(fakeSql((q, ps) => {
+    if (q.startsWith("select l.token, l.pair from lite.launches l")) {
+      assertEquals(ps, [90]);
+      return [{ token: quiet, pair: null }, { token: graduated, pair: pool }];
+    }
+    if (q.startsWith("select id from lite.moments where deadline > now()")) return [{ id: 3 }];
+    throw new Error(`unexpected query: ${q}`);
+  }));
+  const entries = await ttl.upkeepEntries();
+  assertEquals(entries.map((e) => e.label), [
+    "instance launchpad",
+    "instance moments",
+    "code launchpad",
+    "code moments",
+    "code launch token",
+    "quote launchpad XLM",
+    "protocol fees XLM",
+    "quote moments XLM",
+    "quote launchpad USDC",
+    "protocol fees USDC",
+    "quote moments USDC",
+    `instance ${quiet}`,
+    `launch ${quiet}`,
+    `curve ${quiet}`,
+    `instance ${graduated}`,
+    `launch ${graduated}`,
+    `curve ${graduated}`,
+    `instance pool ${pool}`,
+    "moment 3",
+  ]);
+  const key = (label: string) => entries.find((e) => e.label === label)!.key.toXDR("base64");
+  assertEquals(key("quote launchpad XLM"), ttl.quoteKey(pad, XLM_SAC).toXDR("base64"));
+  assertEquals(key("protocol fees USDC"), ttl.protocolFeesKey(pad, USDC.contract).toXDR("base64"));
+  assertEquals(key("quote moments USDC"), ttl.quoteKey(moments, USDC.contract).toXDR("base64"));
+});
+
+Deno.test("an upkeep run: checks the oldest first, extends the low entries from the keeper's account with prepare()'s headroom, logs it, records each check", async () => {
   const latest = 1_000_000;
   const low = ttl.instanceKey(ROUTER);
   const fine = ttl.instanceKey(TESTNET.contracts.launchpad!);
   const gone = ttl.instanceKey(TESTNET.contracts.moments!);
+  // Past its TTL, so archived, though RPC still returns it: no extension can reach it.
+  const lapsed = ttl.quoteKey(TESTNET.contracts.launchpad!, XLM_SAC);
   const keeperAddress = SPONSOR.publicKey();
   const sent: Transaction[] = [];
   rpc = (method, params) => {
@@ -460,7 +717,7 @@ Deno.test("an upkeep run: checks the oldest first, extends the low entries from 
       case "getLedgerEntries": {
         const keys = (params.keys as string[]).map((k) => xdr.LedgerKey.fromXDR(k, "base64"));
         if (keys[0].switch().name === "account") return accountEntry(keeperAddress, 77n);
-        const live = new Map([[low.toXDR("base64"), latest + 17_280], [fine.toXDR("base64"), latest + 20 * 17_280]]);
+        const live = new Map([[low.toXDR("base64"), latest + 17_280], [fine.toXDR("base64"), latest + 20 * 17_280], [lapsed.toXDR("base64"), latest - 1]]);
         const entries = keys.filter((k) => live.has(k.toXDR("base64"))).map((k) => ({
           key: k.toXDR("base64"),
           xdr: xdr.LedgerEntryData.contractData(new xdr.ContractDataEntry({ ext: new xdr.ExtensionPoint(0), contract: k.contractData().contract(), key: k.contractData().key(), durability: k.contractData().durability(), val: xdr.ScVal.scvVoid() })).toXDR("base64"),
@@ -495,20 +752,27 @@ Deno.test("an upkeep run: checks the oldest first, extends the low entries from 
     if (q.startsWith("insert into lite.keeper_log") || q.startsWith("insert into lite.ttl_checks") || q.startsWith("delete from lite.ttl_checks")) return [];
     throw new Error(`unexpected query: ${q}`);
   }));
-  const entries = [{ key: fine, label: "instance launchpad" }, { key: low, label: "instance router" }, { key: gone, label: "instance moments" }];
+  const entries = [{ key: fine, label: "instance launchpad" }, { key: low, label: "instance router" }, { key: gone, label: "instance moments" }, { key: lapsed, label: "quote launchpad XLM" }];
   const report = await ttl.upkeep(entries, { thresholdDays: 10, extendToDays: 30, perRun: 400, idleDays: 90 }, Date.now() + 10_000);
-  assertEquals([report.entries, report.checked, report.low, report.extended, report.missing, report.fee, report.hashes.length], [3, 3, 1, 1, 1, "70150", 1]);
+  assertEquals([report.entries, report.checked, report.low, report.extended, report.missing, report.fee, report.hashes.length], [4, 4, 1, 1, 2, "70150", 1]);
   // One extension, from the keeper's account, of the low entry only.
   assertEquals(sent.length, 1);
   const op = sent[0].operations[0] as any;
   const fp = (sent[0].toEnvelope().v1().tx().ext().sorobanData() as xdr.SorobanTransactionData).resources().footprint();
   assertEquals([sent[0].source, op.type, op.extendTo, fp.readOnly().map((k) => k.toXDR("base64"))], [keeperAddress, "extendFootprintTtl", 30 * 17_280, [low.toXDR("base64")]]);
+  // What it declares: the simulation's 0 instructions, 500 bytes read and 0 written with prepare()'s headroom, its
+  // minimum resource fee of 20,000 × 1.15 + 50,000, and the inclusion bid of 100.
+  assertEquals([resourcesOf(sent[0]), sent[0].fee], [{ instructions: 100_000, readBytes: 1_600, writeBytes: 1_000, resourceFee: 73_000n }, "73100"]);
   const logged = seen.find((s) => s.q.startsWith("insert into lite.keeper_log"))!;
   assertEquals(logged.ps.slice(0, 3), [sent[0].hash().toString("hex"), "ttl", keeperAddress]);
   // Every entry checked is recorded (in the order checked: never-checked first), the extended one at its new TTL; the
   // checks of entries no longer kept go.
-  const [f, l, g] = [fine, low, gone].map((k) => k.toXDR("base64"));
+  const [f, l, g, x] = [fine, low, gone, lapsed].map((k) => k.toXDR("base64"));
   const recorded = seen.find((s) => s.q.startsWith("insert into lite.ttl_checks"))!;
-  assertEquals(recorded.ps, [[l, g, f], ["instance router", "instance moments", "instance launchpad"], [latest + 30 * 17_280, null, latest + 20 * 17_280]]);
-  assertEquals(seen.find((s) => s.q.startsWith("delete from lite.ttl_checks"))!.ps, [[f, l, g]]);
+  assertEquals(recorded.ps, [
+    [l, g, x, f],
+    ["instance router", "instance moments", "quote launchpad XLM", "instance launchpad"],
+    [latest + 30 * 17_280, null, latest - 1, latest + 20 * 17_280],
+  ]);
+  assertEquals(seen.find((s) => s.q.startsWith("delete from lite.ttl_checks"))!.ps, [[f, l, g, x]]);
 });
