@@ -1,16 +1,17 @@
 // Local stand-in for the lite-indexer cron job (migration 2: pg_cron + pg_net POST every minute with x-cron-secret).
-// POSTs to the local lite-indexer now and then every 60 s, and logs the time, the HTTP status and the summary the
-// indexer returns. The secret is only ever sent in the header, never logged. Started by backend/scripts/local-stack.sh:
+// POSTs to the stack's lite-indexer now and then every 60 s, and logs the time, the HTTP status and the summary the
+// indexer returns. The secret is only ever sent in the header, never logged. Started by backend/scripts/local-stack.sh
+// with the stack's env file and its indexer's URL (default: the default stack's):
 //
 //   deno run --no-config --allow-env=LITE_CRON_SECRET --allow-net=127.0.0.1:8001 \
-//     --env-file=.secrets/local-functions.env backend/scripts/local/indexer-loop.ts
-const URL_ = "http://127.0.0.1:8001/lite-indexer";
+//     --env-file=.local-stack/functions.env backend/scripts/local/indexer-loop.ts [http://127.0.0.1:8001/lite-indexer]
+const URL_ = Deno.args[0] ?? "http://127.0.0.1:8001/lite-indexer";
 const EVERY_MS = 60_000;
 const TIMEOUT_MS = 55_000; // the cron job's net.http_post timeout
 
 const secret = Deno.env.get("LITE_CRON_SECRET");
 if (!secret) {
-  console.error("indexer-loop: LITE_CRON_SECRET is not set (run with --env-file=.secrets/local-functions.env)");
+  console.error("indexer-loop: LITE_CRON_SECRET is not set (run with the stack's --env-file)");
   Deno.exit(1);
 }
 
