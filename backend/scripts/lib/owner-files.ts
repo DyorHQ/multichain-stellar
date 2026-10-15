@@ -52,18 +52,37 @@ export function looksLikeSeed(text: string): boolean {
   return found;
 }
 
-/** Text from a file, the chain or anyone else, made safe to print: every control character (C0, DEL and C1, newlines
- *  included) becomes `\xNN` and every Unicode format character (bidirectional overrides, zero-width characters)
- *  `\u{…}`, so a value can neither start a fake line nor hide or rewrite what the terminal shows. */
+/** Text from a file, the chain or anyone else, made safe to print: only printable ASCII stays as it is. A control
+ *  character (C0 and DEL, newlines included) becomes `\xNN`; every other character outside ASCII becomes `\u{…}`:
+ *  C1 controls, bidirectional overrides, zero-width and filler characters, combining marks, line separators and every
+ *  letter that could pass for an ASCII one (Cyrillic а, Greek ο). A backslash becomes `\\`, so an escape in the text
+ *  itself can't pass for one of these. A value can then neither start a fake line, nor hide or rewrite what the
+ *  terminal shows, nor look like another name. */
 export function safe(text: string): string {
-  return text
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
-    .replace(/\p{Cf}/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+  let out = "";
+  for (const ch of text) {
+    const cp = ch.codePointAt(0)!;
+    if (ch === "\\") out += "\\\\";
+    else if (cp >= 0x20 && cp < 0x7f) out += ch;
+    else if (cp < 0x80) out += `\\x${cp.toString(16).padStart(2, "0")}`;
+    else out += `\\u{${cp.toString(16)}}`;
+  }
+  return out;
 }
 
-/** A line for the terminal: `safe` on every part, keeping the newlines of a multi-line message. */
+/** The console's own last line of defence, for whole lines the scripts write: control characters (C0, DEL and C1,
+ *  newlines included), format characters (bidirectional overrides, zero-width characters) and line or paragraph
+ *  separators are escaped, while the scripts' own marks (✓ ✗ → …) print as they are. Outside text is escaped with
+ *  `safe` where it is put in a line. */
+export function controlsSafe(text: string): string {
+  return text
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
+    .replace(/[\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
+/** A line for the terminal: `controlsSafe` on every part, keeping the newlines of a multi-line message. */
 export function terminalSafe(line: string): string {
-  return line.split("\n").map(safe).join("\n");
+  return line.split("\n").map(controlsSafe).join("\n");
 }
 
 /** Where a script prints. */
