@@ -297,7 +297,7 @@ Deno.test("feeCeiling: an activation's is the sponsor's cap; others are their ki
 
 Deno.test("the add-funds card: needsXlm under the floor, 2 XLM for a missing account, 1 XLM plus any reserve lacking", () => {
   const p = (balance: string, min: string, spendable: string) => ({ balance, minBalance: min, sellingLiabilities: "0", spendable, baseReserve: "5000000", reserves: { base: 2, subentries: 1, sponsoring: 0, sponsored: 0 } });
-  const faucet = { amount: "10000", usedToday: false };
+  const faucet = { amount: "10000", claimed: false };
   assertEquals(fees.firstFunding(null, POLICY, "unavailable", faucet), { needsXlm: true, suggestXlm: "20000000", starterSwap: "unavailable", faucet });
   assertEquals(fees.firstFunding(p("100000000000", "15000000", "99985000000"), POLICY, "unavailable", faucet).suggestXlm, "10000000");
   assertEquals(fees.firstFunding(p("100000000000", "15000000", "99985000000"), POLICY, null, null), { needsXlm: false, suggestXlm: "10000000", starterSwap: null, faucet: null });

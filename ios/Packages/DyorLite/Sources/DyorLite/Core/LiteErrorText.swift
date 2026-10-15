@@ -3,15 +3,14 @@ import StellarKit
 
 /// Every error as a person reads it, in the current language (docs/DESIGN-stellar-parity.md §6.13, §4.6): the API's
 /// codes and the contracts' refusals, with the facts they carry (`LiteAPIError.detail`); the phone's own checks before
-/// it signs and Stellar's result for a step it sent (`PlanRunner.Failure`); the connection; the session's failures; an
-/// anchor's. The server's own message is shown only for a transaction Stellar rejected for a reason the app has no
-/// words for, and for codes this build doesn't know.
+/// it signs and Stellar's result for a step it sent (`PlanRunner.Failure`); the connection; the session's failures. The
+/// server's own message is shown only for a transaction Stellar rejected for a reason the app has no words for, and for
+/// codes this build doesn't know.
 public enum LiteErrorText {
     public static func describe(_ error: Error) -> String {
         switch error {
         case let api as LiteAPIError: return describe(api)
         case let runner as PlanRunner.Failure: return describe(runner)
-        case let anchor as AnchorClient.Failure: return describe(anchor)
         default: return LiteSession.failure(for: error).errorDescription ?? error.localizedDescription
         }
     }
@@ -50,7 +49,9 @@ public enum LiteErrorText {
         case "sponsor_limit": return tr("DyorHQ's free setup is busy today. Try again tomorrow.")
         case "already_set_up": return tr("Your account is already set up.")
         case "unsupported_asset": return tr("DyorHQ doesn't support that token on Stellar.")
+        case "bad_symbol": return tr("Use 2 to 10 letters or digits for the symbol.")
         case "look_alike_symbol": return tr("That ticker looks like another token's. Choose another.")
+        case "faucet_used": return tr("You already claimed your test XLM.")
         case "muxed_unsupported": return tr("Muxed (M…) addresses aren't supported. Use the G… address and the memo you were given.")
         case "recipient_missing":
             guard let code = assetCode(detail) else { return tr("This account doesn't exist yet, so it can't receive this token.") }
@@ -118,14 +119,6 @@ public enum LiteErrorText {
     private static func feeTooHigh(_ stroops: String?) -> String {
         guard let fee = xlm(stroops) else { return tr("Not signed: the network fee is unusually high right now. Nothing was sent. Try again in a minute.") }
         return tr("Not signed: the network fee is unusually high right now (\(fee) XLM). Nothing was sent. Try again in a minute.")
-    }
-
-    private static func describe(_ failure: AnchorClient.Failure) -> String {
-        switch failure {
-        case .toml(let what): return tr("This provider's setup file is missing \(what).")
-        case .challenge(let what): return tr("The provider's sign-in didn't pass this iPhone's checks (\(what)).")
-        case .anchor(let message): return message
-        }
     }
 
     private static var notEnoughForFee: String { tr("Not enough XLM for the network fee.") }

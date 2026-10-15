@@ -47,10 +47,9 @@ public struct StellarActivityPresentation: Equatable, Sendable {
         case setUpAccount
         /// "Restored data"
         case restoredData
-        /// "Got %@ test XLM"; nil when the amount isn't known.
-        case gotTestXLM(amount: StellarActivityAmount?)
-        /// "Cash added" / "Cash out" with an anchor.
-        case cash(deposit: Bool)
+        /// "Funded with Friendbot": Friendbot's one grant of test XLM (decision 7), whether it created the account or came
+        /// later through the faucet.
+        case fundedWithFriendbot
         /// A kind this build has no words for, or an item that doesn't name what its words need: the server's own
         /// title or summary when none of its words is a stand-in, else "Transaction", in the current language.
         case other(String)
@@ -111,9 +110,10 @@ public enum StellarActivityPresenter {
             return ("point.3.connected.trianglepath.dotted", .bridged(code: "USDC"),
                     fromMonad ? .route(from: "Monad", to: "Stellar") : .route(from: "Stellar", to: "Monad"))
         case "cash":
+            // A cash transfer from before cash was removed until mainnet (decision 7): the neutral title, and its amount.
             let asset = text(d["asset"]).map { $0 == "native" ? "XLM" : $0 }
             let amount = written(item.amount.map(StellarJSON.string)).flatMap { units in asset.map { StellarActivityAmount(units: units, code: $0) } }
-            return ("banknote", .cash(deposit: item.kind == "deposit"), amount.map { .amount($0) })
+            return ("circle", .other(tr("Transaction")), amount.map { .amount($0) })
         default:
             break
         }
@@ -153,7 +153,7 @@ public enum StellarActivityPresenter {
             return ("checkmark.circle", .restoredData, nil)
         case "faucet":
             let amount = (written(d["amount"]) ?? written(item.amount.map(StellarJSON.string))).map { StellarActivityAmount(units: $0, code: "XLM") }
-            return ("checkmark.circle", .gotTestXLM(amount: amount), nil)
+            return ("checkmark.circle", .fundedWithFriendbot, amount.map { .amount($0) })
         default:
             return fallback(item)
         }
@@ -245,7 +245,7 @@ public enum StellarActivityPresenter {
         }
     }
 
-    /// An amount the server or an anchor wrote out ("10.5"), in base units.
+    /// An amount the server wrote out ("10.5"), in base units.
     private static func written(_ value: StellarJSON?) -> Int64? {
         text(value).flatMap { StellarAmount.parse($0) }
     }

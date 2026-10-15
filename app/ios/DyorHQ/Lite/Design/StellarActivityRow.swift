@@ -101,14 +101,8 @@ struct StellarActivityRow: View {
             Text("Set up your account", tableName: "StellarCommon", comment: "A row of Stellar activity: the account was created on the Stellar network")
         case .restoredData:
             Text("Restored data", tableName: "StellarCommon", comment: "A row of Stellar activity: the account paid to bring back data the Stellar network had archived")
-        case .gotTestXLM(let amount?):
-            Text("Got \(StellarFormat.units(amount.units, decimals: amount.decimals)) test XLM", tableName: "StellarCommon", comment: "A row of Stellar activity: the account received free XLM from the test network's faucet. The value is an amount (10,000); XLM is never translated")
-        case .gotTestXLM(nil):
-            Text("Got test XLM", tableName: "StellarCommon", comment: "A row of Stellar activity: the account received free XLM from the test network's faucet. XLM is never translated")
-        case .cash(deposit: true):
-            Text("Cash added", tableName: "StellarCommon", comment: "A row of Stellar activity: money came into the account from a bank or card, through a cash provider")
-        case .cash(deposit: false):
-            Text("Cash out", tableName: "StellarCommon", comment: "A row of Stellar activity: money left the account to a bank, through a cash provider (a noun)")
+        case .fundedWithFriendbot:
+            Text("Funded with Friendbot", tableName: "StellarCommon", comment: "A row of Stellar activity: the account got its one grant of free test XLM from Friendbot, the Stellar test network's faucet. Friendbot is a name, never translated")
         case .other(let words): Text(verbatim: words)
         }
     }

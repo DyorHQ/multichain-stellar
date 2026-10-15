@@ -538,7 +538,7 @@ Deno.test("create's rules: a URI this creator's metadata wrote for this name and
   assertEquals(await refused({ uri, name: "Another Cat" }), [400, "bad_uri"]);
   assertEquals(await refused({ uri: `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/b4.png` }), [400, "bad_uri"]);
   assertEquals(await refused({ symbol: "U5DC" }), [400, "look_alike_symbol"]);
-  assertEquals(await refused({ symbol: "E" }), [400, "bad_symbol"]);
+  assertEquals(await refused({ symbol: "E" }), [422, "bad_symbol"]);
   assertEquals(await refused({ name: "🐱".repeat(9) }), [400, "bad_name"]);
   assertEquals(await refused({ creatorFeeBps: 1001 }), [400, "bad_fee"]);
   assertEquals(await refused({ quote: "BUSDC" }), [400, "bad_quote"]);
@@ -549,6 +549,27 @@ Deno.test("create's rules: a URI this creator's metadata wrote for this name and
 });
 
 // ------------------------------------------------------------------------------------------------ metadata
+
+Deno.test("a v1 ticker is 2-10 ASCII letters or digits, refused first (422 bad_symbol): Soroswap reads the symbol as UTF-8", async () => {
+  respond = () => [];
+  const refused = async (symbol: unknown, input: Record<string, unknown> = {}) => {
+    const err = await lp.buildLaunch(ME, { action: "create", quote: "XLM", name: "E2E Cat", symbol, ...input } as any).catch((e) => e);
+    assert(err instanceof ApiError, String(err));
+    return [err.status, err.code, err.message];
+  };
+  const SAID = [422, "bad_symbol", "Use 2 to 10 letters or digits for the symbol."];
+  // Too short or long, punctuation, spaces inside, and letters outside ASCII, even those whose upper case is ASCII
+  // ("ß" is "SS", the dotless "ı" is "I").
+  for (const symbol of ["E", "ABCDEFGHIJK", "EC-AT", "EC AT", "ÉCAT", "ßCAT", "ıCAT", "ＥＣＡＴ", "🐱CAT", "", undefined, 7]) {
+    assertEquals(await refused(symbol), SAID, String(symbol));
+  }
+  // Before anything else: a name, fee or quote that would be refused too isn't what is said.
+  assertEquals(await refused("ÉCAT", { name: "", creatorFeeBps: 5_000, quote: "BUSDC" }), SAID);
+  // Letters in either case and digits pass on to the rest of the rules (here: the ticker is upper-cased and allowed).
+  assertEquals(lp.v1LaunchSymbol(" ecat2 "), "ecat2");
+  assertEquals(lp.v1LaunchSymbol("AB"), "AB");
+  assertEquals(lp.v1LaunchSymbol("ABCDEFGHIJ"), "ABCDEFGHIJ");
+});
 
 Deno.test("metadata: written as {name, symbol, description, image, links} under launches/<address>/, recorded by its URI", async () => {
   const image = `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/b4e32bb4.png`;

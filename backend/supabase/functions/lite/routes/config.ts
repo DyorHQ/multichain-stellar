@@ -36,7 +36,6 @@ export function register(router: Router): void {
       assets: net.assets,
       contracts: net.contracts,
       allowlist: contractAllowlist(net),
-      anchors: net.anchors,
       bridge: { routes: net.bridge.routes, monad: net.bridge.monad ? { chainId: net.bridge.monad.chainId, usdc: net.bridge.monad.usdc } : null },
       flags: cfg[0]?.value ?? { enabled: false },
       minBuild: env.minBuild,

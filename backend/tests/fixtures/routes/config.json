@@ -90,23 +90,6 @@
           "CAQCFVLOBK5GIULPNZRGATJJMIZL5BSP7X5YJVMGCPTUEPFM4AVSRCJU"
         ]
       },
-      "anchors": [
-        {
-          "domain": "testanchor.stellar.org",
-          "name": "Stellar Test Anchor",
-          "assets": [
-            "USDC",
-            "XLM"
-          ],
-          "countries": [
-            "*"
-          ],
-          "kinds": [
-            "deposit",
-            "withdraw"
-          ]
-        }
-      ],
       "bridge": {
         "routes": [
           "cctp"

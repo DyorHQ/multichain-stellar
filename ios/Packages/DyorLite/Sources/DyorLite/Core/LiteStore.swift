@@ -419,8 +419,13 @@ public final class LiteStore {
                            summary: .launchTrade(buy: buy, symbol: code(token), amount: amount, quoteCode: code(quote)))
     }
 
-    /// A new coin: its image uploaded and its metadata written first, then the launch (with the developer buy).
+    /// A new coin: its image uploaded and its metadata written first, then the launch (with the developer buy). A
+    /// ticker that isn't 2 to 10 ASCII letters or digits is refused before anything is sent, as the server refuses it
+    /// (422 `bad_symbol`).
     public func launchCreatePlan(_ form: StellarLaunchForm, image: Data?) async throws -> PreparedAction {
+        guard Self.isLaunchSymbol(form.symbol) else {
+            throw LiteAPIError.server(status: 422, code: "bad_symbol", message: tr("Use 2 to 10 letters or digits for the symbol."), detail: nil)
+        }
         try await ensureSession()
         let imageUrl = try await image.asyncMap { try await upload($0, contentType: "image/jpeg") }
         let uri = try await api.launchMetadata(name: form.name, symbol: form.symbol, description: form.description, imageUrl: imageUrl,
@@ -433,6 +438,14 @@ public final class LiteStore {
         let quote = asset(form.quote)?.contract ?? form.quote
         return try prepare(plan, limits: form.developerBuy > 0 ? [quote: form.developerBuy] : [:], title: tr("Launch a coin"),
                            section: .launch, reference: nil, summary: .launchCreate(symbol: form.symbol, name: form.name))
+    }
+
+    /// Whether `symbol` can be a coin's ticker: 2 to 10 ASCII letters or digits as typed, spaces around it aside, the
+    /// server's rule (Soroswap reads a token's symbol as UTF-8, so a coin with any other could never graduate). Create
+    /// checks it before it sends anything.
+    public nonisolated static func isLaunchSymbol(_ symbol: String) -> Bool {
+        let scalars = symbol.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars
+        return (2...10).contains(scalars.count) && scalars.allSatisfy { ("A"..."Z").contains($0) || ("a"..."z").contains($0) || ("0"..."9").contains($0) }
     }
 
     /// Moves a coin whose curve is full to its Soroswap pool (anyone may; the user pays only the network fee).
@@ -532,64 +545,19 @@ public final class LiteStore {
         _ = try await api.bridgeClaimed(id: status.id, txHash: hash)
     }
 
-    /// The testnet faucet: test XLM for the account, once a day.
+    /// Testnet's Friendbot: its test XLM for an account that already existed, once per address, ever (the server
+    /// refuses a second claim with 429 `faucet_used`). The account is read again, so `firstFunding.faucet.claimed` says
+    /// it is done.
     public func faucet() async throws {
         try await ensureSession()
         _ = try await api.faucet()
         await refreshAccount()
     }
 
-    /// The anchors that serve this iPhone's region.
-    public func anchors() async throws -> [AnchorInfo] {
-        try await ensureSession()
-        return try await api.anchors(country: Locale.current.region?.identifier ?? "*")
-    }
-
-    /// Starts adding cash (`deposit`) or cashing out `asset` ("XLM" or "USDC") with `anchor`: the account signs in to
-    /// the anchor (SEP-10) here, through one signing run of its own (App Lock once when it applies, or the passkey), so
-    /// no signer leaves the package; the anchor's page opens next.
-    public func startCash(anchor: AnchorInfo, deposit: Bool, asset: String) async throws -> LiteCashFlow {
-        guard let session else { throw LiteAPIError.notSignedIn }
-        try await ensureSession()
-        let client = AnchorClient(domain: anchor.domain, network: network)
-        let toml = try await client.toml()
-        let reason = tr("Sign in to \(anchor.name)")
-        let signing = try await session.beginSigning(reason: reason)
-        let token: String
-        do {
-            token = try await client.authenticate(signer: try await signing.signer(reason: reason), toml: toml)
-            signing.end()
-        } catch {
-            signing.end()
-            throw error
-        }
-        let flow = try await client.interactive(deposit: deposit, assetCode: isXLM(asset) ? "native" : asset, account: address, jwt: token, toml: toml)
-        guard let url = URL(string: flow.url), url.scheme == "https" else { throw AnchorClient.Failure.anchor(tr("The provider's page couldn't be opened.")) }
-        await trackCash(anchor: anchor.domain, deposit: deposit, asset: asset, id: flow.id, status: "incomplete", amount: nil)
-        return LiteCashFlow(id: flow.id, url: url, anchor: anchor.domain, name: anchor.name, deposit: deposit, asset: isXLM(asset) ? "XLM" : asset,
-                            client: client, toml: toml, token: token)
-    }
-
-    /// Where a cash transfer stands, read from the anchor; DyorHQ's records follow it.
-    public func cashStatus(_ flow: LiteCashFlow) async throws -> AnchorClient.AnchorTransaction {
-        let transaction = try await flow.client.transaction(id: flow.id, jwt: flow.token, toml: flow.toml)
-        await trackCash(anchor: flow.anchor, deposit: flow.deposit, asset: flow.asset, id: flow.id, status: transaction.status, amount: transaction.amount_in)
-        return transaction
-    }
-
-    /// A cash out the anchor waits for: the payment to its account, with its memo bound.
-    public func cashOutPlan(_ flow: LiteCashFlow, transaction: AnchorClient.AnchorTransaction) async throws -> PreparedAction {
-        guard let to = transaction.withdraw_anchor_account, let written = transaction.amount_in, let amount = StellarAmount.parse(written) else {
-            throw LiteAPIError.decoding("the cash out")
-        }
-        try await ensureSession()
-        let plan = try await api.send(asset: flow.asset, to: to, amount: amount, memo: transaction.withdraw_memo, memoType: transaction.withdraw_memo_type)
-        return try prepare(plan, limits: limit(flow.asset, String(amount)), title: tr("Send to \(flow.name)"), section: .cash, reference: "stellar:home",
-                           summary: .cashOut(amount: amount, code: code(flow.asset), anchor: flow.name))
-    }
-
-    func trackCash(anchor: String, deposit: Bool, asset: String, id: String, status: String, amount: String?) async {
-        try? await api.trackCash(anchor: anchor, deposit: deposit, asset: asset, anchorTxId: id, status: status, amount: amount)
+    /// Whether the account may still claim Friendbot's test XLM: testnet, the account read, and its claim not made.
+    /// False while unknown: the offer shows only once the server says it is open.
+    public var canClaimFriendbot: Bool {
+        isTestnet && account?.firstFunding?.faucet?.claimed == false
     }
 
     /// Uploads a photo, a video or a cover frame to DyorHQ's media storage; its URL.

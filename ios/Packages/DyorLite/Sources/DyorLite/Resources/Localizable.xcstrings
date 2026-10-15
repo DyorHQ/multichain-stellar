@@ -2,7 +2,7 @@
   "sourceLanguage" : "en",
   "strings" : {
     "%@ %@ to %@" : {
-      "comment" : "A notification after a send on Stellar: %1$@ %2$@ is the amount and its asset, %3$@ where it went (a short address, or a cash provider's name).",
+      "comment" : "A notification after a send on Stellar: %1$@ %2$@ is the amount and its asset, %3$@ where it went (a short address).",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -691,7 +691,7 @@
       }
     },
     "Activity" : {
-      "comment" : "Stellar Home: the card that lists the account's recent transactions, transfers and cash moves.",
+      "comment" : "Stellar Home: the card that lists the account's recent transactions and transfers.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -715,64 +715,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "动态"
-          }
-        }
-      }
-    },
-    "Add %@" : {
-      "comment" : "Activity: money added through a cash provider; %@ is the asset (USDC, XLM). A title, imperative like the others.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recargar %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recharger %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 충전"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "入金 %@"
-          }
-        }
-      }
-    },
-    "Add %@ %@" : {
-      "comment" : "Activity: money added through a cash provider; %@ %@ is the amount and its asset (“50 USDC”).",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recargar %@ %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recharger %@ %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ %@ 충전"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "入金 %@ %@"
           }
         }
       }
@@ -802,35 +744,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "添加图片"
-          }
-        }
-      }
-    },
-    "Add cash" : {
-      "comment" : "[tight] A Stellar Home action and a segment: buy crypto with money through a provider (an “anchor”). The opposite of “Cash out”.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recargar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recharger"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현금 충전"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "入金"
           }
         }
       }
@@ -1237,93 +1150,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "取消"
-          }
-        }
-      }
-    },
-    "Cash out" : {
-      "comment" : "A segment: sell crypto for money through a provider (an “anchor”). The opposite of “Add cash”.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retirar dinero"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Encaisser"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현금 출금"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出金"
-          }
-        }
-      }
-    },
-    "Cash out %@" : {
-      "comment" : "Activity: money taken out through a cash provider; %@ is the asset. A title, imperative.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retirar %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Encaisser %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ 현금화"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出金 %@"
-          }
-        }
-      }
-    },
-    "Cash out %@ %@" : {
-      "comment" : "Activity: money taken out through a cash provider; %@ %@ is the amount and its asset.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retirar %@ %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Encaisser %@ %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@ %@ 현금화"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出金 %@ %@"
           }
         }
       }
@@ -2691,31 +2517,89 @@
         }
       }
     },
-    "Get %@ test XLM" : {
-      "comment" : "A testnet button: %@ is a number written for the language (“10,000”). XLM is Stellar's coin.",
+    "Fund with Friendbot" : {
+      "comment" : "[tight] A testnet button in Deposit: get free test XLM from Friendbot, Stellar's testnet faucet, once per account (a verb). Friendbot is a name, never translated.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obtener %@ XLM de prueba"
+            "value" : "Fondear con Friendbot"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Obtenir %@ XLM de test"
+            "value" : "Financer avec Friendbot"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "테스트 XLM %@개 받기"
+            "value" : "Friendbot으로 충전"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "领取 %@ 测试 XLM"
+            "value" : "用 Friendbot 充值"
+          }
+        }
+      }
+    },
+    "Funded with Friendbot" : {
+      "comment" : "Activity, and Deposit after the tap: the account got its free test XLM from Friendbot, Stellar's testnet faucet. Friendbot is a name, never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondeada con Friendbot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Financé avec Friendbot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friendbot으로 충전됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已通过 Friendbot 充值"
+          }
+        }
+      }
+    },
+    "Get %@ free test XLM, once" : {
+      "comment" : "Under the testnet button Fund with Friendbot: %@ is a number written for the language (“10,000”); each account can claim it one time only. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibe %@ XLM de prueba gratis, una sola vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recevez %@ XLM de test gratuits, une seule fois"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 테스트 XLM %@개, 한 번만 받을 수 있어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费领取 %@ 测试 XLM，仅限一次"
           }
         }
       }
@@ -2745,35 +2629,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "获取价格"
-          }
-        }
-      }
-    },
-    "Get test XLM" : {
-      "comment" : "An Activity row: the testnet faucet gave the account test XLM, amount not known. XLM is Stellar's coin.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Obtener XLM de prueba"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Obtenir des XLM de test"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "테스트 XLM 받기"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "领取测试 XLM"
           }
         }
       }
@@ -4054,35 +3909,6 @@
         }
       }
     },
-    "No provider for your country yet." : {
-      "comment" : "Add cash: no provider (anchor) serves the user's country.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aún no hay proveedores para tu país."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Aucun prestataire pour votre pays pour l'instant."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "아직 내 국가를 지원하는 제공업체가 없어요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "你所在的国家/地区暂无服务商。"
-          }
-        }
-      }
-    },
     "Not enough %@." : {
       "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of the asset it sends; %@ is the asset's code (USDC).",
       "localizations" : {
@@ -4518,31 +4344,31 @@
         }
       }
     },
-    "Nothing yet. Add cash or swap to get started." : {
+    "Nothing yet. Fund your account or swap to get started." : {
       "comment" : "Stellar Home's Activity, empty.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún no hay nada. Recarga o haz un intercambio para empezar."
+            "value" : "Aún no hay nada. Fondea tu cuenta o haz un intercambio para empezar."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Rien pour l'instant. Rechargez ou faites un échange pour commencer."
+            "value" : "Rien pour l'instant. Approvisionnez votre compte ou faites un échange pour commencer."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "아직 내역이 없어요. 현금을 충전하거나 스왑해서 시작해 보세요."
+            "value" : "아직 내역이 없어요. 계정에 자금을 넣거나 스왑해서 시작해 보세요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "暂无记录。入金或兑换即可开始。"
+            "value" : "暂无记录。为账户充值或兑换即可开始。"
           }
         }
       }
@@ -5049,35 +4875,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "计价"
-          }
-        }
-      }
-    },
-    "Providers" : {
-      "comment" : "Add cash: the section listing the providers (anchors).",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Proveedores"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Prestataires"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "제공업체"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "服务商"
           }
         }
       }
@@ -5720,35 +5517,6 @@
         }
       }
     },
-    "Send %@ %@ to the provider" : {
-      "comment" : "Cash out: pay the provider (anchor). %@ %@ is the amount and its asset.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enviar %@ %@ al proveedor"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Envoyer %@ %@ au prestataire"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "제공업체에 %@ %@ 보내기"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "向服务商发送 %@ %@"
-          }
-        }
-      }
-    },
     "Send %@ USDC to Monad" : {
       "comment" : "A transaction's title and Activity: USDC bridged from Stellar to Monad; %@ is an amount. Monad is a network's name.",
       "localizations" : {
@@ -5832,35 +5600,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "只能向此地址发送 Stellar 资产。如需从 Monad 转入 USDC，使用首页的跨链桥。"
-          }
-        }
-      }
-    },
-    "Send to %@" : {
-      "comment" : "The review's title for a cash out: the payment to the cash provider; %@ is its name.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enviar a %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Envoyer à %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@에 보내기"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "发送给 %@"
           }
         }
       }
@@ -6180,35 +5919,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 Stellar 上登录以继续。"
-          }
-        }
-      }
-    },
-    "Sign in to %@" : {
-      "comment" : "The Face ID prompt's reason before signing in to a cash provider: %@ is its name.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Iniciar sesión en %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se connecter à %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@에 로그인"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "登录 %@"
           }
         }
       }
@@ -6886,35 +6596,6 @@
         }
       }
     },
-    "Testnet balances have no value. You pay Stellar's network fees in XLM, as you pay MON on Monad." : {
-      "comment" : "The Stellar account page's testnet note. XLM and MON are the networks' coins.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Los saldos de testnet no tienen valor. Pagas las comisiones de red de Stellar en XLM, como pagas MON en Monad."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Les soldes du testnet n'ont aucune valeur. Vous payez les frais de réseau de Stellar en XLM, comme vous payez en MON sur Monad."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "테스트넷 잔액에는 가치가 없어요. Monad에서 MON으로 내듯이 Stellar 네트워크 수수료는 XLM으로 내요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "测试网余额没有价值。你用 XLM 支付 Stellar 的网络费用，就像在 Monad 上用 MON 支付一样。"
-          }
-        }
-      }
-    },
     "Testnet rates come from test activity, not real markets." : {
       "comment" : "Earn on testnet: the lending rates aren't real.",
       "localizations" : {
@@ -6940,35 +6621,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "测试网利率来自测试活动，而非真实市场。"
-          }
-        }
-      }
-    },
-    "Testnet uses the Stellar test anchor: no real money moves." : {
-      "comment" : "Add cash on testnet. An anchor is a provider that turns crypto into money.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Testnet usa el anchor de prueba de Stellar: no se mueve dinero real."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le testnet utilise l'anchor de test de Stellar : aucun argent réel ne circule."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "테스트넷은 Stellar 테스트 앵커를 사용해요. 실제 돈은 오가지 않아요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "测试网使用 Stellar 测试锚点：不涉及真实资金。"
           }
         }
       }
@@ -7172,64 +6824,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "价格已超出你的 1% 限制。未发送任何内容。重新查看以获取新价格。"
-          }
-        }
-      }
-    },
-    "The provider's page couldn't be opened." : {
-      "comment" : "An error: the cash provider's page has no address the app can open.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudo abrir la página del proveedor."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Impossible d'ouvrir la page du fournisseur."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "제공업체 페이지를 열 수 없습니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法打开服务商的页面。"
-          }
-        }
-      }
-    },
-    "The provider's sign-in didn't pass this iPhone's checks (%@)." : {
-      "comment" : "An error: a cash provider's sign-in request failed the phone's checks; %@ names the check.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El inicio de sesión del proveedor no superó las comprobaciones de este iPhone (%@)."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La connexion du fournisseur n'a pas passé les vérifications de cet iPhone (%@)."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "제공업체 로그인이 이 iPhone의 검사를 통과하지 못했습니다(%@)."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "服务商的登录未通过此 iPhone 的检查（%@）。"
           }
         }
       }
@@ -7524,35 +7118,6 @@
         }
       }
     },
-    "This provider's setup file is missing %@." : {
-      "comment" : "An error: a cash provider's setup file (stellar.toml) lacks an entry; %@ names it.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Al archivo de configuración de este proveedor le falta %@."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le fichier de configuration de ce fournisseur ne contient pas %@."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "이 제공업체의 설정 파일에 %@이(가) 없습니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "此服务商的配置文件缺少 %@。"
-          }
-        }
-      }
-    },
     "Ticker" : {
       "comment" : "The launch form: the coin's ticker symbol.",
       "localizations" : {
@@ -7815,7 +7380,7 @@
       }
     },
     "Transfer" : {
-      "comment" : "A noun: a cash or bridge transfer, a row label and a section.",
+      "comment" : "A noun: a bridge transfer, a row label and a section.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -7980,6 +7545,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更新 DyorHQ 以使用 Stellar。"
+          }
+        }
+      }
+    },
+    "Use 2 to 10 letters or digits for the symbol." : {
+      "comment" : "An error on Create: a coin's ticker (its symbol) is 2 to 10 letters A–Z or digits 0–9, nothing else.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usa de 2 a 10 letras o dígitos para el símbolo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilisez 2 à 10 lettres ou chiffres pour le symbole."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "심볼은 영문자나 숫자 2~10자로 입력하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码请使用 2 到 10 个字母或数字。"
           }
         }
       }
@@ -8183,6 +7777,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已提取到现货"
+          }
+        }
+      }
+    },
+    "You already claimed your test XLM." : {
+      "comment" : "An error on testnet: Friendbot's free test XLM is one claim per account, and this account has had it. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya recibiste tus XLM de prueba."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous avez déjà reçu vos XLM de test."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트 XLM을 이미 받았어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你已领取过测试 XLM。"
           }
         }
       }

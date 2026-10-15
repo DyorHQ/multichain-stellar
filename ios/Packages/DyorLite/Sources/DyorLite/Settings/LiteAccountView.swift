@@ -2,8 +2,9 @@ import StellarKit
 import SwiftUI
 
 /// Profile › Network › Stellar account (design spec §3.5): the Stellar address, how it is secured, the network, the
-/// secret key for accounts that can export it, test XLM, and signing out of Stellar. Pushed inside Profile's own
-/// navigation stack: it has no stack or Close of its own.
+/// secret key for accounts that can export it, and signing out of Stellar. Friendbot's test XLM isn't here: it is
+/// offered in Deposit, once (decision 7). Pushed inside Profile's own navigation stack: it has no stack or Close of its
+/// own.
 @MainActor
 public struct LiteAccountView: View {
     private let session: LiteSession
@@ -11,12 +12,9 @@ public struct LiteAccountView: View {
     @State private var error: String?
     @State private var copied = false
     @State private var confirmSignOut = false
-    @State private var busy = false
     @Environment(\.liteStyle) private var style
 
     public init(session: LiteSession) { self.session = session }
-
-    private var store: LiteStore? { session.home == .ready ? session.store : nil }
 
     public var body: some View {
         Form {
@@ -68,20 +66,6 @@ public struct LiteAccountView: View {
                     }
                 } footer: {
                     LiteParagraph(tr("Import it into any Stellar wallet (Freighter, LOBSTR, xBull) to reach the same account."))
-                }
-            }
-            if session.isTestnet, let store, let amount = ReceiveSheet.faucetAmount(store.config) {
-                Section {
-                    Button(tr("Get \(amount) test XLM")) {
-                        Task {
-                            busy = true
-                            defer { busy = false }
-                            do { try await store.faucet() } catch { self.error = LiteErrorText.describe(error) }
-                        }
-                    }
-                    .disabled(busy)
-                } footer: {
-                    LiteParagraph(tr("Testnet balances have no value. You pay Stellar's network fees in XLM, as you pay MON on Monad."))
                 }
             }
             if let error { Section { LiteInlineError(message: error) } }

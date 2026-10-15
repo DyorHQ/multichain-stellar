@@ -123,64 +123,6 @@
         }
       }
     },
-    "Cash added" : {
-      "comment" : "A row of Stellar activity: money came into the account from a bank or card, through a cash provider",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Dinero añadido"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Espèces ajoutées"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현금 입금됨"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已入金"
-          }
-        }
-      }
-    },
-    "Cash out" : {
-      "comment" : "A row of Stellar activity: money left the account to a bank, through a cash provider (a noun)",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Retiro de dinero"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Encaissement"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "현금 출금"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出金"
-          }
-        }
-      }
-    },
     "DyorHQ Launch" : {
       "comment" : "[tight] A Stellar coin's badge: launched on the DyorHQ launchpad. DyorHQ is never translated",
       "localizations" : {
@@ -297,60 +239,31 @@
         }
       }
     },
-    "Got %@ test XLM" : {
-      "comment" : "A row of Stellar activity: the account received free XLM from the test network's faucet. The value is an amount (10,000); XLM is never translated",
+    "Funded with Friendbot" : {
+      "comment" : "A row of Stellar activity: the account got its one grant of free test XLM from Friendbot, the Stellar test network's faucet. Friendbot is a name, never translated",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recibiste %@ XLM de prueba"
+            "value" : "Fondeada con Friendbot"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ XLM de test reçus"
+            "value" : "Financé avec Friendbot"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "테스트 XLM %@ 받음"
+            "value" : "Friendbot으로 충전됨"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已获得 %@ 测试 XLM"
-          }
-        }
-      }
-    },
-    "Got test XLM" : {
-      "comment" : "A row of Stellar activity: the account received free XLM from the test network's faucet. XLM is never translated",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Recibiste XLM de prueba"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "XLM de test reçus"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "테스트 XLM 받음"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已获得测试 XLM"
+            "value" : "已通过 Friendbot 充值"
           }
         }
       }

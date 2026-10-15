@@ -14,7 +14,6 @@ import * as activity from "./routes/activity.ts";
 import * as assets from "./routes/assets.ts";
 import * as auth from "./routes/auth.ts";
 import * as bridge from "./routes/bridge.ts";
-import * as cash from "./routes/cash.ts";
 import * as config from "./routes/config.ts";
 import * as earn from "./routes/earn.ts";
 import * as fees from "./routes/fees.ts";
@@ -52,7 +51,7 @@ export async function guard(req: Request, route: string): Promise<void> {
   else await auth.user(req);
 }
 
-const MODULES = [auth, config, fees, account, plans, swap, markets, assets, launches, earn, moments, bridge, cash, holdings, portfolio, activity];
+const MODULES = [auth, config, fees, account, plans, swap, markets, assets, launches, earn, moments, bridge, holdings, portfolio, activity];
 
 export const router = new Router().before(guard);
 for (const m of MODULES) m.register(router);

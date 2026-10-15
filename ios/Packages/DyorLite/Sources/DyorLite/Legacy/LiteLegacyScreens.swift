@@ -70,11 +70,6 @@ public enum LiteLegacyScreens {
         LiteLegacyHost(session: session, style: style, chrome: chrome) { BridgeSheet(toStellar: toStellar) }
     }
 
-    /// Add cash (`deposit`) or Cash out through an anchor. A sheet, with its Close.
-    public static func cash(session: LiteSession, deposit: Bool, style: LiteStyle = .default, chrome: LiteChrome = .none) -> some View {
-        LiteLegacyHost(session: session, style: style, chrome: chrome) { CashSheet(deposit: deposit) }
-    }
-
     /// The search over the account's holdings and the launches; `onPick` gets the asset id or the coin's contract. A
     /// sheet, with its Cancel.
     public static func search(session: LiteSession, style: LiteStyle = .default, onPick: @escaping (String) -> Void) -> some View {
@@ -87,8 +82,8 @@ public enum LiteLegacyScreens {
         .environment(\.liteStyle, style)
     }
 
-    /// The Stellar account page: the address, Secured by, the secret key, test XLM, Sign out of Stellar. Pushed in the
-    /// host's navigation.
+    /// The Stellar account page: the address, Secured by, the secret key, Sign out of Stellar. Pushed in the host's
+    /// navigation.
     public static func account(session: LiteSession, style: LiteStyle = .default) -> some View {
         LiteAccountView(session: session).environment(\.liteStyle, style)
     }
@@ -178,7 +173,7 @@ private struct LiteLegacyActivity: View {
             case .signIn:
                 LiteSignInRow(session: store.session) { await store.refreshActivity() }
             case .empty:
-                Text(tr("Nothing yet. Add cash or swap to get started.")).foregroundStyle(.secondary)
+                Text(tr("Nothing yet. Fund your account or swap to get started.")).foregroundStyle(.secondary)
             case .list:
                 ForEach(store.activity) { LiteActivityRow(item: $0) }
             case .failed:

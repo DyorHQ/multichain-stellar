@@ -1,5 +1,5 @@
-// Account: balances and the XLM position (a viewer route), activation, trustlines, the testnet faucet, sends and
-// recipient checks (§4.3, §6.4).
+// Account: balances and the XLM position (a viewer route), activation, trustlines, testnet's one claim of Friendbot's
+// test XLM, sends and recipient checks (§1.1 decision 7, §4.3, §6.4).
 import { accountView, activate, publicAccountView, recipient, sendPlan, testnetFaucet, trustPlan } from "../../_shared/account.ts";
 import { amountArg, bad, clientIp, json, PUBLIC_VIEW_CACHE, readJson, Router, stringArg } from "../../_shared/http.ts";
 import { accountViewer, user } from "./auth.ts";
@@ -30,7 +30,7 @@ export function register(router: Router): void {
     const body = await readJson<{ asset?: unknown; to?: unknown; amount?: unknown; memo?: unknown; memoType?: unknown }>(req);
     const amount = amountArg(body.amount, "amount");
     const to = stringArg(body.to, "to", 69);
-    // Anchors and exchanges need a memo on withdrawals (SEP-24 withdraw_memo / withdraw_memo_type).
+    // Exchanges often need a memo on deposits to them: text, a number (id) or a hash.
     const memo = body.memo === undefined || body.memo === null || body.memo === "" ? null : stringArg(body.memo, "memo", 100);
     const memoType = memo ? String(body.memoType ?? "text") : null;
     if (memoType && !["text", "id", "hash"].includes(memoType)) throw bad("bad_memo", "memoType is text, id or hash.");

@@ -95,7 +95,7 @@ final class StellarActivityRecorder {
         switch action.section {
         case .bridge: return .swap
         case .moments: return .moments
-        case .spot, .earn, .launch, .cash, .account: return .transaction
+        case .spot, .earn, .launch, .account: return .transaction
         }
     }
 

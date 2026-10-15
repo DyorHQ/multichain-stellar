@@ -28,6 +28,7 @@ export type AssetId = string;
 export type Period = "day" | "week" | "month" | "all";
 
 export type NetworkName = "testnet" | "mainnet";
+/** `cash`: only transfers from before decision 7 removed cash until mainnet (DESIGN-stellar-parity §1.1). */
 export type Section = "spot" | "earn" | "launch" | "moments" | "bridge" | "cash" | "account";
 export type FeePayer = "user" | "sponsor" | "external";
 export type SponsorReason = "setup" | "starter_swap";
@@ -135,15 +136,13 @@ export type ErrorCode =
   | "not_deployed"
   | "storage_unavailable"
   | "storage_error"
-  // bridge and cash
+  // bridge
   | "bad_direction"
   | "bad_hash"
   | "bad_spender"
   | "needs_usdc"
   | "mainnet_route"
   | "bridge_quote_failed"
-  | "bad_anchor"
-  | "bad_kind"
   // added: hybrid fees, sponsorship, recipients, launches, budgets (DESIGN-stellar-parity §6.13)
   | "not_enough_xlm_for_fee"
   | "not_enough_xlm_for_reserve"
@@ -278,14 +277,6 @@ export interface AssetInfo {
   listed?: boolean;
 }
 
-export interface AnchorInfo {
-  domain: string;
-  name: string;
-  assets: string[];
-  countries: string[];
-  kinds: ("deposit" | "withdraw")[];
-}
-
 export interface Pricing {
   kind: "reference" | "market";
   source: string;
@@ -334,7 +325,6 @@ export interface LiteConfig {
   };
   /** Contract ids by role; the phone's pins win. */
   allowlist: Record<string, ContractAddress[]>;
-  anchors: AnchorInfo[];
   bridge: { routes: ("cctp" | "oneclick")[]; monad: { chainId: number; usdc: string } | null };
   flags: { enabled: boolean; maintenance?: boolean };
   minBuild: number;
@@ -402,8 +392,9 @@ export interface FirstFunding {
   suggestXlm: Stroops;
   /** Null in the public view (DyorHQ's records, not the ledger's). */
   starterSwap: "available" | "used" | "unavailable" | null;
-  /** Testnet only. `usedToday` is null in the public view. */
-  faucet: { amount: string; usedToday: boolean | null } | null;
+  /** Testnet only: Friendbot's grant, one claim per address, ever (decision 7). `claimed` (the address's Friendbot
+   *  activation or a faucet row) is null in the public view. */
+  faucet: { amount: string; claimed: boolean | null } | null;
 }
 
 export interface AccountView {
@@ -1151,6 +1142,7 @@ export interface EarnBuildRequest {
 // ------------------------------------------------------------------------------------------------ activity
 
 export interface ActivityItem {
+  /** `cash`: a cash transfer from before decision 7, listed under a neutral title. */
   type: "tx" | "bridge" | "cash";
   id: string;
   kind: string;
@@ -1158,7 +1150,7 @@ export interface ActivityItem {
   summary: string;
   status: string;
   at: IsoTime;
-  /** Bridge: base units of the sending side's USDC; cash: the anchor's amount as written. */
+  /** Bridge: base units of the sending side's USDC; cash: the amount as its provider wrote it. */
   amount?: string | null;
   display?: Record<string, DisplayValue> | null;
   /** Added. */
@@ -1189,7 +1181,7 @@ export interface Activity {
   items: ActivityItem[];
 }
 
-// ------------------------------------------------------------------------------------------------ bridge and cash
+// ------------------------------------------------------------------------------------------------ bridge
 
 export interface BridgeQuoteRequest {
   direction: BridgeDirection;
@@ -1262,23 +1254,6 @@ export interface BridgeStatus {
   error: string | null;
   /** Stellar → Monad, once attested: the Monad step that claims it. */
   claim?: EvmStep;
-}
-
-export interface CashAnchors {
-  anchors: AnchorInfo[];
-}
-
-export interface CashTrackRequest {
-  anchor: string;
-  kind: "deposit" | "withdraw";
-  asset: string;
-  amount?: string;
-  anchorTxId: string;
-  status?: string;
-}
-
-export interface CashTracked {
-  id: string;
 }
 
 // ------------------------------------------------------------------------------------------------ routes
@@ -1368,8 +1343,6 @@ export interface Routes {
   "POST /v1/bridge/:id/source": { auth: "session"; body: BridgeTxRequest; response: { id: string; status: string } };
   "POST /v1/bridge/:id/claimed": { auth: "session"; body: BridgeTxRequest; response: { id: string; status: "completed" } };
   "GET /v1/bridge/:id": { auth: "session"; response: BridgeStatus };
-  "GET /v1/cash/anchors": { auth: "session"; query: { country?: string }; response: CashAnchors };
-  "POST /v1/cash/track": { auth: "session"; body: CashTrackRequest; response: CashTracked };
 }
 
 export type RouteKey = keyof Routes;

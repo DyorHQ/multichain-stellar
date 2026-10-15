@@ -4,8 +4,8 @@ import XCTest
 
 /// `LiteStore`'s actions and reads (docs/DESIGN-stellar-parity.md §7.2): one signing run per confirmed action (App Lock
 /// once when it applies, the passkey once per step), a plan that settles once from the store's own task whether or not
-/// a view still watches it (LiteSettled), plans priced on the phone, Max from the account's own XLM figures, and the
-/// history parts of a passkey account in the public view.
+/// a view still watches it (LiteSettled), plans priced on the phone, Max from the account's own XLM figures, the
+/// history parts of a passkey account in the public view, Friendbot's one claim, and a new coin's ticker.
 @MainActor
 final class LiteStoreTests: XCTestCase {
     private var server: FakeLite!
@@ -227,6 +227,79 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(LiteHomeView.activityCard(store), .list)
         XCTAssertEqual(tally.prompts, 1, "the one passkey sign-in")
         XCTAssertEqual(tally("reason:\(tr("Sign in to DyorHQ on Stellar"))"), 1)
+    }
+
+    // MARK: - Friendbot's one claim (decision 7)
+
+    /// Deposit offers "Fund with Friendbot" only while the server says the claim is open: not before the account is
+    /// read, not in the public view, and never again once claimed.
+    func testFriendbotIsOfferedOnlyWhileTheClaimIsOpen() async throws {
+        server.update { $0.claimed = false }
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        XCTAssertFalse(store.canClaimFriendbot, "unknown before the account is read")
+        await store.refreshAccount()
+        XCTAssertTrue(store.canClaimFriendbot)
+        XCTAssertEqual(ReceiveSheet.faucetAmount(store.config), "10,000")
+
+        try await store.faucet()
+        XCTAssertEqual(store.account?.firstFunding?.faucet?.claimed, true, "the account is read again after the claim")
+        XCTAssertFalse(store.canClaimFriendbot)
+        do {
+            try await store.faucet()
+            XCTFail("a second claim went through")
+        } catch {
+            XCTAssertEqual(LiteErrorText.describe(error), "You already claimed your test XLM.")
+        }
+        XCTAssertEqual(server.paths.filter { $0 == "POST /v1/account/faucet" }.count, 2)
+        XCTAssertEqual(tally.prompts, 0, "claiming signs nothing")
+    }
+
+    /// Home's actions are Monad's: adding cash is removed until mainnet, and so is its tile.
+    func testHomeHasNoAddCash() {
+        XCTAssertEqual(LiteHomeAction.all.map(\.id), [.bridge, .deposit, .withdraw, .swap])
+    }
+
+    func testAnAccountThatClaimedIsNeverOfferedFriendbot() async throws {
+        server.update { $0.claimed = true }
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        await store.refreshAccount()
+        XCTAssertEqual(store.account?.firstFunding?.faucet?.claimed, true)
+        XCTAssertFalse(store.canClaimFriendbot)
+    }
+
+    func testAnAccountReadInThePublicViewIsNeverOfferedFriendbot() async throws {
+        server.update { $0.claimed = false }
+        let (passkey, store) = try await readySession(keys: TestAccount.passkeyKeys(tally: tally), saved: false)
+        XCTAssertEqual(passkey.access, .publicView)
+        await store.refreshAccount()
+        XCTAssertEqual(store.account?.view, "public")
+        XCTAssertNil(store.account?.firstFunding?.faucet?.claimed, "DyorHQ's own record: null in the public view")
+        XCTAssertFalse(store.canClaimFriendbot)
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    // MARK: - A new coin's ticker
+
+    /// Soroswap reads a token's symbol as UTF-8, so Create refuses a ticker that isn't 2 to 10 ASCII letters or digits
+    /// before it uploads, writes or builds anything, with the server's own words.
+    func testANewCoinsTickerIsCheckedBeforeAnythingIsSent() async throws {
+        for symbol in ["ECAT", "ecat", "AB", "ABCDEFGHIJ", "ECAT2", " ECAT "] {
+            XCTAssertTrue(LiteStore.isLaunchSymbol(symbol), symbol)
+        }
+        for symbol in ["E", "ABCDEFGHIJK", "EC-AT", "EC AT", "ÉCAT", "ßCAT", "ıCAT", "ＥＣＡＴ", "🐱CAT", ""] {
+            XCTAssertFalse(LiteStore.isLaunchSymbol(symbol), symbol)
+        }
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: true, tally: tally))
+        server.forget()
+        let form = StellarLaunchForm(name: "E Cat", symbol: "ÉCAT", quote: "XLM", creatorFeeBps: 0)
+        do {
+            _ = try await store.launchCreatePlan(form, image: Data([0xFF, 0xD8]))
+            XCTFail("a ticker outside ASCII went out")
+        } catch let LiteAPIError.server(status, code, _, _) {
+            XCTAssertEqual([String(status), code], ["422", "bad_symbol"])
+        }
+        XCTAssertEqual(server.paths, [], "nothing uploaded, written or built")
+        XCTAssertEqual(tally.prompts, 0)
     }
 
     func testAPasskeyAccountWithNoSessionSignsInOnceWhenItStartsAnAction() async throws {

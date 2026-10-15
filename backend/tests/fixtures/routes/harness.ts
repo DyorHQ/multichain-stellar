@@ -172,7 +172,7 @@ export const routeRows: Responder = (q) => {
   if (q === "select * from lite.moments where id = ?") return [];
   if (q.startsWith("update lite.bridge_transfers set dest_tx")) return [];
   // GET /v1/activity (activity.ts): one swap logged before migration 05 (no section, fee or result), a transfer to
-  // Monad and an anchor deposit.
+  // Monad and a cash deposit from before decision 7.
   if (q.startsWith("select hash, address, kind, intent, status, ledger, created_at, section, fee_charged, fee_payer, result from lite.tx_log t where t.address = ?")) {
     return [{
       hash: "ab".repeat(32),
@@ -254,8 +254,6 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "bridge-source-bad-hash", method: "POST", path: `/v1/bridge/${BRIDGE_ID}/source`, body: { txHash: "nope" }, auth: true },
   { name: "bridge-claimed-unknown", method: "POST", path: `/v1/bridge/${BRIDGE_ID}/claimed`, body: { txHash: "0x" + "cd".repeat(32) }, auth: true },
   { name: "bridge-status-unknown", method: "GET", path: "/v1/bridge/nope", auth: true },
-  { name: "cash-anchors", method: "GET", path: "/v1/cash/anchors?country=gh", auth: true },
-  { name: "cash-track-unknown-anchor", method: "POST", path: "/v1/cash/track", body: { anchor: "example.com", kind: "deposit", asset: "USDC", anchorTxId: "1" }, auth: true },
   { name: "activity", method: "GET", path: "/v1/activity", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.10: section, hash, fees, result, ref, names, words and usd" },
   { name: "prices", method: "GET", path: "/v1/prices", auth: false, volatile: ["at"] },
   { name: "no-route", method: "GET", path: "/v1/nope", auth: false },

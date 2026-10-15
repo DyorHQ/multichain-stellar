@@ -287,9 +287,10 @@ function txWords(r: Row, intent: Partial<Intent>, out: bigint | null, n: Names):
     case "activate":
       return { ...none, title: "Set up your account" };
     case "faucet": {
+      // Friendbot's one grant of test XLM (decision 7), whether it created the account or came later.
       const xlm = n.registry(assetById(n.net, "XLM"));
-      const amount = n.net.faucet ? `${amountText(BigInt(n.net.faucet.amount) * 10n ** BigInt(TOKEN_DECIMALS))} ` : "";
-      return { ...none, symbol: xlm?.code ?? null, name: xlm?.name ?? null, title: `Got ${amount}test XLM` };
+      const amount = n.net.faucet ? `${amountText(BigInt(n.net.faucet.amount) * 10n ** BigInt(TOKEN_DECIMALS))} XLM` : null;
+      return { ...none, symbol: xlm?.code ?? null, name: xlm?.name ?? null, title: "Funded with Friendbot", subtitle: amount };
     }
     case "restore":
       return { ...none, title: "Restored data" };
@@ -329,18 +330,17 @@ function bridgeItem(b: Row, n: Names): ActivityItem {
   };
 }
 
-/** An anchor's deposit or withdrawal, as tracked (its amount as the anchor wrote it). */
+/** A cash transfer tracked before decision 7 removed cash until mainnet (its amount as its provider wrote it): listed
+ *  under a neutral title, "Transaction", as the phone lists it. */
 function cashItem(c: Row, n: Names): ActivityItem {
   const asset = n.registry(assetById(n.net, c.asset === "native" ? "XLM" : String(c.asset)));
   const code = asset?.code ?? String(c.asset);
   const amount = c.amount === null ? null : String(c.amount);
-  const anchor = n.net.anchors.find((a) => a.domain === c.anchor);
   return {
     type: "cash",
     id: String(c.id),
     kind: String(c.kind),
-    // display.asset: the app words the item itself, in the user's language ("native" is XLM).
-    summary: c.kind === "deposit" ? `Added ${c.asset}` : `Cashed out ${c.asset}`,
+    summary: "Transaction",
     amount,
     display: { asset: String(c.asset) },
     status: String(c.status),
@@ -353,8 +353,8 @@ function cashItem(c: Row, n: Names): ActivityItem {
     ref: null,
     symbol: code,
     name: asset?.name ?? null,
-    title: c.kind === "deposit" ? `Added ${code}` : `Cashed out ${code}`,
-    subtitle: anchor?.name ?? String(c.anchor),
+    title: "Transaction",
+    subtitle: amount !== null ? `${amount} ${code}` : null,
     usd: amount !== null && /^[0-9]+(\.[0-9]+)?$/.test(amount) && asset?.usd != null ? usdAmount(Number(amount) * asset.usd) : null,
   };
 }

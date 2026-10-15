@@ -10,7 +10,6 @@ import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import postgres from "postgres";
 import { verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
 import activity from "./phases/activity.ts";
-import anchor from "./phases/anchor.ts";
 import auth from "./phases/auth.ts";
 import bridge from "./phases/bridge.ts";
 import earn from "./phases/earn.ts";
@@ -56,7 +55,6 @@ export const PHASES: [string, Phase][] = [
   ["launch", launch],
   ["moments", moments],
   ["bridge", bridge],
-  ["anchor", anchor],
   ["markets", markets],
   ["prices", prices],
   ["holdings", holdings],

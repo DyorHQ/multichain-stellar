@@ -81,14 +81,14 @@ final class LiteL10nTests: XCTestCase {
         XCTAssertEqual(tr("Testnet"), "Testnet")
         XCTAssertEqual(tr("\(1) trades"), "1 trade")
         XCTAssertEqual(tr("\(12) trades"), "12 trades")
-        XCTAssertEqual(tr("Sign in to \("Anchor")"), "Sign in to Anchor")
+        XCTAssertEqual(tr("Get \("10,000") free test XLM, once"), "Get 10,000 free test XLM, once")
         XCTAssertEqual(tr("95% goes to the creator. Your edition carries a 5% creator royalty for future sales."),
                        "95% goes to the creator. Your edition carries a 5% creator royalty for future sales.", "a percent sign stays one")
         XCTAssertEqual(tr("\(42)% to graduation"), "42% to graduation")
         XCTAssertEqual(LiteL10n.string(LocalizedStringResource("activity.done", defaultValue: "Done", bundle: LiteL10n.lite)), "Done")
 
         LiteL10n.locale = Locale(identifier: "fr_FR")
-        XCTAssertEqual(tr("Sign in to \("Anchor")"), "Se connecter à Anchor")
+        XCTAssertEqual(tr("Get \("10 000") free test XLM, once"), "Recevez 10 000 XLM de test gratuits, une seule fois")
         XCTAssertEqual(LiteSession.Failure.cancelled.errorDescription, "Pas terminé. Réessayez.")
         XCTAssertEqual(tr("\(1) trades"), "1 transaction")
         XCTAssertEqual(tr("\(3) trades"), "3 transactions")
@@ -104,7 +104,7 @@ final class LiteL10nTests: XCTestCase {
         XCTAssertEqual(tr("Switch to Monad"), "切换到 Monad")
 
         LiteL10n.locale = Locale(identifier: "es_ES")
-        XCTAssertEqual(tr("Get \("10.000") test XLM"), "Obtener 10.000 XLM de prueba")
+        XCTAssertEqual(tr("Get \("10.000") free test XLM, once"), "Recibe 10.000 XLM de prueba gratis, una sola vez")
     }
 
     func testDollarsReadTheSameInEveryLanguage() {

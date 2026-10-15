@@ -174,6 +174,8 @@ final class FakeLite: @unchecked Sendable {
         var slow: [String: TimeInterval] = [:]
         /// A plan to answer `account/activate` with (else the account's own).
         var plan: String?
+        /// Whether the account has had Friendbot's test XLM (`firstFunding.faucet.claimed`); nil: no add-funds card.
+        var claimed: Bool?
     }
 
     func update(_ change: (inout State) -> Void) { lock.withLock { change(&state) } }
@@ -258,7 +260,8 @@ final class FakeLite: @unchecked Sendable {
         switch (r.method, r.path) {
         case ("GET", "/v1/account"):
             guard owner || r.route.contains("address=") else { return (400, Self.error("address_required", "An address is required.")) }
-            return (200, Self.account(exists: s.exists, usdc: s.usdc, view: owner ? "owner" : "public"))
+            return (200, Self.account(exists: s.exists, usdc: s.usdc, view: owner ? "owner" : "public", claimed: owner ? s.claimed : nil,
+                                      funding: s.claimed != nil))
         case ("GET", "/v1/holdings"):
             guard owner || r.route.contains("address=") else { return (400, Self.error("address_required", "An address is required.")) }
             return (200, Self.fixture(owner ? "holdings" : "holdings.public"))
@@ -284,6 +287,11 @@ final class FakeLite: @unchecked Sendable {
             if s.exists && s.usdc { return (200, Self.json(["status": "active"], account: Self.account(exists: true, usdc: true, view: "owner"))) }
             update { $0.exists = true }
             return (200, Data(Self.plan(id: "setup", steps: [("s1", "trust", "Enable USDC", 10_000)]).utf8))
+        case ("POST", "/v1/account/faucet"):
+            // Friendbot's test XLM: one claim per address, ever.
+            if s.claimed != false { return (429, Self.error("faucet_used", "You already claimed your test XLM.")) }
+            update { $0.claimed = true }
+            return (200, Self.json(["hash": String(repeating: "f0", count: 32)]))
         case ("POST", "/v1/swap/quote"): return (200, Self.fixture("swap-quote"))
         case ("POST", "/v1/swap/build"): return (200, Data(Self.plan(id: "swap1", steps: [("s1", "trust", "Enable USDC", 10_000), ("s2", "swap_soroswap", "Swap", 400_000)]).utf8))
         default: return (404, Self.error("not_found", "No such route."))
@@ -323,7 +331,7 @@ final class FakeLite: @unchecked Sendable {
          "horizonUrl":"http://127.0.0.1:9/horizon","activation":"friendbot","sponsor":"\(sponsor)",
          "assets":[{"id":"XLM","code":"XLM","name":"Stellar Lumens","decimals":7,"contract":"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC","classic":"native","note":null},
                    {"id":"USDC","code":"USDC","name":"USD Coin","decimals":7,"contract":"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA","classic":"USDC:G","note":null}],
-         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},"anchors":[],
+         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},
          "bridge":{"routes":[],"monad":null},"flags":{"enabled":\(enabled)},"minBuild":\(minBuild),"inviteRequired":false,
          "faucet":{"amount":"10000"}}
         """.utf8)
@@ -334,17 +342,22 @@ final class FakeLite: @unchecked Sendable {
      "estimates":{"trust":"10000","swap_soroswap":"500000","payment":"10000"},"estimateBasis":{"trust":"default"},"updatedAt":null}
     """.utf8)
 
-    /// An account with 10,000 XLM and one subentry (Friendbot, USDC enabled): 1.5 XLM kept, 9,998.5 spendable.
-    static func account(exists: Bool, usdc: Bool, view: String) -> Data {
+    /// An account with 10,000 XLM and one subentry (Friendbot, USDC enabled): 1.5 XLM kept, 9,998.5 spendable. With
+    /// `funding`, the add-funds card, Friendbot's claim made or not (`claimed`; nil in the public view).
+    static func account(exists: Bool, usdc: Bool, view: String, claimed: Bool? = nil, funding: Bool = false) -> Data {
         let xlm = exists ? """
         {"balance":"100000000000","minBalance":"15000000","sellingLiabilities":"0","spendable":"99985000000","baseReserve":"5000000",
          "reserves":{"base":2,"subentries":1,"sponsoring":0,"sponsored":0}}
         """ : "null"
+        let claim = claimed.map { String($0) } ?? "null"
+        let firstFunding = funding
+            ? #","firstFunding":{"needsXlm":false,"suggestXlm":"10000000","starterSwap":"unavailable","faucet":{"amount":"10000","claimed":\#(claim)}}"#
+            : ""
         return Data("""
         {"address":"G","exists":\(exists),"network":"testnet","activation":"friendbot","sponsor":"G","reserves":null,"view":"\(view)",
          "balances":[{"asset":"XLM","code":"XLM","name":"Stellar Lumens","contract":"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC","classic":"native","decimals":7,"balance":"100000000000","enabled":true},
                      {"asset":"USDC","code":"USDC","name":"USD Coin","contract":"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA","classic":"USDC:G","decimals":7,"balance":"52300000","enabled":\(usdc)}],
-         "xlm":\(xlm)}
+         "xlm":\(xlm)\(firstFunding)}
         """.utf8)
     }
 

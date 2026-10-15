@@ -30,8 +30,6 @@ const fixtures: Record<string, string> = {
   "bridge-start-in": "C.BridgeStart",
   "bridge-start-out": "C.BridgeStart",
   "bridge-status": "C.BridgeStatus",
-  "cash-anchors": "C.CashAnchors",
-  "cash-track": "C.CashTracked",
   "config": "C.LiteConfig",
   "config.legacy": "C.LiteConfig",
   "earn-history": "C.EarnHistory",

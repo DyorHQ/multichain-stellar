@@ -84,7 +84,7 @@
     "starterSwap": null,
     "faucet": {
       "amount": "10000",
-      "usedToday": null
+      "claimed": null
     }
   },
   "view": "public"

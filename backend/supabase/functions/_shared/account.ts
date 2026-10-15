@@ -1,8 +1,9 @@
-// Accounts (docs/DESIGN-stellar-parity.md §4.3, §4.5, §6.4): setup (Friendbot on testnet, DyorHQ's sponsored account
-// where activation is sponsored), trustlines the user pays for, the testnet faucet, sends, recipients, and the account
-// view: every balance, the account's XLM position and the add-funds card, for its owner or, from the ledger and the
-// indexer only, for anyone (the public view).
+// Accounts (docs/DESIGN-stellar-parity.md §1.1 decision 7, §4.3, §4.5, §6.4): setup (Friendbot on testnet, DyorHQ's
+// sponsored account where activation is sponsored), trustlines the user pays for, testnet's one claim of Friendbot's
+// test XLM, sends, recipients, and the account view: every balance, the account's XLM position and the add-funds card,
+// for its owner or, from the ledger and the indexer only, for anyone (the public view).
 import { Memo, Operation } from "@stellar/stellar-sdk";
+import type postgres from "postgres";
 import type { AccountView, ActivationResult, BalanceRow, FirstFunding, Recipient, View } from "./contract.ts";
 import { classicAssetInfo, registryAsset, resolveAsset, ResolvedAsset } from "./assets.ts";
 import { sql } from "./db.ts";
@@ -27,6 +28,7 @@ import {
   requireAccount,
   rpcServer,
   sendSigned,
+  SendUnconfirmed,
   sponsor,
   sv,
   TransactionBuilder,
@@ -70,8 +72,8 @@ registerBuilder("activate", async (user, spec) => {
 
 const MEMO_TYPES = ["text", "id", "hash"] as const;
 
-/** A send's memo, from what the user typed: the transaction's and the intent's (a hash memo as lowercase hex; SEP-24
- *  anchors give it in base64). Null without one. */
+/** A send's memo, from what the user typed: the transaction's and the intent's (a hash memo as lowercase hex; some
+ *  exchanges give it in base64). Null without one. */
 export function memoOf(spec: Record<string, unknown>): { memo: Memo; bound: NonNullable<Intent["memo"]> } | null {
   if (spec.memo === null || spec.memo === undefined || spec.memo === "") return null;
   const value = String(spec.memo);
@@ -163,16 +165,65 @@ export async function recipient(address: string, assetId: string | null): Promis
 
 // ------------------------------------------------------------------------------------------------ activation
 
-export async function friendbotFund(address: string): Promise<void> {
+/** The transaction Friendbot funded an account with, as Horizon records it. */
+export interface FriendbotTx {
+  hash: string;
+  ledger: number | null;
+  /** Stroops, as Horizon writes them; null when it doesn't say. */
+  maxFee: string | null;
+  feeCharged: string | null;
+}
+
+/** A Horizon transaction record as a FriendbotTx; null when it isn't one. */
+function friendbotTx(record: unknown): FriendbotTx | null {
+  const r = (record ?? {}) as Record<string, unknown>;
+  if (typeof r.hash !== "string" || !/^[0-9a-f]{64}$/.test(r.hash)) return null;
+  const stroops = (v: unknown) => (typeof v === "string" && /^[0-9]{1,19}$/.test(v) ? v : null);
+  return { hash: r.hash, ledger: typeof r.ledger === "number" ? r.ledger : null, maxFee: stroops(r.max_fee), feeCharged: stroops(r.fee_charged) };
+}
+
+/** A Horizon resource (`path` under the network's Horizon), or null when Horizon doesn't have it or doesn't answer. */
+async function horizonRecord(path: string): Promise<unknown> {
+  try {
+    const res = await fetch(`${env.network.horizonUrl}${path}`);
+    if (!res.ok) {
+      await res.body?.cancel();
+      return null;
+    }
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** Asks testnet's Friendbot to fund `address` with its grant (networks.ts faucet.amount) and waits until the account
+ *  is on the ledger: Friendbot's transaction, or null when Friendbot found the account already funded, so funded it no
+ *  further. Friendbot's answer names the transaction; Horizon's record of it gives its ledger and fees, and, when the
+ *  answer names none, the account's first transaction is Friendbot's. */
+export async function friendbotFund(address: string): Promise<FriendbotTx | null> {
   const url = env.network.friendbotUrl;
   if (!url) throw new ApiError(400, "no_friendbot", "Friendbot only exists on testnet.");
   const res = await fetch(`${url}?addr=${encodeURIComponent(address)}`);
-  if (!res.ok) {
-    const body = await res.text();
-    if (!/already funded|createAccountAlreadyExist/.test(body)) throw new ApiError(502, "friendbot_failed", "Testnet Friendbot didn't answer. Try again.", { status: res.status });
+  const body = await res.text();
+  if (!res.ok && !/already funded|createAccountAlreadyExist/.test(body)) {
+    throw new ApiError(502, "friendbot_failed", "Testnet Friendbot didn't answer. Try again.", { status: res.status });
   }
   for (let i = 0; i < 20; i++) {
-    if (await loadAccount(address)) return;
+    if (await loadAccount(address)) {
+      if (!res.ok) return null;
+      let answer: unknown = null;
+      try {
+        answer = JSON.parse(body);
+      } catch {
+        // Not a record: the account's first transaction says which it was.
+      }
+      const answered = friendbotTx(answer);
+      if (answered?.maxFee) return answered;
+      const record = answered
+        ? await horizonRecord(`/transactions/${answered.hash}`)
+        : ((await horizonRecord(`/accounts/${address}/transactions?order=asc&limit=1`)) as { _embedded?: { records?: unknown[] } } | null)?._embedded?.records?.[0];
+      return friendbotTx(record) ?? answered;
+    }
     await new Promise((r) => setTimeout(r, 1_000));
   }
   throw new ApiError(504, "friendbot_slow", "Testnet is slow to create the account. Try again in a minute.");
@@ -182,9 +233,11 @@ export function usdcAsset(): AssetInfo {
   return assetById(env.network, "USDC")!;
 }
 
-/** POST /v1/account/activate (§4.3): a missing account is funded by Friendbot (testnet) or gets DyorHQ's sponsored
- *  setup plan, offered only while DyorHQ could send it; then USDC, if not enabled yet, is a trust plan the user pays
- *  for (409 not_enough_xlm_for_reserve when the account can't hold it). */
+/** POST /v1/account/activate (§4.3): a missing account is funded by Friendbot (testnet), which is the address's one
+ *  claim of test XLM (decision 7), or gets DyorHQ's sponsored setup plan, offered only while DyorHQ could send it;
+ *  then USDC, if not enabled yet, is a trust plan the user pays for (409 not_enough_xlm_for_reserve when the account
+ *  can't hold it). A missing account is always created, claimed or not: Stellar can't be used without one, and a
+ *  testnet reset removes every account. */
 export async function activate(user: string, ip: string): Promise<ActivationResult> {
   const net = env.network;
   const usdc = usdcAsset();
@@ -194,7 +247,8 @@ export async function activate(user: string, ip: string): Promise<ActivationResu
       await assertSponsorAvailable(user, "activate", ip, net.feePolicy.activationMaxFee);
       return await createPlan(user, "activate", [{ label: "Create your account", spec: { kind: "activate", usdc: usdc.classic } }]);
     }
-    await friendbotFund(user);
+    const funded = await friendbotFund(user);
+    if (funded) await logFaucet(sql(), user, funded.hash, { status: "success", ledger: funded.ledger, maxFee: funded.maxFee ?? "0", feeCharged: funded.feeCharged });
     acct = await classicBalances(user);
   }
   if (acct && !acct.balances.some((b) => b.asset === usdc.classic)) {
@@ -210,17 +264,44 @@ export async function trustPlan(user: string, assetId: string) {
   return await createPlan(user, "trust", [{ label: `Enable ${asset.code}`, spec: { kind: "trust", asset: asset.classic } }]);
 }
 
-async function faucetUsedToday(user: string): Promise<boolean> {
-  const recent = await sql()`select 1 from lite.tx_log where address = ${user} and kind = 'faucet' and created_at > now() - interval '1 day'`;
-  return recent.length > 0;
+// ------------------------------------------------------------------------------------------------ Friendbot's one claim
+
+/** Whether `user` has claimed Friendbot's test XLM (decision 7): a faucet row in lite.tx_log, at any time, that didn't
+ *  fail. Friendbot's activation of the account is logged as one (activate), so it counts. */
+async function faucetClaimed(user: string, q: postgres.Sql | postgres.TransactionSql = sql()): Promise<boolean> {
+  const rows = await q`select 1 from lite.tx_log where address = ${user} and kind = 'faucet' and status <> 'failed' limit 1`;
+  return rows.length > 0;
 }
 
-/** Testnet: tops an existing account up with Friendbot's grant of test XLM (networks.ts faucet.amount): Friendbot funds
- *  a temporary account, which merges into the user's. At most once a day per account. The temporary account pays the
- *  fee: `external` in the log. */
+function faucetUsed(): ApiError {
+  return new ApiError(429, "faucet_used", "You already claimed your test XLM.");
+}
+
+interface FaucetRow {
+  status: "pending" | "success";
+  ledger: number | null;
+  maxFee: string;
+  feeCharged: string | null;
+}
+
+/** Logs Friendbot's grant to `user` (transaction `hash`) as the address's faucet row: paid by Friendbot's accounts
+ *  (`external`), in the account section, with an intent that says what it was ("Funded with Friendbot"). */
+async function logFaucet(q: postgres.Sql | postgres.TransactionSql, user: string, hash: string, row: FaucetRow): Promise<void> {
+  const intent = { kind: "faucet", summary: "Funded with Friendbot", spend: {}, display: { amount: env.network.faucet?.amount ?? null } };
+  await q`
+    insert into lite.tx_log (hash, inner_hash, address, kind, intent, status, ledger, max_fee, fee_charged, fee_payer, section)
+    values (${hash}, ${hash}, ${user}, 'faucet', ${q.json(intent)}, ${row.status}, ${row.ledger}, ${row.maxFee}, ${row.feeCharged}, 'external', 'account')
+    on conflict do nothing`;
+}
+
+/** POST /v1/account/faucet. Testnet: Friendbot's grant of test XLM (networks.ts faucet.amount) for an account that
+ *  already existed, once per address, ever (decision 7): 429 faucet_used once the address has claimed, here or by
+ *  Friendbot's activation. Friendbot funds a temporary account, which merges into the user's; that account pays the
+ *  fee (`external` in the log). The claim is logged before the merge is sent, under a lock per address, so two taps at
+ *  once claim once; a merge that fails releases it. */
 export async function testnetFaucet(user: string): Promise<{ hash: string }> {
-  if (env.network.name !== "testnet") throw new ApiError(400, "testnet_only", "The faucet is testnet-only.");
-  if (await faucetUsedToday(user)) throw new ApiError(429, "faucet_used", "You already got test XLM today.");
+  if (!env.network.faucet) throw new ApiError(400, "testnet_only", "The faucet is testnet-only.");
+  if (await faucetClaimed(user)) throw faucetUsed();
   await requireAccount(user);
   const temp = Keypair.random();
   await friendbotFund(temp.publicKey());
@@ -230,13 +311,24 @@ export async function testnetFaucet(user: string): Promise<{ hash: string }> {
     .setTimeout(60)
     .build();
   tx.sign(temp);
-  const hash = await sendSigned(tx, "external");
-  await sql()`
-    insert into lite.tx_log (hash, inner_hash, address, kind, status, max_fee, fee_payer, section)
-    values (${hash}, ${hash}, ${user}, 'faucet', 'pending', 1000, 'external', 'account')`;
+  const hash = tx.hash().toString("hex");
+  const claimed = await sql().begin(async (q) => {
+    await q`select pg_advisory_xact_lock(hashtextextended(${`lite.faucet:${user}`}, 0))`;
+    if (await faucetClaimed(user, q)) return false;
+    await logFaucet(q, user, hash, { status: "pending", ledger: null, maxFee: "1000", feeCharged: null });
+    return true;
+  });
+  if (!claimed) throw faucetUsed();
+  try {
+    await sendSigned(tx, "external");
+  } catch (err) {
+    // Refused, so nothing was sent: the claim is still to make. An unconfirmed send may yet land, and keeps it.
+    if (!(err instanceof SendUnconfirmed)) await sql()`update lite.tx_log set status = 'failed', updated_at = now() where hash = ${hash}`;
+    throw err;
+  }
   const s = await waitForTx(hash, 30_000);
   await sql()`update lite.tx_log set status = ${s.status === "SUCCESS" ? "success" : s.status === "FAILED" ? "failed" : "pending"}, ledger = ${s.ledger ?? null},
-               fee_charged = ${s.feeCharged ?? null} where hash = ${hash}`;
+               fee_charged = ${s.feeCharged ?? null}, updated_at = now() where hash = ${hash}`;
   return { hash };
 }
 
@@ -312,7 +404,7 @@ async function starterSwapState(address: string, spendable: bigint | null): Prom
 }
 
 /** GET /v1/account (§6.4): the owner's view, or the public view of any account (`scope` "public"): the same shape
- *  from the ledger and the indexer only, with DyorHQ's own records (the starter swap, the faucet's use) null. */
+ *  from the ledger and the indexer only, with DyorHQ's own records (the starter swap, the faucet's claim) null. */
 export async function accountView(address: string, scope: View = "owner"): Promise<AccountView> {
   const net = env.network;
   const owner = scope === "owner";
@@ -321,7 +413,7 @@ export async function accountView(address: string, scope: View = "owner"): Promi
   if (acct) balances.push(...(await launchRows(address, owner)));
   const xlm = positionOf(acct, reserve);
   const starter = owner ? await starterSwapState(address, xlm ? BigInt(xlm.spendable) : null) : null;
-  const faucet = net.faucet ? { amount: net.faucet.amount, usedToday: owner ? await faucetUsedToday(address) : null } : null;
+  const faucet = net.faucet ? { amount: net.faucet.amount, claimed: owner ? await faucetClaimed(address) : null } : null;
   return {
     address,
     exists: Boolean(acct),

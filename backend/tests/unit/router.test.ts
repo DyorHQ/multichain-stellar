@@ -79,8 +79,6 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/bridge/:id/source", `/v1/bridge/${ID}/source`, false],
   ["POST /v1/bridge/:id/claimed", `/v1/bridge/${ID}/claimed`, false],
   ["GET /v1/bridge/:id", `/v1/bridge/${ID}`, false],
-  ["GET /v1/cash/anchors", "/v1/cash/anchors", false],
-  ["POST /v1/cash/track", "/v1/cash/track", false],
   ["GET /v1/holdings", "/v1/holdings", false],
   ["GET /v1/portfolio", "/v1/portfolio", false],
   ["GET /v1/activity", "/v1/activity", false],
@@ -222,7 +220,7 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
   Deno.test("every route's class is the API contract's (_shared/contract.ts Routes)", async () => {
     const source = await Deno.readTextFile(new URL("../../supabase/functions/_shared/contract.ts", import.meta.url));
     const contract = new Map([...source.matchAll(/"([A-Z]+ \/v1\/[^"]+)":\s*\{\s*auth:\s*"(\w+)"/g)].map((m) => [m[1], m[2]]));
-    assert(contract.size > 50, `${contract.size} routes in the contract`);
+    assert(contract.size >= 50, `${contract.size} routes in the contract`);
     const classOf = (spec: string) => (isPublic(spec) ? "public" : isViewer(spec) ? "viewer" : "session");
     for (const [spec, auth] of contract) {
       // The local media stand-in's upload carries its own signed token: public, as far as the session check goes.
@@ -374,7 +372,6 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "assets",
       "contracts",
       "allowlist",
-      "anchors",
       "bridge",
       "flags",
       "minBuild",

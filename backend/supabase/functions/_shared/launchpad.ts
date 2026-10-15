@@ -725,17 +725,28 @@ async function launchOf(token: string): Promise<{ quote: string; symbol: string;
   }
 }
 
-/** POST /v1/launches/build (§6.9). Create takes a name of at most 32 bytes, a 2–10 character ticker that doesn't imitate
- *  a reserved one, and a URI that is empty or metadata this address wrote; buy and sell take the client's minimum
+/** A v1 launch's ticker as the user typed it, refused first (422 bad_symbol) unless it is 2–10 ASCII letters or digits:
+ *  Soroswap's pair reads the first bytes of each token's symbol as UTF-8, so a launch with any other symbol could
+ *  never graduate. */
+export function v1LaunchSymbol(raw: unknown): string {
+  const symbol = typeof raw === "string" ? raw.trim() : "";
+  if (!/^[A-Za-z0-9]{2,10}$/.test(symbol)) throw new ApiError(422, "bad_symbol", "Use 2 to 10 letters or digits for the symbol.");
+  return symbol;
+}
+
+/** POST /v1/launches/build (§6.9). Create takes a 2–10 character ASCII ticker that doesn't imitate a reserved one (any
+ *  other is refused before anything else), a name of at most 32 bytes, and a URI that is empty or metadata this address
+ *  wrote; buy and sell take the client's minimum
  *  (its fixed 1%); graduate is any user's to call and pay for; claim pays one launch's creator fees, or with no token
  *  every launch of this creator with fees waiting, one step each. */
 export async function buildLaunch(user: string, input: Partial<LaunchBuildInput>): Promise<PlanView> {
   launchpadId();
   switch (input.action) {
     case "create": {
+      const typed = v1LaunchSymbol(input.symbol);
       const quote = quoteAsset(String(input.quote ?? "XLM"));
       const name = launchName(input.name);
-      const symbol = launchSymbol(input.symbol);
+      const symbol = launchSymbol(typed);
       const fee = Number(input.creatorFeeBps ?? 0);
       if (!Number.isInteger(fee) || fee < 0 || fee > 1_000) throw bad("bad_fee", "Creator fee: 0–10%.");
       const uri = typeof input.uri === "string" ? input.uri : "";

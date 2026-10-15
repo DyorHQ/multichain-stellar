@@ -505,7 +505,7 @@ final class SetupServer: @unchecked Sendable {
          "horizonUrl":"http://127.0.0.1:9/horizon","activation":"friendbot","sponsor":"\(PinnedContracts.testnet.sponsor)",
          "assets":[{"id":"XLM","code":"XLM","name":"Stellar Lumens","decimals":7,"contract":"CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC","classic":"native","note":null},
                    {"id":"USDC","code":"USDC","name":"USD Coin","decimals":7,"contract":"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA","classic":"USDC:G","note":null}],
-         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},"anchors":[],
+         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},
          "bridge":{"routes":[],"monad":null},"flags":{"enabled":true},"minBuild":1,"inviteRequired":\(inviteRequired),
          "faucet":{"amount":"\(friendbot)"}}
         """.utf8)

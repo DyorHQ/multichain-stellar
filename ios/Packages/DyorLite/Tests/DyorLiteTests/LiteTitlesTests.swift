@@ -42,8 +42,9 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(title("moment_publish", ["price": .string("10000000"), "quote": .string("USDC"), "editions": .number(100)]), "Publish a Moment at 1 USDC")
         XCTAssertEqual(title("approve", ["amount": .string("50000000"), "spender": .string("Circle CCTP")]), "Allow Circle's bridge to move 5 USDC")
         XCTAssertEqual(title("bridge_out", ["amount": .string("50000000"), "to": .string("0x1234")]), "Send 5 USDC to Monad")
-        XCTAssertEqual(title("faucet", ["amount": .string("5000")]), "Get 5,000 test XLM", "the server's amount, in the language's digits")
-        XCTAssertEqual(title("faucet"), "Get test XLM", "the faucet's row carries no intent: no number made up, and never the bare kind")
+        // Friendbot's one grant (decision 7), by the faucet or by its activation of the account, logged as the same row.
+        XCTAssertEqual(title("faucet", ["amount": .string("10000")]), "Funded with Friendbot")
+        XCTAssertEqual(title("faucet"), "Funded with Friendbot", "an older row carries no intent: never the bare kind")
     }
 
     func testAnUnknownKindOrAMissingFieldKeepsTheServersWords() {
@@ -56,7 +57,7 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertNil(title("moment_collect", ["quantity": .number(0), "total": .string("1"), "quote": .string("USDC")]))
     }
 
-    func testActivityRowsWordBridgeAndCashTransfersThemselves() throws {
+    func testActivityRowsWordBridgeTransfersThemselvesAndOldCashTransfersNeutrally() throws {
         func item(_ json: String) throws -> StellarActivityItem { try JSONDecoder().decode(StellarActivityItem.self, from: Data(json.utf8)) }
         // A transaction: its intent's display (the server sends it with every tx row).
         let swap = try item(#"{"type":"tx","id":"h","kind":"swap","summary":"Swap 10 XLM for at least 22.9751758 USDC","status":"success","at":"2026-10-13T09:41:00.000Z","display":{"venue":"aquarius","sell":"XLM","buy":"USDC","amountIn":"100000000","minOut":"229751758"}}"#)
@@ -68,15 +69,15 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(LiteTitles.activity(toMonad), "Send 12.5 USDC to Monad")
         let noAmount = try item(#"{"type":"bridge","id":"b3","kind":"stellar_to_monad","summary":"Sent USDC to Monad","amount":"0","status":"failed","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertEqual(LiteTitles.activity(noAmount), "Send USDC to Monad")
-        // A cash transfer: the anchor writes its amount out; the asset comes in display ("native" is XLM), or not at all
-        // from an older server.
+        // A cash transfer from before cash was removed until mainnet (decision 7): the neutral title, whatever its kind,
+        // its asset or the server's words.
         let cash = try item(#"{"type":"cash","id":"c1","kind":"deposit","summary":"Added native","amount":"50","display":{"asset":"native"},"status":"completed","at":"2026-10-13T09:41:00.000Z"}"#)
-        XCTAssertEqual(LiteTitles.activity(cash), "Add 50 XLM")
+        XCTAssertEqual(LiteTitles.activity(cash), "Transaction")
         let cashOut = try item(#"{"type":"cash","id":"c2","kind":"withdraw","summary":"Cashed out USDC","amount":null,"display":{"asset":"USDC"},"status":"incomplete","at":"2026-10-13T09:41:00.000Z"}"#)
-        XCTAssertEqual(LiteTitles.activity(cashOut), "Cash out USDC")
+        XCTAssertEqual(LiteActivityRow.title(cashOut), "Transaction")
         let older = try item(#"{"type":"cash","id":"c3","kind":"deposit","summary":"Added USDC","amount":null,"status":"incomplete","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertNil(older.display)
-        XCTAssertEqual(LiteTitles.activity(older), "Add cash")
+        XCTAssertEqual(LiteTitles.activity(older), "Transaction")
         let unknown = try item(#"{"type":"airdrop","id":"x","kind":"drop","summary":"Got a drop","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertNil(LiteTitles.activity(unknown), "Activity shows the server's summary")
     }
@@ -87,7 +88,7 @@ final class LiteTitlesTests: XCTestCase {
     func testTheActivityRowNeverShowsAStandInOrABareKind() throws {
         func item(_ json: String) throws -> StellarActivityItem { try JSONDecoder().decode(StellarActivityItem.self, from: Data(json.utf8)) }
         let faucet = try item(#"{"type":"tx","id":"f","kind":"faucet","summary":"faucet","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
-        XCTAssertEqual(LiteActivityRow.title(faucet), "Get test XLM")
+        XCTAssertEqual(LiteActivityRow.title(faucet), "Funded with Friendbot")
         let unknown = try item(#"{"type":"tx","id":"u","kind":"blend_borrow","summary":"Borrow 5 USDC","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertEqual(LiteActivityRow.title(unknown), "Borrow 5 USDC")
         let old = try item(#"{"type":"tx","id":"o","kind":"blend_borrow","summary":"Buy TOKEN with 2 XLM","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
@@ -158,8 +159,7 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(LiteTitles.settled(.publish(title: "Sunset"), results: []).title, "Published Sunset")
         XCTAssertEqual(LiteTitles.settled(.launchGraduate(symbol: "ECAT"), results: []).title, "ECAT graduated")
         for summary: LiteActionSummary in [.enable(code: "USDC"), .launchClaim(symbol: "ECAT"), .bridgeOut(amount: 50_000_000),
-                                           .collect(title: "Sunset", quantity: 2, total: 20_000_000, quoteCode: "XLM"),
-                                           .cashOut(amount: 500_000_000, code: "USDC", anchor: "Test Anchor")] {
+                                           .collect(title: "Sunset", quantity: 2, total: 20_000_000, quoteCode: "XLM")] {
             XCTAssertFalse(LiteTitles.settled(summary, results: []).title.isEmpty, "\(summary)")
         }
     }

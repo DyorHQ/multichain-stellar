@@ -48,7 +48,7 @@ public struct PreparedAction: Identifiable, Equatable {
 
 /// Where an action belongs (§6.11's sections): Portfolio's sections, and what kind of notification it posts.
 public enum LiteSection: String, CaseIterable, Sendable {
-    case spot, earn, launch, moments, bridge, cash, account
+    case spot, earn, launch, moments, bridge, account
 }
 
 /// A plan the store saw through to the end (`LiteSession.onSettled`): once per plan, whether or not a sheet still shows
@@ -203,24 +203,6 @@ public struct StellarLaunchQuote: Equatable, Sendable {
     }
 }
 
-/// A cash transfer started with an anchor (`LiteStore.startCash`): its page to open, and what follows it. The anchor's
-/// session token stays inside: it is the anchor's sign-in, not a key, and no view reads it.
-public struct LiteCashFlow: Identifiable, Sendable {
-    /// The anchor's id for the transfer.
-    public let id: String
-    /// The anchor's own page (SEP-24), https.
-    public let url: URL
-    /// The anchor's domain and name.
-    public let anchor: String
-    public let name: String
-    public let deposit: Bool
-    /// "XLM" or "USDC".
-    public let asset: String
-    let client: AnchorClient
-    let toml: AnchorClient.Toml
-    let token: String
-}
-
 /// What an action does, for its notification once it settles (`LiteTitles.settled`).
 enum LiteActionSummary: Equatable, Sendable {
     case swap(amountIn: Int64, sell: String, buy: String, quotedOut: Int64)
@@ -234,14 +216,13 @@ enum LiteActionSummary: Equatable, Sendable {
     case publish(title: String)
     case collect(title: String, quantity: Int, total: Int64, quoteCode: String)
     case bridgeOut(amount: Int64)
-    case cashOut(amount: Int64, code: String, anchor: String)
 
     /// The main step's kind, as the server names it.
     var kind: String {
         switch self {
         case .swap: "swap"
         case .earn(let deposit, _, _): deposit ? "earn_deposit" : "earn_withdraw"
-        case .send, .cashOut: "payment"
+        case .send: "payment"
         case .enable: "trust"
         case .launchCreate: "launch_create"
         case .launchTrade(let buy, _, _, _): buy ? "launch_buy" : "launch_sell"

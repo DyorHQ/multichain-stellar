@@ -236,7 +236,7 @@ export function assertAffordable(position: { spendable: bigint; minBalance: bigi
 
 /** The add-funds card (§4.5): whether the account needs XLM (spendable under the funding floor), how much to send
  *  (2 XLM to a missing account; otherwise 1 XLM plus any reserve it lacks), the starter swap's state and testnet's
- *  faucet. `starterSwap` and the faucet's `usedToday` are DyorHQ's records: null in the public view. */
+ *  faucet. `starterSwap` and the faucet's `claimed` are DyorHQ's records: null in the public view. */
 export function firstFunding(
   position: XlmPosition | null,
   policy: Pick<FeePolicy, "fundingFloor">,

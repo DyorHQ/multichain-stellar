@@ -33,7 +33,7 @@ final class ApiFixtureTests: XCTestCase {
     }
 
     // The bodies LiteAPI unwraps (its own wrappers are private). A list comes under one of these keys.
-    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let anchors: [T]?; let results: [T]?; let view: String? }
+    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let results: [T]?; let view: String? }
     private struct EarnMarkets: Codable { let markets: [EarnMarket]; let note: String? }
     private struct Metadata: Codable { let uri: String; let posterUrl: String? }
     private struct Active: Codable { let status: String; let account: AccountView }
@@ -119,8 +119,6 @@ final class ApiFixtureTests: XCTestCase {
         "bridge-status": (roundTrip(BridgeStatus.self), ["route"]),
         "bridge-source": (roundTrip(AnyJSON.self), []),
         "bridge-claimed": (roundTrip(AnyJSON.self), []),
-        "cash-anchors": (roundTrip(Listed<AnchorInfo>.self), []),
-        "cash-track": (roundTrip(AnyJSON.self), []),
         "error": (roundTrip(ErrorEnvelope.self), []),
         "error.legacy": (roundTrip(ErrorEnvelope.self), []),
         "error-contract": (roundTrip(ErrorEnvelope.self), []),
@@ -171,7 +169,7 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(account.firstFunding?.starterSwap, "unavailable")
         XCTAssertEqual(account.xlm?.spendable, "99985000000")
         XCTAssertEqual(account.xlm?.reserves.subentries, 1)
-        XCTAssertEqual(account.firstFunding?.faucet?.usedToday, false)
+        XCTAssertEqual(account.firstFunding?.faucet?.claimed, false)
         XCTAssertEqual(account.balances.last?.kind, "launch")
         XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).xlm)
         XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).view)
@@ -271,7 +269,7 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(account.xlm?.spendable, "99985000000")
         XCTAssertEqual(account.firstFunding?.needsXlm, false)
         XCTAssertNil(account.firstFunding?.starterSwap)
-        XCTAssertNil(account.firstFunding?.faucet?.usedToday)
+        XCTAssertNil(account.firstFunding?.faucet?.claimed)
         XCTAssertEqual(account.firstFunding?.faucet?.amount, "10000")
 
         let holdings = try ApiFixtures.decode("holdings.public", as: StellarHoldings.self)
@@ -448,7 +446,6 @@ final class LiteAPIRouteTests: XCTestCase {
         }
         try await expect("GET", "/v1/tx/abc", fixture: "tx-status") { _ = try await $0.txStatus("abc") }
         try await expect("GET", "/v1/launches/CTOKEN", fixture: "launch") { _ = try await $0.launch("CTOKEN", candles: nil) }
-        try await expect("GET", "/v1/cash/anchors?country=GH", fixture: "cash-anchors") { _ = try await $0.anchors(country: "GH") }
     }
 
     /// A pasted value stays one path segment: it can't add a query, a fragment or a route of its own.

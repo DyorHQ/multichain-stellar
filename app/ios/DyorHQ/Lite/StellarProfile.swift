@@ -5,7 +5,7 @@ import DyorLite
 import SwiftUI
 
 /// Profile › Network › Stellar account: the account's short Stellar address, pushing DyorLite's account screen inside
-/// Profile's stack (the address to copy, Secured by, Network, Reserves paid by DyorHQ, the secret key, test XLM, Sign out of
+/// Profile's stack (the address to copy, Secured by, Network, Reserves paid by DyorHQ, the secret key, Sign out of
 /// Stellar). Nothing while the account's Stellar address isn't known on this iPhone.
 struct StellarAccountRow: View {
     /// The account's Monad address, which its Stellar one is filed under.

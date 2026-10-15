@@ -170,7 +170,8 @@ final class LiteHelpersTests: XCTestCase {
             (#""kind":"trust","display":{"asset":"USDC"}"#, "checkmark.circle", .enabled(code: "USDC")),
             (#""kind":"activate""#, "checkmark.circle", .setUpAccount),
             (#""kind":"restore""#, "checkmark.circle", .restoredData),
-            (#""kind":"faucet","display":{"amount":"10000"}"#, "checkmark.circle", .gotTestXLM(amount: StellarActivityAmount(units: 100_000_000_000, code: "XLM"))),
+            (#""kind":"faucet","display":{"amount":"10000"}"#, "checkmark.circle", .fundedWithFriendbot),
+            (#""kind":"faucet""#, "checkmark.circle", .fundedWithFriendbot),
             (#""kind":"blend_borrow","title":"Borrowed USDC""#, "circle", .other("Borrowed USDC")),
         ]
         for (fields, symbol, title) in cases {
@@ -180,8 +181,12 @@ final class LiteHelpersTests: XCTestCase {
         }
         let bridgeIn = try item(#"{"type":"bridge","id":"b","kind":"monad_to_stellar","summary":"Moved","amount":"12500000","status":"completed","at":"2026-10-14T09:41:00.000Z"}"#)
         XCTAssertEqual(StellarActivityPresenter.present(bridgeIn).subtitle, .route(from: "Monad", to: "Stellar"))
-        let cash = try item(#"{"type":"cash","id":"c1","kind":"withdraw","summary":"Cash","amount":"50","display":{"asset":"native"},"status":"completed","at":"2026-10-14T09:41:00.000Z"}"#)
-        XCTAssertEqual(StellarActivityPresenter.present(cash).title, .cash(deposit: false))
+        // Friendbot's grant (decision 7) says how much it brought, in XLM.
+        let friendbot = try item(#"{"type":"tx","id":"f","kind":"faucet","summary":"Funded with Friendbot","status":"success","at":"2026-10-14T09:41:00.000Z","display":{"amount":"10000"}}"#)
+        XCTAssertEqual(StellarActivityPresenter.present(friendbot).subtitle, .amount(StellarActivityAmount(units: 100_000_000_000, code: "XLM")))
+        // A cash transfer from before cash was removed until mainnet: the neutral title, with its amount.
+        let cash = try item(#"{"type":"cash","id":"c1","kind":"withdraw","summary":"Cashed out native","title":"Cashed out XLM","amount":"50","display":{"asset":"native"},"status":"completed","at":"2026-10-14T09:41:00.000Z"}"#)
+        XCTAssertEqual(StellarActivityPresenter.present(cash).title, .other("Transaction"))
         XCTAssertEqual(StellarActivityPresenter.present(cash).subtitle, .amount(StellarActivityAmount(units: 500_000_000, code: "XLM")))
 
         // Whatever an item holds, no word of the presentation is an old server's stand-in, and no name is empty.
@@ -440,7 +445,10 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.timedOut(step: "Swap", hash: "h")), "Swap was sent; confirmation not seen yet.")
         XCTAssertEqual(LiteErrorText.describe(LiteSession.Failure.cancelled), "Not finished. Try again.")
         XCTAssertEqual(LiteErrorText.describe(CancellationError()), "Not finished. Try again.")
-        XCTAssertEqual(LiteErrorText.describe(AnchorClient.Failure.toml("SIGNING_KEY")), "This provider's setup file is missing SIGNING_KEY.")
+        // Friendbot's one claim (decision 7) and a v1 ticker the server refuses, in the phone's own words.
+        XCTAssertEqual(LiteErrorText.describe(LiteAPIError.server(status: 429, code: "faucet_used", message: "You already claimed your test XLM.")),
+                       "You already claimed your test XLM.")
+        XCTAssertEqual(LiteErrorText.describe(LiteAPIError.server(status: 422, code: "bad_symbol", message: "x")), "Use 2 to 10 letters or digits for the symbol.")
     }
 
     /// A step that failed on the network for want of funds names what the run spends: XLM's own words (§6.13), another

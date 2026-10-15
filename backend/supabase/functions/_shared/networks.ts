@@ -29,14 +29,6 @@ export interface AssetInfo {
   listed?: boolean;
 }
 
-export interface AnchorInfo {
-  domain: string;
-  name: string;
-  assets: string[];
-  countries: string[];
-  kinds: ("deposit" | "withdraw")[];
-}
-
 /** Network fees, in stroops (§4.2). The app pins maxFee, maxInclusionPerOp and starterInnerFeeMax too: a cap the
  *  server served couldn't bound the server. */
 export interface FeePolicy {
@@ -92,7 +84,7 @@ export interface NetworkConfig {
   /** Account activation: testnet funds new accounts with Friendbot (10,000 test XLM to play with);
    *  mainnet creates them with sponsored reserves and 0 XLM. */
   activation: "friendbot" | "sponsored";
-  /** Friendbot's grant, in XLM; null where there is no faucet. */
+  /** Friendbot's grant, in XLM: one claim per address, ever (decision 7); null where there is no faucet. */
   faucet: { amount: string } | null;
   feePolicy: FeePolicy;
   ttlPolicy: TtlPolicy;
@@ -121,7 +113,6 @@ export interface NetworkConfig {
     iris: string | null;
     oneClick: string | null;
   };
-  anchors: AnchorInfo[];
   bridge: {
     /** Monad side of the bridge for this network. */
     monad: { chainId: number; rpcUrl: string; domain: number; usdc: string; tokenMessenger: string; messageTransmitter: string } | null;
@@ -223,9 +214,6 @@ export const TESTNET: NetworkConfig = {
     iris: "https://iris-api-sandbox.circle.com",
     oneClick: null, // NEAR Intents has no testnet
   },
-  anchors: [
-    { domain: "testanchor.stellar.org", name: "Stellar Test Anchor", assets: ["USDC", "XLM"], countries: ["*"], kinds: ["deposit", "withdraw"] },
-  ],
   bridge: {
     monad: {
       chainId: 10143,
@@ -293,7 +281,6 @@ export const MAINNET: NetworkConfig = {
     cctp: null,
   },
   apis: { aquarius: "https://amm-api.aqua.network/api/external/v2", soroswap: "https://api.soroswap.finance", iris: "https://iris-api.circle.com", oneClick: "https://1click.chaindefuser.com" },
-  anchors: [],
   bridge: { monad: null, routes: ["oneclick"] },
 };
 

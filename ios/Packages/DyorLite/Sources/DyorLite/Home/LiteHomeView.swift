@@ -2,7 +2,7 @@ import StellarKit
 import SwiftUI
 
 /// Stellar Home, in Monad Home's frame (design spec §3.3): the host's header, the balance card with the network chip
-/// and the serif figure, five actions, My Holdings and Activity. Paused, the card says why and offers Monad; nothing on
+/// and the serif figure, four actions, My Holdings and Activity. Paused, the card says why and offers Monad; nothing on
 /// Stellar locks (decision 6).
 @MainActor
 struct LiteHomeView: View {
@@ -12,12 +12,11 @@ struct LiteHomeView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     enum SheetKind: Identifiable {
-        case cash, send, receive, bridge
+        case send, receive, bridge
         case swap(buy: String?)
 
         var id: String {
             switch self {
-            case .cash: "cash"
             case .send: "send"
             case .receive: "receive"
             case .bridge: "bridge"
@@ -93,7 +92,6 @@ struct LiteHomeView: View {
     @ViewBuilder
     private func sheetContent(_ kind: SheetKind) -> some View {
         switch kind {
-        case .cash: CashSheet()
         case .send: SendSheet()
         case .receive: ReceiveSheet(address: session.address ?? "", store: store)
         case .bridge: BridgeSheet()
@@ -184,7 +182,7 @@ struct LiteHomeView: View {
                 ForEach(LiteHomeAction.all) { tile($0) }
             }
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                GridRow { ForEach(LiteHomeAction.all.prefix(3)) { tile($0) } }
+                GridRow { ForEach(LiteHomeAction.all.prefix(2)) { tile($0) } }
                 GridRow { ForEach(LiteHomeAction.all.suffix(2)) { tile($0) } }
             }
         }
@@ -198,7 +196,6 @@ struct LiteHomeView: View {
             case .deposit: sheet = .receive
             case .withdraw: sheet = .send
             case .swap: sheet = .swap(buy: nil)
-            case .cash: sheet = .cash
             }
         }
     }
@@ -241,7 +238,7 @@ struct LiteHomeView: View {
             case .signIn:
                 LiteSignInRow(session: session) { await store.refreshActivity() }
             case .empty:
-                LiteParagraph(tr("Nothing yet. Add cash or swap to get started."))
+                LiteParagraph(tr("Nothing yet. Fund your account or swap to get started."))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             case .list:
@@ -297,9 +294,10 @@ struct LiteHomeView: View {
     }
 }
 
-/// One of the five Home actions: the first three are Monad Home's, for the same jobs.
+/// One of the four Home actions: the first three are Monad Home's, for the same jobs. Adding cash is removed until
+/// mainnet (decision 7).
 struct LiteHomeAction: Identifiable {
-    enum Kind { case bridge, deposit, withdraw, swap, cash }
+    enum Kind { case bridge, deposit, withdraw, swap }
     let id: Kind
     let title: String
     let symbol: String
@@ -310,7 +308,6 @@ struct LiteHomeAction: Identifiable {
             LiteHomeAction(id: .deposit, title: tr("Deposit"), symbol: "creditcard"),
             LiteHomeAction(id: .withdraw, title: tr("Withdraw"), symbol: "arrow.up"),
             LiteHomeAction(id: .swap, title: tr("Swap"), symbol: "arrow.left.arrow.right"),
-            LiteHomeAction(id: .cash, title: tr("Add cash"), symbol: "banknote"),
         ]
     }
 }
@@ -453,7 +450,7 @@ struct LiteActivityRow: View {
 
     enum Outcome { case done, pending, failed }
 
-    /// The server's statuses (transactions, bridge transfers, anchor transfers) as three words.
+    /// The server's statuses (transactions and transfers) as three words.
     static func outcome(_ status: String) -> Outcome {
         switch status {
         case "success", "completed": .done
@@ -561,7 +558,7 @@ struct SwapSheet: View {
 
 // ------------------------------------------------------------------------------------------------ withdraw & deposit
 
-/// Withdraw: sends an asset to another Stellar address (an exchange, an anchor, a friend).
+/// Withdraw: sends an asset to another Stellar address (an exchange, a friend).
 struct SendSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -614,12 +611,16 @@ struct SendSheet: View {
 }
 
 /// Deposit: the account's Stellar address and its QR code. Receiving needs nothing but the address, so it shows before
-/// the account's figures are read too (`store` nil); the test XLM is the store's, with the amount the server gives.
+/// the account's figures are read too (`store` nil). On testnet, an account that never had Friendbot's test XLM (one
+/// that existed before it came to DyorHQ) also gets "Fund with Friendbot", once: the row shows only while the server
+/// says the claim is open (`firstFunding.faucet.claimed` false), in the amount it gives (decision 7).
 struct ReceiveSheet: View {
     let address: String
     let store: LiteStore?
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var funding = false
+    @State private var funded = false
     @State private var error: String?
     @State private var headerHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
@@ -642,13 +643,12 @@ struct ReceiveSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if let store, store.isTestnet, let amount = Self.faucetAmount(store.config) {
-                    Button(tr("Get \(amount) test XLM")) {
-                        Task {
-                            do { try await store.faucet() } catch { self.error = LiteErrorText.describe(error) }
-                        }
-                    }
-                    .font(.footnote)
+                if let store, store.canClaimFriendbot, let amount = Self.faucetAmount(store.config) {
+                    friendbot(store, amount: amount)
+                } else if funded {
+                    Label(tr("Funded with Friendbot"), systemImage: "checkmark.circle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
                 if let error { LiteInlineError(message: error) }
             }
@@ -671,13 +671,42 @@ struct ReceiveSheet: View {
         .liteFormSheet()
     }
 
+    /// "Fund with Friendbot" and what it brings, once. Once claimed, the account is read again and the row goes.
+    private func friendbot(_ store: LiteStore, amount: String) -> some View {
+        VStack(spacing: 6) {
+            Button {
+                Task { await fund(store) }
+            } label: {
+                if funding { ProgressView() } else { Label(tr("Fund with Friendbot"), systemImage: "drop") }
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .disabled(funding)
+            Text(tr("Get \(amount) free test XLM, once"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func fund(_ store: LiteStore) async {
+        funding = true
+        defer { funding = false }
+        error = nil
+        do {
+            try await store.faucet()
+            funded = true
+        } catch {
+            self.error = LiteErrorText.describe(error)
+        }
+    }
+
     /// The header, the content and the home indicator's inset; about 560 until measured.
     private var fitted: CGFloat {
         contentHeight > 0 ? headerHeight + contentHeight + bottomInset : 560
     }
 
-    /// The testnet faucet's amount, as the server's config gives it (`faucet.amount`, in XLM), in the current
-    /// language's digits; nil off testnet and from servers that don't say.
+    /// Friendbot's grant, as the server's config gives it (`faucet.amount`, in XLM), in the current language's digits;
+    /// nil off testnet and from servers that don't say.
     static func faucetAmount(_ config: LiteConfig?) -> String? {
         guard let text = config?.faucet?.amount, let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return nil }
         return amount.formatted(.number.locale(LiteL10n.locale))
