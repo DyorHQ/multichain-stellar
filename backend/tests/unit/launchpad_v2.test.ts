@@ -11,11 +11,12 @@
 // - every builder's intent: its calls, a spend that covers exactly what its simulated authorization takes, and the
 //   display the review shows; the launch's terms passed by value; refunds burning tokens at the fixed rate; labels
 //   naming the launch's own venue; the fallback refused before fallback_at;
-// - recipient changes: the harvest first when the locker's interval allows (F3), and the backlog one round can't take
-//   (V7);
+// - recipient changes: without holder sharing, the harvest first when the locker's interval allows (F3), and the
+//   recipient's part of the backlog one round can't take (V7); with sharing on, neither (harvests pay the holders);
+//   the plan made again once when the keeper harvests first;
 // - the verifier passes every step. v2's call rules are CT-16's (verify.ts): until they land, the steps whose calls
 //   only v2 has (launch's three arguments, refund, the fallback, the recipient changes, the token's claim, the
-//   locker's harvest) are ignored there, and run as soon as the verifier knows them.
+//   locker's harvest) are ignored there, and run as soon as the verifier knows them, or when LAUNCH_V2_VERIFY=required.
 import { Account, Address, Contract, Keypair, nativeToScVal, scValToNative, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertMatch, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import { fakeSql, OTHER, setTestEnv, USER } from "../fixtures/routes/harness.ts";
@@ -108,7 +109,7 @@ interface World {
   venues: VenueRow[];
   quotes: Record<string, { allowed: number[]; fallback: number; enabled: boolean; phantom: bigint; threshold: bigint }>;
   /** Changes to the terms preview_launch_terms answers (a deployment the app doesn't pin). */
-  terms: { locker?: string; harvestInterval?: number; executor?: string };
+  terms: { locker?: string; harvestInterval?: number; executor?: string; feeAsset?: string };
   launch: { venue: VenueRow; fallback: VenueRow; venueLocked: boolean; sharing: boolean; quote: string; symbol: string };
   curve: {
     phase: 0 | 1 | 2 | 3;
@@ -129,7 +130,8 @@ interface World {
   position: { lp: bigint; principal: bigint; lastHarvest: number; kind: Kind } | null;
   pair: { token: bigint; quote: bigint; total: bigint };
   graduate: xdr.ScVal | { error: string };
-  harvest: { error: string } | null;
+  /** What the locker's harvest answers when simulated (it may change the world first: the keeper harvesting). */
+  harvest: () => Answer;
   /** A simulation's minResourceFee for a launch with this initial buy. */
   launchFee_: (initialBuy: bigint) => number;
   account: { xlm: string; selling?: string; subentries?: number; sponsoring?: number; sponsored?: number; usdc?: string };
@@ -160,7 +162,7 @@ function fresh(): World {
     position: null,
     pair: { token: 4_000_000n, quote: 1_000_000n, total: 2_000_000n },
     graduate: vec([xdr.ScVal.scvSymbol("Graduated"), addr(POOL)]),
-    harvest: null,
+    harvest: () => ok(vec([i128(1n), i128(1n)])),
     launchFee_: () => SIM_FEE,
     account: { xlm: "100.0000000" },
     down: false,
@@ -191,7 +193,7 @@ function termsSv(quote: string, venueId: number): xdr.ScVal | { error: string } 
     snipe_schedule: SCHEDULE,
     snipe_step_secs: u32(5),
     launch_fee: i128(world.launchFee),
-    fee_asset: addr(XLM),
+    fee_asset: addr(world.terms.feeAsset ?? XLM),
     quote: addr(quote),
     phantom: i128(q.phantom),
     threshold: i128(q.threshold),
@@ -419,7 +421,7 @@ function answer(contract: string, fn: string, args: xdr.ScVal[]): Answer {
           : none());
       }
       case "harvest":
-        return world.harvest ?? ok(vec([i128(1n), i128(1n)]));
+        return world.harvest();
     }
   }
   if (contract === POOL) {
@@ -577,6 +579,10 @@ const V2_RULES = (() => {
     return !/function refund is not on the allowlist/.test(String((err as Error).message));
   }
 })();
+
+/** The verifier tests that need v2's call rules are skipped while verify.ts lacks them, unless the run requires them:
+ *  LAUNCH_V2_VERIFY=required (CT-16's gate, and every run after it lands) makes them run and fail instead. */
+const SKIP_V2_VERIFY = !V2_RULES && Deno.env.get("LAUNCH_V2_VERIFY") !== "required";
 
 // ------------------------------------------------------------------------------------------------ symbols and refusals
 
@@ -798,9 +804,10 @@ Deno.test("create in USDC: the XLM fee and the USDC buy are each declared; a rec
   assertEquals((callOf(noBuy.tx).args[1] as any).creator_fee_recipient, NEXT);
 });
 
-Deno.test("create refuses terms the app doesn't pin: a fee above 10 XLM, another locker, other durations, an unpinned executor", async () => {
+Deno.test("create refuses terms the app doesn't pin: a fee above 10 XLM or not in XLM, another locker, other durations, an unpinned executor", async () => {
   for (const [change, field] of [
     [(w: World) => (w.launchFee = 100_000_001n), "launchFee"],
+    [(w: World) => (w.terms.feeAsset = USDC), "feeAsset"],
     [(w: World) => (w.terms.locker = C(30)), "locker"],
     [(w: World) => (w.terms.harvestInterval = 60), "durations.harvestInterval"],
     [(w: World) => (w.terms.executor = C(31)), "venue"],
@@ -822,6 +829,28 @@ Deno.test("create's plan: the venue asked for must be open to the quote; the cre
   assertEquals(quote.code, "bad_quote");
   const exempt = await rejects(() => v2.buildLaunchV2(ME, { action: "create", name: "E2E Cat", symbol: "ECAT", exempt: ["MAAAA"] }));
   assertEquals(exempt.code, "bad_address");
+});
+
+Deno.test("the preview refuses a malformed recipient, exemption or creator fee as create does (400), simulating nothing", async () => {
+  for (const [input, code] of [
+    [{ recipient: "abc" }, "bad_address"],
+    [{ recipient: ME.slice(0, -1) }, "bad_address"],
+    [{ exempt: ["abc"] }, "bad_address"],
+    [{ exempt: G(9) }, "bad_arg"],
+    [{ exempt: Array.from({ length: 33 }, (_, i) => G(40 + i)) }, "bad_arg"],
+    [{ creatorFeeBps: -1 }, "bad_fee"],
+    [{ creatorFeeBps: 1.5 }, "bad_fee"],
+    [{ creatorFeeBps: 1_001 }, "bad_fee"],
+  ] as const) {
+    reset();
+    const err = await rejects(() => v2.launchPreviewV2(ME, { quote: "XLM", ...input } as any));
+    assertEquals([err.status, err.code], [400, code], JSON.stringify(input).slice(0, 80));
+    assert(!calls.includes("launch"), "nothing simulated");
+  }
+  // Well-formed ones are priced as given.
+  reset();
+  const p = await v2.launchPreviewV2(ME, { quote: "XLM", recipient: NEXT, exempt: [G(9), G(9)], creatorFeeBps: 1_000 });
+  assertEquals(p.maxInitialBuy, p.xlm.spendable);
 });
 
 // ------------------------------------------------------------------------------------------------ trades and refunds
@@ -1020,12 +1049,18 @@ Deno.test("a harvest round as the locker runs it: all the growth up to 0.5% of t
   assert(v2.harvestRound(after).growth <= 99_000n - 9_995n + 1n);
 });
 
-Deno.test("the backlog (V7): none when one round takes the growth; above one round's cap, the residual and the rounds to drain it", () => {
+Deno.test("the backlog (V7): none when one round takes the growth; above one round's cap, the recipient's residual and the rounds to drain it", () => {
   const at = 1_800_000_000;
-  assertEquals(v2.harvestBacklog(POSITION(9_000n), at, 3_600), null);
-  const b = v2.harvestBacklog(POSITION(99_000n), at, 3_600)!;
+  assertEquals(v2.harvestBacklog(POSITION(9_000n), at, 3_600, 5_000), null);
+  const b = v2.harvestBacklog(POSITION(99_000n), at, 3_600, 5_000)!;
   // 99,000 of √k value is 98,999 LP units: 197,998 tokens and 49,499 of the quote at today's reserves.
-  assertEquals([b.residualToken, b.residualQuote], ["197998", "49499"]);
+  assertEquals([b.growthToken, b.growthQuote], ["197998", "49499"]);
+  // The new recipient gets what the treasury's 50% leaves of each side, the remainder as the locker pays its last
+  // payee: 98,999 tokens and 24,750 of the quote.
+  assertEquals([b.residualToken, b.residualQuote], ["98999", "24750"]);
+  // The launch's own pinned split, not the launchpad's current one (V1).
+  const pinned = v2.harvestBacklog(POSITION(99_000n), at, 3_600, 2_000)!;
+  assertEquals([pinned.residualToken, pinned.residualQuote, pinned.roundsToDrain], ["158399", "39600", b.roundsToDrain]);
   assertEquals(b.nextHarvestAt, new Date(at * 1000).toISOString());
   assertEquals(b.drainedBy, new Date((at + (b.roundsToDrain - 1) * 3_600) * 1000).toISOString());
   // Exactly that many rounds drain it with no further volume.
@@ -1035,12 +1070,14 @@ Deno.test("the backlog (V7): none when one round takes the growth; above one rou
   assert(b.roundsToDrain > 1 && b.roundsToDrain <= 11, `${b.roundsToDrain} rounds of at most 0.5% each for 5% of the position`);
 });
 
+/** A graduated launch whose harvests pay its recipient (holder sharing off), harvested last at `lastHarvest`. */
 const GRADUATED = (lastHarvest: number, growth: bigint) => (w: World) => {
+  w.launch.sharing = false;
   w.curve = { ...w.curve, phase: 2, pool: POOL };
   w.position = { lp: 1_999_000n, principal: 1_999_000n - growth, lastHarvest, kind: 0 };
 };
 
-Deno.test("recipient transfer and execute on a graduated launch: the harvest first when the interval allows, and its backlog", async () => {
+Deno.test("recipient transfer and execute on a graduated launch without sharing: the harvest first when the interval allows, and its backlog", async () => {
   const now = nowS();
   reset(GRADUATED(now - 3_601, 99_000n));
   const plan = await v2.recipientSteps(ME, "recipient_transfer", TOKEN, NEXT);
@@ -1048,7 +1085,7 @@ Deno.test("recipient transfer and execute on a graduated launch: the harvest fir
   assertEquals(plan.steps.map((s) => s.label), ["Collect ECAT's pool fees first", `Hand ECAT's creator fees to ${NEXT.slice(0, 4)}…${NEXT.slice(-4)}`]);
   // What the harvest step leaves above one round's cap still crosses the change.
   const p = POSITION(99_000n);
-  assertEquals(plan.harvestBacklog, v2.harvestBacklog(v2.afterRound(p, v2.harvestRound(p)), now + 3_600, 3_600));
+  assertEquals(plan.harvestBacklog, v2.harvestBacklog(v2.afterRound(p, v2.harvestRound(p)), now + 3_600, 3_600, 5_000));
   assert(plan.harvestBacklog!.roundsToDrain > 1);
 
   // Under one round's cap: the harvest step still goes first, and nothing is left to report.
@@ -1060,7 +1097,7 @@ Deno.test("recipient transfer and execute on a graduated launch: the harvest fir
   reset(GRADUATED(now - 600, 99_000n));
   const soon = await v2.recipientSteps(ME, "recipient_transfer", TOKEN, NEXT);
   assertEquals(soon.steps.map((s) => s.spec.kind), [v2.LAUNCH_V2_STEPS.recipient_transfer]);
-  assertEquals(soon.harvestBacklog, v2.harvestBacklog(POSITION(99_000n), now - 600 + 3_600, 3_600));
+  assertEquals(soon.harvestBacklog, v2.harvestBacklog(POSITION(99_000n), now - 600 + 3_600, 3_600, 5_000));
 
   // A takeover executes inside its window, the harvest first too.
   reset((w) => {
@@ -1075,6 +1112,33 @@ Deno.test("recipient transfer and execute on a graduated launch: the harvest fir
   reset();
   const curve = await v2.recipientSteps(ME, "recipient_transfer", TOKEN, NEXT);
   assertEquals([curve.steps.length, curve.harvestBacklog], [1, null]);
+});
+
+Deno.test("recipient changes on a graduated launch with holder sharing (the app's default): no harvest step and no backlog", async () => {
+  // Its harvests pay the treasury and the holders whoever the recipient is (harvest_payees), so the change moves no
+  // pool fees: the same position that needs a harvest and leaves a backlog without sharing.
+  const now = nowS();
+  const sharing = (w: World) => {
+    GRADUATED(now - 3_601, 99_000n)(w);
+    w.launch.sharing = true;
+  };
+  reset(sharing);
+  const transfer = await v2.recipientSteps(ME, "recipient_transfer", TOKEN, NEXT);
+  assertEquals([transfer.steps.map((s) => s.spec.kind), transfer.harvestBacklog], [[v2.LAUNCH_V2_STEPS.recipient_transfer], null]);
+  assert(!calls.includes("position"), "the locker isn't read");
+  reset((w) => {
+    sharing(w);
+    w.recipient = G(12);
+    w.takeover = { new: NEXT, effective: now - 60, expires: now + 600 };
+  });
+  const execute = await v2.recipientSteps(ME, "recipient_execute", TOKEN, null);
+  assertEquals([execute.steps.map((s) => s.spec.kind), execute.harvestBacklog], [[v2.LAUNCH_V2_STEPS.recipient_execute], null]);
+
+  reset(sharing);
+  const step = await v2.launchRecipientTransferStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.recipient_transfer, token: TOKEN, to: NEXT });
+  assertStep(step, PAD, "transfer_creator_fee_recipient");
+  const d = step.intent.display!;
+  assertEquals([(step.intent as any).harvestBacklog, d.holderSharing, d.poolFeesTo, d.backlogQuote, d.backlogToken, d.backlogRounds], [null, true, "holders", null, null, null]);
 });
 
 Deno.test("recipient changes: only the current recipient transfers or vetoes; a takeover only inside its window", async () => {
@@ -1098,11 +1162,13 @@ Deno.test("the recipient change's own step: the intent carries the backlog above
   const big = await v2.launchRecipientTransferStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.recipient_transfer, token: TOKEN, to: NEXT });
   assertStep(big, PAD, "transfer_creator_fee_recipient");
   assertEquals([callOf(big.tx).args, big.intent.to, big.intent.spend], [[TOKEN, NEXT], NEXT, {}]);
-  const backlog = v2.harvestBacklog(POSITION(99_000n), now - 600 + 3_600, 3_600)!;
+  const backlog = v2.harvestBacklog(POSITION(99_000n), now - 600 + 3_600, 3_600, 5_000)!;
   assertEquals((big.intent as any).harvestBacklog, backlog);
   const d = big.intent.display!;
   assertEquals([d.backlogQuote, d.backlogToken, d.backlogRounds, d.backlogNextAt, d.backlogDrainedBy], [backlog.residualQuote, backlog.residualToken, backlog.roundsToDrain, backlog.nextHarvestAt, backlog.drainedBy]);
   assertEquals([d.currentRecipient, d.newRecipient, d.bookedStay, d.byTakeover], [ME, NEXT, "3900000", false]);
+  // The new recipient's part only: the treasury keeps the launch's pinned protocol share of each harvest.
+  assertEquals([d.holderSharing, d.poolFeesTo, d.protocolShareBps, BigInt(d.backlogQuote as string) < BigInt(backlog.growthQuote)], [false, "newRecipient", 5_000, true]);
 
   reset(GRADUATED(now - 600, 9_000n));
   const small = await v2.launchRecipientTransferStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.recipient_transfer, token: TOKEN, to: NEXT });
@@ -1176,7 +1242,7 @@ Deno.test("the verifier passes buy, sell, graduate and claim, whose call rules v
 
 Deno.test({
   name: "the verifier passes every other v2 step against its own intent (needs CT-16's v2 call rules in verify.ts)",
-  ignore: !V2_RULES,
+  ignore: SKIP_V2_VERIFY,
   fn: async () => {
     for (const [name, built] of (await everyStep()).filter(([n]) => !V1_RULES_FIT.includes(n))) {
       try {
@@ -1212,7 +1278,7 @@ Deno.test("plans: a buy's plan, built and checked as the phone will see it", asy
 
 Deno.test({
   name: "plans: a recipient change on a graduated launch, harvest first, answers its backlog (needs CT-16's v2 call rules)",
-  ignore: !V2_RULES,
+  ignore: SKIP_V2_VERIFY,
   fn: async () => {
     reset(GRADUATED(nowS() - 3_601, 99_000n));
     const plan = await v2.buildLaunchV2(ME, { action: "recipient_transfer", token: TOKEN, to: NEXT });
@@ -1222,4 +1288,46 @@ Deno.test({
     const fallback = await v2.buildLaunchV2(ME, { action: "graduate_fallback", token: TOKEN });
     assertEquals(fallback.steps.map((s) => s.label), ["Graduate ECAT to Soroswap (fallback)"]);
   },
+});
+
+Deno.test("plans: a keeper harvest between the read and the harvest step's simulation makes the plan again, once", async () => {
+  const label = `Hand ECAT's creator fees to ${NEXT.slice(0, 4)}…${NEXT.slice(-4)}`;
+  const transfer = () => v2.buildLaunchV2(ME, { action: "recipient_transfer", token: TOKEN, to: NEXT }).then((plan) => ({ plan, err: null }), (err) => ({ plan: null, err }));
+  const LOCKER_ERRORS = { TooSoon: 10_606, NothingToHarvest: 10_607, UnknownPosition: 10_604 };
+
+  // The keeper harvests first: the locker refuses the plan's harvest, and the position was harvested just now. The
+  // plan is made again from that: the change alone, with the backlog from the next interval.
+  for (const name of ["TooSoon", "NothingToHarvest"] as const) {
+    reset(GRADUATED(nowS() - 3_601, 99_000n));
+    let harvestedAt = 0;
+    world.harvest = () => {
+      harvestedAt = nowS();
+      world.position!.lastHarvest = harvestedAt;
+      return contractError(LOCKER_ERRORS[name]);
+    };
+    const { plan, err } = await transfer();
+    assertEquals(calls.filter((c) => c === "harvest").length, 1, `${name}: the harvest is simulated once`);
+    assert(calls.lastIndexOf("transfer_creator_fee_recipient") > calls.indexOf("harvest"), `${name}: then the change is built on its own`);
+    if (V2_RULES) {
+      assertEquals(plan!.steps.map((s) => [s.label, s.status]), [[label, "built"]]);
+      assertEquals(plan!.harvestBacklog, v2.harvestBacklog(POSITION(99_000n), harvestedAt + 3_600, 3_600, 5_000));
+    } else {
+      // v1's verifier has no rule for the change yet (CT-16): its self-check refuses the step the second plan built.
+      assertEquals([err.code, /transfer_creator_fee_recipient/.test(err.detail.reason)], ["self_check_failed", true]);
+    }
+  }
+
+  // Refused again: the plan is made again only once, and the locker's refusal is the answer.
+  reset(GRADUATED(nowS() - 3_601, 99_000n));
+  world.harvest = () => contractError(LOCKER_ERRORS.TooSoon);
+  const twice = await transfer();
+  assertEquals(calls.filter((c) => c === "harvest").length, 2);
+  assertEquals([twice.err.code, twice.err.detail.contractError.name, twice.err.detail.contractError.contract], ["simulation_failed", "TooSoon", "lp-locker"]);
+
+  // Any other refusal isn't retried.
+  reset(GRADUATED(nowS() - 3_601, 99_000n));
+  world.harvest = () => contractError(LOCKER_ERRORS.UnknownPosition);
+  const other = await transfer();
+  assertEquals(calls.filter((c) => c === "harvest").length, 1);
+  assertEquals([other.err.code, other.err.detail.contractError.name], ["simulation_failed", "UnknownPosition"]);
 });

@@ -13,8 +13,9 @@
 // - Every refusal of a v2 contract is named from _shared/v2_errors.ts (V10), with its stable code where it has one.
 //   Time-gated actions are refused before simulating with not_available and the time they open: the fallback venue
 //   from fallback_at only, mark_stuck after the grace, the public rescue after rescue_public (§5.4, F14).
-// - A recipient change on a graduated launch collects the pool fees first when the locker's interval allows (F3); what
-//   one harvest round can't take crosses the change, and the plan says so: harvestBacklog (V7).
+// - A recipient change on a graduated launch without holder sharing collects the pool fees first when the locker's
+//   interval allows (F3); the recipient's part of what one harvest round can't take crosses the change, and the plan
+//   says so: harvestBacklog (V7). With sharing on, harvests pay the treasury and the holders, so the change moves none.
 // - Aquarius is off on every deployment today (O7): its venue appears only where the deployment enables it, and every
 //   label names the launch's own venue.
 // The builders are exported as LAUNCH_V2_BUILDERS; the API registers them with the routes (CT-18).
@@ -173,6 +174,23 @@ export function launchSymbolV2(raw: unknown): string {
   const typed = typeof raw === "string" ? raw.trim() : "";
   if (!/^[A-Za-z0-9]{2,10}$/.test(typed)) throw bad("bad_symbol", "Ticker: 2–10 letters (A–Z) or digits, without accents, spaces or symbols.");
   return launchSymbol(typed);
+}
+
+/** A launch's creator fee: whole basis points within its terms' cap (0 when absent); 400 bad_fee otherwise. */
+function creatorFeeArg(v: unknown, maxCreatorFeeBps: number): number {
+  const fee = Number(v ?? 0);
+  if (!Number.isInteger(fee) || fee < 0 || fee > maxCreatorFeeBps) throw bad("bad_fee", `Creator fee: 0–${maxCreatorFeeBps / 100}%.`);
+  return fee;
+}
+
+/** A launch's recipient (null: the creator) and snipe exemptions, as create and its preview take them: Stellar
+ *  addresses (400 bad_address), at most 32 distinct exemptions. */
+function launchAddresses(input: { recipient?: unknown; exempt?: unknown }): { recipient: string | null; exempt: string[] } {
+  const recipient = input.recipient === undefined || input.recipient === null || input.recipient === "" ? null : addressArg(input.recipient, "recipient");
+  if (input.exempt !== undefined && !Array.isArray(input.exempt)) throw bad("bad_arg", "exempt lists Stellar addresses.");
+  const exempt = [...new Set(((input.exempt ?? []) as unknown[]).map((a) => addressArg(a, "exempt")))];
+  if (exempt.length > 32) throw bad("bad_arg", "At most 32 exempt addresses.");
+  return { recipient, exempt };
 }
 
 // ------------------------------------------------------------------------------------------------ refusals
@@ -448,13 +466,15 @@ async function curveOf(pad: string, token: string): Promise<CurveState> {
   };
 }
 
-/** Refuses terms the app's pins wouldn't sign (§20.4, F18): a launch fee above the pinned bound, another locker or
- *  token WASM, durations other than the deployment's, an executor that isn't one of its own. */
+/** Refuses terms the app's pins wouldn't sign (§20.4, F18): a launch fee above the pinned bound or in anything but the
+ *  registry's XLM (every figure here treats it as XLM), another locker or token WASM, durations other than the
+ *  deployment's, an executor that isn't one of its own. */
 export function checkTermsPinned(terms: LaunchTermsJson, net: NetworkConfig): void {
   const v2 = deployed(net).v2;
   const unpinned = (field: string) =>
     new ApiError(409, "terms_unpinned", "The launchpad's terms don't match this app's. Update the app or try again later.", { field });
   if (BigInt(terms.launchFee) > net.maxLaunchFeeStroops) throw unpinned("launchFee");
+  if (terms.feeAsset !== assetById(net, "XLM")?.contract) throw unpinned("feeAsset");
   if (terms.locker !== net.contracts.lpLocker) throw unpinned("locker");
   if (terms.tokenWasmHash !== v2.runtimeWasmHashes.launchTokenV2) throw unpinned("tokenWasmHash");
   for (const k of LAUNCH_DURATION_KEYS) {
@@ -1032,11 +1052,14 @@ export interface LaunchPreviewV2 {
 
 /** The launch preview: the terms a launch would bind now, its fee, and Max (§20.3, F18, V12). The network
  *  fee is the launch's own, simulated with the form's details (the longest name, ticker and URI where they are still
- *  empty), and for an XLM quote simulated again at Max, so a buy of exactly Max passes create's check. */
+ *  empty), and for an XLM quote simulated again at Max, so a buy of exactly Max passes create's check. The recipient,
+ *  the exemptions and the creator fee are refused as create refuses them (400). */
 export async function launchPreviewV2(user: string, input: Partial<LaunchV2BuildInput>): Promise<LaunchPreviewV2> {
   const net = env.network;
   const { pad } = deployed(net);
+  const { recipient, exempt } = launchAddresses(input);
   const { quote, venue, raw, terms } = await launchTermsFor(net, String(input.quote ?? "XLM"), input.venue);
+  const creatorFeeBps = creatorFeeArg(input.creatorFeeBps, terms.maxCreatorFeeBps);
   const balances = await balancesOf(user, quote);
   if (!balances) throw new ApiError(409, "account_inactive", "Activate your Stellar account first.");
   const launchFee = BigInt(terms.launchFee);
@@ -1046,11 +1069,11 @@ export async function launchPreviewV2(user: string, input: Partial<LaunchV2Build
     name: typeof input.name === "string" && input.name.trim() ? input.name.trim() : "N".repeat(32),
     symbol: typeof input.symbol === "string" && input.symbol.trim() ? input.symbol.trim().toUpperCase() : "S".repeat(10),
     uri: typeof input.uri === "string" && input.uri ? input.uri : "u".repeat(net.limits.uriMax),
-    creatorFeeBps: Number.isInteger(input.creatorFeeBps) ? Number(input.creatorFeeBps) : 0,
+    creatorFeeBps,
     venue,
     holderSharing: input.holderSharing !== false,
-    recipient: typeof input.recipient === "string" && input.recipient ? input.recipient : null,
-    exempt: Array.isArray(input.exempt) ? input.exempt.filter((a): a is string => typeof a === "string") : [],
+    recipient,
+    exempt,
     // A buy of one unit costs what any buy does: the curve's entries and the creator's token balance.
     initialBuy: xlmQuote || balances.quoteBalance > 0n ? 1n : 0n,
     minOut: 0n,
@@ -1145,11 +1168,16 @@ export function afterRound(p: PoolPosition, r: HarvestRound): PoolPosition {
   };
 }
 
-/** The pool fees a recipient change would hand to the new recipient (V7). */
+/** The pool fees a recipient change would hand to the new recipient (V7): only on a launch without holder sharing,
+ *  whose harvests pay the recipient current at each one (§5.5, F3). */
 export interface HarvestBacklog {
-  /** The growth not yet harvested at the change, as the quote and the launch token it withdraws now. */
+  /** The new recipient's part of the growth not yet harvested at the change, as the quote and the launch token it
+   *  withdraws now: what is left of each side after the treasury's protocolShareBps, as the locker pays it (V1). */
   residualQuote: string;
   residualToken: string;
+  /** The whole growth not yet harvested, the treasury's part included. */
+  growthQuote: string;
+  growthToken: string;
   /** Harvests it takes with no further volume: one per interval. */
   roundsToDrain: number;
   nextHarvestAt: string;
@@ -1157,9 +1185,13 @@ export interface HarvestBacklog {
   drainedBy: string;
 }
 
-/** The backlog of a position whose next harvest can run at `nextAt` (seconds): null when one round takes all of its
- *  growth, so at most one interval of fees crosses the change (§5.5's declared exception). */
-export function harvestBacklog(p: PoolPosition, nextAt: number, intervalSecs: number): HarvestBacklog | null {
+/** What the last payee of a harvest side gets when the treasury takes `protocolShareBps` of it (lp-locker pay_side). */
+const afterProtocol = (amount: bigint, protocolShareBps: number) => amount - (amount * BigInt(protocolShareBps)) / BPS;
+
+/** The backlog of a position whose next harvest can run at `nextAt` (seconds), split by the launch's pinned
+ *  `protocolShareBps`: null when one round takes all of its growth, so at most one interval of fees crosses the change
+ *  (§5.5's declared exception). */
+export function harvestBacklog(p: PoolPosition, nextAt: number, intervalSecs: number, protocolShareBps: number): HarvestBacklog | null {
   const first = harvestRound(p);
   if (first.growth <= first.cap) return null;
   let state = p;
@@ -1170,9 +1202,12 @@ export function harvestBacklog(p: PoolPosition, nextAt: number, intervalSecs: nu
   }
   const root = isqrt(p.reserveToken * p.reserveQuote);
   const lp = (first.growth * p.totalLp) / (root + 1n);
+  const [growthQuote, growthToken] = [(lp * p.reserveQuote) / p.totalLp, (lp * p.reserveToken) / p.totalLp];
   return {
-    residualQuote: ((lp * p.reserveQuote) / p.totalLp).toString(),
-    residualToken: ((lp * p.reserveToken) / p.totalLp).toString(),
+    residualQuote: afterProtocol(growthQuote, protocolShareBps).toString(),
+    residualToken: afterProtocol(growthToken, protocolShareBps).toString(),
+    growthQuote: growthQuote.toString(),
+    growthToken: growthToken.toString(),
     roundsToDrain: rounds,
     nextHarvestAt: isoAt(nextAt)!,
     drainedBy: isoAt(nextAt + Math.max(0, rounds - 1) * intervalSecs)!,
@@ -1229,8 +1264,10 @@ export interface LaunchV2BuildInput {
 /** A v2 intent: the review's fields, plus the terms a launch binds and a recipient change's harvest backlog. */
 export type LaunchV2Intent = Intent & { terms?: LaunchTermsJson; harvestBacklog?: HarvestBacklog | null };
 
-/** A recipient change's plan (§5.5, F3, V7): on a graduated launch whose locker can harvest now, a harvest step first;
- *  and the backlog that will still cross the change after it (null when one round takes all the growth). */
+/** A recipient change's plan (§5.5, F3, V7): on a graduated launch whose harvests pay the recipient (holder sharing
+ *  off) and whose locker can harvest now, a harvest step first; and the backlog that will still cross the change after
+ *  it (null when one round takes all the growth). With sharing on, harvests pay the treasury and the holders, never a
+ *  recipient: the change moves no pool fees, so there is neither. */
 export async function recipientSteps(
   user: string,
   action: "recipient_transfer" | "recipient_execute",
@@ -1260,15 +1297,25 @@ export async function recipientSteps(
     label: action === "recipient_transfer" ? `Hand ${launch.symbol}'s creator fees to ${short(next)}` : `Hand ${launch.symbol}'s creator fees to ${short(next)} (takeover)`,
     spec: { kind, token, ...(action === "recipient_transfer" ? { to: next } : {}) },
   };
-  const locked = curve.phase === "graduated" && curve.pool ? await lockedPosition(locker, curve.pool, token) : null;
+  const locked = await recipientPosition(locker, launch, curve);
   if (!locked) return { steps: [change], harvestBacklog: null };
   const interval = v2.durations.launch.harvest_interval;
+  const split = launch.protocolShareBps;
   const round = harvestRound(locked.position);
-  if (now < locked.nextAt || round.lpToBurn === 0n) return { steps: [change], harvestBacklog: harvestBacklog(locked.position, locked.nextAt, interval) };
+  if (now < locked.nextAt || round.lpToBurn === 0n) {
+    return { steps: [change], harvestBacklog: harvestBacklog(locked.position, Math.max(locked.nextAt, now), interval, split) };
+  }
   return {
     steps: [{ label: `Collect ${launch.symbol}'s pool fees first`, spec: { kind: LAUNCH_V2_STEPS.harvest, token, pool: curve.pool! } }, change],
-    harvestBacklog: harvestBacklog(afterRound(locked.position, round), now + interval, interval),
+    harvestBacklog: harvestBacklog(afterRound(locked.position, round), now + interval, interval, split),
   };
+}
+
+/** The locked position whose harvests pay the launch's recipient: a graduated launch's, with holder sharing off. Null
+ *  otherwise, and for a pool the locker doesn't harvest. */
+async function recipientPosition(locker: string, launch: LaunchRecord, curve: CurveState) {
+  if (launch.holderSharing || curve.phase !== "graduated" || !curve.pool) return null;
+  return await lockedPosition(locker, curve.pool, launch.token);
 }
 
 /** A pending takeover inside its window, or 409 not_available. */
@@ -1292,15 +1339,11 @@ export async function buildLaunchV2(user: string, input: Partial<LaunchV2BuildIn
     const name = launchName(input.name);
     const symbol = launchSymbolV2(input.symbol);
     const { quote, venue, terms } = await launchTermsFor(net, String(input.quote ?? "XLM"), input.venue);
-    const fee = Number(input.creatorFeeBps ?? 0);
-    if (!Number.isInteger(fee) || fee < 0 || fee > terms.maxCreatorFeeBps) throw bad("bad_fee", `Creator fee: 0–${terms.maxCreatorFeeBps / 100}%.`);
+    const fee = creatorFeeArg(input.creatorFeeBps, terms.maxCreatorFeeBps);
     const uri = typeof input.uri === "string" ? input.uri : "";
     if (uri.length > net.limits.uriMax) throw bad("bad_uri", "Metadata link is too long.");
     await checkLaunchUri(user, uri, name, symbol);
-    const recipient = input.recipient === undefined || input.recipient === null || input.recipient === "" ? null : addressArg(input.recipient, "recipient");
-    if (input.exempt !== undefined && !Array.isArray(input.exempt)) throw bad("bad_arg", "exempt lists Stellar addresses.");
-    const exempt = [...new Set((input.exempt ?? []).map((a) => addressArg(a, "exempt")))];
-    if (exempt.length > 32) throw bad("bad_arg", "At most 32 exempt addresses.");
+    const { recipient, exempt } = launchAddresses(input);
     const spec = {
       kind: LAUNCH_V2_STEPS.create,
       quote: quote.contract,
@@ -1336,8 +1379,8 @@ export async function buildLaunchV2(user: string, input: Partial<LaunchV2BuildIn
     try {
       return await build();
     } catch (err) {
-      // The keeper harvested between the read and the step's simulation: plan again from what it left.
-      const named = (err as ApiError)?.detail as { contractError?: { contract?: string; name?: string } } | undefined;
+      // The keeper harvested between the read and the step's simulation: plan again, once, from what it left.
+      const named = err instanceof ApiError ? (err.detail as { contractError?: { contract?: string; name?: string } } | undefined) : undefined;
       if (named?.contractError?.contract === "lp-locker" && ["TooSoon", "NothingToHarvest"].includes(String(named.contractError.name))) return await build();
       throw err;
     }
@@ -1659,8 +1702,9 @@ export const launchHarvestStepV2: Builder = async (user, spec) => {
 };
 
 /** transfer_creator_fee_recipient (by the current recipient) and execute_recipient_change (anyone, inside the
- *  takeover's window): the fees booked so far stay with the current recipient (L14); pool fees not yet harvested go
- *  to the new one, and the intent carries what that is when one round can't take it (V7). */
+ *  takeover's window): the fees booked so far stay with the current recipient (L14). Without holder sharing, the
+ *  recipient's part of pool fees not yet harvested goes to the new one, and the intent carries it when one round can't
+ *  take it (V7); with sharing on, pool fees go to the holders whoever the recipient is (§5.5). */
 function recipientChangeStep(action: "recipient_transfer" | "recipient_execute"): Builder {
   return async (user, spec) => {
     const { pad, locker, v2, token, launch, quote } = await stepLaunch(spec);
@@ -1674,8 +1718,10 @@ function recipientChangeStep(action: "recipient_transfer" | "recipient_execute")
       takeoverOpen(takeover, now);
       next = String(takeover.new);
     }
-    const locked = curve.phase === "graduated" && curve.pool ? await lockedPosition(locker, curve.pool, token) : null;
-    const backlog = locked ? harvestBacklog(locked.position, Math.max(locked.nextAt, now), v2.durations.launch.harvest_interval) : null;
+    const locked = await recipientPosition(locker, launch, curve);
+    const backlog = locked
+      ? harvestBacklog(locked.position, Math.max(locked.nextAt, now), v2.durations.launch.harvest_interval, launch.protocolShareBps)
+      : null;
     const acct = await requireAccount(user);
     const fn = action === "recipient_transfer" ? "transfer_creator_fee_recipient" : "execute_recipient_change";
     const args = action === "recipient_transfer" ? [sv.addr(token), sv.addr(next)] : [sv.addr(token)];
@@ -1696,6 +1742,10 @@ function recipientChangeStep(action: "recipient_transfer" | "recipient_execute")
         byTakeover: action === "recipient_execute",
         bookedStay: curve.creatorFees.toString(),
         graduated: curve.phase === "graduated",
+        holderSharing: launch.holderSharing,
+        // Who the creator part of the pool fees goes to after the change: the holders with sharing on (§5.5).
+        poolFeesTo: launch.holderSharing ? "holders" : "newRecipient",
+        protocolShareBps: launch.protocolShareBps,
         backlogQuote: backlog?.residualQuote ?? null,
         backlogToken: backlog?.residualToken ?? null,
         backlogRounds: backlog?.roundsToDrain ?? null,
