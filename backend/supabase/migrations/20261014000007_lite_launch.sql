@@ -12,6 +12,8 @@
 --   to a group (one getEvents request), each group with its own cursor.
 -- - token_price_at, token_candles and launch_holders: a launch's price at a time, its candles over curve trades and
 --   pool swaps, and its holder count without the launchpad and the pair.
+-- - record_token_event, record_pool_swap and reconcile_balance: the indexer's writes of a token event with its
+--   balances, of a pool swap with its trader, and of a balance read live, each in one statement.
 
 -- ------------------------------------------------------------------------------------------------ metadata
 
@@ -71,8 +73,9 @@ create index if not exists launches_pair on lite.launches (pair) where pair is n
 
 -- ------------------------------------------------------------------------------------------------ trades and claims
 
--- Soroswap swaps of a graduated launch token. side is 'buy' when the launch token left the pool; price is the pool's
--- quote per token after the swap (the sync of the same transaction), null until that sync is read.
+-- Soroswap swaps of a graduated launch token. side is 'buy' when the launch token left the pool; trader is who sold
+-- the tokens in a sell and who got them in a buy (record_pool_swap); price is the pool's quote per token after the swap
+-- (the sync of the same transaction), null until that sync is read.
 create table if not exists lite.pool_swaps (
   event_id text primary key,
   token text not null references lite.launches(token) on delete cascade,
@@ -88,7 +91,8 @@ create table if not exists lite.pool_swaps (
 );
 create index if not exists pool_swaps_token on lite.pool_swaps (token, ts desc);
 create index if not exists pool_swaps_trader on lite.pool_swaps (trader, ts desc);
-create index if not exists pool_swaps_tx on lite.pool_swaps (pair, tx_hash) where price is null;
+-- A transaction's swaps in a pair: priced by its sync, their seller named by its transfer.
+create index if not exists pool_swaps_tx on lite.pool_swaps (pair, tx_hash);
 
 create table if not exists lite.creator_claims (
   event_id text primary key,
@@ -121,10 +125,12 @@ create table if not exists lite.token_events (
       or (kind = 'burn' and from_address is not null and to_address is null))
 );
 create index if not exists token_events_burns on lite.token_events (token) where kind = 'burn';
+-- A transaction's transfers: who sold into a pool (record_pool_swap).
+create index if not exists token_events_tx on lite.token_events (tx_hash);
 
 -- What token_events add up to per holder (G… or C…). reconcile checks them against a live balance(), oldest check
--- first, and overwrites a mismatch; checked_ledger is the ledger that balance was read at, so an event up to it is
--- already counted.
+-- first, and overwrites a mismatch unless the row already holds something newer (reconcile_balance); checked_ledger is
+-- the ledger that balance was read at, so an event up to it is already counted; updated_ledger is the latest event's.
 create table if not exists lite.token_balances (
   token text not null references lite.launches(token) on delete cascade,
   address text not null,
@@ -220,13 +226,113 @@ as $$
    where token = p_token and balance > 0 and not (address = any(coalesce(array_remove(p_excluded, null), '{}')))
 $$;
 
+-- ------------------------------------------------------------------------------------------------ the indexer's writes
+
+-- A launch token's transfer, mint or burn (jobs/watch.ts) and the balances it moves, at most once per event id: answers
+-- whether it was new. A balance read live at the event's ledger or later (reconcile_balance) already counts it. A
+-- transfer also names the seller of the sells after it in its transaction in the pair it went into (record_pool_swap):
+-- a token's events are recorded in their order, so each sell ends with the transfer just before it.
+create or replace function lite.record_token_event(p_event_id text, p_token text, p_kind text, p_from text, p_to text,
+  p_to_muxed_id text, p_amount numeric, p_tx_hash text, p_ledger int, p_ts timestamptz)
+returns boolean
+language plpgsql
+set search_path = lite, pg_temp
+as $$
+declare
+  m record;
+begin
+  insert into lite.token_events (event_id, token, kind, from_address, to_address, to_muxed_id, amount, tx_hash, ledger, ts)
+  values (p_event_id, p_token, p_kind, p_from, p_to, p_to_muxed_id, p_amount, p_tx_hash, p_ledger, p_ts)
+  on conflict (event_id) do nothing;
+  if not found then
+    return false;
+  end if;
+  for m in select v.address, v.delta from (values (p_from, -p_amount), (p_to, p_amount)) as v(address, delta)
+            where v.address is not null loop
+    insert into lite.token_balances as b (token, address, balance, updated_ledger) values (p_token, m.address, m.delta, p_ledger)
+    on conflict (token, address) do update set
+      balance = case when b.checked_ledger >= excluded.updated_ledger then b.balance else b.balance + excluded.balance end,
+      updated_ledger = greatest(b.updated_ledger, excluded.updated_ledger),
+      updated_at = now();
+  end loop;
+  if p_kind = 'transfer' and p_tx_hash is not null then
+    update lite.pool_swaps set trader = p_from
+     where pair = p_to and tx_hash = p_tx_hash and token = p_token and side = 'sell' and event_id > p_event_id;
+  end if;
+  return true;
+end
+$$;
+
+-- A Soroswap swap of a launch token (jobs/watch.ts), at most once per event id: answers whether it was new. A sell's
+-- trader is whoever sent the launch tokens into the pair last before it in its transaction: a route of more than one
+-- pool sends a pool's output on to the next pool, so the swap's `to` (p_to) is that pool, not the seller. Until that
+-- transfer is read, p_to stands in (record_token_event names the seller when it comes). A buy's trader is p_to, who got
+-- the tokens. The price is the pool's after the sync of the same transaction when that sync was read first; otherwise
+-- the sync prices it when it comes (jobs/watch.ts).
+create or replace function lite.record_pool_swap(p_event_id text, p_token text, p_pair text, p_to text, p_side text,
+  p_quote_amount numeric, p_token_amount numeric, p_tx_hash text, p_ledger int, p_ts timestamptz)
+returns boolean
+language plpgsql
+set search_path = lite, pg_temp
+as $$
+begin
+  insert into lite.pool_swaps (event_id, token, pair, trader, side, quote_amount, token_amount, price, tx_hash, ledger, ts)
+  values (p_event_id, p_token, p_pair,
+          coalesce(case when p_side = 'sell' then (
+                     select e.from_address from lite.token_events e
+                      where e.tx_hash = p_tx_hash and e.token = p_token and e.kind = 'transfer' and e.to_address = p_pair
+                        and e.event_id < p_event_id
+                      order by e.event_id desc limit 1) end,
+                   p_to),
+          p_side, p_quote_amount, p_token_amount,
+          (select l.last_price from lite.launches l where l.token = p_token and l.pool_tx = p_tx_hash),
+          p_tx_hash, p_ledger, p_ts)
+  on conflict (event_id) do nothing;
+  if not found then
+    return false;
+  end if;
+  update lite.launches set last_trade_at = greatest(last_trade_at, p_ts), updated_at = now() where token = p_token;
+  return true;
+end
+$$;
+
+-- A balance read live at p_ledger (jobs/reconcile.ts) in place of the indexed one, unless the row holds something newer:
+-- an event after p_ledger, or a read at a later ledger (an RPC node behind the others answered this one). It keeps the
+-- ledger, so record_token_event adds no event up to it again. Answers 'same', 'corrected' or 'newer' (left as it is),
+-- or null when there is no such row.
+create or replace function lite.reconcile_balance(p_token text, p_address text, p_balance numeric, p_ledger int)
+returns text
+language plpgsql
+set search_path = lite, pg_temp
+as $$
+declare
+  cur record;
+begin
+  select balance, updated_ledger, checked_ledger into cur from lite.token_balances
+   where token = p_token and address = p_address for update;
+  if not found then
+    return null;
+  end if;
+  if cur.updated_ledger > p_ledger or coalesce(cur.checked_ledger, 0) > p_ledger then
+    return 'newer';
+  end if;
+  update lite.token_balances set balance = p_balance, checked_ledger = p_ledger, checked_at = now(),
+         updated_at = case when cur.balance <> p_balance then now() else updated_at end
+   where token = p_token and address = p_address;
+  return case when cur.balance = p_balance then 'same' else 'corrected' end;
+end
+$$;
+
 -- ------------------------------------------------------------------------------------------------ access
 
 -- Closed to everyone but lite_api, as every lite table is (migrations 1 and 4).
 revoke all on lite.launch_metadata, lite.pool_swaps, lite.creator_claims, lite.token_events, lite.token_balances,
   lite.watch_groups, lite.watch_contracts from public;
 revoke all on function lite.token_price_at(text, timestamptz), lite.token_candles(text, interval, int),
-  lite.launch_holders(text, text[]) from public;
+  lite.launch_holders(text, text[]),
+  lite.record_token_event(text, text, text, text, text, text, numeric, text, int, timestamptz),
+  lite.record_pool_swap(text, text, text, text, text, numeric, numeric, text, int, timestamptz),
+  lite.reconcile_balance(text, text, numeric, int) from public;
 do $$
 declare r text;
 begin
@@ -235,7 +341,10 @@ begin
       execute format('revoke all on lite.launch_metadata, lite.pool_swaps, lite.creator_claims, lite.token_events, '
         'lite.token_balances, lite.watch_groups, lite.watch_contracts from %I', r);
       execute format('revoke all on function lite.token_price_at(text, timestamptz), lite.token_candles(text, interval, int), '
-        'lite.launch_holders(text, text[]) from %I', r);
+        'lite.launch_holders(text, text[]), '
+        'lite.record_token_event(text, text, text, text, text, text, numeric, text, int, timestamptz), '
+        'lite.record_pool_swap(text, text, text, text, text, numeric, numeric, text, int, timestamptz), '
+        'lite.reconcile_balance(text, text, numeric, int) from %I', r);
     end if;
   end loop;
 end $$;
@@ -244,7 +353,10 @@ grant select, insert, update, delete, truncate on lite.launch_metadata, lite.poo
   lite.token_events, lite.token_balances, lite.watch_groups, lite.watch_contracts to lite_api;
 grant usage, select on all sequences in schema lite to lite_api;
 grant execute on function lite.token_price_at(text, timestamptz), lite.token_candles(text, interval, int),
-  lite.launch_holders(text, text[]) to lite_api;
+  lite.launch_holders(text, text[]),
+  lite.record_token_event(text, text, text, text, text, text, numeric, text, int, timestamptz),
+  lite.record_pool_swap(text, text, text, text, text, numeric, numeric, text, int, timestamptz),
+  lite.reconcile_balance(text, text, numeric, int) to lite_api;
 
 -- The RLS-and-policy loop of 20261013000004: RLS on every lite table, and lite_api's one policy on each.
 do $$

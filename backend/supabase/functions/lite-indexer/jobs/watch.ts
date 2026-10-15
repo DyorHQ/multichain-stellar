@@ -3,13 +3,16 @@
 //   Contracts the launchpad handler registers join a new group at the earliest of their first ledgers; groups that
 //   have caught up with the chain merge, at the earlier of their positions (an event read twice is dropped by its id).
 // - Gaps. A group whose position RPC no longer keeps (older than its retention, or a cursor it refuses) starts again
-//   at the oldest ledger RPC has, and the holders of its launch tokens are marked incomplete.
+//   a little inside the window RPC keeps at that moment (it slides on with every ledger), and the holders of its launch
+//   tokens are marked incomplete. A group RPC still refuses is read again next run; the other groups still are.
 // - Token events (OpenZeppelin stellar-tokens 0.7.2): transfer [transfer, from, to] with an i128, or {amount,
 //   to_muxed_id} for a muxed destination; mint [mint, to] {amount}; burn [burn, from] {amount}. Each is recorded with
-//   the balances it moves, in one transaction; a balance reconcile read live already counts the events up to its ledger.
+//   the balances it moves (lite.record_token_event); a balance reconcile read live already counts the events up to its
+//   ledger.
 // - Pair events (Soroswap, topics ("SoroswapPair", name)): sync, deposit and withdraw set the pool's reserves and price;
-//   swap records a pool trade (side buy when the launch token leaves the pool), priced by the sync of the same
-//   transaction, whichever of the two is read first.
+//   swap records a pool trade (lite.record_pool_swap; side buy when the launch token leaves the pool), priced by the
+//   sync of the same transaction, whichever of the two is read first. A sell's trader is whoever sent the launch tokens
+//   into the pair: on a route through more than one pool the swap's `to` is the next pool.
 // - Launches indexed before migration 07 have no watched token: they are taken up here (their facts, fee terms and,
 //   once graduated, the pool's fee and their pair's side), and launches whose fee terms couldn't be read are retried.
 //   The deployment's smoke launches are unlisted.
@@ -17,6 +20,7 @@ import type { rpc } from "@stellar/stellar-sdk";
 import { sql } from "../../_shared/db.ts";
 import { env } from "../../_shared/env.ts";
 import { ratio, SOROSWAP_POOL_FEE_BPS } from "../../_shared/launchpad.ts";
+import { NetworkConfig } from "../../_shared/networks.ts";
 import { native, rpcServer } from "../../_shared/stellar.ts";
 import { launchFacts, launchTerms, pairSide, watchContract } from "../handlers/launchpad.ts";
 import { cursorLedger } from "./main_events.ts";
@@ -32,6 +36,9 @@ const PAGE_LIMIT = 1_000;
 const PAGES = 10;
 /** A group within this many ledgers of the chain's head has caught up. */
 export const CAUGHT_UP_LEDGERS = 12;
+/** A group that starts again for a gap starts this many ledgers (about 100 s) past the oldest one RPC keeps: the
+ *  window moves on a ledger every 5 s or so, and another node behind the same URL may keep a little less. */
+export const RETENTION_MARGIN = 20;
 /** The job stops starting groups after this long (the indexer's budget is 45 s for every job). */
 const RUN_MS = 15_000;
 /** Launches taken up per run. */
@@ -144,7 +151,8 @@ export function balanceChanges(m: TokenMove): [string, bigint][] {
 
 export type PoolEvent =
   | { kind: "reserves"; reserveToken: bigint; reserveQuote: bigint; price: string | null; depositTo: string | null }
-  | { kind: "swap"; trader: string; side: "buy" | "sell"; tokenAmount: bigint; quoteAmount: bigint };
+  /** `to` got the swap's output: the trader in a buy; in a sell, the seller or the next pool of the seller's route. */
+  | { kind: "swap"; to: string; side: "buy" | "sell"; tokenAmount: bigint; quoteAmount: bigint };
 
 /** A Soroswap pair's event, decoded for its launch token: `token0IsLaunch` says which reserve is the token's. Null for
  *  any other event (skim, the LP token's own). */
@@ -164,7 +172,7 @@ export function decodePairEvent(topics: unknown[], data: unknown, token0IsLaunch
     const quoteNet = quoteIn - quoteOut;
     return {
       kind: "swap",
-      trader: String(d.to),
+      to: String(d.to),
       side: tokensOut > 0n ? "buy" : "sell",
       tokenAmount: tokensOut < 0n ? -tokensOut : tokensOut,
       quoteAmount: quoteNet < 0n ? -quoteNet : quoteNet,
@@ -186,27 +194,16 @@ export interface Member {
   fromLedger: number;
 }
 
-/** Records a token's event and the balances it moves, in one transaction. */
-export async function recordTokenEvent(token: string, m: TokenMove, e: Event): Promise<void> {
+/** Records a token's event and the balances it moves (balanceChanges), once, in one statement: a balance read live at
+ *  its ledger or later (reconcile) already counts it, and a transfer into a pair names the seller of that pair's later
+ *  sells in its transaction (lite.record_token_event). Answers whether the event was new. */
+export async function recordTokenEvent(token: string, m: TokenMove, e: Event): Promise<boolean> {
   const from = m.kind === "mint" ? null : m.from;
   const to = m.kind === "burn" ? null : m.to;
-  await sql().begin(async (tx) => {
-    const inserted = await tx`
-      insert into lite.token_events (event_id, token, kind, from_address, to_address, to_muxed_id, amount, tx_hash, ledger, ts)
-      values (${e.id}, ${token}, ${m.kind}, ${from}, ${to}, ${m.kind === "transfer" ? m.toMuxedId : null}, ${m.amount.toString()},
-              ${e.txHash ?? null}, ${e.ledger}, ${new Date(e.ledgerClosedAt)})
-      on conflict (event_id) do nothing returning event_id`;
-    if (!inserted.length) return;
-    for (const [address, delta] of balanceChanges(m)) {
-      // A balance read live at a later ledger (reconcile) already counts this event.
-      await tx`
-        insert into lite.token_balances (token, address, balance, updated_ledger) values (${token}, ${address}, ${delta.toString()}, ${e.ledger})
-        on conflict (token, address) do update set
-          balance = case when lite.token_balances.checked_ledger >= excluded.updated_ledger then lite.token_balances.balance
-                         else lite.token_balances.balance + excluded.balance end,
-          updated_ledger = greatest(lite.token_balances.updated_ledger, excluded.updated_ledger), updated_at = now()`;
-    }
-  });
+  const [r] = await sql()`
+    select lite.record_token_event(${e.id}, ${token}, ${m.kind}, ${from}, ${to}, ${m.kind === "transfer" ? m.toMuxedId : null},
+                                   ${m.amount.toString()}, ${e.txHash ?? null}, ${e.ledger}, ${new Date(e.ledgerClosedAt)}) as recorded`;
+  return r?.recorded === true;
 }
 
 /** Records a pair's event: reserves move the pool and price their transaction's swap; a swap is a pool trade. */
@@ -229,15 +226,11 @@ export async function recordPoolEvent(member: Member, ev: PoolEvent, e: Event): 
     });
     return;
   }
-  await sql().begin(async (tx) => {
-    // Priced by the sync of the same transaction when it was read first; otherwise that sync prices it.
-    const inserted = await tx`
-      insert into lite.pool_swaps (event_id, token, pair, trader, side, quote_amount, token_amount, price, tx_hash, ledger, ts)
-      values (${e.id}, ${member.token}, ${member.contract}, ${ev.trader}, ${ev.side}, ${ev.quoteAmount.toString()}, ${ev.tokenAmount.toString()},
-              (select l.last_price from lite.launches l where l.token = ${member.token} and l.pool_tx = ${txHash}), ${txHash}, ${e.ledger}, ${ts})
-      on conflict (event_id) do nothing returning event_id`;
-    if (inserted.length) await tx`update lite.launches set last_trade_at = greatest(last_trade_at, ${ts}), updated_at = now() where token = ${member.token}`;
-  });
+  // Once, with its trader (a sell's seller from its transaction's transfer into the pair) and, when the sync of its
+  // transaction was read first, its price (lite.record_pool_swap); otherwise that sync prices it.
+  await sql()`
+    select lite.record_pool_swap(${e.id}, ${member.token}, ${member.contract}, ${ev.to}, ${ev.side}, ${ev.quoteAmount.toString()},
+                                 ${ev.tokenAmount.toString()}, ${txHash}, ${e.ledger}, ${ts}) as recorded`;
 }
 
 function contractIdOf(e: Event): string {
@@ -267,11 +260,11 @@ async function handleWatched(e: Event, members: Map<string, Member>): Promise<bo
 /** Launches indexed before migration 07, or whose fee terms couldn't be read, taken up: their facts, fee terms, the pool
  *  fee and pair side once graduated, the time of their last curve trade, and their token and pair watched from their
  *  first ledgers. A launch whose reads fail waits for the next run. Also unlists the deployment's smoke launches. */
-async function takeUp(): Promise<number> {
-  const smoke = env.network.deployment?.smoke?.launches ?? [];
+export async function takeUp(net: NetworkConfig = env.network): Promise<number> {
+  const smoke = net.deployment?.smoke?.launches ?? [];
   if (smoke.length) await sql()`update lite.launches set listed = false where listed and token = any(${smoke}::text[])`;
   const rows = await sql()`
-    select l.token, l.symbol, l.uri, l.created_ledger, l.graduated, l.pair, l.graduated_ledger, l.pair_token0_is_launch,
+    select l.token, l.creator, l.name, l.symbol, l.uri, l.created_ledger, l.graduated, l.pair, l.graduated_ledger, l.pair_token0_is_launch,
            exists (select 1 from lite.watch_contracts w where w.contract = l.token) as watched
       from lite.launches l
      where l.fee_bps is null or not exists (select 1 from lite.watch_contracts w where w.contract = l.token)
@@ -284,7 +277,8 @@ async function takeUp(): Promise<number> {
     const pair = r.graduated === true && r.pair ? String(r.pair) : null;
     const side = pair === null || r.pair_token0_is_launch !== null ? r.pair_token0_is_launch : await pairSide(pair, token);
     if (pair !== null && side === null) continue;
-    const facts = r.watched ? null : await launchFacts(token, String(r.symbol), String(r.uri ?? ""));
+    const launch = { token, creator: String(r.creator), name: String(r.name), symbol: String(r.symbol), uri: String(r.uri ?? "") };
+    const facts = r.watched ? null : await launchFacts(launch, net);
     await sql().begin(async (tx) => {
       await tx`update lite.launches set fee_bps = ${terms.feeBps}, protocol_share_bps = ${terms.protocolShareBps}, updated_at = now() where token = ${token}`;
       if (facts === null) return;
@@ -351,14 +345,15 @@ async function save(id: number, p: Position, ledger: number): Promise<void> {
   await sql()`update lite.watch_groups set cursor = ${p.cursor}, start_ledger = ${p.cursor === null ? p.ledger : sql()`start_ledger`}, ledger = ${ledger}, updated_at = now() where id = ${id}`;
 }
 
-/** The launches whose tokens may have had events before `oldest` that the group didn't read: their holders may be
+/** The launches whose tokens may have had events before `start` that the group didn't read: their holders may be
  *  missing. A token made since has none. */
-async function markIncomplete(g: LoadedGroup, oldest: number): Promise<void> {
-  const tokens = g.watched.filter((m) => m.role === "token" && m.fromLedger < oldest).map((m) => m.token);
+async function markIncomplete(g: LoadedGroup, start: number): Promise<void> {
+  const tokens = g.watched.filter((m) => m.role === "token" && m.fromLedger < start).map((m) => m.token);
   if (tokens.length) await sql()`update lite.launches set holders_complete = false where token = any(${tokens}::text[])`;
 }
 
-/** Reads a group's events from its position until it catches up, runs out of pages or `deadline` passes. */
+/** Reads a group's events from its position until it catches up, runs out of pages or `deadline` passes. `oldest` is
+ *  RPC's oldest ledger when the run began: a position older than that restarts before the first request. */
 async function read(g: LoadedGroup, oldest: number, deadline: number): Promise<{ events: number; gap: boolean }> {
   const members = new Map(g.watched.map((m) => [m.contract, m]));
   const filters = Array.from({ length: Math.ceil(g.members.length / PER_FILTER) }, (_, i) => ({
@@ -367,27 +362,29 @@ async function read(g: LoadedGroup, oldest: number, deadline: number): Promise<{
   }));
   let position = g.position;
   let gap = false;
-  let restarted = false;
-  // From the start of the position's ledger, or of RPC's oldest when the position is older: a gap then, for the tokens
-  // that existed before it.
-  const restart = async (oldest: number) => {
-    restarted = true;
-    if (ledgerOf(position) < oldest) {
+  let retried = false;
+  // From the start of the position's ledger, or, when RPC no longer keeps it, a little inside the window RPC keeps now
+  // (read just before the request: it moves on while a run reads other groups): a gap then, for the tokens that existed
+  // before that start.
+  const restart = async () => {
+    const start = (await rpcServer().getHealth()).oldestLedger + RETENTION_MARGIN;
+    if (ledgerOf(position) < start) {
       gap = true;
-      await markIncomplete(g, oldest);
+      await markIncomplete(g, start);
     }
-    position = { cursor: null, ledger: Math.max(oldest, ledgerOf(position)) };
+    position = { cursor: null, ledger: Math.max(start, ledgerOf(position)) };
   };
-  if (ledgerOf(position) < oldest) await restart(oldest);
+  if (ledgerOf(position) < oldest) await restart();
   let events = 0;
   for (let page = 0; page < PAGES && Date.now() < deadline; page++) {
     let res: rpc.Api.GetEventsResponse;
     try {
       res = await rpcServer().getEvents(position.cursor ? { filters, limit: PAGE_LIMIT, cursor: position.cursor } : { filters, limit: PAGE_LIMIT, startLedger: position.ledger });
     } catch (err) {
-      // A cursor or a start RPC refuses: again from what it keeps, once.
-      if (restarted) throw err;
-      await restart((await rpcServer().getHealth()).oldestLedger);
+      // A cursor or a start RPC refuses: again from what it keeps now, once.
+      if (retried) throw err;
+      retried = true;
+      await restart();
       continue;
     }
     for (const e of res.events) if (await handleWatched(e, members)) events++;
@@ -418,8 +415,10 @@ async function merge(all: LoadedGroup[], latest: number): Promise<number> {
 export interface WatchReport {
   groups: number;
   events: number;
-  /** Groups that restarted at RPC's oldest ledger. */
+  /** Groups that restarted inside RPC's window. */
   gaps: number;
+  /** Groups RPC wouldn't read this run: read again next run. */
+  failed: number;
   /** Groups folded into others. */
   merged: number;
   /** Launches taken up. */
@@ -428,7 +427,8 @@ export interface WatchReport {
 }
 
 /** One run: take up older launches, group new contracts, read each group (the furthest behind first) and merge those
- *  that have caught up. */
+ *  that have caught up. A group that can't be read doesn't stop the others; when none of those tried can be, the run
+ *  fails with the last error. */
 export async function watchContracts(): Promise<WatchReport | { skipped: string }> {
   if (!env.network.contracts.launchpad) return { skipped: "no launchpad on this network" };
   const deadline = Date.now() + RUN_MS;
@@ -438,6 +438,9 @@ export async function watchContracts(): Promise<WatchReport | { skipped: string 
   const all = await groups();
   let events = 0;
   let gaps = 0;
+  let tried = 0;
+  let failed = 0;
+  let lastError: unknown = null;
   for (const g of [...all].sort((a, b) => ledgerOf(a.position) - ledgerOf(b.position))) {
     if (Date.now() >= deadline) break;
     // A pair's events need its side, read once at graduation; one that couldn't be is read again first.
@@ -446,12 +449,20 @@ export async function watchContracts(): Promise<WatchReport | { skipped: string 
       if (m.token0IsLaunch !== null) await sql()`update lite.launches set pair_token0_is_launch = ${m.token0IsLaunch} where token = ${m.token}`;
     }
     if (g.watched.some((w) => w.role === "pair" && w.token0IsLaunch === null)) continue;
-    const r = await read(g, health.oldestLedger, deadline);
-    events += r.events;
-    if (r.gap) gaps++;
+    tried++;
+    try {
+      const r = await read(g, health.oldestLedger, deadline);
+      events += r.events;
+      if (r.gap) gaps++;
+    } catch (err) {
+      failed++;
+      lastError = err;
+      console.warn(`watch: group ${g.id} not read this run`, String((err as Error).message ?? err).slice(0, 200));
+    }
   }
+  if (failed > 0 && failed === tried) throw lastError;
   const merged = await merge(all, health.latestLedger);
-  return { groups: all.length - merged, events, gaps, merged, takenUp, latest: health.latestLedger };
+  return { groups: all.length - merged, events, gaps, failed, merged, takenUp, latest: health.latestLedger };
 }
 
 export const watch: (() => Promise<unknown>) | null = watchContracts;

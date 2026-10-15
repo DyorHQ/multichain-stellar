@@ -1,7 +1,8 @@
 // The launchpad (docs/DESIGN-stellar-parity.md §6.9, §6.11, §6.13, §12.5):
 // - decoding of the launchpad's events, from events recorded on testnet on 2026-10-13 (ECAT's launch, a buy, a sell,
 //   its graduation and its creator's claim): launch, trade, graduate and claim_creator;
-// - what the indexer adds to a launch: listed (never a smoke launch), look_alike, metadata joined by URI;
+// - what the indexer adds to a launch: listed (never a smoke launch), look_alike, metadata joined by URI (only what its
+//   creator wrote for its name and ticker, or an image its creator uploaded);
 // - the launchpad's own refusals get their stable codes, from simulation errors recorded on testnet: a failure further
 //   down (a missing account) and another contract's get none;
 // - economics are read live from the contracts (a fake RPC), kept 5 minutes, served from the last read when RPC fails,
@@ -247,24 +248,36 @@ Deno.test("decode: graduate, the pool's opening reserves priced at the curve's f
 
 Deno.test("recording a launch: listed unless the deployment made it as a smoke test, look_alike, the metadata by URI, its token watched", async () => {
   const uri = `${STORAGE}/storage/v1/object/public/lite-media/launches/${CREATOR}/aef9135a-6c53-435a-a2e4-5bb339faa0e1.json`;
-  respond = (q) => (q.startsWith("select image, description, links from lite.launch_metadata where uri = ?")
-    ? [{ image: `${STORAGE}/storage/v1/object/public/lite-media/uploads/${CREATOR}/b4.png`, description: "A cat.", links: { website: "https://ecat.dyorhq.fun" } }]
-    : []);
+  const written = { address: CREATOR, name: "E2E Cat", symbol: "ECAT", image: `${STORAGE}/storage/v1/object/public/lite-media/uploads/${CREATOR}/b4.png`, description: "A cat.", links: { website: "https://ecat.dyorhq.fun" } };
+  respond = (q, p) => (q === "select address, name, symbol, image, description, links from lite.launch_metadata where uri = ?" && p[0] === uri ? [written] : []);
+  const ecat = { token: ECAT, creator: CREATOR, name: "E2E Cat", symbol: "ECAT", uri };
   const smoke = { ...TESTNET, deployment: { ...TESTNET.deployment!, smoke: { launches: [ECAT], moments: [] } } };
-  assertEquals(await h.launchFacts(ECAT, "ECAT", uri, smoke), {
+  assertEquals(await h.launchFacts(ecat, smoke), {
     listed: false,
     lookAlike: false,
     image: `${STORAGE}/storage/v1/object/public/lite-media/uploads/${CREATOR}/b4.png`,
     description: "A cat.",
     links: { website: "https://ecat.dyorhq.fun", x: null, telegram: null },
   });
-  assertEquals((await h.launchFacts(ECAT, "U5DC", "", TESTNET)).listed, true);
-  assertEquals((await h.launchFacts(ECAT, "U5DC", "", TESTNET)).lookAlike, true);
-  // An older app put the uploaded image itself in the URI: that is the image.
+  assertEquals((await h.launchFacts({ ...ecat, symbol: "U5DC", uri: "" }, TESTNET)).listed, true);
+  assertEquals((await h.launchFacts({ ...ecat, symbol: "U5DC", uri: "" }, TESTNET)).lookAlike, true);
+  // Create's rule, for a launch made on the contract directly too: someone else's metadata, or the creator's for
+  // another name or ticker, shows nothing.
+  const none = { image: null, description: null, links: null };
+  const facts = async (launch: typeof ecat) => {
+    const f = await h.launchFacts(launch, TESTNET);
+    return { image: f.image, description: f.description, links: f.links };
+  };
+  assertEquals(await facts({ ...ecat, creator: ME }), none);
+  assertEquals(await facts({ ...ecat, name: "Another Cat" }), none);
+  assertEquals(await facts({ ...ecat, symbol: "ECAT2" }), none);
+  // An older app put the uploaded image itself in the URI: that is the image, when the creator uploaded it.
   const image = `${STORAGE}/storage/v1/object/public/lite-media/uploads/${CREATOR}/c1.jpg`;
   respond = () => [];
-  assertEquals(await meta.metadataFor(image), { image, description: null, links: null });
-  assertEquals(await meta.metadataFor("https://elsewhere.example/cat.png"), { image: null, description: null, links: null });
+  assertEquals(await meta.metadataFor(image, ecat), { image, description: null, links: null });
+  assertEquals(await meta.metadataFor(image, { ...ecat, creator: ME }), none);
+  assertEquals(await meta.metadataFor(`${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/../${CREATOR}/c1.jpg`, { ...ecat, creator: ME }), none);
+  assertEquals(await meta.metadataFor("https://elsewhere.example/cat.png", ecat), none);
 
   // The handler: the row (terms from get_launch), then the token watched from the launch's ledger.
   answer = (contract, fn) => (contract === PAD && fn === "get_launch" ? struct({ fee_bps: u32(100), protocol_share_bps: u32(5000) }) : { error: "HostError: Error(Contract, #1)" });
@@ -586,6 +599,11 @@ Deno.test("metadata's rules: links https and to their own sites, at most 200 cha
       `${STORAGE}/storage/v1/object/public/lite-media/moments/${ME}/b4.png`,
       `https://elsewhere.example/storage/v1/object/public/lite-media/uploads/${ME}/b4.png`,
       `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/b4.mp4`,
+      // Under this address's folder by its prefix only: another's file, a folder below, a query.
+      `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/../${CREATOR}/b4.png`,
+      `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/%2e%2e/${CREATOR}/b4.png`,
+      `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/x/b4.png`,
+      `${STORAGE}/storage/v1/object/public/lite-media/uploads/${ME}/b4.png?x=.png`,
     ]
   ) assertEquals(await refused({ imageUrl }), [400, "bad_media"], imageUrl);
   assertEquals(await refused({ symbol: "XLM" }), [400, "look_alike_symbol"]);

@@ -2,10 +2,11 @@
 // - POST /v1/launches/metadata checks them, writes the JSON {name, symbol, description, image, links} to the media
 //   bucket under launches/<address>/ and records it in lite.launch_metadata, by the URI it answers. Create then takes
 //   that URI, and only from the address that wrote it.
-// - The indexer joins a launch to its metadata by the URI it carries on chain. A launch whose URI is an image on our
-//   storage (as an older app created them) has that image and nothing else.
-// The image must be one this address uploaded through DyorHQ (media.ts), so a launch never shows someone else's file
-// or one from outside our storage; links are https, and only to the sites they name.
+// - The indexer joins a launch to its metadata by the URI it carries on chain, under create's rule: only metadata its
+//   creator wrote for its name and ticker (a launch made on the contract directly may carry anyone's URI). A launch
+//   whose URI is an image its creator uploaded (as an older app created them) has that image and nothing else.
+// The image must be one this address uploaded through DyorHQ (media.ts): exactly uploads/<address>/<file>, so a launch
+// never shows someone else's file or one from outside our storage; links are https, and only to the sites they name.
 import type { LaunchMetadataRequest, MetadataUri } from "./contract.ts";
 import { sql } from "./db.ts";
 import { bad } from "./http.ts";
@@ -24,8 +25,8 @@ const LINK_HOSTS = { website: null, x: ["x.com", "twitter.com"], telegram: ["t.m
 export type LinkName = keyof typeof LINK_HOSTS;
 export type Links = Record<LinkName, string | null>;
 
-/** The image extensions an upload gets (media.ts). */
-const IMAGE = /\.(jpe?g|png|webp|gif)$/i;
+/** An uploaded image's file name: media.ts names an upload <uuid>.<ext>, one path segment. */
+const IMAGE_FILE = /^[A-Za-z0-9-]{1,64}\.(jpe?g|png|webp|gif)$/i;
 
 const enc = new TextEncoder();
 
@@ -51,6 +52,13 @@ export function launchSymbol(raw: unknown): string {
 /** Where media lives: the bucket's public base, ending in "/". */
 export function mediaBase(): string {
   return publicUrl("");
+}
+
+/** Whether `url` is an image `address` uploaded through DyorHQ: exactly <media base>uploads/<address>/<file>, the file
+ *  one segment with an image's extension (nothing like "../" that would reach another folder). */
+export function isOwnImage(url: string, address: string): boolean {
+  const folder = `${mediaBase()}uploads/${address}/`;
+  return url.startsWith(folder) && IMAGE_FILE.test(url.slice(folder.length));
 }
 
 /** An optional text field: null when absent or blank. */
@@ -96,11 +104,8 @@ export async function writeLaunchMetadata(user: string, input: Partial<LaunchMet
   const symbol = launchSymbol(input.symbol);
   const description = optional(input.description, "description");
   if (description !== null && [...description].length > DESCRIPTION_MAX) throw bad("bad_arg", `Description: at most ${DESCRIPTION_MAX} characters.`);
-  const base = mediaBase();
   const image = optional(input.imageUrl, "imageUrl");
-  if (image !== null && !(image.startsWith(`${base}uploads/${user}/`) && IMAGE.test(image))) {
-    throw bad("bad_media", "Upload the image through DyorHQ first.");
-  }
+  if (image !== null && !isOwnImage(image, user)) throw bad("bad_media", "Upload the image through DyorHQ first.");
   const links: Links = { website: launchLink("website", input.website), x: launchLink("x", input.x), telegram: launchLink("telegram", input.telegram) };
   const uri = await putPublicObject(
     `launches/${user}/${crypto.randomUUID()}.json`,
@@ -121,13 +126,20 @@ export async function checkLaunchUri(user: string, uri: string, name: string, sy
   if (rows[0].name !== name || rows[0].symbol !== symbol) throw bad("bad_uri", "Those details are for another name or ticker.");
 }
 
-/** What a launch shows from its URI: the metadata recorded for it, or for an image on our storage that image alone;
- *  nothing for any other URI. */
-export async function metadataFor(uri: string): Promise<{ image: string | null; description: string | null; links: Links | null }> {
+/** What a launch shows from its URI, under create's rule (checkLaunchUri) whoever made it: the metadata recorded for it
+ *  when the launch's creator wrote it for the launch's name and ticker; for an image the creator uploaded, that image
+ *  alone; nothing for any other URI (someone else's metadata or image included). */
+export async function metadataFor(
+  uri: string,
+  launch: { creator: string; name: string; symbol: string },
+): Promise<{ image: string | null; description: string | null; links: Links | null }> {
   const none = { image: null, description: null, links: null };
   if (uri === "") return none;
-  const rows = await sql()`select image, description, links from lite.launch_metadata where uri = ${uri}`;
-  if (rows.length) return { image: rows[0].image as string | null, description: rows[0].description as string | null, links: linksOf(rows[0].links) };
-  if (uri.startsWith(`${mediaBase()}uploads/`) && IMAGE.test(uri)) return { ...none, image: uri };
-  return none;
+  const rows = await sql()`select address, name, symbol, image, description, links from lite.launch_metadata where uri = ${uri}`;
+  if (rows.length) {
+    const m = rows[0];
+    if (m.address !== launch.creator || m.name !== launch.name || m.symbol !== launch.symbol) return none;
+    return { image: m.image as string | null, description: m.description as string | null, links: linksOf(m.links) };
+  }
+  return isOwnImage(uri, launch.creator) ? { ...none, image: uri } : none;
 }

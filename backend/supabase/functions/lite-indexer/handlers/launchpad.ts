@@ -2,8 +2,8 @@
 // Decoding is pure (decode*); recording is idempotent (by event id, or as the state the event describes), so a page
 // read twice changes nothing.
 // - launch: the row, with the launch's fee terms (get_launch, read once), listed unless the deployment made it as a
-//   smoke test, look_alike when its ticker imitates a reserved one, and the metadata joined by its URI; its token is
-//   watched from the launch's ledger (jobs/watch.ts).
+//   smoke test, look_alike when its ticker imitates a reserved one, and the metadata joined by its URI when the
+//   creator wrote it for this name and ticker; its token is watched from the launch's ledger (jobs/watch.ts).
 // - trade: the trade and the curve's new state, as before, plus the time of the last trade.
 // - graduate: the burn, the pool's opening reserves and price, which side of the pair the launch token is (the pair's
 //   token_0, read once) and when; the pair is watched from then on.
@@ -125,11 +125,11 @@ export function decodeClaim({ topics, data }: Decodable): Claimed {
 // ------------------------------------------------------------------------------------------------ what the indexer adds
 
 /** What a launch shows besides its event: listed (never a smoke launch of the deployment), look_alike, and the metadata
- *  joined by its URI. */
-export async function launchFacts(token: string, symbol: string, uri: string, net: NetworkConfig = env.network) {
+ *  joined by its URI, only when its creator wrote it for this name and ticker (metadataFor). */
+export async function launchFacts(l: Pick<Launched, "token" | "creator" | "name" | "symbol" | "uri">, net: NetworkConfig = env.network) {
   const smoke = net.deployment?.smoke?.launches ?? [];
-  const meta = await metadataFor(uri);
-  return { listed: !smoke.includes(token), lookAlike: symbolLooksReserved(symbol, net), image: meta.image, description: meta.description, links: meta.links };
+  const meta = await metadataFor(l.uri, l);
+  return { listed: !smoke.includes(l.token), lookAlike: symbolLooksReserved(l.symbol, net), image: meta.image, description: meta.description, links: meta.links };
 }
 
 /** A launch's fee terms, fixed when it was created (its record in the launchpad); null when they can't be read. */
@@ -163,7 +163,7 @@ export async function watchContract(q: postgres.Sql, contract: string, role: "to
 // ------------------------------------------------------------------------------------------------ recording
 
 async function recordLaunch(l: Launched, ledger: number, ts: Date): Promise<void> {
-  const [facts, terms] = await Promise.all([launchFacts(l.token, l.symbol, l.uri), launchTerms(l.token)]);
+  const [facts, terms] = await Promise.all([launchFacts(l), launchTerms(l.token)]);
   await sql().begin(async (tx) => {
     await tx`
       insert into lite.launches (token, creator, quote, name, symbol, uri, launch_index, supply, phantom, threshold, creator_fee_bps,

@@ -2,7 +2,11 @@
 -- can't reach the new tables or functions and lite_api can; RLS is on; the checks keep out what the indexer never
 -- writes; token_candles merges curve trades and priced pool swaps into one series; token_price_at answers the last
 -- price at a time (events of one ledger in their order), the opening price before any trade and nothing before the
--- launch; launch_holders counts positive balances without the launchpad and the pair. One transaction, rolled back.
+-- launch; launch_holders counts positive balances without the launchpad and the pair; the indexer's writes, as
+-- lite_api: record_token_event moves balances once per event and never adds one a live read already counts,
+-- reconcile_balance never takes a balance back to an older read, and record_pool_swap names a sell's seller from its
+-- transaction's transfer into the pair whichever is read first (a route through two pools sends the swap's output to
+-- the next pool). One transaction, rolled back.
 begin;
 
 -- 1. anon and authenticated can neither read nor write the tables, nor call the functions; RLS is on; lite_api can.
@@ -19,7 +23,10 @@ begin
       end;
       execute 'reset role';
     end loop;
-    foreach t in array array['lite.token_price_at(''C'', now())', 'lite.token_candles(''C'', interval ''1 hour'', 10)', 'lite.launch_holders(''C'', array[''C''])'] loop
+    foreach t in array array['lite.token_price_at(''C'', now())', 'lite.token_candles(''C'', interval ''1 hour'', 10)', 'lite.launch_holders(''C'', array[''C''])',
+                             'lite.record_token_event(''e'', ''C'', ''mint'', null, ''G'', null, 1, null, 1, now())',
+                             'lite.record_pool_swap(''e'', ''C'', ''P'', ''G'', ''buy'', 1, 1, null, 1, now())',
+                             'lite.reconcile_balance(''C'', ''G'', 1, 1)'] loop
       begin
         execute format('set local role %I', r);
         execute format('select * from %s', t);
@@ -35,6 +42,12 @@ begin
     raise exception 'RLS is off on a launch table';
   end if;
   if has_function_privilege('public', 'lite.launch_holders(text, text[])', 'execute') then raise exception 'PUBLIC can execute lite.launch_holders'; end if;
+  foreach t in array array['lite.record_token_event(text, text, text, text, text, text, numeric, text, int, timestamptz)',
+                           'lite.record_pool_swap(text, text, text, text, text, numeric, numeric, text, int, timestamptz)',
+                           'lite.reconcile_balance(text, text, numeric, int)'] loop
+    if has_function_privilege('public', t, 'execute') then raise exception 'PUBLIC can execute %', t; end if;
+    if not has_function_privilege('lite_api', t, 'execute') then raise exception 'lite_api cannot call %', t; end if;
+  end loop;
   foreach t in array array['launch_metadata', 'pool_swaps', 'creator_claims', 'token_events', 'token_balances', 'watch_groups', 'watch_contracts'] loop
     if not has_table_privilege('lite_api', format('lite.%I', t), 'select, insert, update, delete, truncate') then raise exception 'lite_api lacks lite.%', t; end if;
   end loop;
@@ -177,6 +190,117 @@ begin
   truncate lite.watch_contracts, lite.watch_groups;
   execute 'reset role';
   raise notice 'ok: lite_api writes the launch tables';
+end $$;
+
+-- 7. As lite_api, record_token_event and reconcile_balance: a mint, a transfer and a burn move balances, each once; an
+--    event a live read already counts (at or before its ledger) moves no balance that read set; a live read replaces a
+--    balance unless the row holds something newer: an event after the read, or a read at a later ledger.
+do $$
+declare
+  ts timestamptz := timestamptz '2026-10-14 12:00+00';
+  outcome text;
+  b record;
+begin
+  execute 'set local role lite_api';
+  if not lite.record_token_event('0000000000000000800-0000000001', 'CTOKEN', 'mint', null, 'GM1', null, 100, 'tx8', 800, ts) then
+    raise exception 'a new mint was not recorded';
+  end if;
+  if lite.record_token_event('0000000000000000800-0000000001', 'CTOKEN', 'mint', null, 'GM1', null, 100, 'tx8', 800, ts) then
+    raise exception 'a mint read again was recorded again';
+  end if;
+  perform lite.record_token_event('0000000000000000801-0000000001', 'CTOKEN', 'transfer', 'GM1', 'GM2', null, 30, 'tx9', 801, ts);
+  perform lite.record_token_event('0000000000000000802-0000000001', 'CTOKEN', 'burn', 'GM2', null, null, 5, 'tx10', 802, ts);
+  select (select balance from lite.token_balances where token = 'CTOKEN' and address = 'GM1') as m1,
+         (select balance from lite.token_balances where token = 'CTOKEN' and address = 'GM2') as m2,
+         (select updated_ledger from lite.token_balances where token = 'CTOKEN' and address = 'GM2') as m2_ledger into b;
+  if b.m1 <> 70 or b.m2 <> 25 or b.m2_ledger <> 802 then raise exception 'after a mint, a transfer and a burn: %', b; end if;
+
+  -- A read at ledger 810 already counts a transfer at 805 the index hasn't read: 60, not 70.
+  outcome := lite.reconcile_balance('CTOKEN', 'GM1', 60, 810);
+  if outcome is distinct from 'corrected' then raise exception 'a stale balance read live: %', outcome; end if;
+  perform lite.record_token_event('0000000000000000805-0000000001', 'CTOKEN', 'transfer', 'GM1', 'GM2', null, 10, 'tx11', 805, ts);
+  -- After the read: counted.
+  perform lite.record_token_event('0000000000000000811-0000000001', 'CTOKEN', 'transfer', 'GM1', 'GM2', null, 5, 'tx12', 811, ts);
+  select (select balance from lite.token_balances where token = 'CTOKEN' and address = 'GM1') as m1,
+         (select balance from lite.token_balances where token = 'CTOKEN' and address = 'GM2') as m2 into b;
+  if b.m1 <> 55 or b.m2 <> 40 then raise exception 'events around a live read at 810: GM1 % (expected 55), GM2 % (expected 40)', b.m1, b.m2; end if;
+
+  -- A read older than an event already applied leaves the balance (a lagging RPC node, or an overlapping run).
+  outcome := lite.reconcile_balance('CTOKEN', 'GM1', 60, 810);
+  select balance, checked_ledger into b from lite.token_balances where token = 'CTOKEN' and address = 'GM1';
+  if outcome is distinct from 'newer' or b.balance <> 55 or b.checked_ledger <> 810 then
+    raise exception 'a read older than an event took the balance back: %, %', outcome, b;
+  end if;
+  -- So does a read at a ledger before an earlier read's.
+  perform lite.record_token_event('0000000000000000820-0000000001', 'CTOKEN', 'mint', null, 'GM3', null, 50, 'tx13', 820, ts);
+  outcome := lite.reconcile_balance('CTOKEN', 'GM3', 50, 830);
+  if outcome is distinct from 'same' then raise exception 'a matching read: %', outcome; end if;
+  outcome := lite.reconcile_balance('CTOKEN', 'GM3', 40, 825);
+  select balance, checked_ledger into b from lite.token_balances where token = 'CTOKEN' and address = 'GM3';
+  if outcome is distinct from 'newer' or b.balance <> 50 or b.checked_ledger <> 830 then
+    raise exception 'a read before an earlier read took the balance back: %, %', outcome, b;
+  end if;
+  if lite.reconcile_balance('CTOKEN', 'GNOBODY', 1, 830) is not null then raise exception 'a read for no balance row'; end if;
+  execute 'reset role';
+  raise notice 'ok: record_token_event and reconcile_balance';
+end $$;
+
+-- 8. As lite_api, record_pool_swap: a sell's trader is whoever sent the launch tokens into the pair last before it in
+--    its transaction, whether that transfer is read before the swap or after it (the swap's `to`, the next pool of a
+--    route through two pools, stands in until then); a buy's is its `to`. Each swap once, priced by its transaction's
+--    sync when that was read first, and the launch's last trade moves on.
+do $$
+declare
+  ts timestamptz := timestamptz '2026-10-14 12:30+00';
+  t text;
+  r record;
+begin
+  execute 'set local role lite_api';
+  -- The transfer read first. A transfer into another pair names no one.
+  perform lite.record_token_event('0000000000000000900-0000000000', 'CTOKEN', 'transfer', 'GELSEWHERE', 'COTHERPAIR', null, 7, 'txA', 900, ts);
+  perform lite.record_token_event('0000000000000000900-0000000001', 'CTOKEN', 'transfer', 'GSELLER', 'CPAIR', null, 1000, 'txA', 900, ts);
+  if not lite.record_pool_swap('0000000000000000900-0000000003', 'CTOKEN', 'CPAIR', 'CNEXTPOOL', 'sell', 20, 1000, 'txA', 900, ts) then
+    raise exception 'a new swap was not recorded';
+  end if;
+  if lite.record_pool_swap('0000000000000000900-0000000003', 'CTOKEN', 'CPAIR', 'CNEXTPOOL', 'sell', 20, 1000, 'txA', 900, ts) then
+    raise exception 'a swap read again was recorded again';
+  end if;
+  select trader into t from lite.pool_swaps where event_id = '0000000000000000900-0000000003';
+  if t is distinct from 'GSELLER' then raise exception 'a sell read after its transfer: trader %', t; end if;
+
+  -- The swap read first: its `to` until the transfer comes.
+  perform lite.record_pool_swap('0000000000000000901-0000000003', 'CTOKEN', 'CPAIR', 'CNEXTPOOL', 'sell', 20, 1000, 'txB', 901, ts);
+  select trader into t from lite.pool_swaps where event_id = '0000000000000000901-0000000003';
+  if t is distinct from 'CNEXTPOOL' then raise exception 'a sell before its transfer: trader %', t; end if;
+  perform lite.record_token_event('0000000000000000901-0000000001', 'CTOKEN', 'transfer', 'GSELLER2', 'CPAIR', null, 1000, 'txB', 901, ts);
+  select trader into t from lite.pool_swaps where event_id = '0000000000000000901-0000000003';
+  if t is distinct from 'GSELLER2' then raise exception 'a sell whose transfer came after it: trader %', t; end if;
+
+  -- Two sells in one transaction, both swaps read before both transfers: each ends with the transfer just before it.
+  perform lite.record_pool_swap('0000000000000000902-0000000003', 'CTOKEN', 'CPAIR', 'CNEXTPOOL', 'sell', 20, 1000, 'txC', 902, ts);
+  perform lite.record_pool_swap('0000000000000000902-0000000006', 'CTOKEN', 'CPAIR', 'CNEXTPOOL', 'sell', 20, 1000, 'txC', 902, ts);
+  perform lite.record_token_event('0000000000000000902-0000000001', 'CTOKEN', 'transfer', 'GS1', 'CPAIR', null, 1000, 'txC', 902, ts);
+  perform lite.record_token_event('0000000000000000902-0000000004', 'CTOKEN', 'transfer', 'GS2', 'CPAIR', null, 1000, 'txC', 902, ts);
+  select (select trader from lite.pool_swaps where event_id = '0000000000000000902-0000000003') as first,
+         (select trader from lite.pool_swaps where event_id = '0000000000000000902-0000000006') as second into r;
+  if r.first is distinct from 'GS1' or r.second is distinct from 'GS2' then raise exception 'two sells in one transaction: %', r; end if;
+
+  -- A buy's trader is who got the tokens, whatever went into the pair before it.
+  perform lite.record_token_event('0000000000000000903-0000000001', 'CTOKEN', 'transfer', 'GLP', 'CPAIR', null, 1, 'txD', 903, ts);
+  perform lite.record_pool_swap('0000000000000000903-0000000003', 'CTOKEN', 'CPAIR', 'GBUYER', 'buy', 20, 1000, 'txD', 903, ts);
+  select trader into t from lite.pool_swaps where event_id = '0000000000000000903-0000000003';
+  if t is distinct from 'GBUYER' then raise exception 'a buy: trader %', t; end if;
+
+  -- Priced by its transaction's sync read first; the launch's last trade is its time.
+  update lite.launches set pool_tx = 'txE', last_price = 0.000060 where token = 'CTOKEN';
+  perform lite.record_pool_swap('0000000000000000905-0000000003', 'CTOKEN', 'CPAIR', 'GBUYER', 'buy', 30, 500, 'txE', 905, timestamptz '2026-10-14 13:00+00');
+  select s.price, l.last_trade_at into r from lite.pool_swaps s join lite.launches l on l.token = s.token
+   where s.event_id = '0000000000000000905-0000000003';
+  if r.price is distinct from 0.000060 or r.last_trade_at is distinct from timestamptz '2026-10-14 13:00+00' then
+    raise exception 'a swap after its sync: %', r;
+  end if;
+  execute 'reset role';
+  raise notice 'ok: record_pool_swap';
 end $$;
 
 rollback;
