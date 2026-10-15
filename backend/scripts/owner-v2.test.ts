@@ -728,7 +728,7 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
         "✓ keys file mode is 600",
         "✓ deploy key is ADMIN_PUBLIC's",
         "✓ treasury trusts USDC",
-        "✓ deployer holds at least 6,000 XLM",
+        "✓ deployer holds at least 3,000 XLM",
         "✓ Aquarius router WASM hash matches fixtures.json",
         "✓ Aquarius ConstantPoolHash matches fixtures.json",
         "✓ Aquarius TokenHash matches fixtures.json",
@@ -736,7 +736,7 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
         "✓ reviewed WASMs",
       ]
     ) assertStringIncludes(ok.out, line);
-    // 7,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
+    // 4,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
     assertEquals((await owner(k, ["check", "--fund-aqua-float"])).code, 0);
     // A WASM in dist that differs from the reviewed build fails the check, as it would stop the deploy.
     const lp = `${k.root}contracts/dist/dyor_launchpad_v2.wasm`;
@@ -750,10 +750,10 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     // A deployer below the TTL step's rent fails it.
     const roles = await rolesOf(k);
     const xlmBefore = k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm;
-    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = 5_000n * XLM;
+    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = 2_500n * XLM;
     const poor = await owner(k, ["check"]);
     assertEquals(poor.code, 1, poor.out);
-    assertStringIncludes(poor.out, "✗ deployer holds at least 6,000 XLM");
+    assertStringIncludes(poor.out, "✗ deployer holds at least 3,000 XLM");
     k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = xlmBefore;
     // A deploy key that isn't the admin's is a failure.
     k.env.DEPLOYER_SECRET = Keypair.random().secret();
@@ -836,9 +836,10 @@ Deno.test("deploy: the owner's testnet end to end, then an idempotent re-run, th
     assert(keptAlive[0].contracts.includes(SOROSWAP_FACTORY));
     assert(keptAlive[0].hashes.includes(SOROSWAP_FACTORY_CODE) && keptAlive[0].hashes.includes(SOROSWAP_PAIR_CODE));
     for (const k2 of [...keptAlive[0].contracts, ...keptAlive[0].hashes]) assert(k.ledger.ttl.get(k2)! >= k.ledger.ledger + TTL_EXTEND_LEDGERS - 2, `${k2} reaches ${TTL_EXTEND_DAYS} days`);
-    assertStringIncludes(r.out, "extended 18 instance and WASM entries to 179 days");
-    assertStringIncludes(r.out, "(179 days)");
-    assertStringIncludes(r.out, "3. Start the keeper's TTL upkeep (lite-indexer) before testers are invited");
+    assertStringIncludes(r.out, "extended 18 instance and WASM entries to 75 days");
+    assertStringIncludes(r.out, "(75 days)");
+    assertStringIncludes(r.out, "3. The v2 contracts and WASMs now live 75 days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)");
+    assertStringIncludes(r.out, "must still run before testers are invited");
     assertStringIncludes(r.out, "✓ exec-soroswap callers() contains launchpad-v2 and moments-graduator");
     assertStringIncludes(r.out, "✓ launchpad-v2 venues() Soroswap venue executor is exec-soroswap");
     const roles = await rolesOf(k);
@@ -1715,7 +1716,7 @@ Deno.test("the TTL step is checked: an entry left short fails the run loudly, be
     k.ttlSkip = [launchpadWasm];
     const r = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r.code, 1);
-    assertStringIncludes(r.out, "the TTL step didn't reach 179 days");
+    assertStringIncludes(r.out, "the TTL step didn't reach 75 days");
     assertMatch(r.out, /dyor_launchpad_v2\.wasm code: live until \d+/);
     assertStringIncludes(r.out, "Run the same command again");
     assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file yet");
@@ -1883,7 +1884,7 @@ Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, an
         "    moments-graduator-qa-fail soroswap_factory() is the Soroswap factory",
         "  any mismatch stops the run there: no admin call, no TTL step and no deployment file",
         "Wiring read-back: runs after the constructors (25 checks, listed above)",
-        "to 179 days (testnet's maximum is 180)",
+        "to 75 days (past the 2026-12-16 testnet reset) where they have less",
       ]
     ) assertStringIncludes(dry.out, s);
     const r = await deployDefault(k, ["--deployment", "testnet-qa"]);
@@ -1935,8 +1936,10 @@ Deno.test("wiring read-back: a planned contract not at its id after the construc
   }
 });
 
-Deno.test("TTL: 179 days stays under testnet's maximum entry TTL, with a day to spare; the Soroswap entries are extended only when live", async () => {
-  assertEquals([TTL_EXTEND_DAYS, TTL_THRESHOLD_DAYS, TTL_EXTEND_LEDGERS], [179, 180, 3_093_120]);
+Deno.test("TTL: 75 days (past the 2026-12-16 testnet reset), under testnet's maximum entry TTL; the Soroswap entries are passed only when live", async () => {
+  assertEquals([TTL_EXTEND_DAYS, TTL_THRESHOLD_DAYS, TTL_EXTEND_LEDGERS], [75, 75, 1_296_000]);
+  // 2026-10-15 + 75 days is past 2026-12-16.
+  assert(new Date(Date.UTC(2026, 9, 15) + TTL_EXTEND_DAYS * 86_400_000) > new Date(Date.UTC(2026, 11, 16)));
   // An extension must stay at or below max_entry_ttl − 1 (3,110,399 on testnet, 2026-10-15).
   assert(TTL_EXTEND_LEDGERS <= TESTNET_MAX_ENTRY_TTL - 1 - 17_279, "at least a day under the maximum");
   const k = await kit();

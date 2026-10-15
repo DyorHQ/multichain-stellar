@@ -110,9 +110,11 @@ Deno.test("ttl-extend: code steps add CODE_STEP_DAYS each and end exactly at the
   assertEquals(codeSteps(177 * DAY, 179 * DAY), [179 * DAY]);
   assertEquals(codeSteps(200 * DAY, 179 * DAY), [179 * DAY]);
   assertEquals(codeSteps(-5, 30 * DAY, 25).map((s) => s / DAY), [25, 30]);
+  // The deploy's 75 days: three transactions for a freshly uploaded WASM (7 days).
+  assertEquals(codeSteps(7 * DAY, 75 * DAY).map((s) => s / DAY), [32, 57, 75]);
 });
 
-Deno.test("ttl-extend: one batch of every WASM can't be paid in one transaction, at 179 days nor at 30 (why the step exists)", async () => {
+Deno.test("ttl-extend: one batch of every WASM can't be paid in one transaction, at 75 days nor at 30 (why the step exists)", async () => {
   const { c, e } = world();
   const { TransactionBuilder, Operation, SorobanDataBuilder, BASE_FEE } = await import("@stellar/stellar-sdk");
   const batch = (days: number, keys: string[]) =>
@@ -121,15 +123,15 @@ Deno.test("ttl-extend: one batch of every WASM can't be paid in one transaction,
       .setSorobanData(new SorobanDataBuilder().setReadOnly(keys.map(codeKey)).build())
       .setTimeout(60)
       .build();
-  // launchpad-v2's WASM alone, 7 → 179 days: about 1,270 XLM.
-  await assertRejects(() => c.prepare(batch(179, [e.padCode])), Error, "exceeds the maximum uint32 value");
+  // launchpad-v2's WASM alone, 7 → 75 days: about 500 XLM, 650 with the headroom.
+  await assertRejects(() => c.prepare(batch(75, [e.padCode])), Error, "exceeds the maximum uint32 value");
   // The WASMs together, 7 → 30 days (what a keepAlive batch of 20 would send).
   await assertRejects(() => c.prepare(batch(30, [e.big, e.padCode, e.factoryCode])), Error, "exceeds the maximum uint32 value");
   // One step of one WASM fits.
   await c.prepare(batch(7 + CODE_STEP_DAYS, [e.big]));
 });
 
-Deno.test("ttl-extend: every entry under the threshold reaches the target, instances together and each WASM in steps, no fee over the limit", async () => {
+Deno.test("ttl-extend: the deploy's 75 days: entries under 75 days reach it, instances together and each WASM in steps, no fee over the limit", async () => {
   const { c, e } = world();
   const before = c.ledger;
   const lines: string[] = [];
@@ -139,45 +141,48 @@ Deno.test("ttl-extend: every entry under the threshold reaches the target, insta
     payer,
     [e.pad, e.mo, e.factory, e.gone, e.pad],
     [e.big, e.padCode, e.factoryCode, e.pairCode, e.fresh],
-    179,
-    180,
+    75,
+    75,
     (l) => lines.push(l),
     (k) => (k === e.padCode ? "dyor_launchpad_v2.wasm code" : k.slice(0, 8)),
   );
-  // The archived instance is left out; the WASM with 200 days left isn't touched.
-  assertEquals(r.extended, 3 + 4);
-  for (const k of [e.pad, e.mo, e.factory, e.big, e.padCode, e.factoryCode, e.pairCode]) {
-    assert(c.ttl.get(k)! >= before + 179 * DAY, `${k} reaches 179 days`);
-    assert(c.ttl.get(k)! <= c.ledger + 179 * DAY, `${k} isn't extended past 179 days`);
+  // The archived instance is left out; the Soroswap-like entries (94.2 and 177.2 days) and the WASM with 200 days left
+  // have more than 75 days and aren't touched.
+  assertEquals(r.extended, 2 + 2);
+  for (const k of [e.pad, e.mo, e.big, e.padCode]) {
+    assert(c.ttl.get(k)! >= before + 75 * DAY, `${k} reaches 75 days`);
+    assert(c.ttl.get(k)! <= c.ledger + 75 * DAY, `${k} isn't extended past 75 days`);
   }
-  assertEquals(c.ttl.get(e.fresh), before + 200 * DAY);
+  for (const [k, days] of [[e.factory, 94.2], [e.factoryCode, 94.2], [e.pairCode, 177.2], [e.fresh, 200]] as const) {
+    assertEquals(c.ttl.get(k), before + Math.round(days * DAY), `${k} untouched`);
+  }
   assertEquals(c.ttl.has(e.gone), false);
-  // One transaction for the three instances; 7 steps for each WASM from 7 days, 4 from 94.2, 1 from 177.2.
-  assertEquals(c.sent[0].keys.sort(), [e.pad, e.mo, e.factory].sort());
-  assertEquals(c.sent.length, 1 + 7 + 7 + 4 + 1);
+  // One transaction for the two instances; 3 steps (32, 57, 75 days) for each WASM from 7 days.
+  assertEquals(c.sent[0].keys.sort(), [e.pad, e.mo].sort());
+  assertEquals(c.sent.length, 1 + 3 + 3);
   assert(c.sent.slice(1).every((t) => t.keys.length === 1), "each WASM alone");
   assertEquals(r.transactions, c.sent.length);
   assertEquals(r.fee, c.sent.reduce((s, t) => s + t.fee, 0n));
-  // The largest step stays well under the 429 XLM a transaction can pay.
+  // The largest step (the 128 KB WASM, 25 days) stays well under the 429 XLM a transaction can pay.
   const largest = c.sent.reduce((m, t) => (t.fee > m ? t.fee : m), 0n);
   assert((largest * 13n) / 10n + 100_100n < UINT32_MAX, `largest step ${largest}`);
   assert(largest < 270n * BigInt(XLM), `largest step ${Number(largest) / XLM} XLM`);
-  assertStringIncludes(lines.join("\n"), "extended 3 instances to 179.0 days");
+  assertStringIncludes(lines.join("\n"), "extended 2 instances to 75.0 days");
   assertStringIncludes(lines.join("\n"), "extended dyor_launchpad_v2.wasm code to 32.0 days");
-  // About 179 days of rent for the 7.4 XLM-a-day WASM: 172 days × 7.4 ≈ 1,273 XLM, over seven transactions.
+  // 68 days of rent for the 7.4 XLM-a-day WASM: about 503 XLM, over three transactions.
   const padFee = c.sent.filter((t) => t.keys[0] === e.padCode).reduce((s, t) => s + t.fee, 0n);
-  assert(Math.abs(Number(padFee) / XLM - 172 * 7.4) < 2, `${Number(padFee) / XLM} XLM`);
+  assert(Math.abs(Number(padFee) / XLM - 68 * 7.4) < 2, `${Number(padFee) / XLM} XLM`);
 });
 
 Deno.test("ttl-extend: a transaction that fails stops the step; running it again goes on from where it stopped", async () => {
   const { c, e } = world();
   const before = c.ledger;
-  c.failAt = 3;
-  await assertRejects(() => extendTtl(c, Keypair.random(), [e.pad], [e.padCode], 179, 180), Error, "txFAILED");
-  assertEquals(c.sent.length, 3);
+  c.failAt = 2;
+  await assertRejects(() => extendTtl(c, Keypair.random(), [e.pad], [e.padCode], 75, 75), Error, "txFAILED");
+  assertEquals(c.sent.length, 2);
   c.failAt = -1;
-  const again = await extendTtl(c, Keypair.random(), [e.pad], [e.padCode], 179, 180);
-  // The instance has a few ledgers under 179 days, so under the 180-day threshold: extended again, for those ledgers.
-  assert(c.ttl.get(e.padCode)! >= before + 179 * DAY);
-  assertEquals(again.transactions, 1 + 5, "the instance again, then the WASM's five remaining steps from 57 days");
+  const again = await extendTtl(c, Keypair.random(), [e.pad], [e.padCode], 75, 75);
+  // The instance has a few ledgers under 75 days, so under the threshold: extended again, for those ledgers.
+  assert(c.ttl.get(e.padCode)! >= before + 75 * DAY);
+  assertEquals(again.transactions, 1 + 2, "the instance again, then the WASM's two remaining steps from 32 days");
 });

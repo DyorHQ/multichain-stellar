@@ -22,8 +22,8 @@
 // a); the planned ids (L-c) and the re-run check; uploads; the executors, the locker, the graduator, launchpad-v2 and
 // moments-v2 (§3.4); the wiring read-back (lib/wiring-v2.ts: every contract at its planned id, then the executors,
 // the factory and the locker read back with views, refused on any mismatch); the admin's configuration with venue
-// ids read back from venues() (F8); 179 days of TTL for every instance and WASM and for the Soroswap factory's
-// instance, factory WASM and pair WASM (L-g); the deployment file; the next steps (L-h). A dry run prints the plan
+// ids read back from venues() (F8); 75 days of TTL (past the 2026-12-16 testnet reset) for every instance and WASM
+// and for the Soroswap factory's instance, factory WASM and pair WASM (L-g); the deployment file; the next steps (L-h). A dry run prints the plan
 // and sends nothing; --offline also skips the read-only network checks. A run that failed halfway can be run again:
 // what is already on chain and matches the plan is skipped, and anything that differs is refused.
 import { Buffer } from "node:buffer";
@@ -294,16 +294,16 @@ async function qaKeys(ctx: DeployCtx, dryRun: boolean): Promise<Keys> {
 // ------------------------------------------------------------------------------------------------ the plan
 
 /** The TTL step (L-g) extends every v2 instance and WASM, and the Soroswap factory's instance and the factory and pair
- *  WASMs, to 179 days, every entry with less than 180 days left (lib/ttl-extend.ts: a transaction's fee is at most
- *  429 XLM, so each WASM goes alone in steps of CODE_STEP_DAYS). Testnet's max_entry_ttl
- *  (CONFIG_SETTING_STATE_ARCHIVAL, read 2026-10-15) is 3,110,400 ledgers, 180 days at 5 s, and an extension must stay
- *  at or below max_entry_ttl − 1: 179 days stays a day under it. The rent is paid by the deployer: about 24 XLM a day
- *  for testnet's ~320 KB of v2 WASM at the 2026-10-15 rates, so about 4,100 XLM on the first run (MIN_DEPLOYER_XLM
- *  covers it with the uploads). Per-launch tokens, Moment NFTs and coins start at the network minimum (7 days): the
- *  keeper's TTL upkeep keeps them alive. */
-export const TTL_EXTEND_DAYS = 179;
-export const TTL_THRESHOLD_DAYS = 180;
-/** 179 days of ledgers (17,280 a day): the read-back's target past the ledger before the extension. */
+ *  WASMs, to 75 days: every entry with less than 75 days left (the Soroswap ones have more today, so they are
+ *  skipped). Testnet resets on 2026-12-16 (docs/ARCHITECTURE.md), 62 days after 2026-10-15: longer buys nothing.
+ *  Testnet's max_entry_ttl (CONFIG_SETTING_STATE_ARCHIVAL, read 2026-10-15) is 3,110,400 ledgers, 180 days. A
+ *  transaction's fee is at most 429 XLM, so each WASM goes alone in steps of CODE_STEP_DAYS (lib/ttl-extend.ts). The
+ *  rent is paid by the deployer: at most 24 XLM a day for testnet's ~320 KB of v2 WASM at the 2026-10-15 rates, so
+ *  about 1,630 XLM on the first run (MIN_DEPLOYER_XLM covers it with the uploads). Per-launch tokens, Moment NFTs and
+ *  coins start at the network minimum (7 days): the keeper's TTL upkeep keeps them alive. */
+export const TTL_EXTEND_DAYS = 75;
+export const TTL_THRESHOLD_DAYS = 75;
+/** 75 days of ledgers (17,280 a day): the read-back's target past the ledger before the extension. */
 export const TTL_EXTEND_LEDGERS = TTL_EXTEND_DAYS * 17_280;
 /** Testnet's max_entry_ttl as read on 2026-10-15; TTL_EXTEND_LEDGERS must stay under it (a test checks). */
 export const TESTNET_MAX_ENTRY_TTL = 3_110_400;
@@ -556,8 +556,9 @@ function printPlan(io: Io, plan: Plan) {
   say("  set_launch_fee, set_fees and set_venue_enabled only where the chain differs from the economics file (the");
   say("  constructor already takes the launch fee, starts at §14.1's fees and enables every initial venue)");
   say(`  then every v2 instance and WASM, and the Soroswap factory's instance and its factory and pair WASMs, are extended`);
-  say(`  to ${TTL_EXTEND_DAYS} days (testnet's maximum is 180), paid by the deployer: about 4,100 XLM of rent on the first run,`);
-  say(`  each WASM alone in ${CODE_STEP_DAYS}-day steps (a transaction's fee is at most 429 XLM): 60 to 70 transactions, several minutes`);
+  say(`  to ${TTL_EXTEND_DAYS} days (past the 2026-12-16 testnet reset) where they have less, paid by the deployer: about 1,650 XLM`);
+  say(`  of rent on the first run, each WASM alone in ${CODE_STEP_DAYS}-day steps (a transaction's fee is at most 429 XLM): 25 to 30`);
+  say("  transactions");
   say(`  and backend/supabase/functions/_shared/deployments/${profile.deploymentFile} is written`);
 }
 
@@ -937,10 +938,10 @@ async function deploy(
   const quotesRead: Record<string, unknown> = {};
   for (const [k, a] of assets) quotesRead[k] = scValToNative(await chain.view(launchpad, "quote_economics", [new Address(a).toScVal()]));
 
-  // 9. TTL: 179 days for every v2 instance and WASM, and for the Soroswap factory's instance and the factory and pair
-  //    WASMs (ExtendFootprintTTL is permissionless), paid by the deployer (L-g). The step's own report isn't trusted:
-  //    every entry's live-until ledger is read back, and each must be at least 179 days past the ledger before the
-  //    extension (an extension applied at ledger A sets A + 179 days).
+  // 9. TTL: 75 days for every v2 instance and WASM, and for the Soroswap factory's instance and the factory and pair
+  //    WASMs where they have less (ExtendFootprintTTL is permissionless), paid by the deployer (L-g). The step's own
+  //    report isn't trusted: every entry's live-until ledger is read back, and each must be at least 75 days past the
+  //    ledger before the extension (an extension applied at ledger A sets A + 75 days).
   const soroswap = await soroswapTtlEntries(chain, network().soroswapFactory);
   for (const n of soroswap.notes) say(`  note: ${n}`);
   const contracts = [...new Set([...[...plan.ids.values()].map((p) => p.id), ...soroswap.contracts])];
@@ -983,8 +984,9 @@ async function deploy(
   say("Next steps:");
   say(`  1. Send that file to the lead to commit; CT-12 binds the app's pins to it later.`);
   say("  2. Do NOT run the v1 cutover (admin-v2.ts cutover-v1) until the lead says the app serves v2: v1 must keep working until then (§17 steps 6–7).");
-  say(`  3. Start the keeper's TTL upkeep (lite-indexer) before testers are invited: this run gave the v2 contracts and WASMs ${TTL_EXTEND_DAYS} days,`);
-  say("     but every launch token, Moment NFT and Moment coin starts at the network minimum (about 7 days) and only the keeper extends it.");
+  say(`  3. The v2 contracts and WASMs now live ${TTL_EXTEND_DAYS} days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)`);
+  say("     must still run before testers are invited: every launch token, Moment NFT and Moment coin starts at the network minimum");
+  say("     (about 7 days) and only the keeper extends it.");
   return 0;
 }
 
