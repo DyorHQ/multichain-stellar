@@ -6,8 +6,8 @@
 // its live balance(). The economics and the board need no session.
 //
 // Before the owner's redeploy (O-1) it runs on the current deployment, whose feed that redeploy retires; after it,
-// only on testnet-qa (Q3). E2E_NO_MEDIA=1 is for a stack without media storage (before the local media stand-in): the
-// coin is then launched without metadata, and the summary says so.
+// only on testnet-qa (Q3), and anywhere else it is skipped. E2E_NO_MEDIA=1 is for a stack without media storage
+// (before the local media stand-in): the coin is then launched without metadata, and the summary says so.
 import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import { hex, SEP53_PREFIX, sha256 } from "../../../supabase/functions/_shared/auth.ts";
 import { verifyTransaction } from "../../../supabase/functions/_shared/verify.ts";
@@ -19,6 +19,8 @@ const DESCRIPTION = "A cat that runs end-to-end tests.";
 const WEBSITE = "https://dyorhq.fun/";
 const X = "https://x.com/dyorhq";
 const CREATOR_FEE_BPS = 100;
+/** The live testnet's launchpad until O-1: the redeploy retires it, and the test coins with its feed. */
+const BEFORE_O1_LAUNCHPAD = "CDZD53SNMXM4H7GUHHCCMCCS3W3VRNSG63NXB4OPVK7OELYYIGKC5I6I";
 /** A 1×1 PNG. */
 const PNG = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="), (c) => c.charCodeAt(0));
 
@@ -114,8 +116,13 @@ async function trade(t: E2E, kp: Keypair, token: string, launch: string, quote: 
   return q;
 }
 
-export default async function launch(t: E2E): Promise<string> {
+export default async function launch(t: E2E): Promise<string | null> {
   t.config ??= await api(t, null, "GET", "/config");
+  const deployment = t.config.deployment;
+  if (deployment?.id !== "testnet-qa" && deployment?.launchpad !== BEFORE_O1_LAUNCHPAD) {
+    console.log(`  not on ${deployment?.id ?? "this network"}: after O-1, test coins are launched on testnet-qa only (Q3)`);
+    return null;
+  }
   if (!t.token) t.token = await account(t, t.user);
   const me = t.user.publicKey();
   const { ONE } = t;
