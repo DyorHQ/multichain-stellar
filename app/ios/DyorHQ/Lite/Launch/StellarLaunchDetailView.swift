@@ -210,7 +210,9 @@ struct StellarLaunchDetailView: View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    StellarTokenLogo(symbol: symbol, image: coin?.image, size: 48)
+                    // The coin's own launch art, in the round logo disc every Stellar logo sits in (DyorKit's lint keeps
+                    // symbol-keyed logos off the app's screens).
+                    StellarLogoDisc(size: 48) { StellarArtwork(symbol: symbol, image: coin?.image, pointSize: 48) }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(verbatim: coin?.name ?? symbol).font(.title3.weight(.semibold))
                         Text(verbatim: statusLine).font(.subheadline).foregroundStyle(.secondary)
