@@ -145,6 +145,7 @@ function fakeChain(opts: { failSwap?: boolean; rate?: bigint } = {}) {
     contractWasmHash: () => Promise.resolve(null),
     instanceStorage: () => Promise.resolve(null),
     codeExists: () => Promise.resolve(false),
+    liveUntil: () => Promise.resolve(new Map()),
     view(id, fn, args) {
       views.push({ fn, args: args.map((a) => scValToNative(a)) });
       if (id === fx.router && fn === "estimate_swap") {

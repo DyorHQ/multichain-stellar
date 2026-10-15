@@ -62,6 +62,8 @@ export interface ChainReader extends ContractReader {
   instanceStorage(id: string): Promise<{ key: xdr.ScVal; val: xdr.ScVal }[] | null>;
   /** True when the WASM with this hash (hex) is uploaded. */
   codeExists(hashHex: string): Promise<boolean>;
+  /** The live-until ledger of each contract instance and each WASM (by id or hash); null when the entry is missing. */
+  liveUntil(contracts: string[], codeHashes: string[]): Promise<Map<string, number | null>>;
 }
 
 /** Everything that sends. */
@@ -95,8 +97,59 @@ function codeKey(hashHex: string): xdr.LedgerKey {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** The network's per-transaction instruction limit (Inv2 §3.1). */
-const MAX_INSTRUCTIONS = 400_000_000;
+// ------------------------------------------------------------------------------------------------ resource limits
+
+/** The network's per-transaction resource limits, read live from its config settings. */
+export interface TxLimits {
+  instructions: number;
+  diskReadBytes: number;
+  writeBytes: number;
+}
+
+const configKey = (id: xdr.ConfigSettingId) => xdr.LedgerKey.configSetting(new xdr.LedgerKeyConfigSetting({ configSettingId: id }));
+
+/** Reads txMaxInstructions (CONTRACT_COMPUTE_V0) and txMaxDiskReadBytes and txMaxWriteBytes (CONTRACT_LEDGER_COST_V0)
+ *  from the network's config settings. Throws when they can't be read. */
+export async function readTxLimits(server: Pick<rpc.Server, "getLedgerEntries">): Promise<TxLimits> {
+  const r = await server.getLedgerEntries(
+    configKey(xdr.ConfigSettingId.configSettingContractComputeV0()),
+    configKey(xdr.ConfigSettingId.configSettingContractLedgerCostV0()),
+  );
+  let instructions: number | null = null;
+  let diskReadBytes: number | null = null;
+  let writeBytes: number | null = null;
+  for (const e of r.entries) {
+    const cs = e.val.configSetting();
+    if (cs.switch().name === "configSettingContractComputeV0") instructions = Number(cs.contractCompute().txMaxInstructions().toString());
+    if (cs.switch().name === "configSettingContractLedgerCostV0") {
+      const c = cs.contractLedgerCost();
+      diskReadBytes = Number(c.txMaxDiskReadBytes());
+      writeBytes = Number(c.txMaxWriteBytes());
+    }
+  }
+  if (!instructions || !diskReadBytes || !writeBytes) throw new Error("the network's config settings didn't include the per-transaction limits");
+  return { instructions, diskReadBytes, writeBytes };
+}
+
+/** The resources to declare: the simulation's with headroom (state can move between the simulation and the ledger that
+ *  applies it), never above the network's per-transaction limits. A simulation that already exceeds a limit can't be
+ *  sent at all, so it is refused. */
+export function fitResources(
+  simulated: { instructions: number; diskReadBytes: number; writeBytes: number },
+  limits: TxLimits,
+): { instructions: number; diskReadBytes: number; writeBytes: number } {
+  const over = (["instructions", "diskReadBytes", "writeBytes"] as const).filter((k) => simulated[k] > limits[k]);
+  if (over.length) {
+    throw new Error(
+      `this transaction needs more than the network allows per transaction (${over.map((k) => `${k} ${simulated[k]} > ${limits[k]}`).join(", ")}); nothing was sent`,
+    );
+  }
+  return {
+    instructions: Math.min(limits.instructions, Math.ceil(simulated.instructions * 1.25) + 100_000),
+    diskReadBytes: Math.min(limits.diskReadBytes, Math.ceil(simulated.diskReadBytes * 1.2) + 1_000),
+    writeBytes: Math.min(limits.writeBytes, Math.ceil(simulated.writeBytes * 1.2) + 1_000),
+  };
+}
 
 export interface TestnetUrls {
   rpcUrl: string;
@@ -104,13 +157,28 @@ export interface TestnetUrls {
   friendbotUrl: string;
 }
 
-/** Stellar testnet through its public endpoints (or STELLAR_RPC_URL for RPC, as the functions use it). */
-export function testnetChain(urls: TestnetUrls): Chain {
-  const server = new rpc.Server(urls.rpcUrl, { allowHttp: urls.rpcUrl.startsWith("http://") });
-  const horizon = new Horizon.Server(urls.horizonUrl);
+/** The RPC calls the chain makes (rpc.Server's), so tests can stand in for the network. */
+export type RpcLike = Pick<
+  rpc.Server,
+  "getLedgerEntries" | "getLatestLedger" | "simulateTransaction" | "getAccount" | "sendTransaction" | "getTransaction"
+>;
+
+/** Stellar testnet through its public endpoints (or STELLAR_RPC_URL for RPC, as the functions use it). `deps` replaces
+ *  the RPC and Horizon clients (tests). */
+export function testnetChain(urls: TestnetUrls, deps: { server?: RpcLike; horizon?: Pick<Horizon.Server, "loadAccount"> } = {}): Chain {
+  const server: RpcLike = deps.server ?? new rpc.Server(urls.rpcUrl, { allowHttp: urls.rpcUrl.startsWith("http://") });
+  const horizon = deps.horizon ?? new Horizon.Server(urls.horizonUrl);
   const instance = async (id: string) => {
     const r = await server.getLedgerEntries(instanceKey(id));
     return r.entries.length ? r.entries[0].val.contractData().val().instance() : null;
+  };
+  let limits: Promise<TxLimits> | null = null;
+  const txLimits = () => {
+    limits ??= readTxLimits(server).catch((e) => {
+      limits = null;
+      throw new Error(`can't read the network's per-transaction limits (${(e as Error).message}); nothing was sent`);
+    });
+    return limits;
   };
   return {
     passphrase: TESTNET_PASSPHRASE,
@@ -159,6 +227,19 @@ export function testnetChain(urls: TestnetUrls): Chain {
     async codeExists(hashHex) {
       return (await server.getLedgerEntries(codeKey(hashHex))).entries.length > 0;
     },
+    async liveUntil(contracts, codeHashes) {
+      const wanted = [...contracts.map((id) => ({ name: id, key: instanceKey(id) })), ...codeHashes.map((h) => ({ name: h, key: codeKey(h) }))];
+      const out = new Map<string, number | null>(wanted.map((w) => [w.name, null]));
+      for (let i = 0; i < wanted.length; i += 50) {
+        const batch = wanted.slice(i, i + 50);
+        const r = await server.getLedgerEntries(...batch.map((b) => b.key));
+        for (const e of r.entries) {
+          const found = batch.find((b) => b.key.toXDR("base64") === e.key.toXDR("base64"));
+          if (found) out.set(found.name, e.liveUntilLedgerSeq ?? null);
+        }
+      }
+      return out;
+    },
     async view(id, fn, args) {
       const source = new Account(Keypair.random().publicKey(), "0");
       const tx = new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: TESTNET_PASSPHRASE })
@@ -179,19 +260,17 @@ export function testnetChain(urls: TestnetUrls): Chain {
       return await server.getAccount(id);
     },
     async prepare(tx) {
+      const lim = await txLimits();
       const sim = await server.simulateTransaction(tx);
       if (rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed: ${simulationError(sim.error)}`);
       if (rpc.Api.isSimulationRestore(sim)) throw new Error("part of this contract's state is archived; restore it first");
       const ok = sim as rpc.Api.SimulateTransactionSuccessResponse;
-      // Headroom: state can move between the simulation and the ledger that applies it. The resource fee lives in
-      // the Soroban data (assembleTransaction adds it to the fee), so it is raised with the resources.
+      // Headroom within the network's limits (fitResources). The resource fee lives in the Soroban data
+      // (assembleTransaction adds it to the fee), so it is raised with the resources.
       const data = ok.transactionData;
       const r = data.build().resources();
-      data.setResources(
-        Math.min(MAX_INSTRUCTIONS, Math.ceil(r.instructions() * 1.25) + 100_000),
-        Math.ceil(r.diskReadBytes() * 1.2) + 1_000,
-        Math.ceil(r.writeBytes() * 1.2) + 1_000,
-      );
+      const fit = fitResources({ instructions: r.instructions(), diskReadBytes: r.diskReadBytes(), writeBytes: r.writeBytes() }, lim);
+      data.setResources(fit.instructions, fit.diskReadBytes, fit.writeBytes);
       data.setResourceFee(BigInt(Math.ceil(Number(ok.minResourceFee) * 1.3) + 100_000));
       ok.transactionData = data;
       return rpc.assembleTransaction(tx, ok).build();
@@ -248,6 +327,7 @@ export function readOnlyChain(chain: ChainReader): Chain {
     contractWasmHash: (id) => chain.contractWasmHash(id),
     instanceStorage: (id) => chain.instanceStorage(id),
     codeExists: (h) => chain.codeExists(h),
+    liveUntil: (contracts, hashes) => chain.liveUntil(contracts, hashes),
     view: (id, fn, args) => chain.view(id, fn, args),
     friendbot: refuse("Friendbot"),
     sourceAccount: refuse("building a transaction"),
@@ -345,7 +425,7 @@ export function parseEnvelope(text: string): UnsignedEnvelope {
   } catch {
     throw new Error("not an envelope file written by admin-v2.ts (not JSON)");
   }
-  if (raw?.format !== ENVELOPE_FORMAT) throw new Error(`not an envelope file written by admin-v2.ts (format ${String(raw?.format)})`);
+  if (raw?.format !== ENVELOPE_FORMAT) throw new Error(`not an envelope file written by admin-v2.ts (its format isn't ${ENVELOPE_FORMAT})`);
   for (const k of ["networkPassphrase", "role", "source", "xdr"]) {
     if (typeof raw[k] !== "string" || raw[k] === "") throw new Error(`the envelope file has no ${k}`);
   }

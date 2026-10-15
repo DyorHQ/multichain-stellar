@@ -1,6 +1,6 @@
 // Contract ids of the v2 singletons (CT-11a lead decision L-c): the derivation, the salts per generation, and the
 // re-run plan against a mocked RPC.
-import { assert, assertEquals, assertNotEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { Buffer } from "node:buffer";
 import { Address, Asset, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { TESTNET } from "../../supabase/functions/_shared/networks.ts";
@@ -14,6 +14,7 @@ import {
   saltFor,
   saltLabel,
   sameValue,
+  storageLeaves,
 } from "./contract-ids.ts";
 
 const TESTNET_PASSPHRASE = "Test SDF Network ; September 2015";
@@ -78,8 +79,10 @@ const B = "GAYMY43ASKVRTMJGS55BD3B3HKMHY4FETF4HUDVXRGZHMUUWFCFEINBT";
 const FACTORY = TESTNET.contracts.soroswapFactory;
 const HASH = "11".repeat(32);
 
-/** A mocked RPC: contracts by id, each with its WASM hash and its views' answers. */
-function mockChain(contracts: Record<string, { wasm: string; views: Record<string, xdr.ScVal | Error> }>): ContractReader & { calls: string[] } {
+/** A mocked RPC: contracts by id, each with its WASM hash, its views' answers and its instance storage. */
+function mockChain(
+  contracts: Record<string, { wasm: string; views: Record<string, xdr.ScVal | Error>; storage?: { key: xdr.ScVal; val: xdr.ScVal }[] | Error }>,
+): ContractReader & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
@@ -89,6 +92,12 @@ function mockChain(contracts: Record<string, { wasm: string; views: Record<strin
       const v = contracts[id]?.views[fn];
       if (v === undefined) return Promise.reject(new Error(`no ${fn}`));
       return v instanceof Error ? Promise.reject(v) : Promise.resolve(v);
+    },
+    instanceStorage(id) {
+      calls.push(`${id}.storage`);
+      const s = contracts[id]?.storage;
+      if (s instanceof Error) return Promise.reject(s);
+      return Promise.resolve(contracts[id] ? (s ?? []) : null);
     },
   };
 }
@@ -108,6 +117,7 @@ const planned: PlannedContract[] = [
       { label: "exec-soroswap factory()", fn: "factory", args: [], expected: FACTORY },
       { label: "exec-soroswap callers()", fn: "callers", args: [], expected: [lockerId, gradId] },
     ],
+    stored: [],
   },
   {
     name: "lp-locker",
@@ -117,8 +127,10 @@ const planned: PlannedContract[] = [
       { label: "lp-locker harvest_interval()", fn: "harvest_interval", args: [], expected: 3_600 },
       { label: "lp-locker aquarius_router()", fn: "aquarius_router", args: [], expected: null },
     ],
+    stored: [],
   },
-  { name: "moments-graduator", id: gradId, wasmHash: HASH, views: [] },
+  // No view: its configuration is checked in its instance storage.
+  { name: "moments-graduator", id: gradId, wasmHash: HASH, views: [], stored: [{ label: "executor", value: execId }, { label: "locker", value: lockerId }, { label: "coin_wasm_hash", value: HASH }] },
 ];
 
 Deno.test("a re-run skips a deployed contract whose views match the plan and deploys what is missing", async () => {
@@ -129,6 +141,37 @@ Deno.test("a re-run skips a deployed contract whose views match the plan and dep
   const r = await reconcile(planned, chain);
   assertEquals(r.map((x) => [x.name, x.state]), [["exec-soroswap", "deployed"], ["lp-locker", "deployed"], ["moments-graduator", "absent"]]);
   assertEquals(chain.calls, [`${execId}.factory`, `${execId}.callers`, `${lockerId}.harvest_interval`, `${lockerId}.aquarius_router`]);
+});
+
+/** An instance storage holding these values, the way a contract keeps its constructor arguments. */
+const storageOf = (...vals: xdr.ScVal[]) => [{ key: xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Config")]), val: xdr.ScVal.scvVec(vals) }];
+
+Deno.test("a contract without views is skipped only when its code hash and its instance storage both match the plan", async () => {
+  const good = storageOf(new Address(execId).toScVal(), new Address(lockerId).toScVal(), xdr.ScVal.scvBytes(Buffer.from(HASH, "hex")));
+  const ok = await reconcile([planned[2]], mockChain({ [gradId]: { wasm: HASH, views: {}, storage: good } }));
+  assertEquals(ok[0].state, "deployed");
+  // Another executor in its storage: a conflict naming the missing value.
+  const other = storageOf(new Address(B).toScVal(), new Address(lockerId).toScVal(), xdr.ScVal.scvBytes(Buffer.from(HASH, "hex")));
+  const [bad] = await reconcile([planned[2]], mockChain({ [gradId]: { wasm: HASH, views: {}, storage: other } }));
+  assertEquals(bad.state, "conflict");
+  assertEquals((bad as { differences: string[] }).differences, [`moments-graduator's instance storage doesn't hold executor ${execId}`]);
+  // Storage that can't be read is a conflict, never a skip.
+  const [unread] = await reconcile([planned[2]], mockChain({ [gradId]: { wasm: HASH, views: {}, storage: new Error("RPC down") } }));
+  assertEquals(unread.state, "conflict");
+  assertStringIncludes((unread as { differences: string[] }).differences[0], "can't be read (RPC down)");
+  // The right storage behind another WASM is still a conflict: the code hash comes first.
+  const [wasm] = await reconcile([planned[2]], mockChain({ [gradId]: { wasm: "33".repeat(32), views: {}, storage: good } }));
+  assertEquals(wasm.state, "conflict");
+});
+
+Deno.test("storage leaves are every address, byte string and string inside the keys and values", () => {
+  const leaves = storageLeaves([
+    { key: xdr.ScVal.scvSymbol("Callers"), val: addrs(execId, lockerId) },
+    { key: xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Config")]), val: xdr.ScVal.scvMap([new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("base"), val: nativeToScVal("https://dyorhq.fun/moments/", { type: "string" }) })]) },
+    { key: xdr.ScVal.scvSymbol("Hash"), val: xdr.ScVal.scvBytes(Buffer.from(HASH, "hex")) },
+    { key: xdr.ScVal.scvSymbol("Interval"), val: nativeToScVal(3_600n, { type: "u64" }) },
+  ]);
+  assertEquals([...leaves].sort(), [execId, lockerId, "https://dyorhq.fun/moments/", HASH].sort());
 });
 
 Deno.test("a re-run refuses a contract at its planned id whose views or WASM differ from the plan", async () => {

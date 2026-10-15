@@ -368,3 +368,35 @@ Deno.test("a re-run compares each contract's config views with the plan", () => 
   assertEquals(planned.find((c) => c.name === "launchpad-v2")!.wasmHash, hashes["launchpad-v2"]);
   assertThrows(() => plannedContracts(plan(TESTNET, true, false), constructors(plan(TESTNET, true, false))), Error, "absent from dist");
 });
+
+Deno.test("a re-run also compares the instance storage: every address, WASM hash and string of the constructor", () => {
+  const p = plan(TESTNET, true);
+  const planned = plannedContracts(p, constructors(p));
+  const stored = (n: string): Record<string, string | undefined> => Object.fromEntries(planned.find((c) => c.name === n)!.stored.map((s) => [s.label, s.value]));
+  // moments-graduator has no view: the storage is its whole check.
+  assertEquals(stored("moments-graduator"), {
+    moments: p.ids["moments-v2"],
+    coin_wasm_hash: hashes["moment-coin"],
+    executor: p.ids["exec-soroswap"],
+    locker: p.ids["lp-locker"],
+    soroswap_factory: net.soroswapFactory,
+  });
+  // exec-aquarius shows only max_pool_payment: its router, payment asset and callers come from the storage.
+  assertEquals(stored("exec-aquarius"), {
+    router: net.aquariusRouter,
+    payment_asset: AQUA_SAC,
+    "callers[0]": p.ids["launchpad-v2"],
+    "callers[1]": p.ids["moments-graduator"],
+  });
+  // Nested values too (the venue executors, the policy's platform and treasury), each value once.
+  const lp = stored("launchpad-v2");
+  assertEquals(lp["venues[1].executor"], p.ids["exec-aquarius"]);
+  assertEquals(lp.token_wasm_hash, hashes["launch-token-v2"]);
+  const mo = stored("moments-v2");
+  assertEquals(mo.external_base, "https://dyorhq.fun/moments/");
+  assertEquals([mo["policy.platform"], mo["policy.treasury"]], [roles.PLATFORM_PUBLIC, undefined], "the platform is the treasury here: one value, listed once");
+  assertEquals(mo.governance, roles.GOVERNANCE_PUBLIC);
+  // Without Aquarius the locker stores no router, so none is expected.
+  const off = plannedContracts(plan(TESTNET, false), constructors(plan(TESTNET, false)));
+  assertEquals(off.find((c) => c.name === "lp-locker")!.stored.map((s) => s.label), ["owners[0]", "owners[1]", "soroswap_factory"]);
+});

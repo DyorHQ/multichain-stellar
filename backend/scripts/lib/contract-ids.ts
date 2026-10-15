@@ -85,14 +85,52 @@ export interface PlannedContract {
   /** The WASM it must run (hex). */
   wasmHash: string;
   views: ViewCheck[];
+  /** Values the instance's storage must hold: the constructor arguments that identify its configuration (addresses,
+   *  WASM hashes, strings). They cover what no view shows (moments-graduator has no view; exec-aquarius shows only
+   *  max_pool_payment). */
+  stored: { label: string; value: string }[];
 }
 
 /** What reconcile needs from the network: read-only. */
 export interface ContractReader {
-  /** The WASM hash (hex) behind a contract id; null when no contract is there. */
+  /** The WASM hash (hex) of the instance's executable, read from its ledger entry; null when no contract is there. */
   contractWasmHash(id: string): Promise<string | null>;
   /** A read-only call (simulation). */
   view(id: string, fn: string, args: xdr.ScVal[]): Promise<xdr.ScVal>;
+  /** The instance's storage entries; null when there is no such contract. */
+  instanceStorage(id: string): Promise<{ key: xdr.ScVal; val: xdr.ScVal }[] | null>;
+}
+
+/** Every address (strkey), byte string (hex) and string inside the storage's keys and values. */
+export function storageLeaves(entries: { key: xdr.ScVal; val: xdr.ScVal }[]): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: xdr.ScVal) => {
+    switch (v.switch().name) {
+      case "scvAddress":
+        out.add(Address.fromScVal(v).toString());
+        break;
+      case "scvBytes":
+        out.add(Buffer.from(v.bytes()).toString("hex"));
+        break;
+      case "scvString":
+        out.add(v.str().toString());
+        break;
+      case "scvVec":
+        for (const x of v.vec() ?? []) walk(x);
+        break;
+      case "scvMap":
+        for (const e of v.map() ?? []) {
+          walk(e.key());
+          walk(e.val());
+        }
+        break;
+    }
+  };
+  for (const e of entries) {
+    walk(e.key);
+    walk(e.val);
+  }
+  return out;
 }
 
 export type Reconciled =
@@ -100,8 +138,9 @@ export type Reconciled =
   | { name: string; id: string; state: "deployed" }
   | { name: string; id: string; state: "conflict"; differences: string[] };
 
-/** Sorts each planned contract: absent (deploy), deployed with the planned WASM and config (skip), or a conflict
- *  (refuse): a contract at the planned id whose WASM or views differ from the plan. */
+/** Sorts each planned contract: absent (deploy), deployed with the planned WASM and configuration (skip), or a
+ *  conflict (refuse): a contract at the planned id whose code hash, views or instance storage differ from the plan. A
+ *  contract is skipped only when all three match. */
 export async function reconcile(planned: PlannedContract[], chain: ContractReader): Promise<Reconciled[]> {
   const out: Reconciled[] = [];
   for (const p of planned) {
@@ -113,6 +152,19 @@ export async function reconcile(planned: PlannedContract[], chain: ContractReade
     const differences: string[] = [];
     if (onChain !== p.wasmHash) differences.push(`${p.name} runs WASM ${onChain}, the plan uploads ${p.wasmHash}`);
     else {
+      if (p.stored.length) {
+        let leaves: Set<string> | null = null;
+        try {
+          const storage = await chain.instanceStorage(p.id);
+          leaves = storage ? storageLeaves(storage) : null;
+        } catch (e) {
+          differences.push(`${p.name}: its instance storage can't be read (${(e as Error).message})`);
+        }
+        if (leaves === null && differences.length === 0) differences.push(`${p.name}: no instance storage to compare`);
+        for (const s of leaves ? p.stored : []) {
+          if (!leaves!.has(s.value)) differences.push(`${p.name}'s instance storage doesn't hold ${s.label} ${s.value}`);
+        }
+      }
       for (const v of p.views) {
         let got: unknown;
         try {

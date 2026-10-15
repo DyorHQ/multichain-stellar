@@ -4,7 +4,7 @@
 // every secret directory is a fresh temporary one holding keys made here. Each CLI path's output is checked for
 // secrets: no seed this file generated, and nothing shaped like one. The last tests run the scripts as processes
 // without network permission, for their real stdout and stderr.
-import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertFalse, assertMatch, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { Buffer } from "node:buffer";
 import {
   Account,
@@ -12,7 +12,9 @@ import {
   Asset,
   hash,
   Keypair,
+  Memo,
   nativeToScVal,
+  Operation,
   scValToNative,
   SorobanDataBuilder,
   StrKey,
@@ -28,7 +30,7 @@ import { KEYS_FILE, QA_KEYS_FILE, recordingIo, ROLES_FILE } from "./lib/owner-fi
 import type { AccountInfo, Chain, TxOutcome } from "./lib/preflight-v2.ts";
 import { sha256Hex } from "./lib/reviewed-hashes.ts";
 import { constructors, RUNTIME_CONSTRUCTORS, WASMS, type WasmKey } from "./lib/v2-constructors.ts";
-import { specEntries, wasmWithSections } from "./lib/wasm-spec.ts";
+import { customSections, specEntries, wasmWithSections } from "./lib/wasm-spec.ts";
 
 const repo = new URL("../../", import.meta.url).pathname;
 const PASSPHRASE = "Test SDF Network ; September 2015";
@@ -40,6 +42,19 @@ const USDC_SAC = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
 const XLM_SAC = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 const XLM = 10_000_000n;
 const SEED = /S[A-Z2-7]{55}/;
+/** Testnet's minimum persistent TTL: what a new entry starts with (about 7 days). */
+const MIN_TTL = 120_960;
+
+/** The source account's auth entry for a call, its root invocation the call itself (what simulation returns). */
+function sourceAuth(call: xdr.InvokeContractArgs, sub: xdr.SorobanAuthorizedInvocation[] = []): xdr.SorobanAuthorizationEntry {
+  return new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(),
+    rootInvocation: new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(call),
+      subInvocations: sub,
+    }),
+  });
+}
 
 // ------------------------------------------------------------------------------------------------ the in-memory ledger
 
@@ -77,6 +92,12 @@ class Ledger implements Chain {
   log: string[] = [];
   pool = { xlm: 349_583_963_389n, aqua: 7_911_445_542_969n };
   failSwap = false;
+  /** The router's views fail (an upgrade removed them, or its instance is archived). */
+  routerDown = false;
+  /** Live-until ledgers of contract instances (by id) and WASMs (by hash). New entries get testnet's minimum TTL. */
+  ttl = new Map<string, number>();
+  /** Called when the router quotes a swap (a test's hook into the AQUA depth check). */
+  onEstimate: (() => void) | null = null;
 
   constructor() {
     this.addContract(AQ.router.contract_id, {
@@ -174,9 +195,25 @@ class Ledger implements Chain {
   codeExists(h: string) {
     return Promise.resolve(this.codes.has(h));
   }
+  liveUntil(contracts: string[], hashes: string[]) {
+    return Promise.resolve(new Map([...contracts, ...hashes].map((k) => [k, this.ttl.get(k) ?? null])));
+  }
+  /** What ttl.ts keepAlive does when every batch applies: 30 days from now. `skip` entries are left as they were. */
+  extendTtl(contracts: string[], hashes: string[], skip: string[] = []) {
+    for (const k of [...contracts, ...hashes]) if (!skip.includes(k)) this.ttl.set(k, this.ledger + 30 * 17_280);
+  }
   view(id: string, fn: string, args: xdr.ScVal[]) {
-    this.log.push(`view ${this.contracts.get(id)?.kind ?? id}.${fn}`);
-    return Promise.resolve(sv(this.call(id, fn, args.map((x) => scValToNative(x)), null)));
+    const kind = this.contracts.get(id)?.kind ?? id;
+    this.log.push(`view ${kind}.${fn}`);
+    if (kind === "router") {
+      if (fn === "estimate_swap") this.onEstimate?.();
+      if (this.routerDown) return Promise.reject(new Error(`${fn} failed in simulation: host error Storage/MissingValue`));
+    }
+    try {
+      return Promise.resolve(sv(this.call(id, fn, args.map((x) => scValToNative(x)), null)));
+    } catch (e) {
+      return Promise.reject(e);
+    }
   }
   friendbot(id: string) {
     this.log.push(`friendbot ${id}`);
@@ -188,10 +225,19 @@ class Ledger implements Chain {
     if (!a) return Promise.reject(new Error(`account ${id} not found`));
     return Promise.resolve(new Account(id, a.sequence));
   }
+  /** As the RPC's simulation and assembleTransaction do: Soroban data, and for a contract call the source account's
+   *  auth entry whose root invocation is the call itself. */
   prepare(tx: Transaction) {
     this.log.push("prepare");
     const data = new SorobanDataBuilder().setResourceFee(50_000).build();
-    return Promise.resolve(TransactionBuilder.cloneFrom(tx, { fee: String(Number(tx.fee) + 50_000), sorobanData: data, networkPassphrase: PASSPHRASE }).build());
+    const b = TransactionBuilder.cloneFrom(tx, { fee: String(Number(tx.fee) + 50_000), sorobanData: data, networkPassphrase: PASSPHRASE });
+    const op = tx.operations[0] as any;
+    if (op.type === "invokeHostFunction" && (op.func as xdr.HostFunction).switch().name === "hostFunctionTypeInvokeContract") {
+      const call = (op.func as xdr.HostFunction).invokeContract();
+      b.clearOperations();
+      b.addOperation(Operation.invokeHostFunction({ func: op.func, auth: [sourceAuth(call)] }));
+    }
+    return Promise.resolve(b.build());
   }
   submit(tx: Transaction): Promise<TxOutcome> {
     try {
@@ -223,6 +269,7 @@ class Ledger implements Chain {
       case "hostFunctionTypeUploadContractWasm": {
         const h = Buffer.from(hash(Buffer.from(f.wasm()))).toString("hex");
         this.codes.add(h);
+        this.ttl.set(h, this.ledger + MIN_TTL);
         this.log.push(`upload ${this.wasmKinds.get(h) ?? h}`);
         return xdr.ScVal.scvBytes(Buffer.from(h, "hex"));
       }
@@ -230,6 +277,7 @@ class Ledger implements Chain {
         const asset = Asset.fromOperation(f.createContract().contractIdPreimage().fromAsset());
         const id = asset.contractId(PASSPHRASE);
         if (!this.contracts.has(id)) this.addSac(`${asset.getCode()}:${asset.getIssuer()}`, id);
+        this.ttl.set(id, this.ledger + MIN_TTL);
         this.log.push(`create SAC ${asset.getCode()}`);
         return new Address(id).toScVal();
       }
@@ -243,7 +291,10 @@ class Ledger implements Chain {
         const id = contractIdFor(deployer, Uint8Array.from(from.salt()), PASSPHRASE);
         if (this.contracts.has(id)) throw new Error("the contract exists");
         const kind = this.wasmKinds.get(wasm)!;
-        this.addContract(id, this.instantiate(kind, wasm, id, c.constructorArgs().map((x) => scValToNative(x))));
+        const args = c.constructorArgs().map((x) => scValToNative(x));
+        // Like the v2 contracts, the instance keeps its constructor arguments in its storage.
+        this.addContract(id, { ...this.instantiate(kind, wasm, id, args), storage: [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(args) }] });
+        this.ttl.set(id, this.ledger + MIN_TTL);
         this.log.push(`create ${kind}`);
         return new Address(id).toScVal();
       }
@@ -385,14 +436,17 @@ interface Kit {
   secrets: string;
   deployments: string;
   env: Record<string, string>;
+  /** Everything the scripts wrote, unredacted and unescaped (recordingIo). */
   outputs: string[];
+  /** Entries the TTL step leaves short (a batch that "succeeded" without applying). */
+  ttlSkip: string[];
 }
 
 async function kit(opts: { reviewed?: boolean } = {}): Promise<Kit> {
   const ledger = new Ledger();
   const root = await fakeRepo(ledger, opts);
   const secrets = await Deno.makeTempDir({ prefix: "ct11a-secrets-" });
-  return { ledger, root, secrets, deployments: `${root}deployments`, env: {}, outputs: [] };
+  return { ledger, root, secrets, deployments: `${root}deployments`, env: {}, outputs: [], ttlSkip: [] };
 }
 
 async function cleanup(k: Kit) {
@@ -435,6 +489,9 @@ async function deploy(k: Kit, args: string[]) {
     chain: k.ledger,
     keepAlive: (contracts, hashes, payer) => {
       keptAlive.push({ contracts, hashes, payer: payer.publicKey() });
+      // Like ttl.ts keepAlive: it reports every entry as extended, whether or not each batch applied.
+      k.ledger.ledger += 2;
+      k.ledger.extendTtl(contracts, hashes, k.ttlSkip);
       return Promise.resolve({ extended: contracts.length + hashes.length, fee: "123456" });
     },
     now: () => new Date("2026-10-15T00:00:00Z"),
@@ -463,14 +520,19 @@ async function secretsOf(k: Kit): Promise<string[]> {
   return [...out, ...Object.values(k.env).filter((v) => SEED.test(v))];
 }
 
-/** No output of this kit carries a secret: none of its seeds, nothing shaped like one. */
+/** No output of this kit carries a secret: none of its seeds, nothing shaped like one. The outputs are what the
+ *  scripts wrote before the console's redaction (recordingIo), so a leak fails here even though the console would mask
+ *  it. Nor does any output carry a control character other than a newline. */
 async function assertNoSecrets(k: Kit) {
   const secrets = await secretsOf(k);
-  assert(secrets.length > 0 || k.outputs.length > 0);
-  for (const out of k.outputs) {
-    assertFalse(SEED.test(out), "an output holds something shaped like a secret seed");
-    for (const s of secrets) assertFalse(out.includes(s), "an output holds a secret");
-  }
+  assert(k.outputs.length > 0, "nothing was recorded");
+  for (const out of k.outputs) assertClean(out, secrets);
+}
+
+function assertClean(out: string, secrets: string[]) {
+  assertFalse(SEED.test(out), "an output holds something shaped like a secret seed");
+  for (const s of secrets) assertFalse(out.includes(s), "an output holds a secret");
+  assertFalse(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(out), "an output holds a control character");
 }
 
 const rolesOf = async (k: Kit): Promise<Record<string, string>> =>
@@ -949,6 +1011,403 @@ Deno.test("sign: refuses another network, another source and a missing TTY; sign
   }
 });
 
+// ------------------------------------------------------------------------------------------------ sign: only what admin-v2 writes
+
+const ATTACKER = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 7)).publicKey();
+
+interface Craft {
+  /** Operations instead of the one contract call. */
+  ops?: xdr.Operation[];
+  call?: { contract: string; fn: string; args: xdr.ScVal[] };
+  /** Auth entries of the call; its own source-account entry by default. */
+  auth?: xdr.SorobanAuthorizationEntry[];
+  opSource?: string;
+  memo?: Memo;
+  /** null: no time bound at all (an envelope that never expires). */
+  timebounds?: { minTime: number; maxTime: number } | null;
+  ledgerbounds?: { minLedger: number; maxLedger: number };
+  /** Soroban data (a prepared envelope); on by default for the contract call. */
+  soroban?: boolean;
+  fee?: string;
+  signWith?: Keypair;
+  feeBump?: boolean;
+  source?: string;
+  meta?: Record<string, string>;
+}
+
+const callArgs = (c: { contract: string; fn: string; args: xdr.ScVal[] }) =>
+  new xdr.InvokeContractArgs({ contractAddress: new Address(c.contract).toScAddress(), functionName: c.fn, args: c.args });
+
+/** An envelope file in admin-v2.ts's format around a transaction built offline to the test's recipe. */
+function craft(c: Craft = {}): string {
+  const source = c.source ?? V1.admin;
+  const call = c.call ?? { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] };
+  const opts: Record<string, unknown> = { fee: c.fee ?? "100", networkPassphrase: PASSPHRASE };
+  if (c.memo) opts.memo = c.memo;
+  if (c.ledgerbounds) opts.ledgerbounds = c.ledgerbounds;
+  if (c.timebounds !== null) opts.timebounds = c.timebounds ?? { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 1_800 };
+  const b = new TransactionBuilder(new Account(source, "22204675977641999"), opts as never);
+  if (c.timebounds === null) b.setTimeout(0);
+  const ops = c.ops ?? [
+    Operation.invokeHostFunction({
+      func: xdr.HostFunction.hostFunctionTypeInvokeContract(callArgs(call)),
+      auth: c.auth ?? [sourceAuth(callArgs(call))],
+      ...(c.opSource ? { source: c.opSource } : {}),
+    }),
+  ];
+  for (const o of ops) b.addOperation(o);
+  if (c.soroban ?? !c.ops) b.setSorobanData(new SorobanDataBuilder().setResourceFee(50_000).build());
+  const tx = b.build();
+  if (c.signWith) tx.sign(c.signWith);
+  const env = c.feeBump ? TransactionBuilder.buildFeeBumpTransaction(source, "1000", tx, PASSPHRASE) : tx;
+  return JSON.stringify({
+    format: "dyorhq-unsigned-envelope/1",
+    networkPassphrase: PASSPHRASE,
+    role: "v1-admin",
+    source,
+    contract: call.contract,
+    function: call.fn,
+    description: "v1 cutover 1 of 2: v1 launchpad set_launches_enabled(false)",
+    builtAt: "2026-10-15T00:00:00.000Z",
+    ...c.meta,
+    xdr: env.toEnvelope().toXDR("base64"),
+  });
+}
+
+const transferAll = (to: string) =>
+  new xdr.SorobanAuthorizedInvocation({
+    function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(
+      callArgs({ contract: XLM_SAC, fn: "transfer", args: [new Address(V1.admin).toScVal(), new Address(to).toScVal(), nativeToScVal(90_000_000_000n, { type: "i128" })] }),
+    ),
+    subInvocations: [],
+  });
+
+Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prompt (the review's crafted envelopes and each rule)", async () => {
+  const k = await kit();
+  try {
+    await copyV1(k);
+    v1Contracts(k.ledger);
+    const launchpadCall = { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] };
+    const cases: [string, string, string][] = [
+      // craft.ts 1: several classic operations, one adding a signer that takes the account over, one paying out.
+      [
+        "classic",
+        craft({
+          ops: [
+            Operation.setOptions({ signer: { ed25519PublicKey: ATTACKER, weight: 255 }, masterWeight: 0 }),
+            Operation.payment({ destination: ATTACKER, asset: Asset.native(), amount: "9000" }),
+            Operation.manageData({ name: "x", value: "y" }),
+          ],
+        }),
+        "refused: 3 operations; admin-v2.ts writes exactly one contract call",
+      ],
+      // craft.ts 3 without its text: one classic payment.
+      ["payment", craft({ ops: [Operation.payment({ destination: ATTACKER, asset: Asset.native(), amount: "9000" })] }), "refused: the operation is payment, not a contract call"],
+      // craft.ts 2: a call to a contract that isn't DyorHQ's, whose auth root is a 9,000 XLM transfer.
+      [
+        "unknown contract",
+        craft({ call: { contract: AQ.router.contract_id, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] }, auth: [new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: transferAll(ATTACKER) })] }),
+        `refused: the call goes to ${AQ.router.contract_id}, which is none of DyorHQ's contracts`,
+      ],
+      // The same auth root on the real v1 launchpad call: the label says set_launches_enabled, the signature pays out.
+      [
+        "auth root",
+        craft({ auth: [new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: transferAll(ATTACKER) })] }),
+        `refused: auth entry 1 authorizes ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${ATTACKER}, 90000000000), not the call set_launches_enabled itself`,
+      ],
+      [
+        "address credentials",
+        craft({
+          auth: [
+            new xdr.SorobanAuthorizationEntry({
+              credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+                new xdr.SorobanAddressCredentials({ address: new Address(ATTACKER).toScAddress(), nonce: xdr.Int64.fromString("1"), signatureExpirationLedger: 1, signature: xdr.ScVal.scvVoid() }),
+              ),
+              rootInvocation: new xdr.SorobanAuthorizedInvocation({
+                function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(callArgs(launchpadCall)),
+                subInvocations: [],
+              }),
+            }),
+          ],
+        }),
+        "refused: auth entry 1 needs another account's signature",
+      ],
+      ["operation source", craft({ opSource: ATTACKER }), "refused: the operation has its own source account"],
+      ["memo", craft({ memo: Memo.text("pay me") }), "refused: the transaction has a memo"],
+      ["ledger bounds", craft({ ledgerbounds: { minLedger: 0, maxLedger: 9_999_999 } }), "refused: the transaction has preconditions beyond a time bound"],
+      ["no expiry", craft({ timebounds: null }), "refused: the transaction never expires"],
+      ["start time", craft({ timebounds: { minTime: 1_000, maxTime: Math.floor(Date.now() / 1000) + 600 } }), "refused: the transaction has a start time"],
+      ["signed", craft({ signWith: Keypair.random() }), "refused: the envelope already carries 1 signature(s)"],
+      [
+        "metadata",
+        craft({ call: { contract: V1.moments, fn: "set_policy", args: [nativeToScVal(0, { type: "u32" }), nativeToScVal(0, { type: "u32" }), xdr.ScVal.scvBool(true)] }, meta: { contract: V1.launchpad, function: "set_launches_enabled" } }),
+        "refused: the file says set_launches_enabled on",
+      ],
+      ["not prepared", craft({ soroban: false }), "refused: the transaction isn't prepared (no Soroban data)"],
+      ["fee", craft({ fee: "40000000" }), "refused: the max fee 4.005 XLM is above the 3 XLM cap"],
+      // craft2.ts: a fee-bump.
+      ["fee bump", craft({ feeBump: true }), "refused: a fee-bump envelope"],
+      ["passphrase", JSON.stringify({ ...JSON.parse(craft()), networkPassphrase: "Public Global Stellar Network ; September 2015" }), "not testnet"],
+      ["upload", craft({ ops: [Operation.uploadContractWasm({ wasm: Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]) })], soroban: true }), "refused: the operation is hostFunctionTypeUploadContractWasm, not a contract call"],
+      [
+        "create",
+        craft({ ops: [Operation.createCustomContract({ address: new Address(V1.admin), wasmHash: Buffer.alloc(32, 1), salt: Buffer.alloc(32, 2), constructorArgs: [] })], soroban: true }),
+        "refused: the operation is hostFunctionTypeCreateContractV2, not a contract call",
+      ],
+      ["not json", "AAAAAgAAAAA=", "not an envelope file written by admin-v2.ts"],
+    ];
+    for (const [name, text, reason] of cases) {
+      const file = `${k.root}${name.replace(/ /g, "-")}.json`;
+      await Deno.writeTextFile(file, text);
+      const before = k.ledger.log.length;
+      const decode = await owner(k, ["sign", file, "--as", "v1-admin", "--decode-only"]);
+      assertEquals(decode.code, 1, `${name}: ${decode.out}`);
+      assertStringIncludes(decode.out, reason, name);
+      const signing = await owner(k, ["sign", file, "--as", "v1-admin"], { terminal: true, answer: "y" });
+      assertEquals(signing.code, 1, name);
+      assertStringIncludes(signing.out, reason, name);
+      assertFalse(signing.out.includes("Sign and submit"), `${name}: no prompt`);
+      assertEquals(k.ledger.log.slice(before).filter((l) => !l.startsWith("view")), [], `${name}: nothing sent`);
+    }
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("sign: an expired envelope is shown and refused, with --decode-only too; a good one passes decode-only", async () => {
+  const k = await kit();
+  try {
+    await copyV1(k);
+    v1Contracts(k.ledger);
+    // craft2.ts 5, prepared: expired in 2023.
+    await Deno.writeTextFile(`${k.root}expired.json`, craft({ timebounds: { minTime: 0, maxTime: 1_700_000_000 } }));
+    for (const args of [["--decode-only"], []]) {
+      const r = await owner(k, ["sign", `${k.root}expired.json`, "--as", "v1-admin", ...args], { terminal: true, answer: "y" });
+      assertEquals(r.code, 1);
+      assertStringIncludes(r.out, "valid until  2023-11-14T22:13:20.000Z (expired: build it again)");
+      assertStringIncludes(r.out, "refused: the envelope has expired");
+    }
+    await Deno.writeTextFile(`${k.root}good.json`, craft());
+    const good = await owner(k, ["sign", `${k.root}good.json`, "--as", "v1-admin", "--decode-only"]);
+    assertEquals(good.code, 0, good.out);
+    for (
+      const s of [
+        "  network      testnet ✓",
+        `  source       ${V1.admin} (v1-admin) ✓`,
+        "  memo         none; no signatures yet",
+        "  operation    one contract call, no operation source",
+        `      contract ${V1.launchpad} (v1 launchpad)`,
+        "      call     set_launches_enabled(false)",
+        "      auth 1   the source account authorizes:",
+        `              ${V1.launchpad} (v1 launchpad) set_launches_enabled(false)`,
+      ]
+    ) assertStringIncludes(good.out, s);
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("sign escapes every control character from the file and the chain: nothing can fake a line or hide the prompt", async () => {
+  const k = await kit();
+  try {
+    await copyV1(k);
+    v1Contracts(k.ledger);
+    // craft.ts 3's text, on an otherwise valid envelope: fake lines, then ESC[8m to hide what follows.
+    const fake = "v1 cutover 1 of 2\n  source ... (v1-admin) OK\n   1. contract " + V1.launchpad + " (v1 launchpad)\n      call     set_launches_enabled(false)\n\x1b[8m";
+    const text = craft({
+      call: { contract: V1.launchpad, fn: "set_label\x1b[2J", args: [nativeToScVal("https://x\x1b[8m‮evil", { type: "string" }), xdr.ScVal.scvSymbol("a\x07b")] },
+      meta: { description: fake, builtAt: "\x1b]0;title\x07", role: "v1-admin\x1b[2J" },
+    });
+    await Deno.writeTextFile(`${k.root}escapes.json`, text);
+    const r = await owner(k, ["sign", `${k.root}escapes.json`, "--as", "v1-admin", "--decode-only"]);
+    assertEquals(r.code, 0, r.out);
+    // Shown as text, on the lines where they belong.
+    assertStringIncludes(r.out, "  built        \\x1b]0;title\\x07: v1 cutover 1 of 2\\x0a  source ... (v1-admin) OK\\x0a");
+    assertStringIncludes(r.out, "\\x1b[8m");
+    assertStringIncludes(r.out, "  note: the envelope was built for --as v1-admin\\x1b[2J");
+    assertStringIncludes(r.out, `      call     set_label\\x1b[2J("https://x\\x1b[8m\\u{202e}evil", a\\x07b)`);
+    // The recorded output (before the console's own escaping) holds no control character at all.
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("sign prints the full invocation tree with decoded arguments", async () => {
+  const k = await kit();
+  try {
+    await copyV1(k);
+    v1Contracts(k.ledger);
+    const call = { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] };
+    const create = new xdr.SorobanAuthorizedInvocation({
+      function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeCreateContractV2HostFn(
+        new xdr.CreateContractArgsV2({
+          contractIdPreimage: xdr.ContractIdPreimage.contractIdPreimageFromAddress(
+            new xdr.ContractIdPreimageFromAddress({ address: new Address(V1.admin).toScAddress(), salt: Buffer.alloc(32, 2) }),
+          ),
+          executable: xdr.ContractExecutable.contractExecutableWasm(Buffer.alloc(32, 1)),
+          constructorArgs: [new Address(ATTACKER).toScVal(), nativeToScVal(7, { type: "u32" })],
+        }),
+      ),
+      subInvocations: [],
+    });
+    const sub = new xdr.SorobanAuthorizedInvocation({ function: transferAll(V1.launchpad).function(), subInvocations: [create] });
+    await Deno.writeTextFile(`${k.root}tree.json`, craft({ auth: [sourceAuth(callArgs(call), [sub])] }));
+    const r = await owner(k, ["sign", `${k.root}tree.json`, "--as", "v1-admin", "--decode-only"]);
+    assertEquals(r.code, 0, r.out);
+    assertStringIncludes(r.out, `              ${V1.launchpad} (v1 launchpad) set_launches_enabled(false)`);
+    assertStringIncludes(r.out, `                ↳ ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${V1.launchpad}, 90000000000)`);
+    assertStringIncludes(
+      r.out,
+      `                  ↳ create a contract from WASM ${"01".repeat(32)} by ${V1.admin} with salt ${"02".repeat(32)}(${ATTACKER}, 7)`,
+    );
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("the secret and control-character checks can fail: the recorder sees what a script writes, unredacted", () => {
+  const seed = Keypair.random().secret();
+  const io = recordingIo();
+  io.out(`leaked ${seed}`);
+  assertEquals(io.stdout, [`leaked ${seed}`], "the recorder doesn't redact");
+  assertThrows(() => assertClean(io.stdout.join("\n"), [seed]), Error, "secret seed");
+  assertThrows(() => assertClean("ok\x1b[8m", []), Error, "control character");
+  assertClean("line one\nline two ✓", []);
+});
+
+// ------------------------------------------------------------------------------------------------ deploy: the review's findings
+
+Deno.test("--aquarius off never asks the router: a router that doesn't answer blocks neither the dry run nor the deploy", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    k.ledger.routerDown = true;
+    const dry = await deploy(k, ["--deployment", "testnet", "--dry-run", "--aquarius", "off"]);
+    assertEquals(dry.code, 0, dry.out);
+    assertStringIncludes(dry.out, "Aquarius router: not asked (the venue is off: --aquarius off)");
+    assertStringIncludes(dry.out, "A real deploy would go ahead.");
+    const r = await deploy(k, ["--deployment", "testnet", "--aquarius", "off"]);
+    assertEquals(r.code, 0, r.out);
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("view router.")), [], "the router was never asked");
+    const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-v2.json`));
+    assertEquals(file.aquarius.enabled, false);
+    assertEquals(file.contracts.execAquarius, undefined);
+    // With Aquarius on, a router that doesn't answer stops the owner's deploy with a way out.
+    const auto = await deploy(k, ["--deployment", "testnet", "--generation", "2"]);
+    assertEquals(auto.code, 1);
+    assertStringIncludes(auto.out, "the Aquarius router didn't answer");
+    assertStringIncludes(auto.out, "--aquarius off");
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("testnet-qa: a router that doesn't answer means no Aquarius venue, and the deploy goes on", async () => {
+  const k = await kit();
+  try {
+    k.ledger.routerDown = true;
+    const r = await deploy(k, ["--deployment", "testnet-qa"]);
+    assertEquals(r.code, 0, r.out);
+    const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-qa-v2.json`));
+    assertEquals(file.aquarius.enabled, false);
+    assertStringIncludes(file.aquarius.reason, "the Aquarius router didn't answer");
+    assertEquals(file.contracts.execAquarius, undefined);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("the TTL step is checked: an entry left short fails the run loudly, before the deployment file; a re-run fixes it", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // One WASM's batch "succeeds" without applying, as a pending or failed keepAlive batch would.
+    const launchpadWasm = [...k.ledger.wasmKinds.entries()].find(([, kind]) => kind === "launchpad-v2")![0];
+    k.ttlSkip = [launchpadWasm];
+    const r = await deploy(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1);
+    assertStringIncludes(r.out, "the TTL step didn't reach 30 days");
+    assertMatch(r.out, /dyor_launchpad_v2\.wasm code: live until \d+/);
+    assertStringIncludes(r.out, "Run the same command again");
+    assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file yet");
+    k.ttlSkip = [];
+    const again = await deploy(k, ["--deployment", "testnet"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "✓ every instance and WASM lives until ledger");
+    assert(await Deno.stat(`${k.deployments}/testnet-v2.json`));
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("testnet-qa: after a failed AQUA funding the rebuilt plan is checked again, so a dist that changed is refused", async () => {
+  const k = await kit();
+  try {
+    k.ledger.pool = { xlm: 2n * XLM, aqua: 20n * XLM };
+    // While the depth check runs, dist/dyor_launchpad_v2.wasm is replaced (its new hash even added to the reviewed list).
+    k.ledger.onEstimate = () => {
+      k.ledger.onEstimate = null;
+      const path = `${k.root}contracts/dist/dyor_launchpad_v2.wasm`;
+      const old = Deno.readFileSync(path);
+      const swapped = wasmWithSections([["contractspecv0", customSections(old, "contractspecv0")[0]], ["dyorhq-test", new TextEncoder().encode("swapped")]]);
+      Deno.writeFileSync(path, swapped);
+      const h = Buffer.from(hash(Buffer.from(swapped))).toString("hex");
+      const reviewed = `${k.root}contracts/review/reviewed-wasm.sha256`;
+      Deno.writeTextFileSync(reviewed, Deno.readTextFileSync(reviewed).replace(/^[0-9a-f]{64}  dist\/dyor_launchpad_v2\.wasm$/m, `${h}  dist/dyor_launchpad_v2.wasm`));
+    };
+    const r = await deploy(k, ["--deployment", "testnet-qa"]);
+    assertEquals(r.code, 1, r.out);
+    assertStringIncludes(r.out, "testnet-qa goes on without exec-aquarius");
+    // The swapped file passes the reviewed list and the guard on its own: only the comparison with what was checked
+    // at the start of the run catches it.
+    assertStringIncludes(r.out, "contracts/dist changed during this run (dyor_launchpad_v2.wasm); nothing more was sent");
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("upload") || l.startsWith("create ") && !l.startsWith("create SAC")), [], "nothing uploaded or deployed");
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("re-runs compare the instance storage too: a contract with the planned WASM but another configuration is refused", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    assertEquals((await deploy(k, ["--deployment", "testnet"])).code, 0);
+    const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-v2.json`));
+    // moments-graduator has no view: its storage is all there is. Give it another executor.
+    const grad = k.ledger.contracts.get(file.contracts.momentsGraduator)!;
+    const args = scValToNative(grad.storage![0].val) as unknown[];
+    const other = [...args];
+    other[2] = ATTACKER;
+    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(other) }];
+    const mark = k.ledger.log.length;
+    const r = await deploy(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1);
+    assertStringIncludes(r.out, `moments-graduator's instance storage doesn't hold executor ${file.contracts.execSoroswap}`);
+    assertStringIncludes(r.out, "use a new --generation");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    // exec-aquarius shows only max_pool_payment: its router comes from the storage.
+    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(args) }];
+    const exec = k.ledger.contracts.get(file.contracts.execAquarius)!;
+    const execArgs = scValToNative(exec.storage![0].val) as unknown[];
+    exec.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv([XLM_SAC, ...execArgs.slice(1)]) }];
+    const r2 = await deploy(k, ["--deployment", "testnet"]);
+    assertEquals(r2.code, 1);
+    assertStringIncludes(r2.out, `exec-aquarius's instance storage doesn't hold router ${AQ.router.contract_id}`);
+    // And another WASM at the planned id is refused whatever its configuration.
+    exec.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(execArgs) }];
+    grad.wasm = "ab".repeat(32);
+    const r3 = await deploy(k, ["--deployment", "testnet"]);
+    assertEquals(r3.code, 1);
+    assertStringIncludes(r3.out, `moments-graduator runs WASM ${"ab".repeat(32)}`);
+  } finally {
+    await cleanup(k);
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ as processes, without network
 
 async function run(script: string, args: string[], env: Record<string, string>, write: string[]) {
@@ -1010,8 +1469,9 @@ Deno.test("as processes without network permission: the offline dry run, decode-
     assertEquals(usage.code, 2);
     for (const r of runs) {
       for (const text of [r.stdout, r.stderr]) {
-        assertFalse(SEED.test(text), "a process printed something shaped like a seed");
-        for (const s of secrets) assertFalse(text.includes(s), "a process printed a secret");
+        assertClean(text, secrets);
+        // The console redacts anything shaped like a seed as a last line of defence; it must never have had to.
+        assertFalse(text.includes("[redacted]"), "a process tried to print something shaped like a seed");
       }
     }
   } finally {

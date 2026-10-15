@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { Keypair } from "@stellar/stellar-sdk";
 import {
   completeRoles,
+  consoleIo,
   createQaKeys,
   KEYS_FILE,
   loadKeysFile,
@@ -18,8 +19,10 @@ import {
   refuseRoleEnv,
   requireRoles,
   rolesErrors,
+  safe,
   secretFromEnvFile,
   secretsDir,
+  terminalSafe,
   writeSecretFile,
 } from "./owner-files.ts";
 
@@ -207,11 +210,33 @@ Deno.test("the secrets directory is $DYOR_SECRETS_DIR when it is set", () => {
   assert(secretsDir(() => undefined).endsWith("/.secrets"));
 });
 
-Deno.test("output redacts anything shaped like a seed", () => {
+Deno.test("the console redacts anything shaped like a seed and escapes control characters, as a last line of defence", () => {
+  const printed: string[] = [];
+  const [log, error] = [console.log, console.error];
+  console.log = (l: string) => void printed.push(`out ${l}`);
+  console.error = (l: string) => void printed.push(`err ${l}`);
+  try {
+    const io = consoleIo();
+    io.out(`oops ${ADMIN.secret()} there`);
+    io.err(`${ADMIN.secret()}\nsecond line\x1b[8m`);
+  } finally {
+    [console.log, console.error] = [log, error];
+  }
+  assertEquals(printed, ["out oops S…[redacted] there", "err S…[redacted]\nsecond line\\x1b[8m"]);
+  assertEquals(redact(ADMIN.publicKey()), ADMIN.publicKey());
+});
+
+Deno.test("the test recorder keeps exactly what a script writes, so a leak can't hide behind the console's redaction", () => {
   const io = recordingIo();
   io.out(`oops ${ADMIN.secret()} there`);
-  io.err(ADMIN.secret());
-  assertEquals(io.stdout, ["oops S…[redacted] there"]);
-  assertEquals(io.stderr, ["S…[redacted]"]);
-  assertEquals(redact(ADMIN.publicKey()), ADMIN.publicKey());
+  io.err("\x1b[8m");
+  assertEquals(io.stdout, [`oops ${ADMIN.secret()} there`]);
+  assertEquals(io.stderr, ["\x1b[8m"]);
+});
+
+Deno.test("safe() escapes every control and format character, newlines included; terminalSafe() keeps the newlines", () => {
+  assertEquals(safe("a\nb\r\tc\x00\x1b[8m\x7f\x9b"), "a\\x0ab\\x0d\\x09c\\x00\\x1b[8m\\x7f\\x9b");
+  assertEquals(safe("evil‮dcba​"), "evil\\u{202e}dcba\\u{200b}");
+  assertEquals(safe("✓ G…ABC → 10 XLM"), "✓ G…ABC → 10 XLM");
+  assertEquals(terminalSafe("one\ntwo\x1b[2J"), "one\ntwo\\x1b[2J");
 });

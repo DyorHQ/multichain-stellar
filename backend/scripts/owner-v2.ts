@@ -37,6 +37,7 @@ import {
   requireRoles,
   ROLES_FILE,
   rolesErrors,
+  safe,
   secretFromEnv,
   secretFromEnvFile,
   secretsDir,
@@ -59,6 +60,7 @@ import {
   type SigningRole,
   STROOPS_PER_XLM,
   testnetChain,
+  type UnsignedEnvelope,
 } from "./lib/preflight-v2.ts";
 import { checkReviewed, REVIEWED_FILE, sha256Hex } from "./lib/reviewed-hashes.ts";
 import { WASMS, type WasmKey } from "./lib/v2-constructors.ts";
@@ -332,8 +334,12 @@ async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
   // The live Aquarius router against CT-03's fixtures (ruling a).
   if (aquarius === "off") add(line(true, "Aquarius", "--aquarius off: not checked", false));
   else {
-    const live = await aquariusLiveCheck(chain, await loadAquariusFixtures(ctx.root));
-    for (const l of live.lines) add(line(l.ok, `Aquarius ${l.label} matches fixtures.json`, l.ok ? l.fixture : `live ${l.live ?? "unreadable"}, fixture ${l.fixture}: CT-03's gate must be re-run, or deploy with --aquarius off`));
+    try {
+      const live = await aquariusLiveCheck(chain, await loadAquariusFixtures(ctx.root));
+      for (const l of live.lines) add(line(l.ok, `Aquarius ${l.label} matches fixtures.json`, l.ok ? l.fixture : `live ${l.live ?? "unreadable"}, fixture ${l.fixture}: CT-03's gate must be re-run, or deploy with --aquarius off`));
+    } catch (e) {
+      add(line(false, "Aquarius router", `it didn't answer (${(e as Error).message}): try again, or deploy with --aquarius off`));
+    }
   }
 
   // The keeper (reported only): it graduates, harvests and keeps v2 alive.
@@ -370,18 +376,166 @@ async function readJson(path: string): Promise<any | null> {
   return t === null ? null : JSON.parse(t);
 }
 
-/** Contract labels for the summary: v1 from deployments/testnet.json, v2 from testnet-v2.json when it exists. */
-async function contractNames(ctx: OwnerCtx): Promise<Map<string, string>> {
+/** The contracts `sign` accepts a call to: the ones admin-v2.ts targets, named in deployments/testnet.json (the v1
+ *  launchpad and Moments) or testnet-v2.json (every v2 contract it lists). By id, with a label. */
+export async function signableContracts(deploymentsDir: string): Promise<Map<string, string>> {
   const m = new Map<string, string>();
-  const v1 = (await readJson(`${ctx.deploymentsDir}/testnet.json`)) as V1Deployment | null;
-  if (v1) {
-    m.set(v1.launchpad, "v1 launchpad");
-    m.set(v1.moments, "v1 Moments");
+  const v1 = (await readJson(`${deploymentsDir}/testnet.json`)) as V1Deployment | null;
+  if (v1?.launchpad) m.set(v1.launchpad, "v1 launchpad");
+  if (v1?.moments) m.set(v1.moments, "v1 Moments");
+  const v2 = await readJson(`${deploymentsDir}/testnet-v2.json`);
+  for (const [k, v] of Object.entries((v2?.contracts ?? {}) as Record<string, string>)) {
+    if (typeof v === "string" && /^C[A-Z2-7]{55}$/.test(v)) m.set(v, `v2 ${k}`);
   }
-  const v2 = await readJson(`${ctx.deploymentsDir}/testnet-v2.json`);
-  for (const [k, v] of Object.entries((v2?.contracts ?? {}) as Record<string, string>)) m.set(v, k);
-  for (const a of TESTNET.assets) m.set(a.contract, `${a.id} SAC`);
   return m;
+}
+
+/** Labels for every address a summary may show: the signable contracts plus the network's assets and routers. */
+function labelsFor(signable: Map<string, string>): Map<string, string> {
+  const m = new Map(signable);
+  for (const a of TESTNET.assets) m.set(a.contract, `${a.id} SAC`);
+  m.set(TESTNET.contracts.soroswapFactory, "Soroswap factory");
+  m.set(TESTNET.contracts.soroswapRouter, "Soroswap router");
+  if (TESTNET.contracts.aquariusRouter) m.set(TESTNET.contracts.aquariusRouter, "Aquarius router");
+  return m;
+}
+
+export interface Inspected {
+  tx: Transaction;
+  /** The summary, every outside value escaped. */
+  lines: string[];
+  expired: boolean;
+}
+
+/** Checks an envelope file against exactly what admin-v2.ts writes, and returns the transaction and its summary.
+ *  Refused (throws): another network; XDR that doesn't parse; a fee-bump; signatures already on it; a memo; any
+ *  precondition but a time bound from 0 to a set expiry; anything but ONE invokeContract operation without an
+ *  operation source; a call to a contract outside `signable`; metadata that doesn't match the transaction; an auth
+ *  entry that isn't the source account's or whose root invocation isn't the call itself; no Soroban data; a fee above
+ *  the network's cap. `now` is in milliseconds. */
+export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, string>, now: number): Inspected {
+  const refuse = (why: string): never => {
+    throw new Error(`refused: ${why}`);
+  };
+  if (env.networkPassphrase !== TESTNET.passphrase) refuse(`the envelope is for the network "${safe(env.networkPassphrase)}", not testnet`);
+  let parsed: Transaction | FeeBumpTransaction;
+  try {
+    parsed = TransactionBuilder.fromXDR(env.xdr, TESTNET.passphrase);
+  } catch {
+    return refuse("the envelope's XDR can't be read");
+  }
+  if (parsed instanceof FeeBumpTransaction) refuse("a fee-bump envelope; admin-v2.ts writes plain transactions");
+  const tx = parsed as Transaction;
+  const body = tx.toEnvelope().v1().tx();
+  if (tx.signatures.length) refuse(`the envelope already carries ${tx.signatures.length} signature(s); admin-v2.ts writes unsigned ones`);
+  if (tx.memo.type !== "none") refuse("the transaction has a memo; admin-v2.ts never sets one");
+  const cond = body.cond();
+  if (cond.switch().name !== "precondTime") {
+    refuse(cond.switch().name === "precondNone" ? "the transaction never expires; admin-v2.ts always sets an expiry" : "the transaction has preconditions beyond a time bound (ledger bounds, sequence rules or extra signers)");
+  }
+  const minTime = Number(cond.timeBounds().minTime().toString());
+  const maxTime = Number(cond.timeBounds().maxTime().toString());
+  if (minTime !== 0) refuse("the transaction has a start time; admin-v2.ts sets none");
+  if (maxTime === 0) refuse("the transaction never expires; admin-v2.ts always sets an expiry");
+  if (tx.operations.length !== 1) refuse(`${tx.operations.length} operations; admin-v2.ts writes exactly one contract call`);
+  const op = tx.operations[0] as any;
+  if (op.type !== "invokeHostFunction") refuse(`the operation is ${safe(String(op.type))}, not a contract call`);
+  if (op.source) refuse("the operation has its own source account; admin-v2.ts never sets one");
+  const f = op.func as xdr.HostFunction;
+  if (f.switch().name !== "hostFunctionTypeInvokeContract") refuse(`the operation is ${safe(f.switch().name)}, not a contract call`);
+  const call = f.invokeContract();
+  const contract = Address.fromScAddress(call.contractAddress()).toString();
+  const fn = call.functionName().toString();
+  const args = call.args();
+  if (!signable.has(contract)) {
+    refuse(`the call goes to ${contract}, which is none of DyorHQ's contracts (deployments/testnet.json, testnet-v2.json)`);
+  }
+  if (env.contract !== contract || env.function !== fn || env.source !== tx.source) {
+    refuse(
+      `the file says ${safe(String(env.function))} on ${safe(String(env.contract))} from ${safe(String(env.source))}, but its transaction calls ` +
+        `${safe(fn)} on ${contract} from ${tx.source}`,
+    );
+  }
+  const auth = (op.auth ?? []) as xdr.SorobanAuthorizationEntry[];
+  const sameCall = (inv: xdr.SorobanAuthorizedInvocation) => {
+    const g = inv.function();
+    if (g.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") return false;
+    const c = g.contractFn();
+    return c.contractAddress().toXDR("base64") === call.contractAddress().toXDR("base64") &&
+      c.functionName().toString() === fn &&
+      c.args().length === args.length &&
+      c.args().every((a, i) => a.toXDR("base64") === args[i].toXDR("base64"));
+  };
+  auth.forEach((a, i) => {
+    if (a.credentials().switch().name !== "sorobanCredentialsSourceAccount") {
+      refuse(`auth entry ${i + 1} needs another account's signature; admin-v2.ts uses the source account's only`);
+    }
+    if (!sameCall(a.rootInvocation())) {
+      refuse(`auth entry ${i + 1} authorizes ${invocationText(a.rootInvocation(), labelsFor(signable))}, not the call ${safe(fn)} itself`);
+    }
+  });
+  let soroban: xdr.SorobanTransactionData | null = null;
+  try {
+    soroban = body.ext().sorobanData();
+  } catch {
+    soroban = null;
+  }
+  if (!soroban) refuse("the transaction isn't prepared (no Soroban data); build it with admin-v2.ts");
+  const fee = BigInt(tx.fee);
+  if (fee > TESTNET.feePolicy.maxFee) refuse(`the max fee ${fmtXlm(fee)} is above the ${fmtXlm(TESTNET.feePolicy.maxFee)} cap`);
+
+  const labels = labelsFor(signable);
+  const expired = maxTime * 1000 < now;
+  const lines = [
+    `  network      testnet ✓`,
+    `  built        ${safe(String(env.builtAt ?? "?"))}: ${safe(String(env.description ?? ""))}`,
+    `  max fee      ${fmtUnits(fee)} XLM (${fee.toLocaleString("en-US")} stroops; resource fee ${fmtUnits(BigInt(soroban!.resourceFee().toString()))} XLM)`,
+    `  sequence     ${tx.sequence}`,
+    `  valid until  ${new Date(maxTime * 1000).toISOString()}${expired ? " (expired: build it again)" : ""}`,
+    `  memo         none; no signatures yet`,
+    `  operation    one contract call, no operation source`,
+    `      contract ${label(contract, labels)}`,
+    `      call     ${safe(fn)}(${args.map(renderScVal).join(", ")})`,
+    ...args.map((a, i) => `      arg ${i + 1}    ${a.switch().name.replace(/^scv/, "")} ${renderScVal(a)}`),
+    ...(auth.length === 0 ? ["      auth     none: the call needs no signature but the transaction's"] : []),
+    ...auth.flatMap((a, i) => [`      auth ${i + 1}   the source account authorizes:`, ...invocationLines(a.rootInvocation(), labels, 4)]),
+  ];
+  return { tx, lines, expired };
+}
+
+const label = (a: string, labels: Map<string, string>) => (labels.has(a) ? `${a} (${safe(labels.get(a)!)})` : a);
+
+/** One invocation as text: `<contract> <fn>(<args>)`, or a contract creation with its arguments. */
+function invocationText(inv: xdr.SorobanAuthorizedInvocation, labels: Map<string, string>): string {
+  const g = inv.function();
+  switch (g.switch().name) {
+    case "sorobanAuthorizedFunctionTypeContractFn": {
+      const c = g.contractFn();
+      return `${label(Address.fromScAddress(c.contractAddress()).toString(), labels)} ${safe(c.functionName().toString())}(${c.args().map(renderScVal).join(", ")})`;
+    }
+    case "sorobanAuthorizedFunctionTypeCreateContractHostFn":
+    case "sorobanAuthorizedFunctionTypeCreateContractV2HostFn": {
+      const v2 = g.switch().name === "sorobanAuthorizedFunctionTypeCreateContractV2HostFn";
+      const c: any = v2 ? g.createContractV2HostFn() : g.createContractHostFn();
+      const exec = c.executable();
+      const what = exec.switch().name === "contractExecutableWasm" ? `WASM ${Buffer.from(exec.wasmHash()).toString("hex")}` : "a Stellar Asset Contract";
+      const pre = c.contractIdPreimage();
+      const from = pre.switch().name === "contractIdPreimageFromAddress"
+        ? ` by ${Address.fromScAddress(pre.fromAddress().address()).toString()} with salt ${Buffer.from(pre.fromAddress().salt()).toString("hex")}`
+        : " for a classic asset";
+      const ctorArgs = v2 ? (c.constructorArgs() as xdr.ScVal[]).map(renderScVal).join(", ") : "";
+      return `create a contract from ${what}${from}(${ctorArgs})`;
+    }
+  }
+  return safe(g.switch().name);
+}
+
+/** The full invocation tree, one line per node. */
+function invocationLines(inv: xdr.SorobanAuthorizedInvocation, labels: Map<string, string>, depth: number): string[] {
+  return [
+    `${" ".repeat(depth * 2 + 6)}${depth > 4 ? "↳ " : ""}${invocationText(inv, labels)}`,
+    ...inv.subInvocations().flatMap((s) => invocationLines(s, labels, depth + 1)),
+  ];
 }
 
 async function sign(ctx: OwnerCtx, args: string[]): Promise<number> {
@@ -393,23 +547,13 @@ async function sign(ctx: OwnerCtx, args: string[]): Promise<number> {
     if (args[i] === "--as") role = args[++i] ?? "";
     else if (args[i] === "--decode-only") decodeOnly = true;
     else if (!args[i].startsWith("--") && !file) file = args[i];
-    else throw new Error(`unknown argument ${args[i]}\n${USAGE}`);
+    else throw new Error(`unknown argument ${safe(args[i])}\n${USAGE}`);
   }
   if (!file || !(SIGNING_ROLES as readonly string[]).includes(role)) throw new Error(USAGE);
   refuseRoleEnv(ctx.env);
 
   const env = parseEnvelope(await Deno.readTextFile(file));
-  if (env.networkPassphrase !== TESTNET.passphrase) {
-    throw new Error(`refused: the envelope is for the network "${env.networkPassphrase}", not testnet`);
-  }
-  let parsed: Transaction | FeeBumpTransaction;
-  try {
-    parsed = TransactionBuilder.fromXDR(env.xdr, TESTNET.passphrase);
-  } catch {
-    throw new Error("refused: the envelope's XDR can't be read");
-  }
-  if (parsed instanceof FeeBumpTransaction) throw new Error("refused: a fee-bump envelope");
-  const tx = parsed;
+  const { tx, lines, expired } = inspectEnvelope(env, await signableContracts(ctx.deploymentsDir), Date.now());
 
   const { key, addresses, from } = await roleKey(ctx, role as SigningRole);
   if (!addresses.includes(tx.source)) {
@@ -418,26 +562,13 @@ async function sign(ctx: OwnerCtx, args: string[]): Promise<number> {
         `If ${tx.source} is your own ${role} key: ${from}`,
     );
   }
-  if (env.role !== role) say(`note: the envelope was built for --as ${env.role}`);
-
-  const names = await contractNames(ctx);
-  say(`Envelope ${file}`);
-  say(`  network      testnet ✓`);
-  say(`  built        ${env.builtAt ?? "?"}: ${env.description ?? ""}`);
+  say(`Envelope ${safe(file)}`);
+  if (env.role !== role) say(`  note: the envelope was built for --as ${safe(String(env.role))}`);
   say(`  source       ${tx.source} (${role}) ✓`);
-  say(`  max fee      ${fmtUnits(BigInt(tx.fee))} XLM (${BigInt(tx.fee).toLocaleString("en-US")} stroops)`);
-  say(`  sequence     ${tx.sequence}`);
-  const maxTime = Number(tx.timeBounds?.maxTime ?? 0);
-  const expired = maxTime !== 0 && maxTime * 1000 < Date.now();
-  say(`  valid until  ${maxTime === 0 ? "no limit" : new Date(maxTime * 1000).toISOString()}${expired ? " (expired: build it again)" : ""}`);
-  say(`  signatures   ${tx.signatures.length}`);
-  say(`  operations   ${tx.operations.length}`);
-  tx.operations.forEach((op, i) => {
-    for (const l of describeOperation(op, i + 1, names, tx.source)) say(l);
-  });
+  for (const l of lines) say(l);
+  if (expired) throw new Error("refused: the envelope has expired; build it again with admin-v2.ts");
   if (decodeOnly) return 0;
 
-  if (expired) throw new Error("refused: the envelope has expired; build it again with admin-v2.ts");
   if (!key) throw new Error(`no key for ${role}: ${from}`);
   if (!ctx.isTerminal()) throw new Error("refused: signing asks for a yes in a terminal, and this isn't one (there is no TTY)");
   const answer = (await ctx.ask("Sign and submit? [y/N] "))?.trim().toLowerCase();
@@ -485,47 +616,8 @@ async function roleKey(ctx: OwnerCtx, role: SigningRole): Promise<{ key: Keypair
   }
 }
 
-/** A plain description of one operation: a contract call with its decoded arguments, or the classic operation. */
-export function describeOperation(op: Transaction["operations"][number], n: number, names: Map<string, string>, txSource: string): string[] {
-  const label = (a: string) => (names.has(a) ? `${a} (${names.get(a)})` : a);
-  const out: string[] = [];
-  const src = (op as { source?: string }).source;
-  if (src && src !== txSource) out.push(`   ${n}. operation source ${src} (not the envelope's source: refuse to sign it unless you expect this)`);
-  if (op.type === "invokeHostFunction") {
-    const f = (op as any).func as xdr.HostFunction;
-    switch (f.switch().name) {
-      case "hostFunctionTypeInvokeContract": {
-        const ic = f.invokeContract();
-        const contract = Address.fromScAddress(ic.contractAddress()).toString();
-        const fn = ic.functionName().toString();
-        const args = ic.args();
-        out.push(`   ${n}. contract ${label(contract)}`);
-        out.push(`      call     ${fn}(${args.map(renderScVal).join(", ")})`);
-        args.forEach((a, i) => out.push(`      arg ${i + 1}    ${a.switch().name.replace(/^scv/, "")} ${renderScVal(a)}`));
-        break;
-      }
-      case "hostFunctionTypeUploadContractWasm":
-        out.push(`   ${n}. upload a WASM of ${f.wasm().length} bytes`);
-        break;
-      default:
-        out.push(`   ${n}. create a contract (${f.switch().name})`);
-    }
-    const auth = ((op as any).auth ?? []) as xdr.SorobanAuthorizationEntry[];
-    for (const a of auth) {
-      const c = a.credentials();
-      out.push(`      auth     ${c.switch().name === "sorobanCredentialsSourceAccount" ? "the source account's signature" : `a separate signature by ${Address.fromScAddress(c.address().address()).toString()}`}`);
-    }
-    return out;
-  }
-  const o = op as any;
-  const fields = Object.entries(o)
-    .filter(([k]) => k !== "type" && k !== "source")
-    .map(([k, v]) => `${k} ${v instanceof Asset ? (v.isNative() ? "XLM" : `${v.getCode()}:${v.getIssuer()}`) : String(v)}`);
-  out.push(`   ${n}. ${op.type}${fields.length ? `: ${fields.join(", ")}` : ""}`);
-  return out;
-}
-
-/** A readable ScVal: numbers in full, addresses as strkeys, bytes in hex, maps and vectors expanded. */
+/** A readable ScVal: numbers in full, addresses as strkeys, bytes in hex, maps and vectors expanded; strings and
+ *  symbols escaped (they come from the envelope). */
 export function renderScVal(v: xdr.ScVal): string {
   const k = v.switch().name;
   switch (k) {
@@ -547,15 +639,15 @@ export function renderScVal(v: xdr.ScVal): string {
     case "scvBytes":
       return Buffer.from(v.bytes()).toString("hex");
     case "scvString":
-      return JSON.stringify(v.str().toString());
+      return `"${safe(v.str().toString()).replace(/"/g, '\\"')}"`;
     case "scvSymbol":
-      return v.sym().toString();
+      return safe(v.sym().toString());
     case "scvAddress":
       return Address.fromScVal(v).toString();
     case "scvVec":
       return `[${(v.vec() ?? []).map(renderScVal).join(", ")}]`;
     case "scvMap":
-      return `{${(v.map() ?? []).map((e) => `${e.key().switch().name === "scvSymbol" ? e.key().sym().toString() : renderScVal(e.key())}: ${renderScVal(e.val())}`).join(", ")}}`;
+      return `{${(v.map() ?? []).map((e) => `${renderScVal(e.key())}: ${renderScVal(e.val())}`).join(", ")}}`;
     default:
       return k.replace(/^scv/, "");
   }

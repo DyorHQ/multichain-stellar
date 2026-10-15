@@ -30,6 +30,7 @@ import {
   depthCheck,
   floatOf,
   fundFloat,
+  type LiveCheck,
   loadAquariusFixtures,
   planAquarius,
   routerEstimate,
@@ -254,6 +255,9 @@ async function qaKeys(ctx: DeployCtx, dryRun: boolean): Promise<Keys> {
 }
 
 // ------------------------------------------------------------------------------------------------ the plan
+
+/** 30 days of ledgers: what the TTL step extends every instance and WASM to (ttl.ts keepAlive with extendToDays 30). */
+export const TTL_EXTEND_LEDGERS = 30 * 17_280;
 
 const CAMEL: Record<SingletonName, string> = {
   "exec-soroswap": "execSoroswap",
@@ -523,19 +527,32 @@ export async function main(args: string[], ctx: DeployCtx): Promise<number> {
     if (!opts.offline && !chain) throw new Error("no network: use --dry-run --offline");
     const reader = chain ? (opts.dryRun ? readOnlyChain(chain) : chain) : null;
 
-    // The Aquarius decision first: whether exec-aquarius and the venue are in the plan.
-    const live = reader ? await aquariusLiveCheck(reader, fixtures) : null;
-    const payment = reader ? await routerPayment(reader, fixtures) : null;
-    let aqua = planAquarius({
-      deployment: profile.name,
-      aquarius: opts.aquarius,
-      fundAquaFloat: opts.fundAquaFloat,
-      swapByDefault: profile.aquaSwapByDefault,
-      fixtures,
-      live,
-      payment,
-      targetMultiple: profile.aquaFloatTargetMultiple,
-    });
+    // The Aquarius decision first: whether exec-aquarius and the venue are in the plan. With --aquarius off the router
+    // is never asked anything, so a router that doesn't answer can't block the deploy.
+    let live: LiveCheck | null = null;
+    let payment: { asset: string; amount: bigint } | null = null;
+    let routerProblem: string | null = null;
+    if (reader && opts.aquarius !== "off") {
+      try {
+        live = await aquariusLiveCheck(reader, fixtures);
+        payment = await routerPayment(reader, fixtures);
+      } catch (e) {
+        routerProblem = `the Aquarius router didn't answer (${(e as Error).message})`;
+      }
+    }
+    if (routerProblem && profile.name === "testnet") throw new Error(`${routerProblem}: try again later, or deploy without the Aquarius venue (--aquarius off)`);
+    let aqua: AquaPlan = routerProblem
+      ? { enabled: false, reason: routerProblem, swap: false, target: null, notes: [] }
+      : planAquarius({
+        deployment: profile.name,
+        aquarius: opts.aquarius,
+        fundAquaFloat: opts.fundAquaFloat,
+        swapByDefault: profile.aquaSwapByDefault,
+        fixtures,
+        live,
+        payment,
+        targetMultiple: profile.aquaFloatTargetMultiple,
+      });
     // A re-run follows what an earlier run of this generation deployed.
     if (reader) {
       const earlier = planIds(profile.name, opts.generation, keys.deployer, TESTNET.passphrase, ["exec-aquarius", "launchpad-v2"]);
@@ -584,12 +601,21 @@ async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<n
     if (plan.keys.qaEphemeral) say("  – testnet-qa's accounts, QA asset and trustlines are created by the real run first");
     for (const l of lines) say(`  ${renderCheck(l)}`);
     if (!allNeededPass(lines)) blockers.push("the preflight");
-    const live = await aquariusLiveCheck(reader, plan.fixtures);
-    say("Aquarius router against contracts/testdata/fixtures.json (ruling a)");
-    for (const l of live.lines) say(`  ${l.ok ? "✓" : "✗"} ${l.label}: live ${l.live ?? "unreadable"}, fixture ${l.fixture}`);
-    if (plan.aqua.enabled && plan.aqua.swap) {
-      const d = await depthCheck(routerEstimate(reader, plan.fixtures), plan.aqua.target ?? 0n);
-      say(`  ${d.ok ? "✓" : "✗"} depth check: 1 XLM → ${fmtUnits(d.rate1)} AQUA; ${fmtUnits(d.spend)} XLM → ${fmtUnits(d.out)} AQUA for a minimum of ${fmtUnits(d.minOut)}${d.reason ? ` (${d.reason})` : ""}`);
+    if (!plan.aqua.enabled) {
+      say(`Aquarius router: not asked (the venue is off: ${plan.aqua.reason})`);
+    } else {
+      say("Aquarius router against contracts/testdata/fixtures.json (ruling a)");
+      try {
+        const live = await aquariusLiveCheck(reader, plan.fixtures);
+        for (const l of live.lines) say(`  ${l.ok ? "✓" : "✗"} ${l.label}: live ${l.live ?? "unreadable"}, fixture ${l.fixture}`);
+        if (plan.aqua.swap) {
+          const d = await depthCheck(routerEstimate(reader, plan.fixtures), plan.aqua.target ?? 0n);
+          say(`  ${d.ok ? "✓" : "✗"} depth check: 1 XLM → ${fmtUnits(d.rate1)} AQUA; ${fmtUnits(d.spend)} XLM → ${fmtUnits(d.out)} AQUA for a minimum of ${fmtUnits(d.minOut)}${d.reason ? ` (${d.reason})` : ""}`);
+        }
+      } catch (e) {
+        say(`  ✗ the router didn't answer (${(e as Error).message})`);
+        blockers.push("the Aquarius router");
+      }
     }
     if (plan.wasms.every((w) => w.sha256)) {
       say("Already on chain (a re-run skips what matches and refuses what differs)");
@@ -618,6 +644,26 @@ function assetNames(plan: Plan): Map<string, string> {
 
 // ------------------------------------------------------------------------------------------------ the real run
 
+/** Refuses a plan whose WASMs aren't all in dist, don't all match the reviewed list (F13) or fail the constructor
+ *  guard (L-d). `checked`, when given, is the plan already checked in this run: every WASM must be the same file it
+ *  was then, so a dist that changed during the run is refused too. */
+export function requireDeployable(plan: Plan, checked?: Plan): void {
+  const absent = plan.wasms.filter((w) => !w.bytes);
+  if (absent.length) throw new Error(`absent from contracts/dist: ${absent.map((w) => WASMS[w.key].file).join(", ")} (build with contracts/build.sh); nothing was sent`);
+  if (!plan.reviewed.ok) throw new Error(`reviewed-hash check failed; nothing was sent:\n  ${plan.reviewed.problems.join("\n  ")}`);
+  const badGuards = plan.guards.filter((g) => !g.result?.ok);
+  if (badGuards.length) {
+    throw new Error(`constructor guard: ${badGuards.map((g) => `${WASMS[g.wasm].file} (${g.result?.differences.join("; ")})`).join(", ")}; nothing was sent`);
+  }
+  if (checked) {
+    const changed = plan.wasms.filter((w) => {
+      const before = checked.wasms.find((x) => x.key === w.key);
+      return !before || before.sha256 !== w.sha256;
+    });
+    if (changed.length) throw new Error(`contracts/dist changed during this run (${changed.map((w) => WASMS[w.key].file).join(", ")}); nothing more was sent`);
+  }
+}
+
 async function deploy(
   ctx: DeployCtx,
   first: Plan,
@@ -634,23 +680,17 @@ async function deploy(
     say(`  ${what}: ${o.hash} (fee ${fmtXlm(o.feeCharged)})`);
   };
 
-  // 1. Nothing is sent before the reviewed-hash gate and the constructor guard pass.
-  const absent = plan.wasms.filter((w) => !w.bytes);
-  if (absent.length) throw new Error(`absent from contracts/dist: ${absent.map((w) => WASMS[w.key].file).join(", ")} (build with contracts/build.sh)`);
-  if (!plan.reviewed.ok) throw new Error(`reviewed-hash check failed; nothing was sent:\n  ${plan.reviewed.problems.join("\n  ")}`);
-  const badGuards = plan.guards.filter((g) => !g.result?.ok);
-  if (badGuards.length) {
-    throw new Error(`constructor guard: ${badGuards.map((g) => `${WASMS[g.wasm].file} (${g.result?.differences.join("; ")})`).join(", ")}; nothing was sent`);
-  }
+  // 1. Nothing is sent before the reviewed-hash gate and the constructor guard pass (and again for a rebuilt plan).
+  requireDeployable(plan);
   const deployer = plan.keys.deployKey!;
   const admin = plan.keys.adminKey!;
   // The re-run check (L-c), read-only and before anything is sent: skip what matches, refuse what differs.
-  const reconcileOrRefuse = async (p: Plan): Promise<Reconciled[]> => {
+  const reconcileOrRefuse = async (p: Plan, sentAlready = false): Promise<Reconciled[]> => {
     const states = await reconcile(plannedContracts(p.constructorPlan, p.ctors), chain);
     const conflicts = states.filter((s) => s.state === "conflict");
     if (conflicts.length) {
       throw new Error(
-        `contracts at the planned ids differ from the plan; nothing was sent (use a new --generation, or fix the inputs):\n  ${
+        `contracts at the planned ids differ from the plan; nothing ${sentAlready ? "more " : ""}was sent (use a new --generation, or fix the inputs):\n  ${
           conflicts.flatMap((c) => (c as { differences: string[] }).differences).join("\n  ")
         }`,
       );
@@ -728,8 +768,11 @@ async function deploy(
         say(`  AQUA: ${failure}`);
         if (!next.enabled) {
           say("  testnet-qa goes on without exec-aquarius and the Aquarius venue");
-          plan = await rebuild(next);
-          states = await reconcileOrRefuse(plan);
+          const rebuilt = await rebuild(next);
+          // The rebuilt plan read contracts/dist again: the same gate and guard, and the same WASMs as checked above.
+          requireDeployable(rebuilt, plan);
+          plan = rebuilt;
+          states = await reconcileOrRefuse(plan, true);
         } else plan = { ...plan, aqua: next };
       }
     }
@@ -768,12 +811,32 @@ async function deploy(
   const quotesRead: Record<string, unknown> = {};
   for (const [k, a] of assets) quotesRead[k] = scValToNative(await chain.view(launchpad, "quote_economics", [new Address(a).toScVal()]));
 
-  // 8. TTL: 30 days for every v2 instance and WASM, paid by the deployer (L-g).
+  // 8. TTL: 30 days for every v2 instance and WASM, paid by the deployer (L-g). keepAlive doesn't say whether each of
+  //    its batches applied, so every entry's live-until ledger is read back: each must be at least 30 days past the
+  //    ledger before the extension (an extension applied at ledger A sets A + 30 days).
   const contracts = [...plan.ids.values()].map((p) => p.id);
   const hashes = plan.wasms.map((w) => w.sha256!);
+  const ttlFrom = await chain.latestLedger();
   const ttl = await ctx.keepAlive(contracts, hashes, deployer);
   fees += BigInt(ttl.fee);
   say(`  extended ${ttl.extended} instance and WASM entries to 30 days, paid by the deployer (fee at most ${fmtXlm(BigInt(ttl.fee))})`);
+  const target = ttlFrom + TTL_EXTEND_LEDGERS;
+  const liveUntil = await chain.liveUntil(contracts, hashes);
+  const short = [...liveUntil.entries()].filter(([, l]) => l === null || l < target);
+  if (short.length) {
+    const label = (k: string) => {
+      const p = [...plan.ids.values()].find((x) => x.id === k);
+      if (p) return `${p.name} ${k}`;
+      const w = plan.wasms.find((x) => x.sha256 === k);
+      return w ? `${WASMS[w.key].file} code` : k;
+    };
+    throw new Error(
+      `the TTL step didn't reach 30 days (live until ledger ${target} or later) for:\n  ${
+        short.map(([k, l]) => `${label(k)}: ${l === null ? "missing" : `live until ${l}`}`).join("\n  ")
+      }\nEverything else is deployed. Run the same command again: it skips what is there and retries the TTL step.`,
+    );
+  }
+  say(`  ✓ every instance and WASM lives until ledger ${target} or later`);
 
   // 9. The deployment file: ids, the venue table as read, hashes, public roles, durations; never a key.
   const file = `${ctx.deploymentsDir}/${plan.profile.deploymentFile}`;

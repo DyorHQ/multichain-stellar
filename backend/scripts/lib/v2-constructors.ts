@@ -18,7 +18,7 @@ import { Buffer } from "node:buffer";
 import { scValToNative, xdr } from "@stellar/stellar-sdk";
 import { type PlannedContract, sameValue, type ViewCheck } from "./contract-ids.ts";
 import type { SingletonName, TtlPolicy, V2Profile, V2Roles } from "./v2-profile.ts";
-import { param, type Param, renderParams, renderValue, T, toScVal } from "./wasm-spec.ts";
+import { param, type Param, renderParams, renderValue, type SpecType, T, toScVal } from "./wasm-spec.ts";
 
 // ------------------------------------------------------------------------------------------------ dyor-common types
 
@@ -528,8 +528,42 @@ export function plannedContracts(p: ConstructorPlan, ctors: Ctor[]): PlannedCont
     }
     const wasm = p.wasmHashes[c.wasm];
     if (!wasm) throw new Error(`${WASMS[c.wasm].file} is absent from dist`);
-    return { name: c.contract, id: need(p, c.contract), wasmHash: wasm, views };
+    return { name: c.contract, id: need(p, c.contract), wasmHash: wasm, views, stored: identityLeaves(c) };
   });
+}
+
+/** The constructor arguments that identify a contract's configuration (every address, WASM hash and string, with
+ *  where it came from), which its instance storage must hold. Integers and enums are left to the views. The v2
+ *  contracts keep their constructor arguments in instance storage (§5.2, §8.1, §9.1; the merged executors and the
+ *  locker do; CT-11 confirms launchpad-v2, moments-v2 and moments-graduator once merged). */
+export function identityLeaves(c: Ctor): { label: string; value: string }[] {
+  const out = new Map<string, string>();
+  const walk = (t: SpecType, v: unknown, label: string) => {
+    if (v === null || v === undefined) return;
+    switch (t.kind) {
+      case "prim":
+        if (t.name === "Address" || t.name === "String") out.set(String(v), out.get(String(v)) ?? label);
+        return;
+      case "bytesN": {
+        const hex = typeof v === "string" ? v : Buffer.from(v as Uint8Array).toString("hex");
+        if (/^([0-9a-f]{2})+$/.test(hex)) out.set(hex, out.get(hex) ?? label);
+        return;
+      }
+      case "option":
+        return walk(t.value, v, label);
+      case "vec":
+        (v as unknown[]).forEach((x, i) => walk(t.element, x, `${label}[${i}]`));
+        return;
+      case "tuple":
+        t.items.forEach((it, i) => walk(it, (v as unknown[])[i], `${label}.${i}`));
+        return;
+      case "udt":
+        if (t.def?.kind === "struct") for (const f of t.def.fields) walk(f.type, (v as Record<string, unknown>)[f.name], `${label}.${f.name}`);
+        return;
+    }
+  };
+  c.params.forEach((prm, i) => walk(prm.type, c.values[i], prm.name));
+  return [...out.entries()].map(([value, label]) => ({ label, value }));
 }
 
 // ------------------------------------------------------------------------------------------------ after the constructors

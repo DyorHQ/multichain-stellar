@@ -52,21 +52,38 @@ export function looksLikeSeed(text: string): boolean {
   return found;
 }
 
+/** Text from a file, the chain or anyone else, made safe to print: every control character (C0, DEL and C1, newlines
+ *  included) becomes `\xNN` and every Unicode format character (bidirectional overrides, zero-width characters)
+ *  `\u{…}`, so a value can neither start a fake line nor hide or rewrite what the terminal shows. */
+export function safe(text: string): string {
+  return text
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
+    .replace(/\p{Cf}/gu, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
+/** A line for the terminal: `safe` on every part, keeping the newlines of a multi-line message. */
+export function terminalSafe(line: string): string {
+  return line.split("\n").map(safe).join("\n");
+}
+
 /** Where a script prints. */
 export interface Io {
   out(line: string): void;
   err(line: string): void;
 }
 
+/** The console, behind two last lines of defence: anything shaped like a seed is redacted, and control characters are
+ *  escaped. The scripts never put a secret in a message, and they escape outside text where they print it. */
 export function consoleIo(): Io {
-  return { out: (l) => console.log(redact(l)), err: (l) => console.error(redact(l)) };
+  return { out: (l) => console.log(terminalSafe(redact(l))), err: (l) => console.error(terminalSafe(redact(l))) };
 }
 
-/** An Io that records what it is given (redacted, as the console one prints it). For tests. */
+/** An Io that records exactly what a script writes, before any redaction or escaping, so a test of "no secret in the
+ *  output" or "no control character" sees a leak the console would have masked. For tests. */
 export function recordingIo(): Io & { stdout: string[]; stderr: string[] } {
   const stdout: string[] = [];
   const stderr: string[] = [];
-  return { stdout, stderr, out: (l) => void stdout.push(redact(l)), err: (l) => void stderr.push(redact(l)) };
+  return { stdout, stderr, out: (l) => void stdout.push(l), err: (l) => void stderr.push(l) };
 }
 
 // ------------------------------------------------------------------------------------------------ env files
