@@ -1,6 +1,7 @@
 // Contract deployments by name (docs/DESIGN-stellar-parity.md §6.16): the live testnet one, a QA one where the owner
 // allowed it (testnet-qa.json, read when it is first selected) and none on mainnet yet. LITE_DEPLOYMENT picks one and
-// defaults to the network's name. deploy-contracts.ts writes the files; gen-pinned.ts pins the app to one of them.
+// defaults to the network's name. deploy-contracts.ts writes the files, from economics.<name>.json beside them;
+// gen-pinned.ts pins the app to one of them.
 import testnet from "./testnet.json" with { type: "json" };
 
 export interface Deployment {
@@ -20,30 +21,56 @@ export interface Deployment {
   indexFromLedger: number | null;
 }
 
+/** Every deployment name and its network, deployed or not: deploy-contracts.ts makes them, LITE_DEPLOYMENT selects. */
+export const DEPLOYMENT_NETWORKS: Record<string, "testnet" | "mainnet"> = {
+  testnet: "testnet",
+  "testnet-qa": "testnet",
+  mainnet: "mainnet",
+};
+
+const CONTRACT_ID = /^C[A-Z2-7]{55}$/;
+
 // The files also record the admin and the treasury, for the runbook. Nothing here reads them: the API never depends
 // on who they are.
 function load(id: string, raw: Record<string, unknown>): Deployment {
+  const fail = (what: string): never => {
+    throw new Error(`deployments/${id}.json: ${what}`);
+  };
   const text = (k: string): string => {
     const v = raw[k];
-    if (typeof v !== "string" || v === "") throw new Error(`deployments/${id}.json: ${k} is missing`);
-    return v;
+    if (typeof v !== "string" || v === "") fail(`${k} is missing`);
+    return v as string;
   };
   const network = text("network");
-  if (network !== "testnet" && network !== "mainnet") throw new Error(`deployments/${id}.json: network is ${network}`);
-  if (!Number.isInteger(raw.deployLedger)) throw new Error(`deployments/${id}.json: deployLedger is missing`);
-  const smoke = (raw.smoke ?? {}) as { launches?: unknown[]; moments?: unknown[] };
+  if (network !== "testnet" && network !== "mainnet") fail(`network is ${network}`);
+  if (!Number.isInteger(raw.deployLedger)) fail("deployLedger is missing");
+  const deployLedger = raw.deployLedger as number;
+  // A smoke id that doesn't parse would leave a test item listed: refuse the file instead.
+  const smoke = (raw.smoke ?? {}) as { launches?: unknown; moments?: unknown };
+  const launches = smoke.launches ?? [];
+  const moments = smoke.moments ?? [];
+  if (!Array.isArray(launches) || !launches.every((t) => typeof t === "string" && CONTRACT_ID.test(t))) {
+    fail("smoke.launches must list launch token contract ids (C…)");
+  }
+  if (!Array.isArray(moments) || !moments.every((m) => Number.isInteger(m) && (m as number) > 0)) {
+    fail("smoke.moments must list Moment ids (whole numbers from 1)");
+  }
+  const from = raw.indexFromLedger ?? null;
+  if (from !== null && !(Number.isInteger(from) && (from as number) >= deployLedger)) {
+    fail("indexFromLedger must be a ledger at or after deployLedger, or null");
+  }
   return {
     id,
-    network,
+    network: network as Deployment["network"],
     launchpad: text("launchpad"),
     moments: text("moments"),
     launchTokenWasmHash: text("launchTokenWasmHash"),
     launchpadWasmHash: text("launchpadWasmHash"),
     momentsWasmHash: text("momentsWasmHash"),
-    deployLedger: raw.deployLedger as number,
+    deployLedger,
     deployedAt: text("deployedAt"),
-    smoke: { launches: (smoke.launches ?? []).map(String), moments: (smoke.moments ?? []).map(Number) },
-    indexFromLedger: Number.isInteger(raw.indexFromLedger) ? raw.indexFromLedger as number : null,
+    smoke: { launches: launches as string[], moments: moments as number[] },
+    indexFromLedger: from as number | null,
   };
 }
 
