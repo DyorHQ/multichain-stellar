@@ -108,6 +108,8 @@ enum LiteTitles {
             return (tr("Sent \(amount(value)) USDC to the bridge"), tr("Claim it on Monad once Circle confirms."))
         case let .cashOut(value, code, anchor):
             return (tr("Sent"), tr("\(amount(value)) \(code) to \(anchor)"))
+        case let .launchV2(_, title, body):
+            return (title, body)
         }
     }
 

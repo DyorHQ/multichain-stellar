@@ -1,0 +1,592 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@'s graduation marked delayed" : {
+      "comment" : "A notification's title: the user recorded that a coin's graduation is delayed. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduación de %@ marcada como retrasada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduation de %@ marquée comme retardée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업이 지연으로 표시됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 的毕业已标记为延迟"
+          }
+        }
+      }
+    },
+    "Apply the change of %@'s fee recipient" : {
+      "comment" : "A transaction's title: carry out a pending change of the account that receives a coin's creator fees, now that its wait is over. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aplicar el cambio del receptor de comisiones de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appliquer le changement de destinataire des frais de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수수료 수령인 변경 적용"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行 %@ 费用接收方的变更"
+          }
+        }
+      }
+    },
+    "Change %@'s fee recipient" : {
+      "comment" : "A transaction's title: the account that receives a coin's creator fees hands them to another account. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el receptor de comisiones de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changer le destinataire des frais de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수수료 수령인 변경"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改 %@ 的费用接收方"
+          }
+        }
+      }
+    },
+    "Changed %@'s fee recipient" : {
+      "comment" : "A notification's title: a coin's creator fees now go to another account. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Receptor de comisiones de %@ cambiado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destinataire des frais de %@ changé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수수료 수령인이 변경됐어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更改 %@ 的费用接收方"
+          }
+        }
+      }
+    },
+    "Claim creator fees owed to you" : {
+      "comment" : "A transaction's title: collect the creator fees a coin earned for the user before its fee recipient changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobrar las comisiones de creador que se te deben"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récupérer les frais de créateur qui vous sont dus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받아야 할 크리에이터 수수료 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取欠你的创作者费用"
+          }
+        }
+      }
+    },
+    "Claim your %@ holder rewards" : {
+      "comment" : "A transaction's title: collect the user's share of a coin's fees, paid to its holders. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobrar tus recompensas de holder de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récupérer vos récompenses de détenteur %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 홀더 보상 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取你的 %@ 持有者奖励"
+          }
+        }
+      }
+    },
+    "Claimed %@ holder rewards" : {
+      "comment" : "A notification's title: the user collected their share of a coin's fees paid to holders. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recompensas de holder de %@ cobradas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récompenses de détenteur %@ récupérées"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 홀더 보상을 받았어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取 %@ 持有者奖励"
+          }
+        }
+      }
+    },
+    "Collect %@'s pool fees first" : {
+      "comment" : "A transaction's title, the first step of a fee recipient change: collect the fees a graduated coin's locked pool earned, so they go to the current recipient. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobrar primero las comisiones del pool de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collecter d'abord les frais du pool de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 %@ 풀 수수료 수집"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先收取 %@ 的资金池费用"
+          }
+        }
+      }
+    },
+    "Collected creator fees owed to you" : {
+      "comment" : "A notification's title: the user collected the creator fees earned for them before a coin's fee recipient changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobraste las comisiones de creador que se te debían"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de créateur dus récupérés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받아야 할 크리에이터 수수료를 받았어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取欠你的创作者费用"
+          }
+        }
+      }
+    },
+    "Mark %@'s graduation delayed" : {
+      "comment" : "A transaction's title: record that a coin's full curve hasn't graduated in time, which starts its fallback and refund clocks. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcar la graduación de %@ como retrasada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marquer la graduation de %@ comme retardée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업 지연으로 표시"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将 %@ 的毕业标记为延迟"
+          }
+        }
+      }
+    },
+    "Open refunds for %@" : {
+      "comment" : "A transaction's title: a coin stuck past its rescue date switches to refunds, so every holder can get the curve's funds back at one fixed rate. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir reembolsos de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir les remboursements de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 환불 열기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启 %@ 退款"
+          }
+        }
+      }
+    },
+    "Refund" : {
+      "comment" : "A transaction's title: give back coins of a launch whose graduation was rescued, at its fixed refund rate, with no fees",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "환불"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退款"
+          }
+        }
+      }
+    },
+    "Refund %@ %@" : {
+      "comment" : "A transaction's title: give back coins of a rescued launch at its fixed rate. The first value is an amount, the second the coin's ticker",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Refund %1$@ %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsar %1$@ %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rembourser %1$@ %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 환불"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退还 %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "Refunded %@" : {
+      "comment" : "A notification's title: the user's coins of a rescued launch were refunded at its fixed rate. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ reembolsado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ remboursé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 환불 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已退款"
+          }
+        }
+      }
+    },
+    "Refunds opened for %@" : {
+      "comment" : "A notification's title: the user switched a stuck coin to refunds. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos abiertos para %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements ouverts pour %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 환불이 열렸어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已开启退款"
+          }
+        }
+      }
+    },
+    "The launchpad's terms aren't the ones this version of DyorHQ signs. Update DyorHQ to launch." : {
+      "comment" : "An error before the launch review: the launchpad's terms (its fee or its waiting times) differ from the ones this build of the app may sign. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las condiciones del launchpad no son las que firma esta versión de DyorHQ. Actualiza DyorHQ para lanzar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les conditions du launchpad ne sont pas celles que signe cette version de DyorHQ. Mettez DyorHQ à jour pour lancer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "런치패드 조건이 이 버전의 DyorHQ가 서명하는 조건과 달라요. 런칭하려면 DyorHQ를 업데이트하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射台的条款与此版本 DyorHQ 可签署的条款不同。请更新 DyorHQ 后再发射。"
+          }
+        }
+      }
+    },
+    "The launchpad's terms changed. Review your launch again." : {
+      "comment" : "An error before the launch review: the launchpad's terms changed after the screen showed them, so nothing was signed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las condiciones del launchpad cambiaron. Vuelve a revisar tu lanzamiento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les conditions du launchpad ont changé. Vérifiez à nouveau votre lancement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "런치패드 조건이 바뀌었어요. 런칭을 다시 검토하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射台的条款已变更。请重新检查你的发射。"
+          }
+        }
+      }
+    },
+    "This version of DyorHQ can't sign on Stellar's new launchpad yet. Update DyorHQ to continue." : {
+      "comment" : "An error before any review: this build of the app doesn't know the new Stellar launchpad's contracts, so it can't sign for it. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta versión de DyorHQ aún no puede firmar en el nuevo launchpad de Stellar. Actualiza DyorHQ para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette version de DyorHQ ne peut pas encore signer sur le nouveau launchpad de Stellar. Mettez DyorHQ à jour pour continuer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 버전의 DyorHQ는 아직 Stellar의 새 런치패드에서 서명할 수 없어요. 계속하려면 DyorHQ를 업데이트하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本的 DyorHQ 还无法在 Stellar 的新发射台上签名。请更新 DyorHQ 后继续。"
+          }
+        }
+      }
+    },
+    "Veto the change of %@'s fee recipient" : {
+      "comment" : "A transaction's title: the account that receives a coin's creator fees refuses a pending change of that account. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vetar el cambio del receptor de comisiones de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refuser le changement de destinataire des frais de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수수료 수령인 변경 거부"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "否决 %@ 费用接收方的变更"
+          }
+        }
+      }
+    },
+    "Vetoed the change of %@'s fee recipient" : {
+      "comment" : "A notification's title: the user refused a pending change of a coin's fee recipient. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambio del receptor de comisiones de %@ vetado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changement de destinataire des frais de %@ refusé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수수료 수령인 변경을 거부했어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已否决 %@ 费用接收方的变更"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
