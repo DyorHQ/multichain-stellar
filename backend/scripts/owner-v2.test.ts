@@ -25,7 +25,7 @@ import {
 import { ADMIN_FNS, main as adminMain } from "./admin-v2.ts";
 import { type DeployCtx, main as deployMain } from "./deploy-contracts-v2.ts";
 import { main as ownerMain, type OwnerCtx } from "./owner-v2.ts";
-import { contractIdFor } from "./lib/contract-ids.ts";
+import { contractIdFor, normalize } from "./lib/contract-ids.ts";
 import { KEYS_FILE, QA_KEYS_FILE, recordingIo, ROLES_FILE } from "./lib/owner-files.ts";
 import type { AccountInfo, Chain, TxOutcome } from "./lib/preflight-v2.ts";
 import { sha256Hex } from "./lib/reviewed-hashes.ts";
@@ -60,6 +60,7 @@ function sourceAuth(call: xdr.InvokeContractArgs, sub: xdr.SorobanAuthorizedInvo
 
 /** Native values to ScVals the way the contracts return them (integers as i128 or u32, addresses, maps by key). */
 function sv(v: unknown): xdr.ScVal {
+  if (v instanceof xdr.ScVal) return v;
   if (v === null || v === undefined) return xdr.ScVal.scvVoid();
   if (typeof v === "boolean") return xdr.ScVal.scvBool(v);
   if (typeof v === "bigint") return nativeToScVal(v, { type: "i128" });
@@ -90,6 +91,10 @@ class Ledger implements Chain {
   held = new Map<string, Map<string, bigint>>();
   wasmKinds = new Map<string, string>();
   log: string[] = [];
+  /** Every contract call a transaction made: the contract's kind, the function and the transaction's source. */
+  calls: { kind: string; fn: string; source: string }[] = [];
+  /** The ledger's close time (unix seconds): 5 s per transaction, and the smoke's waits. */
+  time = 1_760_486_400;
   pool = { xlm: 349_583_963_389n, aqua: 7_911_445_542_969n };
   failSwap = false;
   /** The router's views fail (an upgrade removed them, or its instance is archived). */
@@ -248,6 +253,7 @@ class Ledger implements Chain {
       const returnValue = this.apply(tx);
       a.sequence = tx.sequence;
       this.ledger += 1;
+      this.time += 5;
       return Promise.resolve({ hash: tx.hash().toString("hex"), ledger: this.ledger, feeCharged: 1_000n, returnValue });
     } catch (e) {
       return Promise.reject(new Error(`transaction failed: ${(e as Error).message}`));
@@ -303,6 +309,7 @@ class Ledger implements Chain {
         const id = Address.fromScAddress(ic.contractAddress()).toString();
         const fn = ic.functionName().toString();
         this.log.push(`invoke ${this.contracts.get(id)?.kind ?? id}.${fn}`);
+        this.calls.push({ kind: this.contracts.get(id)?.kind ?? id, fn, source: tx.source });
         return sv(this.call(id, fn, ic.args().map((x) => scValToNative(x)), tx.source));
       }
     }
@@ -334,7 +341,8 @@ class Ledger implements Chain {
         if ((a[0] as unknown[]).length === 0) throw new Error("the locker needs an owner");
         return { kind, wasm, fns: { owners: () => a[0], soroswap_factory: () => a[1], aquarius_router: () => a[2], harvest_interval: () => BigInt(a[3] as bigint) } };
       case "moments-graduator":
-        return { kind, wasm, fns: {} };
+        // Its constructor arguments as views (§12), which moments-v2's constructor and the re-run check read.
+        return { kind, wasm, fns: { moments: () => a[0], coin_wasm_hash: () => a[1], executor: () => a[2], locker: () => a[3], soroswap_factory: () => a[4] } };
       case "launchpad-v2": {
         const [adm, guardian, treasury, xlm, tokenHash, lockerId, factory, router, launchFee, venues, durations, ttl] = a as any[];
         if (locker(lockerId) !== Number(durations.harvest_interval)) throw new Error("Error(Contract, #10129)");
@@ -376,7 +384,10 @@ class Ledger implements Chain {
       case "moments-v2": {
         const [governance, guardian, usdc, nftHash, graduator, lockerId, executor, factory, base, policy, durations, ttl] = a as any[];
         if (locker(lockerId) !== Number(durations.harvest_interval)) throw new Error("Error(Contract, #10729)");
-        const cfg = { governance, guardian, usdc, nft_wasm_hash: nftHash, graduator, locker: lockerId, executor, soroswap_factory: factory, external_base: base, publishing_paused: false, guardian_paused: false, durations, ttl };
+        // Like moments-v2's constructor: the graduator must be wired to this contract and its peers.
+        const g = (fn: string) => this.call(String(graduator), fn, [], null);
+        if (g("moments") !== id || g("locker") !== lockerId || g("executor") !== executor || g("soroswap_factory") !== factory) throw new Error("Error(Contract, #10732)");
+        const cfg = { governance, guardian, usdc, nft_wasm_hash: nftHash, coin_wasm_hash: g("coin_wasm_hash"), graduator, locker: lockerId, executor, soroswap_factory: factory, external_base: base, publishing_paused: false, guardian_paused: false, durations, ttl };
         return { kind, wasm, fns: { config: () => cfg, policy: () => policy } };
       }
     }
@@ -478,7 +489,13 @@ async function owner(k: Kit, args: string[], tty: { terminal?: boolean; answer?:
 
 const keptAlive: { contracts: string[]; hashes: string[]; payer: string }[] = [];
 
+/** deploy-contracts-v2.ts with the Aquarius path on (--aquarius auto) unless a test chooses: these tests cover it too.
+ *  `deployDefault` runs the script with exactly the arguments given (Aquarius off by default, O7). */
 async function deploy(k: Kit, args: string[]) {
+  return await deployDefault(k, args.includes("--aquarius") || args.includes("--smoke") ? args : [...args, "--aquarius", "auto"]);
+}
+
+async function deployDefault(k: Kit, args: string[]) {
   const io = recordingIo();
   const ctx: DeployCtx = {
     io,
@@ -495,6 +512,12 @@ async function deploy(k: Kit, args: string[]) {
       return Promise.resolve({ extended: contracts.length + hashes.length, fee: "123456" });
     },
     now: () => new Date("2026-10-15T00:00:00Z"),
+    // The smoke's waits: ledgers close while it waits.
+    sleep: (ms) => {
+      k.ledger.time += Math.ceil(ms / 1000);
+      k.ledger.ledger += Math.ceil(ms / 5000);
+      return Promise.resolve();
+    },
   };
   const code = await deployMain(args, ctx);
   const out = [...io.stdout, ...io.stderr].join("\n");
@@ -657,7 +680,12 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     const keeper = Keypair.random();
     await Deno.writeTextFile(`${k.secrets}/testnet-functions.env`, `LITE_NETWORK=testnet\nSPONSOR_SECRET=${Keypair.random().secret()}\nKEEPER_SECRET=${keeper.secret()}\n`);
     k.ledger.fund(keeper.publicKey(), 250n * XLM);
-    const ok = await owner(k, ["check"]);
+    // Aquarius is off by default (O7): the router isn't asked.
+    const off = await owner(k, ["check"]);
+    assertEquals(off.code, 0, off.out);
+    assertStringIncludes(off.out, "✓ Aquarius: off (owner decision O7: Soroswap only), not checked");
+    assertFalse(off.out.includes("dyor_exec_aquarius.wasm"), "exec-aquarius is not expected with Aquarius off");
+    const ok = await owner(k, ["check", "--aquarius", "auto"]);
     assertEquals(ok.code, 0, ok.out);
     for (
       const line of [
@@ -684,8 +712,9 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     delete k.env.DEPLOYER_SECRET;
     // A changed Aquarius router stops the deploy unless --aquarius off.
     k.ledger.contracts.get(AQ.router.contract_id)!.storage![1].val = xdr.ScVal.scvBytes(Buffer.alloc(32));
-    assertEquals((await owner(k, ["check"])).code, 1);
+    assertEquals((await owner(k, ["check", "--aquarius", "auto"])).code, 1);
     assertEquals((await owner(k, ["check", "--aquarius", "off"])).code, 0);
+    assertEquals((await owner(k, ["check"])).code, 0);
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -832,8 +861,10 @@ Deno.test("deploy: refused before anything is sent without the reviewed list, wi
     for (const d of ["mainnet", "testnet-v2"]) assertEquals((await deploy(k, ["--deployment", d, "--dry-run"])).code, 1);
     k.env.SMOKE = "1";
     delete k.env.DEPLOYER_SECRET;
-    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--dry-run"])).out, "SMOKE=1 is refused for testnet");
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--dry-run"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
     delete k.env.SMOKE;
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--smoke"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--smoke", "--dry-run"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -947,7 +978,7 @@ Deno.test("admin-v2 cutover-v1: reads config() first, writes two prepared unsign
     assertEquals(mom.code, 0, mom.out);
     assertStringIncludes(mom.out, `contract ${V1.moments} (v1 Moments)`);
     assertStringIncludes(mom.out, "call     set_policy(250, 300, false)", "the values come from config()");
-    assertStringIncludes(mom.out, "  description  v1 Moments set_policy(250, 300, false): publishing stops; platform_bps is set to 250 and royalty_bps to 300 (cutover-v1 keeps the current ones)");
+    assertStringIncludes(mom.out, "  description  v1 Moments set_policy(250, 300, false): publishing stops; platform_bps is set to 250 and royalty_bps to 300");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -1567,6 +1598,39 @@ Deno.test("--aquarius off never asks the router: a router that doesn't answer bl
   }
 });
 
+Deno.test("O7: by default Aquarius is off: no exec-aquarius is uploaded, deployed or required in the reviewed list or dist", async () => {
+  for (const deployment of ["testnet", "testnet-qa"]) {
+    const k = await kit();
+    try {
+      if (deployment === "testnet") await readyOwner(k);
+      // CT-19 reviews no exec-aquarius (O7) and dist may lack it: neither stops a Soroswap-only deploy.
+      const reviewed = `${k.root}contracts/review/reviewed-wasm.sha256`;
+      await Deno.writeTextFile(reviewed, (await Deno.readTextFile(reviewed)).split("\n").filter((l) => !l.includes("dyor_exec_aquarius.wasm")).join("\n"));
+      await Deno.remove(`${k.root}contracts/dist/dyor_exec_aquarius.wasm`);
+      const dry = await deployDefault(k, ["--deployment", deployment, "--dry-run"]);
+      assertEquals(dry.code, 0, dry.out);
+      assertStringIncludes(dry.out, "Aquarius: disabled (--aquarius off)");
+      assertStringIncludes(dry.out, "✓ every WASM matches the reviewed list");
+      assertStringIncludes(dry.out, "A real deploy would go ahead.");
+      assertFalse(dry.out.includes("exec-aquarius"), "exec-aquarius is never planned");
+      const r = await deployDefault(k, ["--deployment", deployment]);
+      assertEquals(r.code, 0, r.out);
+      assertFalse(k.ledger.log.some((l) => l.includes("exec-aquarius")), "no exec-aquarius upload or deploy");
+      assertEquals(k.ledger.log.filter((l) => l.startsWith("view router.") || l.startsWith("invoke router.")), [], "the Aquarius router was never asked");
+      const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/${deployment}-v2.json`));
+      assertEquals([file.aquarius.enabled, file.aquarius.reason], [false, "--aquarius off"]);
+      assertEquals(file.contracts.execAquarius, undefined);
+      assertEquals(file.wasmHashes.execAquarius, undefined);
+      assertEquals(file.venues.map((v: any) => v.kind), deployment === "testnet" ? ["Soroswap"] : ["Soroswap", "QaFail"]);
+      // The locker was built without the Aquarius router.
+      assertEquals(k.ledger.contracts.get(file.contracts.lpLocker)!.fns.aquarius_router([], null), null);
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
 Deno.test("testnet-qa: a router that doesn't answer means no Aquarius venue, and the deploy goes on", async () => {
   const k = await kit();
   try {
@@ -1638,20 +1702,18 @@ Deno.test("re-runs compare the instance storage too: a contract with the planned
     await readyOwner(k);
     assertEquals((await deploy(k, ["--deployment", "testnet"])).code, 0);
     const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-v2.json`));
-    // moments-graduator has no view: its storage is all there is. Give it another executor.
+    // moments-graduator shows its constructor arguments as views (CT-08): give it another executor.
     const grad = k.ledger.contracts.get(file.contracts.momentsGraduator)!;
-    const args = scValToNative(grad.storage![0].val) as unknown[];
-    const other = [...args];
-    other[2] = ATTACKER;
-    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(other) }];
+    const executor = grad.fns.executor;
+    grad.fns.executor = () => ATTACKER;
     const mark = k.ledger.log.length;
     const r = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r.code, 1);
-    assertStringIncludes(r.out, `moments-graduator's instance storage doesn't hold executor ${file.contracts.execSoroswap}`);
+    assertStringIncludes(r.out, `moments-graduator executor() is "${ATTACKER}" on chain, the plan has "${file.contracts.execSoroswap}"`);
     assertStringIncludes(r.out, "use a new --generation");
     assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    grad.fns.executor = executor;
     // exec-aquarius shows only max_pool_payment: its router comes from the storage.
-    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(args) }];
     const exec = k.ledger.contracts.get(file.contracts.execAquarius)!;
     const execArgs = scValToNative(exec.storage![0].val) as unknown[];
     exec.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv([XLM_SAC, ...execArgs.slice(1)]) }];
@@ -1669,11 +1731,537 @@ Deno.test("re-runs compare the instance storage too: a contract with the planned
   }
 });
 
+// ------------------------------------------------------------------------------------------------ the testnet-qa smoke
+
+const ROUTER = "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD";
+const LAUNCH_PARAMS = ["creator_fee_bps", "creator_fee_recipient", "holder_sharing", "initial_buy", "min_tokens_out", "name", "nonce", "quote", "snipe_exempt", "symbol", "uri", "venue"];
+const PUBLISH_PARAMS = ["creator_alloc_bps", "date", "media_hash", "metadata_uri", "name", "nonce", "place", "price", "symbol", "window_secs"];
+const SYMBOL_RULE = /^[A-Za-z0-9]{2,10}$/;
+const cid = (label: string) => StrKey.encodeContract(hash(Buffer.from(label)));
+const sameNative = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
+const outcome = (pool: string) => xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Graduated"), new Address(pool).toScVal()]);
+const failed = (origin: number, code: number) => xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Failed"), sv({ code, origin })]);
+
+/** What the smoke drives, on top of the deployed fakes: the curve, launch tokens, Soroswap's router and pairs, the
+ *  locker's harvest and a Moment's life. Each call checks its caller's auth (the transaction's source), its argument
+ *  names and the state it needs, as the contracts do; a contract error is thrown as the RPC reports one. */
+function smokeWorld(l: Ledger, file: any, opts: { graduation?: "ok" | "failed"; usdc?: "deep" | "thin" } = {}) {
+  const auth = (who: unknown, source: string | null) => {
+    if (who !== source) throw new Error("Error(Auth, InvalidAction)");
+  };
+  const fail = (code: number): never => {
+    throw new Error(`Error(Contract, #${code})`);
+  };
+  const balanceOf = (asset: string, who: string) => BigInt(l.call(asset, "balance", [who], null) as bigint);
+  const move = (asset: string, from: string, to: string, amount: bigint) => void l.call(asset, "transfer", [from, to, amount], from);
+  const credit = (asset: string, holder: string, amount: bigint) => {
+    const m = l.held.get(asset) ?? new Map<string, bigint>();
+    m.set(holder, (m.get(holder) ?? 0n) + amount);
+    l.held.set(asset, m);
+  };
+  const lpId: string = file.contracts.launchpadV2;
+  const lp = l.contracts.get(lpId)!;
+  const cfg = lp.fns.config([], null) as Record<string, any>;
+  const table = lp.fns.venues([], null) as any[];
+  const growth = new Map<string, number>();
+
+  // A token whose holder rewards are queued from the next ledger on (launch-token-v2), or a plain one (moment-coin).
+  const token = (id: string, kind: string) => {
+    const balances = new Map<string, bigint>();
+    const rewards = new Map<string, { quote: bigint; token: bigint; from: number }>();
+    const get = (w: string) => balances.get(w) ?? 0n;
+    const send = (from: string, to: string, amount: bigint) => {
+      if (get(from) < amount) fail(10);
+      balances.set(from, get(from) - amount);
+      balances.set(to, get(to) + amount);
+    };
+    const mint = (to: string, amount: bigint) => void balances.set(to, get(to) + amount);
+    l.addContract(id, {
+      kind,
+      wasm: `${kind}-instance`,
+      fns: {
+        balance: (a) => get(a[0] as string),
+        transfer: (a, s) => {
+          auth(a[0], s);
+          send(a[0] as string, a[1] as string, BigInt(a[2] as bigint));
+        },
+        pending_rewards: (a) => {
+          const r = rewards.get(a[0] as string);
+          return r && l.ledger >= r.from ? [r.quote, r.token] : [0n, 0n];
+        },
+        claim: (a, s) => {
+          auth(a[0], s);
+          const holder = a[0] as string;
+          const r = rewards.get(holder);
+          if (!r || l.ledger < r.from) return [0n, 0n];
+          rewards.delete(holder);
+          move(XLM_SAC, id, holder, r.quote);
+          send(id, holder, r.token);
+          return [r.quote, r.token];
+        },
+      },
+    });
+    /** Queues `quote` and `tok` for the holders outside `excluded`, pro rata. */
+    const notify = (quote: bigint, tok: bigint, excluded: string[]) => {
+      const holders = [...balances.entries()].filter(([w, b]) => b > 0n && w !== id && !excluded.includes(w));
+      const total = holders.reduce((s, [, b]) => s + b, 0n);
+      for (const [w, b] of holders) {
+        const r = rewards.get(w) ?? { quote: 0n, token: 0n, from: 0 };
+        rewards.set(w, { quote: r.quote + (quote * b) / total, token: r.token + (tok * b) / total, from: l.ledger + 1 });
+      }
+    };
+    return { send, mint, notify, balances };
+  };
+
+  // ---- launchpad-v2: the curve.
+  const launches = new Map<string, any>();
+  const tokenAddress = (creator: string, nonce: bigint) => cid(`launch/${lpId}/${creator}/${nonce}`);
+  const preview = (quote: string, venue: number) => {
+    const q = lp.fns.quote_economics([quote], null) as any;
+    if (!q?.enabled) fail(10103);
+    const v = table.find((x) => x.id === venue && x.enabled) ?? fail(10109);
+    return {
+      supply: cfg.supply,
+      fee_bps: cfg.fee_bps,
+      launch_fee: cfg.launch_fee,
+      fee_asset: cfg.xlm,
+      quote,
+      phantom: q.phantom,
+      threshold: q.threshold,
+      venue: v,
+      fallback: table[q.fallback_venue],
+      venue_locked: false,
+      locker: cfg.locker,
+      token_wasm_hash: cfg.token_wasm_hash,
+      durations: cfg.durations,
+    };
+  };
+  const quoteBuy = (tok: string, quoteIn: bigint) => {
+    const L = launches.get(tok) ?? fail(10111);
+    if (L.phase !== 0) fail(10112);
+    const snipe = l.time - L.created < 20 ? 2_500n : 0n;
+    const total = 100n + BigInt(L.creatorFeeBps) + snipe;
+    const remaining = BigInt(L.threshold) - BigInt(L.real);
+    let used = quoteIn;
+    let net = used - (used * total) / 10_000n;
+    if (net > remaining) {
+      used = (remaining * 10_000n + 10_000n - total - 1n) / (10_000n - total);
+      net = remaining;
+    }
+    const base_fee = used / 100n;
+    const creator_fee = (used * BigInt(L.creatorFeeBps)) / 10_000n;
+    return { used, net, base_fee, creator_fee, snipe_fee: snipe ? used - net - base_fee - creator_fee : 0n, tokens_out: net * 200n };
+  };
+  Object.assign(lp.fns, {
+    preview_launch_terms: (a: unknown[]) => preview(a[0] as string, Number(a[1])),
+    token_address: (a: unknown[]) => tokenAddress(a[0] as string, BigInt(a[1] as bigint)),
+    launch: (a: unknown[], s: string | null) => {
+      const [creator, p, expected] = a as [string, Record<string, any>, unknown];
+      auth(creator, s);
+      assertEquals(Object.keys(p).sort(), LAUNCH_PARAMS);
+      if (!SYMBOL_RULE.test(p.symbol)) fail(10105);
+      if (!sameNative(expected, preview(p.quote, Number(p.venue)))) fail(10108);
+      const id = tokenAddress(creator, BigInt(p.nonce));
+      if (launches.has(id)) fail(10133);
+      move(XLM_SAC, creator, lpId, BigInt(cfg.launch_fee));
+      const t = token(id, "launch-token-v2");
+      t.mint(lpId, BigInt(cfg.supply));
+      const q = lp.fns.quote_economics([p.quote], null) as any;
+      launches.set(id, { creator, quote: p.quote, creatorFeeBps: Number(p.creator_fee_bps), created: l.time, threshold: BigInt(q.threshold), real: 0n, protocol: 0n, launchFee: BigInt(cfg.launch_fee), phase: 0, t });
+      return id;
+    },
+    quote_buy: (a: unknown[]) => quoteBuy(a[0] as string, BigInt(a[2] as bigint)),
+    buy: (a: unknown[], s: string | null) => {
+      const [buyer, tok, quoteIn, minOut] = a as [string, string, bigint, bigint];
+      auth(buyer, s);
+      const q = quoteBuy(tok, BigInt(quoteIn));
+      if (q.tokens_out < BigInt(minOut)) fail(10114);
+      const L = launches.get(tok);
+      move(L.quote, buyer, lpId, q.used);
+      L.real += q.net;
+      L.protocol += (q.base_fee + q.snipe_fee) / 2n;
+      if (L.real === L.threshold) L.phase = 1;
+      L.t.send(lpId, buyer, q.tokens_out);
+      return q.tokens_out;
+    },
+    status: (a: unknown[]) => ({ phase: (launches.get(a[0] as string) ?? fail(10111)).phase }),
+    graduate: (a: unknown[]) => {
+      const tok = a[0] as string;
+      const L = launches.get(tok) ?? fail(10111);
+      if (L.phase === 0) fail(10116);
+      if (L.phase === 2) fail(10117);
+      if (opts.graduation === "failed") return failed(3, 10_302);
+      L.phase = 2;
+      const pool = cid(`pair/${tok}`);
+      pairs.set(`${tok}|${L.quote}`, pool);
+      pairs.set(`${L.quote}|${tok}`, pool);
+      move(L.quote, lpId, pool, L.real);
+      L.t.send(lpId, pool, 200_000_000n * XLM);
+      positions.set(pool, { tok, last: l.time });
+      return outcome(pool);
+    },
+    claim_protocol_fees: (a: unknown[]) => {
+      let total = 0n;
+      for (const tok of a[0] as string[]) {
+        const L = launches.get(tok) ?? fail(10111);
+        total += L.protocol + L.launchFee;
+        [L.protocol, L.launchFee] = [0n, 0n];
+      }
+      if (total === 0n) fail(10123);
+      move(XLM_SAC, lpId, cfg.treasury, total);
+      return [[XLM_SAC, total]];
+    },
+  });
+
+  // ---- Soroswap: the router and its pairs (XLM–USDC already there, a launch's pair from its graduation).
+  const pairs = new Map<string, string>();
+  const usdcPair = cid("pair/XLM/USDC");
+  const [rx, ru] = opts.usdc === "thin" ? [1_000n * XLM, 20n * XLM] : [1_000_000n * XLM, 106_000n * XLM];
+  credit(XLM_SAC, usdcPair, rx);
+  credit(USDC_SAC, usdcPair, ru);
+  pairs.set(`${XLM_SAC}|${USDC_SAC}`, usdcPair);
+  pairs.set(`${USDC_SAC}|${XLM_SAC}`, usdcPair);
+  const pairOf = (path: string[]) => {
+    if (path.length !== 2) throw new Error("Error(Contract, #LibraryInvalidPath)");
+    return pairs.get(`${path[0]}|${path[1]}`) ?? (() => {
+      throw new Error("SoroswapRouter: pair does not exist");
+    })();
+  };
+  const out = (amountIn: bigint, rIn: bigint, rOut: bigint) => (amountIn * 997n * rOut) / (rIn * 1000n + amountIn * 997n);
+  const inFor = (amountOut: bigint, rIn: bigint, rOut: bigint) => {
+    if (amountOut >= rOut) throw new Error("SoroswapLibrary: insufficient liquidity");
+    return (rIn * amountOut * 1000n) / ((rOut - amountOut) * 997n) + 1n;
+  };
+  const swap = (path: string[], to: string, amountIn: bigint, amountOut: bigint, deadline: bigint) => {
+    if (deadline < BigInt(l.time)) throw new Error("SoroswapRouter: deadline expired");
+    const pair = pairOf(path);
+    move(path[0], to, pair, amountIn);
+    move(path[1], pair, to, amountOut);
+    growth.set(pair, (growth.get(pair) ?? 0) + 1);
+    return [amountIn, amountOut];
+  };
+  l.addContract(ROUTER, {
+    kind: "soroswap-router",
+    wasm: "router",
+    fns: {
+      router_get_amounts_out: (a) => {
+        const [amount, path] = a as [bigint, string[]];
+        const pair = pairOf(path);
+        return [BigInt(amount), out(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair))];
+      },
+      router_get_amounts_in: (a) => {
+        const [amount, path] = a as [bigint, string[]];
+        const pair = pairOf(path);
+        return [inFor(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair)), BigInt(amount)];
+      },
+      swap_exact_tokens_for_tokens: (a, s) => {
+        const [amount, min, path, to, deadline] = a as [bigint, bigint, string[], string, bigint];
+        auth(to, s);
+        const pair = pairOf(path);
+        const o = out(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair));
+        if (o < BigInt(min)) throw new Error("SoroswapRouter: insufficient output amount");
+        return swap(path, to, BigInt(amount), o, BigInt(deadline));
+      },
+      swap_tokens_for_exact_tokens: (a, s) => {
+        const [amount, max, path, to, deadline] = a as [bigint, bigint, string[], string, bigint];
+        auth(to, s);
+        const pair = pairOf(path);
+        const i = inFor(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair));
+        if (i > BigInt(max)) throw new Error("SoroswapRouter: excessive input amount");
+        return swap(path, to, i, BigInt(amount), BigInt(deadline));
+      },
+    },
+  });
+
+  // ---- lp-locker: one harvest per interval, half to the treasury, half to the holders (sharing on).
+  const lockerId: string = file.contracts.lpLocker;
+  const locker = l.contracts.get(lockerId)!;
+  const interval = Number(locker.fns.harvest_interval([], null));
+  const positions = new Map<string, { tok: string; last: number }>();
+  Object.assign(locker.fns, {
+    harvestable: (a: unknown[]) => {
+      const p = positions.get(a[0] as string) ?? fail(10601);
+      const g = BigInt(growth.get(a[0] as string) ?? 0);
+      return [g, g * 1_000n, g * 1_000n * XLM, g * XLM, BigInt(p.last + interval)];
+    },
+    harvest: (a: unknown[], s: string | null) => {
+      const pool = a[0] as string;
+      const p = positions.get(pool) ?? fail(10601);
+      if (l.time < p.last + interval) fail(10603);
+      const g = BigInt(growth.get(pool) ?? 0);
+      if (g === 0n) fail(10604);
+      // A simulation (a view has no source) commits nothing.
+      if (s === null) return [g * 1_000n * XLM, g * XLM];
+      growth.set(pool, 0);
+      p.last = l.time;
+      const [base, quote] = [g * 1_000n * XLM, g * XLM];
+      const t = launches.get(p.tok).t;
+      t.send(pool, cfg.treasury, base / 2n);
+      move(XLM_SAC, pool, cfg.treasury, quote / 2n);
+      t.send(pool, p.tok, base / 2n);
+      move(XLM_SAC, pool, p.tok, quote / 2n);
+      t.notify(quote / 2n, base / 2n, [pool, lpId, lockerId, cfg.treasury]);
+      return [base, quote];
+    },
+  });
+
+  // ---- moments-v2: publish, collect, graduate, vest.
+  const moId: string = file.contracts.momentsV2;
+  const mo = l.contracts.get(moId)!;
+  const policy = mo.fns.policy([], null) as Record<string, any>;
+  const terms = () => ({ policy, durations: (mo.fns.config([], null) as any).durations, usdc: USDC_SAC });
+  const nftAddress = (creator: string, nonce: bigint) => cid(`nft/${moId}/${creator}/${nonce}`);
+  const moments = new Map<string, any>();
+  const quoteCollect = (nft: string, qty: number) => {
+    const M = moments.get(nft) ?? fail(10708);
+    if (M.state !== 0) fail(10709);
+    const r = BigInt(policy.reserve_bps);
+    const requested = M.price * BigInt(qty);
+    const remaining = BigInt(policy.threshold) - M.reserve;
+    let [gross, reserve_in, editions] = [requested, (requested * r) / 10_000n, qty];
+    const terminal = reserve_in >= remaining;
+    if (terminal) {
+      gross = (remaining * 10_000n + r - 1n) / r;
+      reserve_in = (gross * r) / 10_000n;
+      editions = Number((gross + M.price - 1n) / M.price);
+    }
+    return { gross, editions, entitlement: gross * 50_000n, reserve_in, creator_in: 0n, platform_in: 0n, excess: requested - gross, terminal };
+  };
+  const due = (M: any, account: string): [bigint, bigint] => [
+    ((M.entitlements.get(account) ?? 0n) * 6_000n) / 10_000n - (M.claimed.get(account) ?? 0n),
+    account === M.creator ? (1_000_000_000_000_000n * BigInt(M.alloc) / 10_000n) * 2_000n / 10_000n - M.creatorClaimed : 0n,
+  ];
+  Object.assign(mo.fns, {
+    terms: () => terms(),
+    nft_address: (a: unknown[]) => nftAddress(a[0] as string, BigInt(a[1] as bigint)),
+    publish: (a: unknown[], s: string | null) => {
+      const [creator, p, expected] = a as [string, Record<string, any>, unknown];
+      auth(creator, s);
+      assertEquals(Object.keys(p).sort(), PUBLISH_PARAMS);
+      if (!SYMBOL_RULE.test(p.symbol) || (p.media_hash as Uint8Array).length !== 32) fail(10707);
+      if (!sameNative(expected, terms())) fail(10702);
+      if (BigInt(p.price) < BigInt(policy.min_price)) fail(10703);
+      if (Number(p.creator_alloc_bps) > Number(policy.max_creator_alloc_bps)) fail(10705);
+      const nft = nftAddress(creator, BigInt(p.nonce));
+      if (moments.has(nft)) fail(10730);
+      moments.set(nft, { creator, price: BigInt(p.price), alloc: Number(p.creator_alloc_bps), state: 0, reserve: 0n, entitlements: new Map(), claimed: new Map(), creatorClaimed: 0n });
+      l.addContract(nft, { kind: "moment-nft", wasm: "moment-nft-instance", fns: {} });
+      return nft;
+    },
+    quote: (a: unknown[]) => quoteCollect(a[0] as string, Number(a[1])),
+    collect: (a: unknown[], s: string | null) => {
+      const [collector, nft, qty, max] = a as [string, string, number, bigint];
+      auth(collector, s);
+      const q = quoteCollect(nft, Number(qty));
+      if (q.gross > BigInt(max)) fail(10712);
+      move(USDC_SAC, collector, moId, q.gross);
+      const M = moments.get(nft);
+      M.reserve += q.reserve_in;
+      M.entitlements.set(collector, (M.entitlements.get(collector) ?? 0n) + q.entitlement);
+      if (q.terminal) M.state = 1;
+      return { first_rank: 1, editions: q.editions, gross: q.gross, entitlement: q.entitlement };
+    },
+    ledger: (a: unknown[]) => ({ state: (moments.get(a[0] as string) ?? fail(10708)).state }),
+    get_moment: (a: unknown[]) => ({ coin: cid(`coin/${a[0]}`), creator: (moments.get(a[0] as string) ?? fail(10708)).creator }),
+    graduate: (a: unknown[]) => {
+      const nft = a[0] as string;
+      const M = moments.get(nft) ?? fail(10708);
+      if (M.state !== 1) fail(10714);
+      if (opts.graduation === "failed") return failed(10, 11_003);
+      M.state = 2;
+      M.coin = token(cid(`coin/${nft}`), "moment-coin");
+      return outcome(cid(`pair/coin/${nft}`));
+    },
+    claimable: (a: unknown[]) => {
+      const M = moments.get(a[0] as string) ?? fail(10708);
+      return M.state === 2 ? due(M, a[1] as string) : [0n, 0n];
+    },
+    claim: (a: unknown[], s: string | null) => {
+      const [account, nft] = a as [string, string];
+      auth(account, s);
+      const M = moments.get(nft) ?? fail(10708);
+      if (M.state !== 2) fail(10714);
+      const [c, cr] = due(M, account);
+      if (c === 0n && cr === 0n) fail(10715);
+      M.claimed.set(account, (M.claimed.get(account) ?? 0n) + c);
+      M.creatorClaimed += cr;
+      M.coin.mint(account, c + cr);
+      return [c, cr];
+    },
+  });
+  return { launches, moments, growth };
+}
+
+/** A testnet-qa deployment on the in-memory ledger (Aquarius off), with the smoke's world on top. */
+async function qaDeployed(opts: Parameters<typeof smokeWorld>[2] = {}) {
+  const k = await kit();
+  const r = await deploy(k, ["--deployment", "testnet-qa", "--aquarius", "off"]);
+  assertEquals(r.code, 0, r.out);
+  const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-qa-v2.json`));
+  const world = smokeWorld(k.ledger, file, opts);
+  return { k, file, world };
+}
+
+const TX_LINE = /^ {2}(.+): ([0-9a-f]{64}) \(fee 0\.0001 XLM\)$/;
+
+Deno.test("--smoke on testnet-qa: a launch through graduation, a harvest and both claims, a Moment through its first vest claims; each hash and fee printed", async () => {
+  const { k, file } = await qaDeployed();
+  try {
+    const deployer = file.deployer;
+    const treasury = file.roles.treasury;
+    const treasuryBefore = k.ledger.accounts.get(treasury)!.xlm;
+    // The dry run checks the deployment and the USDC route and sends nothing.
+    const mark = k.ledger.log.length;
+    const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    for (const s of ["DRY RUN: nothing is sent", "✓ the deployment file is testnet-qa's", "✓ XLM → USDC depth check", "Dry run: nothing was sent."]) assertStringIncludes(dry.out, s);
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "a dry run sends nothing");
+
+    const calls = k.ledger.calls.length;
+    const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+    assertEquals(r.code, 0, r.out);
+    // Every transaction: its label, hash and fee.
+    const txs = r.out.split("\n").filter((l) => TX_LINE.test(l)).map((l) => l.match(TX_LINE)![1]);
+    const expected = [
+      /^launch SMK\d{5}$/,
+      /^buy \(completes the curve\)$/,
+      /^keeper graduate \(Soroswap\)$/,
+      /^swap: sell 5% of the tokens on the pool$/,
+      /^swap: buy with 100 XLM on the pool$/,
+      /^keeper harvest$/,
+      /^holder claim \(quote and token rewards\)$/,
+      /^claim_protocol_fees \(to the treasury\)$/,
+      /^collector trusts USDC$/,
+      /^swap: 14\.3333334 USDC for at most [\d,.]+ XLM$/,
+      /^publish SMM\d{5}$/,
+      /^collect 14 \(terminal\)$/,
+      /^keeper graduate \(Moment\)$/,
+      /^collector's first vest claim$/,
+      /^creator's first vest claim$/,
+    ];
+    assertEquals(txs.length, expected.length, txs.join("\n"));
+    txs.forEach((t, i) => assertMatch(t, expected[i]));
+    assertStringIncludes(r.out, `Smoke passed: 15 transactions, 0.0015 XLM in fees.`);
+    // Who signed what: the creator launches and publishes, the buyer buys, swaps and claims, the QA deployer keeps.
+    const by = k.ledger.calls.slice(calls).map((c) => `${c.kind}.${c.fn} ${c.source === deployer ? "keeper" : c.source}`);
+    const [creator, buyer, collector] = ["creator", "buyer", "collector"].map((n) => r.out.match(new RegExp(`  ${n} +(G[A-Z2-7]{55})`))![1]);
+    const who = (s: string) => s.replace(creator, "creator").replace(buyer, "buyer").replace(collector, "collector");
+    assertEquals(by.map(who), [
+      "launchpad-v2.launch creator",
+      "launchpad-v2.buy buyer",
+      "launchpad-v2.graduate keeper",
+      "soroswap-router.swap_exact_tokens_for_tokens buyer",
+      "soroswap-router.swap_exact_tokens_for_tokens buyer",
+      "lp-locker.harvest keeper",
+      "launch-token-v2.claim buyer",
+      "launchpad-v2.claim_protocol_fees keeper",
+      "soroswap-router.swap_tokens_for_exact_tokens collector",
+      "moments-v2.publish creator",
+      "moments-v2.collect collector",
+      "moments-v2.graduate keeper",
+      "moments-v2.claim collector",
+      "moments-v2.claim creator",
+    ]);
+    for (const s of ["✓ completed", "✓ graduated: pool", "✓ harvested", "✓ the holder claimed", "✓ collected 14 editions for 13.3333334 USDC", "✓ the collector claimed"]) assertStringIncludes(r.out, s);
+    // The treasury got the launch fee and the protocol fees, and half of the harvest's XLM.
+    assert(k.ledger.accounts.get(treasury)!.xlm - treasuryBefore > 10n * XLM);
+    // The throwaway accounts were funded by Friendbot; their keys were never printed.
+    for (const a of [creator, buyer, collector]) assert(k.ledger.log.includes(`friendbot ${a}`));
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("--smoke stops at the step that fails, naming it: a recorded graduation failure; a thin USDC route stops it before the Moment", async () => {
+  {
+    const { k } = await qaDeployed({ graduation: "failed" });
+    try {
+      const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+      assertEquals(r.code, 1);
+      assertStringIncludes(r.out, "the smoke stopped: the launch's graduation recorded a failure: origin 3, code 10302");
+      assertStringIncludes(r.out, "keeper graduate (Soroswap): ");
+      assertFalse(r.out.includes("keeper harvest"));
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+  {
+    // F10: the launch part runs; the Moment part stops before the collector's trustline or any USDC swap.
+    const { k } = await qaDeployed({ usdc: "thin" });
+    try {
+      const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"]);
+      assertEquals(dry.code, 0);
+      assertStringIncludes(dry.out, "✗ XLM → USDC depth check");
+      const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+      assertEquals(r.code, 1);
+      assertStringIncludes(r.out, "✗ XLM → USDC depth check");
+      assertStringIncludes(r.out, "✓ the treasury");
+      assertStringIncludes(r.out, "the smoke stopped: testnet XLM→USDC liquidity too thin");
+      assertFalse(r.out.includes("collector trusts USDC"));
+      assertFalse(k.ledger.calls.some((c) => c.kind === "moments-v2"));
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("--smoke is testnet-qa's only, and only against its own deployment and keys", async () => {
+  const { k, file } = await qaDeployed();
+  try {
+    for (const d of ["testnet", "mainnet"]) assertEquals((await deployDefault(k, ["--deployment", d, "--smoke"])).code, 1);
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet", "--smoke"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--generation", "2"])).out, "--smoke runs against the deployment file");
+    // SMOKE=1 alone doesn't turn a deploy into a smoke.
+    k.env.SMOKE = "1";
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"])).out, "SMOKE=1 is set: run the smoke with --smoke");
+    delete k.env.SMOKE;
+    // A deployment file whose deployer isn't the QA keys' is refused before anything is sent.
+    const path = `${k.deployments}/testnet-qa-v2.json`;
+    await Deno.writeTextFile(path, JSON.stringify({ ...file, deployer: Keypair.random().publicKey() }));
+    const mark = k.ledger.log.length;
+    const other = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+    assertEquals(other.code, 1);
+    assertStringIncludes(other.out, "isn't the QA keys' deployer");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), []);
+    // A contract that runs another WASM than the file records is refused too.
+    await Deno.writeTextFile(path, JSON.stringify({ ...file, wasmHashes: { ...file.wasmHashes, lpLocker: "ab".repeat(32) } }));
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"])).out, `lpLocker ${file.contracts.lpLocker} runs WASM`);
+    await Deno.remove(path);
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"])).out, "run deploy-contracts-v2.ts --deployment testnet-qa first");
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ as processes, without network
 
-async function run(script: string, args: string[], env: Record<string, string>, write: string[]) {
+/** A temporary repository holding only what the scripts read: backend/scripts, the functions' _shared modules and
+ *  contracts/testdata/fixtures.json. It has no contracts/dist and no reviewed list, whatever the real checkout has
+ *  (build.sh writes a git-ignored dist into it), so what the processes print doesn't depend on the checkout. */
+async function scriptsRepo(): Promise<string> {
+  const root = await Deno.makeTempDir({ prefix: "ct11-scripts-" });
+  const copy = async (from: string, to: string) => {
+    for await (const e of Deno.readDir(from)) {
+      if (e.isDirectory) {
+        await Deno.mkdir(`${to}/${e.name}`, { recursive: true });
+        await copy(`${from}/${e.name}`, `${to}/${e.name}`);
+      } else if (e.isFile) await Deno.copyFile(`${from}/${e.name}`, `${to}/${e.name}`);
+    }
+  };
+  for (const d of ["backend/scripts", "backend/supabase/functions/_shared", "contracts/testdata"]) {
+    await Deno.mkdir(`${root}/${d}`, { recursive: true });
+    if (d === "contracts/testdata") await Deno.copyFile(`${repo}${d}/fixtures.json`, `${root}/${d}/fixtures.json`);
+    else await copy(`${repo}${d}`, `${root}/${d}`);
+  }
+  return `${root}/`;
+}
+
+async function run(script: string, args: string[], env: Record<string, string>, write: string[], root = repo) {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--allow-read", "--allow-env", `--allow-write=${write.join(",")}`, "--config", `${repo}backend/supabase/functions/deno.json`, `${repo}backend/scripts/${script}`, ...args],
+    args: ["run", "--allow-read", "--allow-env", `--allow-write=${write.join(",")}`, "--config", `${repo}backend/supabase/functions/deno.json`, `${root}backend/scripts/${script}`, ...args],
     env: { ...env, NO_COLOR: "1" },
     clearEnv: true,
     stdout: "piped",
@@ -1685,6 +2273,7 @@ async function run(script: string, args: string[], env: Record<string, string>, 
 
 Deno.test("as processes without network permission: the offline dry run, decode-only and the refusals print no secret", async () => {
   const k = await kit();
+  const scripts = await scriptsRepo();
   try {
     await readyOwner(k);
     await copyV1(k);
@@ -1695,15 +2284,20 @@ Deno.test("as processes without network permission: the offline dry run, decode-
     if (!env.DENO_DIR) delete (env as Record<string, string>).DENO_DIR;
     const secrets = await secretsOf(k);
     const runs = [
-      // The real repository: no contracts/dist and no reviewed list yet.
-      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--dry-run", "--offline"], env, [k.secrets]),
-      await run("owner-v2.ts", ["sign", `${out}/2-v1-moments-set_policy.json`, "--as", "v1-admin", "--decode-only"], env, [k.secrets]),
-      await run("owner-v2.ts", ["keys"], { ...env, ADMIN_PUBLIC: (await rolesOf(k)).ADMIN_PUBLIC }, [k.secrets]),
-      await run("deploy-contracts-v2.ts", ["--deployment", "mainnet"], env, [k.secrets]),
-      await run("owner-v2.ts", ["keys", "--deployment", "testnet-qa"], env, [k.secrets]),
-      await run("admin-v2.ts", [], env, [k.secrets]),
+      // A copy of the scripts without contracts/dist and without the reviewed list: the state before a build.
+      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--dry-run", "--offline"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["sign", `${out}/2-v1-moments-set_policy.json`, "--as", "v1-admin", "--decode-only"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["keys"], { ...env, ADMIN_PUBLIC: (await rolesOf(k)).ADMIN_PUBLIC }, [k.secrets], scripts),
+      await run("deploy-contracts-v2.ts", ["--deployment", "mainnet"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["keys", "--deployment", "testnet-qa"], env, [k.secrets], scripts),
+      await run("admin-v2.ts", [], env, [k.secrets], scripts),
+      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--smoke", "--dry-run", "--offline"], env, [k.secrets], scripts),
     ];
-    const [dry, decode, roleEnv, mainnet, qa, usage] = runs;
+    const [dry, decode, roleEnv, mainnet, qa, usage, smoke] = runs;
+    assertEquals(smoke.code, 1);
+    assertStringIncludes(smoke.stderr, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes(dry.stdout, "Aquarius: disabled (--aquarius off)");
+    assertFalse(dry.stdout.includes("exec-aquarius"), "with Aquarius off by default, exec-aquarius is never planned");
     assertEquals(dry.code, 0, dry.stderr);
     for (
       const s of [
@@ -1737,5 +2331,6 @@ Deno.test("as processes without network permission: the offline dry run, decode-
     }
   } finally {
     await cleanup(k);
+    await Deno.remove(scripts, { recursive: true });
   }
 });

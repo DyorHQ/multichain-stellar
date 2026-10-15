@@ -3,13 +3,15 @@
 // lib/wasm-spec.ts) and the values a deployment passes, the config views a re-run compares (L-c), the economics files
 // and the admin calls the deploy makes after the constructors (L-b, F8).
 //
-// Binding status, 2026-10-14 (main 9354d56):
-// - exec-soroswap, exec-aquarius, qa-exec-fail, launch-token-v2, lp-locker, moment-nft, moment-coin: merged; the
-//   declarations match their code.
-// - launchpad-v2 (CT-05), moments-graduator (CT-08), moments-v2 (CT-09): not merged yet; their constructors are the
-//   ones the lead pinned in the CT-05, CT-08 and CT-09 entries ("LEAD NOTES AFTER CT-04/06/07"). The guard refuses
-//   to deploy any WASM whose constructor differs, so a drift can't reach the chain. CT-11 re-checks them, and the
-//   views and admin calls below (config(), venues(), quote_economics(), set_quote, …), against the merged code.
+// Binding status, 2026-10-15 (CT-11: main dad21a4 + stellar/CT-08): every v2 contract is merged and every declaration
+// below matches its code. The constructors were checked against the contractspecv0 sections of the WASMs that
+// contracts/build.sh builds (spec-shaken, wasm-opt -Oz), and the constructor guard re-checks them before every deploy,
+// so a contract that drifts can't reach the chain. Merged facts the kit relies on: launchpad-v2 takes the launch fee
+// before the venue table and keeps every constructor argument in config() and venues(); moments-v2's constructor
+// reads graduator.coin_wasm_hash() and refuses a graduator whose moments(), locker(), executor() or
+// soroswap_factory() differ from its own arguments, so the graduator is deployed first with moments-v2's planned id;
+// moments-graduator shows its five constructor arguments as views; lp-locker takes (owners, soroswap_factory,
+// Option aquarius_router, harvest_interval).
 //
 // The deploy deploys exec-soroswap, exec-aquarius (when enabled), lp-locker, moments-graduator, launchpad-v2 and
 // moments-v2 (plus qa-exec-fail and the failing Moments stack on testnet-qa). launch-token-v2, moment-nft and
@@ -51,7 +53,7 @@ export const MomentsDurationsT = T.struct("MomentsDurations", [
 /** qa-exec-fail's Mode (§7.3). */
 export const ModeT = T.enumU32("Mode", [["Fail", 0], ["ExhaustBudget", 1], ["BogusSuccess", 2]]);
 
-// Defined in launchpad-v2 and moments-v2 (pinned by the lead; CT-05 and CT-09 not merged yet).
+// Defined in launchpad-v2 and moments-v2.
 /** One entry of launchpad-v2's initial venue table: ids are 0.. in table order, and every initial venue is enabled. */
 export const VenueInitT = T.struct("VenueInit", [["kind", VenueKindT], ["executor", T.address], ["params", VenueParamsT]]);
 /** moments-v2's Policy (§9.1). */
@@ -92,16 +94,16 @@ export interface WasmInfo {
 }
 
 export const WASMS: Record<WasmKey, WasmInfo> = {
-  "launchpad-v2": { file: "dyor_launchpad_v2.wasm", binding: "pinned", source: "constructor pinned by the lead (CT-05)" },
+  "launchpad-v2": { file: "dyor_launchpad_v2.wasm", binding: "merged", source: "main, CT-05" },
   "launch-token-v2": { file: "dyor_launch_token_v2.wasm", binding: "merged", source: "main, CT-01" },
   "exec-soroswap": { file: "dyor_exec_soroswap.wasm", binding: "merged", source: "main, CT-02" },
   "exec-aquarius": { file: "dyor_exec_aquarius.wasm", binding: "merged", source: "main, CT-03" },
   "qa-exec-fail": { file: "dyor_qa_exec_fail.wasm", binding: "merged", source: "main, CT-02" },
   "lp-locker": { file: "dyor_lp_locker.wasm", binding: "merged", source: "main, CT-04" },
-  "moments-v2": { file: "dyor_moments_v2.wasm", binding: "pinned", source: "constructor pinned by the lead (CT-09)" },
+  "moments-v2": { file: "dyor_moments_v2.wasm", binding: "merged", source: "main, CT-09" },
   "moment-nft": { file: "dyor_moment_nft.wasm", binding: "merged", source: "main, CT-06" },
   "moment-coin": { file: "dyor_moment_coin.wasm", binding: "merged", source: "main, CT-07" },
-  "moments-graduator": { file: "dyor_moments_graduator.wasm", binding: "pinned", source: "constructor pinned by the lead (CT-08)" },
+  "moments-graduator": { file: "dyor_moments_graduator.wasm", binding: "merged", source: "CT-08" },
 };
 
 /** The WASM each singleton runs. */
@@ -518,24 +520,38 @@ export function plannedContracts(p: ConstructorPlan, ctors: Ctor[]): PlannedCont
         ));
         break;
       case "moments-v2":
-        for (const k of ["governance", "guardian", "usdc", "nft_wasm_hash", "graduator", "locker", "executor", "soroswap_factory", "durations", "ttl"]) {
+        for (const k of ["governance", "guardian", "usdc", "nft_wasm_hash", "graduator", "locker", "executor", "soroswap_factory", "external_base", "durations", "ttl"]) {
           views.push(view(`config().${k}`, "config", v[k], (n) => hex(field(k)(n))));
         }
         views.push(view("policy()", "policy", v.policy));
         break;
       case "moments-graduator":
-        break; // §12 has no config view; the WASM hash is compared.
+        // Its five constructor arguments, each a view (§12): the same values moments-v2's constructor checks.
+        for (const k of ["moments", "coin_wasm_hash", "executor", "locker", "soroswap_factory"]) views.push(view(`${k}()`, k, v[k], hex));
+        break;
     }
     const wasm = p.wasmHashes[c.wasm];
     if (!wasm) throw new Error(`${WASMS[c.wasm].file} is absent from dist`);
-    return { name: c.contract, id: need(p, c.contract), wasmHash: wasm, views, stored: identityLeaves(c) };
+    // The views come first; the instance storage is compared only for what no view shows (exec-aquarius's router,
+    // payment asset and callers).
+    const shown = new Set(views.flatMap((x) => leafValues(x.expected)));
+    return { name: c.contract, id: need(p, c.contract), wasmHash: wasm, views, stored: identityLeaves(c).filter((l) => !shown.has(l.value)) };
   });
+}
+
+/** Every string (address, hex WASM hash, text) inside an expected view value. */
+function leafValues(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  if (v instanceof Uint8Array) return [Buffer.from(v).toString("hex")];
+  if (Array.isArray(v)) return v.flatMap(leafValues);
+  if (v && typeof v === "object") return Object.values(v).flatMap(leafValues);
+  return [];
 }
 
 /** The constructor arguments that identify a contract's configuration (every address, WASM hash and string, with
  *  where it came from), which its instance storage must hold. Integers and enums are left to the views. The v2
- *  contracts keep their constructor arguments in instance storage (§5.2, §8.1, §9.1; the merged executors and the
- *  locker do; CT-11 confirms launchpad-v2, moments-v2 and moments-graduator once merged). */
+ *  contracts keep their constructor arguments in instance storage (§5.2, §8.1, §9.1, §12). plannedContracts keeps
+ *  only those no view shows. */
 export function identityLeaves(c: Ctor): { label: string; value: string }[] {
   const out = new Map<string, string>();
   const walk = (t: SpecType, v: unknown, label: string) => {
