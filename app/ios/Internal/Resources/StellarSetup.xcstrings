@@ -1,0 +1,360 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Confirm with your passkey" : {
+      "comment" : "The network sheet's sign-in step on a passkey account while it runs: the passkey prompt is up, and that one prompt signs in and sets up the account",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirma con tu llave de acceso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmez avec votre clé d'accès"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패스키로 확인해 주세요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用你的通行密钥确认"
+          }
+        }
+      }
+    },
+    "Creates your Stellar account and enables USDC. DyorHQ pays this one-time setup. After it, you pay Stellar's network fees in XLM." : {
+      "comment" : "The network sheet's account step on Stellar's main network, before its tap: DyorHQ pays for creating the account and enabling USDC; every later network fee is paid by the user in XLM. Stellar, USDC, DyorHQ and XLM are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crea tu cuenta de Stellar y activa USDC. DyorHQ paga esta configuración única. Después, tú pagas las comisiones de red de Stellar en XLM."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crée votre compte Stellar et active USDC. DyorHQ paie cette configuration unique. Ensuite, vous payez les frais de réseau de Stellar en XLM."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 계정을 만들고 USDC를 사용 설정해요. 이 한 번의 설정 비용은 DyorHQ가 내요. 그다음부터는 Stellar의 네트워크 수수료를 XLM으로 직접 내요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建你的 Stellar 账户并启用 USDC。这次一次性设置由 DyorHQ 支付。之后，Stellar 的网络费由你用 XLM 支付。"
+          }
+        }
+      }
+    },
+    "Enable USDC" : {
+      "comment" : "A step of the network sheet's Setup: let the new Stellar account hold USDC (a trustline), right after the account is created. USDC is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar USDC"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer USDC"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC 사용 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 USDC"
+          }
+        }
+      }
+    },
+    "Enter your invite code to continue." : {
+      "comment" : "The network sheet's invite step on a passkey account: the server needs an invite code for this account's first use of DyorHQ on Stellar; the next tap asks for the passkey again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce tu código de invitación para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez votre code d'invitation pour continuer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계속하려면 초대 코드를 입력해 주세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入你的邀请码以继续。"
+          }
+        }
+      }
+    },
+    "Fund with Friendbot" : {
+      "comment" : "[tight] The network sheet's button on Stellar's test network: create the account with free test XLM from Friendbot, Stellar's testnet faucet (a verb). Friendbot is a name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondear con Friendbot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Financer avec Friendbot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friendbot으로 충전"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Friendbot 充值"
+          }
+        }
+      }
+    },
+    "Get %@ free test XLM from Stellar's Friendbot (one claim per account), then enable USDC. Enabling USDC holds 0.5 XLM and costs a small network fee, paid from your test XLM." : {
+      "comment" : "The network sheet's account step on Stellar's test network, before its tap: Friendbot, Stellar's testnet faucet, gives the new account free test XLM once; enabling USDC keeps 0.5 XLM back and costs a small fee in that XLM. %@ is a number, formatted by the app (10,000). Friendbot, Stellar, XLM and USDC are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibe %@ XLM de prueba gratis del Friendbot de Stellar (una sola vez por cuenta) y luego activa USDC. Activar USDC retiene 0.5 XLM y cuesta una pequeña comisión de red, que se paga con tus XLM de prueba."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recevez %@ XLM de test gratuits du Friendbot de Stellar (une seule fois par compte), puis activez USDC. Activer USDC immobilise 0.5 XLM et coûte de petits frais de réseau, payés avec vos XLM de test."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar의 Friendbot에서 무료 테스트 XLM %@개를 받은 다음(계정당 한 번) USDC를 사용 설정해요. USDC를 사용 설정하면 0.5 XLM이 묶이고, 적은 네트워크 수수료가 테스트 XLM에서 나가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Stellar 的 Friendbot 免费领取 %@ 个测试 XLM（每个账户仅可领取一次），然后启用 USDC。启用 USDC 会预留 0.5 XLM，并收取少量网络费，从你的测试 XLM 中支付。"
+          }
+        }
+      }
+    },
+    "Get free test XLM from Stellar's Friendbot (one claim per account), then enable USDC. Enabling USDC holds 0.5 XLM and costs a small network fee, paid from your test XLM." : {
+      "comment" : "The network sheet's account step on Stellar's test network, before its tap, while the amount isn't known: Friendbot, Stellar's testnet faucet, gives the new account free test XLM once; enabling USDC keeps 0.5 XLM back and costs a small fee in that XLM. Friendbot, Stellar, XLM and USDC are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibe XLM de prueba gratis del Friendbot de Stellar (una sola vez por cuenta) y luego activa USDC. Activar USDC retiene 0.5 XLM y cuesta una pequeña comisión de red, que se paga con tus XLM de prueba."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recevez des XLM de test gratuits du Friendbot de Stellar (une seule fois par compte), puis activez USDC. Activer USDC immobilise 0.5 XLM et coûte de petits frais de réseau, payés avec vos XLM de test."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar의 Friendbot에서 무료 테스트 XLM을 받은 다음(계정당 한 번) USDC를 사용 설정해요. USDC를 사용 설정하면 0.5 XLM이 묶이고, 적은 네트워크 수수료가 테스트 XLM에서 나가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Stellar 的 Friendbot 免费领取测试 XLM（每个账户仅可领取一次），然后启用 USDC。启用 USDC 会预留 0.5 XLM，并收取少量网络费，从你的测试 XLM 中支付。"
+          }
+        }
+      }
+    },
+    "Holds %@ XLM · network fee up to %@ XLM" : {
+      "comment" : "The network sheet's Enable USDC step: the XLM the account must keep back for USDC (its reserve), then the most the step's network fee may be. Both values are numbers of XLM, formatted by the app (0.5, 0.001). XLM is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Holds %1$@ XLM · network fee up to %2$@ XLM"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiene %1$@ XLM · comisión de red de hasta %2$@ XLM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Immobilise %1$@ XLM · frais de réseau jusqu'à %2$@ XLM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ XLM 묶임 · 네트워크 수수료 최대 %2$@ XLM"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预留 %1$@ XLM · 网络费最多 %2$@ XLM"
+          }
+        }
+      }
+    },
+    "Needed the first time you use Stellar." : {
+      "comment" : "The network sheet, under the optional invite code field of a passkey account's first setup on this iPhone: a code is needed only the first time the account uses DyorHQ on Stellar. Stellar is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo se necesita la primera vez que usas Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nécessaire la première fois que vous utilisez Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar를 처음 사용할 때만 필요해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仅在首次使用 Stellar 时需要。"
+          }
+        }
+      }
+    },
+    "Not finished. Try again." : {
+      "comment" : "The network sheet's Setup: the passkey, Face ID or passcode prompt was cancelled, or the app went to the background during a passkey run; nothing was sent",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se terminó. Vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas terminé. Réessayez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "완료되지 않았어요. 다시 시도해 주세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未完成。再试一次。"
+          }
+        }
+      }
+    },
+    "Signing in…" : {
+      "comment" : "The network sheet's sign-in step while it runs, with no prompt: DyorHQ checks this account owns its Stellar key",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando sesión…"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion…"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인하는 중…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在登录…"
+          }
+        }
+      }
+    },
+    "You pay Stellar's network fees in XLM, as you pay MON on Monad." : {
+      "comment" : "The network sheet, before the first switch to Stellar: every Stellar transaction's network fee is paid by the user in XLM, Stellar's coin, as Monad's are paid in MON, Monad's coin. Stellar, Monad, XLM and MON are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pagas las comisiones de red de Stellar en XLM, como pagas en MON en Monad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous payez les frais de réseau de Stellar en XLM, comme vous payez en MON sur Monad."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 MON으로 내는 것처럼, Stellar의 네트워크 수수료는 XLM으로 내요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你用 XLM 支付 Stellar 的网络费，就像在 Monad 上用 MON 支付一样。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
