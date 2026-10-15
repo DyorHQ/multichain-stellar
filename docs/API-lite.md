@@ -290,7 +290,7 @@ do.
 
 | Account | Answer |
 |---|---|
-| Missing, `friendbot` (testnet) | Friendbot funds it (10,000 test XLM): the address's one claim, logged as its faucet row. Then a **user-paid** `trust` plan for USDC. |
+| Missing, `friendbot` (testnet) | Friendbot funds it (10,000 test XLM): the address's one claim, logged as its faucet row with Friendbot's transaction. Then a **user-paid** `trust` plan for USDC. 502 `friendbot_failed` when Friendbot doesn't answer; 504 `friendbot_slow` when the account, or the transaction that funded it, doesn't show in time. |
 | Missing, `sponsored` (mainnet; local rehearsal with `LITE_ACTIVATION=sponsored`) | An `activate` plan: DyorHQ creates the account with 0 XLM and sponsors the USDC trustline (`feePayer: sponsor`, `sponsorReason: setup`). |
 | Exists, USDC not enabled | A user-paid `trust` plan. Too little XLM: 409 `not_enough_xlm_for_reserve`. |
 | Exists, USDC enabled | `{status: "active", account}`. |
