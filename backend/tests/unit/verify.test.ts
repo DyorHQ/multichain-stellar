@@ -6,8 +6,8 @@
 // the tests below cover where v2's pins come from.
 import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, scValToNative, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertGreater, assertThrows } from "jsr:@std/assert@1";
-import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
-import { TESTNET, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
+import { BUNDLED_V2, DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
+import { TESTNET, withDeployment, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
 import {
   FeeCaps,
   Intent,
@@ -448,6 +448,31 @@ Deno.test("v2's pins come from the deployment: its own executors (qa-exec-fail o
   assertEquals([launchTerms.venue.id, launchTerms.venue.kind, launchTerms.venue.executor], [qaVenue.id, 3, qaVenue.executor]);
   // A network whose v2 deployment is taken away has no v2 pins.
   assertEquals(v2PinsOf(withDeploymentV2(qaNet, null)), null);
+});
+
+Deno.test("testnet's v2 pins are the owner's deployment (deployments/testnet-v2.json): its singletons, runtime WASMs, production durations and the 10 XLM bound", () => {
+  const file = JSON.parse(Deno.readTextFileSync(new URL("../../supabase/functions/_shared/deployments/testnet-v2.json", import.meta.url)));
+  assertEquals(BUNDLED_V2["testnet-v2"], file, "the functions serve the owner's file");
+  const pins = v2PinsOf(withDeployment(TESTNET, "testnet"))!;
+  assertEquals([pins.launchpad, pins.moments, pins.locker, pins.graduator, pins.soroswapExecutor], [
+    "CAEEBNR6DDXCRCHBDUGPG5AWND5L2PHHEK4A77PDPHR4MTS5XVFRTMPS",
+    "CDABBNTQD2IOJMAFH75MKP4OKZJSGTFILZUBG4X5VSL4LMOX3HLPDOQL",
+    "CDIZ4NTKKCEETUL6RUPHCI35IRHAB7RKB5EOZFGHN7ZFPBXPCNCCWDMP",
+    "CB7MBSRVNSQCTLG35NDX7B2XUOYRZMVFB6Q32ANANZQLNEGJFKLW2VIA",
+    "CA7RDHGNXATQNQSIPA5P7U36NY33OPMLWICI4FFWXPYXZIWTAEBHV5BF",
+  ]);
+  // Soroswap only (O7): the one executor a launch's terms may name.
+  assertEquals(pins.executors, ["CA7RDHGNXATQNQSIPA5P7U36NY33OPMLWICI4FFWXPYXZIWTAEBHV5BF"]);
+  assertEquals(pins.runtimeWasmHashes, {
+    launchTokenV2: "f09bc5743aaf94626d04f5831759abf7ed9d03fa42f3ac791b7d9d747a256707",
+    momentNft: "e14e1676a4071b6e5f3bdf7335250fb6439251e3ffd11d12db5815bd1207a2c9",
+    momentCoin: "9106f6a8a0513bedec4ec33f6a200acadcf0f2f79b6158609b71c1cdf3dc6e2a",
+  });
+  assertEquals(pins.durations, { launch: DURATION_SETS_V2.production.launch, moments: DURATION_SETS_V2.production.moments });
+  assertEquals(pins.maxLaunchFeeStroops, 100_000_000n);
+  // The phone pins the same (PinnedContracts+Testnet.swift, StellarCoreTests checks it there).
+  const swift = Deno.readTextFileSync(new URL("../../../ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+Testnet.swift", import.meta.url));
+  for (const id of [pins.launchpad, pins.moments, pins.locker, pins.graduator, ...Object.values(pins.runtimeWasmHashes)]) assert(swift.includes(`"${id}"`), id);
 });
 
 Deno.test("without v2's pins a call is judged by v1's rules, and a runtime contract's hash allows nothing", () => {

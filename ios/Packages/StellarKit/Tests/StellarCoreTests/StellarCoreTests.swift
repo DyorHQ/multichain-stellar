@@ -339,6 +339,35 @@ final class VerifierVectorTests: XCTestCase {
         XCTAssertEqual(TxVerifier.V2Pins(pinned)?.executors.count, 1)
     }
 
+    /// The app's testnet pins are the owner's v2 deployment (deployments/testnet-v2.json, gen-pinned.ts): its
+    /// singletons, the WASMs of the contracts it creates, production durations and the 10 XLM bound (verify.test.ts
+    /// checks the server's).
+    func testTestnetPinsTheOwnersV2Deployment() throws {
+        let v2 = try XCTUnwrap(TxVerifier.V2Pins(.testnet))
+        XCTAssertEqual(v2.launchpad, "CAEEBNR6DDXCRCHBDUGPG5AWND5L2PHHEK4A77PDPHR4MTS5XVFRTMPS")
+        XCTAssertEqual(v2.moments, "CDABBNTQD2IOJMAFH75MKP4OKZJSGTFILZUBG4X5VSL4LMOX3HLPDOQL")
+        XCTAssertEqual(v2.locker, "CDIZ4NTKKCEETUL6RUPHCI35IRHAB7RKB5EOZFGHN7ZFPBXPCNCCWDMP")
+        XCTAssertEqual(v2.graduator, "CB7MBSRVNSQCTLG35NDX7B2XUOYRZMVFB6Q32ANANZQLNEGJFKLW2VIA")
+        XCTAssertEqual(v2.soroswapExecutor, "CA7RDHGNXATQNQSIPA5P7U36NY33OPMLWICI4FFWXPYXZIWTAEBHV5BF")
+        // Soroswap only (O7): no Aquarius executor, and never testnet-qa's failing venue (F4).
+        XCTAssertEqual(v2.executors, ["CA7RDHGNXATQNQSIPA5P7U36NY33OPMLWICI4FFWXPYXZIWTAEBHV5BF"])
+        XCTAssertEqual(v2.launchTokenWasm, "f09bc5743aaf94626d04f5831759abf7ed9d03fa42f3ac791b7d9d747a256707")
+        XCTAssertEqual(v2.nftWasm, "e14e1676a4071b6e5f3bdf7335250fb6439251e3ffd11d12db5815bd1207a2c9")
+        XCTAssertEqual(v2.coinWasm, "9106f6a8a0513bedec4ec33f6a200acadcf0f2f79b6158609b71c1cdf3dc6e2a")
+        XCTAssertEqual(v2.durations.launch.grace, 3_600)
+        XCTAssertEqual(v2.durations.launch.fallbackDelay, 3_600)
+        XCTAssertEqual(v2.durations.launch.rescuePublic, 2_592_000)
+        XCTAssertEqual(v2.durations.launch.harvestInterval, 3_600)
+        XCTAssertEqual(v2.durations.moments.vestPeriod, 2_592_000)
+        XCTAssertEqual(v2.durations.moments.pendingBackstop, 2_592_000)
+        XCTAssertEqual(v2.maxLaunchFeeStroops, 100_000_000)
+        // Every v2 singleton is on the allowlist; the runtime contracts are allowed by these hashes only.
+        for role in ["launchpadV2", "momentsV2", "lpLocker", "execSoroswap", "momentsGraduator"] {
+            XCTAssertEqual(PinnedContracts.testnet.contracts(role).count, 1, role)
+        }
+        XCTAssertTrue(PinnedContracts.testnet.contracts("execAquarius").isEmpty)
+    }
+
     /// Without v2's pins, a call is judged by v1's rules and a runtime contract's hash allows nothing (verify.test.ts
     /// checks the same two).
     func testWithoutV2PinsTheV1RulesApply() throws {

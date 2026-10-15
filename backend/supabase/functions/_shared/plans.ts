@@ -108,9 +108,19 @@ const STEP_KINDS: ReadonlySet<string> = new Set<StepKind>([
   "launch_claim", "moment_publish", "moment_collect", "token_approve", "cctp_burn",
 ]);
 
+/** Contracts v2's step kinds (DESIGN-stellar-contracts-v2 §20.3): each builder's own kind (launchpad_v2.ts
+ *  LAUNCH_V2_STEPS, moments_v2.ts SPEC_KINDS) is the step's kind. */
+const V2_STEP_KINDS: ReadonlySet<string> = new Set<StepKind>([
+  "launch_v2_create", "launch_v2_buy", "launch_v2_sell", "launch_v2_refund", "launch_v2_graduate",
+  "launch_v2_graduate_fallback", "launch_v2_mark_stuck", "launch_v2_rescue", "launch_v2_claim", "launch_v2_claim_owed",
+  "launch_v2_claim_rewards", "launch_v2_harvest", "launch_v2_recipient_transfer", "launch_v2_recipient_cancel",
+  "launch_v2_recipient_execute", "moment_v2_publish", "moment_v2_collect", "moment_v2_claim", "moment_v2_claim_all",
+  "moment_v2_withdraw", "moment_v2_graduate", "moment_v2_expire",
+]);
+
 /** The step kind a spec builds (§6.3), as fees are estimated and transactions logged; null for a builder's kind that
  *  has none. A send moves a classic asset to an account (payment) or calls a token's transfer (payment_token); a Blend
- *  submit supplies (request type 0) or withdraws (1). */
+ *  submit supplies (request type 0) or withdraws (1); a v2 step is its builder's kind. */
 export function stepKindOf(spec: StepSpec): StepKind | null {
   if (spec.kind === "payment") {
     const asset = assetById(env.network, String(spec.asset));
@@ -118,7 +128,15 @@ export function stepKindOf(spec: StepSpec): StepKind | null {
     return classic && !isContractId(String(spec.to)) ? "payment" : "payment_token";
   }
   if (spec.kind === "blend_submit") return Number(spec.requestType) === 1 ? "blend_submit_withdraw" : "blend_submit_deposit";
-  return STEP_KINDS.has(spec.kind) ? spec.kind as StepKind : null;
+  return STEP_KINDS.has(spec.kind) || V2_STEP_KINDS.has(spec.kind) ? spec.kind as StepKind : null;
+}
+
+/** A built step's kind: a v2 step's is its spec's, the same before and after it is built, so its fees are learned
+ *  apart from v1's (some v2 builders name v1's kind); any other builder's where it knows better (a send's), else the
+ *  spec's. */
+function builtKindOf(made: BuiltTx, spec: StepSpec): StepKind | null {
+  if (V2_STEP_KINDS.has(spec.kind)) return spec.kind as StepKind;
+  return made.stepKind ?? stepKindOf(spec);
 }
 
 /** New base reserves a step holds back on the user's account: a trustline is one. */
@@ -213,7 +231,7 @@ async function build(user: string, step: PlanStep): Promise<PlanStep> {
     }
   }
   const { tx, intent, cosignSponsor } = made;
-  const kind = made.stepKind ?? stepKindOf(spec);
+  const kind = builtKindOf(made, spec);
   const policy = env.network.feePolicy;
   const fee = BigInt(tx.fee);
   if (fee > policy.maxFee) throw feeTooHigh(fee, policy.maxFee);
@@ -577,8 +595,8 @@ function units(v: unknown): string | null {
 }
 
 /** What a settled step delivered (§6.11): an SDEX path payment's last amount, the last element of Soroswap's amounts,
- *  Aquarius's u128, a curve buy's tokens out or a sell's quote out; any other step's return value when it is an
- *  amount. Null when it delivered none. */
+ *  Aquarius's u128, a curve buy's tokens out or a sell's quote out (v2's buy and sell return that amount itself); any
+ *  other step's return value when it is an amount. Null when it delivered none. */
 export function outcomeOf(stepKind: string | null | undefined, settled: Pick<Settled, "resultXdr" | "returnValue">): { amountOut: string | null } {
   const rv = settled.returnValue;
   const field = (name: string) => (rv && typeof rv === "object" && !Array.isArray(rv) ? units((rv as Record<string, unknown>)[name]) : null);
@@ -588,8 +606,10 @@ export function outcomeOf(stepKind: string | null | undefined, settled: Pick<Set
     case "swap_soroswap":
       return { amountOut: Array.isArray(rv) && rv.length > 0 ? units(rv[rv.length - 1]) : null };
     case "launch_buy":
+    case "launch_v2_buy":
       return { amountOut: field("tokens_out") ?? units(rv) };
     case "launch_sell":
+    case "launch_v2_sell":
       return { amountOut: field("quote_out") ?? units(rv) };
     default:
       return { amountOut: units(rv) };

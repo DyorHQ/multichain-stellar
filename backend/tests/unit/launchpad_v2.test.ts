@@ -14,10 +14,10 @@
 // - recipient changes: without holder sharing, the harvest first when the locker's interval allows (F3), and the
 //   recipient's part of the backlog one round can't take (V7); with sharing on, neither (harvests pay the holders);
 //   the plan made again once when the keeper harvests first;
-// - the verifier passes every step. v2's call rules are CT-16's (verify.ts): until they land, the steps whose calls
-//   only v2 has (launch's three arguments, refund, the fallback, the recipient changes, the token's claim, the
-//   locker's harvest) are ignored there, and run as soon as the verifier knows them, or when LAUNCH_V2_VERIFY=required.
-import { Account, Address, Contract, Keypair, nativeToScVal, scValToNative, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+// - the server verifier (verify.ts, with v2's call rules) passes every builder's step against its own intent, and
+//   plans.ts runs it on every step it builds: each step built through createPlan, as the API builds it, with its own
+//   v2 step kind; a step the verifier refuses is never handed out.
+import { Address, Keypair, nativeToScVal, scValToNative, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertMatch, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import { fakeSql, OTHER, setTestEnv, USER } from "../fixtures/routes/harness.ts";
 
@@ -62,7 +62,9 @@ const DURATIONS = DURATION_SETS_V2.production.launch;
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const { TESTNET } = await import("../../supabase/functions/_shared/networks.ts");
 const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
-const { registerBuilder, verifyContext } = await import("../../supabase/functions/_shared/plans.ts");
+const { createPlan, registerBuilder, verifyContext } = await import("../../supabase/functions/_shared/plans.ts");
+type StepSpec = import("../../supabase/functions/_shared/plans.ts").StepSpec;
+const { feeEstimates } = await import("../../supabase/functions/_shared/fees.ts");
 const { verifyTransaction } = await import("../../supabase/functions/_shared/verify.ts");
 const v2 = await import("../../supabase/functions/_shared/launchpad_v2.ts");
 
@@ -565,24 +567,6 @@ async function rejects(run: () => Promise<unknown>): Promise<InstanceType<typeof
   assert(err instanceof ApiError, `expected an ApiError, got ${err}`);
   return err;
 }
-
-/** Whether verify.ts has v2's call rules (CT-16): its v1 rules have none for refund. */
-const V2_RULES = (() => {
-  const tx = new TransactionBuilder(new Account(ME, "1"), { fee: "100", networkPassphrase: TESTNET.passphrase })
-    .addOperation(new Contract(PAD).call("refund", addr(ME), addr(TOKEN), i128(1n)))
-    .setTimeout(600)
-    .build();
-  try {
-    verifyTransaction(tx, { kind: "launch_refund", summary: "", spend: { [TOKEN]: "1" }, calls: [{ contract: PAD, fn: "refund" }] }, ctx());
-    return true;
-  } catch (err) {
-    return !/function refund is not on the allowlist/.test(String((err as Error).message));
-  }
-})();
-
-/** The verifier tests that need v2's call rules are skipped while verify.ts lacks them, unless the run requires them:
- *  LAUNCH_V2_VERIFY=required (CT-16's gate, and every run after it lands) makes them run and fail instead. */
-const SKIP_V2_VERIFY = !V2_RULES && Deno.env.get("LAUNCH_V2_VERIFY") !== "required";
 
 // ------------------------------------------------------------------------------------------------ symbols and refusals
 
@@ -1198,60 +1182,73 @@ Deno.test("the harvest step: the locker's harvest, anyone's to call, its estimat
 
 // ------------------------------------------------------------------------------------------------ the verifier
 
-/** Every builder's step, built against the fake chain in the state it needs. */
-async function everyStep(): Promise<[string, { tx: Transaction; intent: any }][]> {
+/** Every builder's step: its name, the fake chain's state it needs and its spec, as the plans give it. */
+function everySpec(): [string, (w: World) => void, StepSpec][] {
   const now = nowS();
-  const out: [string, { tx: Transaction; intent: any }][] = [];
-  const add = async (name: string, change: (w: World) => void, build: () => Promise<{ tx: Transaction; intent: any }>) => {
-    reset(change);
-    out.push([name, await build()]);
-  };
   const step = (kind: string, extra: Record<string, unknown> = {}) => ({ kind, token: TOKEN, ...extra });
-  await add("buy", () => {}, () => v2.launchBuyStepV2(ME, step(v2.LAUNCH_V2_STEPS.buy, { amount: "500000000", minOut: "1" })));
-  await add("sell", () => {}, () => v2.launchSellStepV2(ME, step(v2.LAUNCH_V2_STEPS.sell, { amount: "500000000", minOut: "1" })));
-  await add("graduate", (w) => (w.curve = { ...w.curve, phase: 1, completedAt: now - 60 }), () => v2.launchGraduateStepV2(ME, step(v2.LAUNCH_V2_STEPS.graduate)));
-  await add("claim", (w) => (w.curve.creatorFees = 1n), () => v2.launchClaimStepV2(ME, step(v2.LAUNCH_V2_STEPS.claim)));
-  await add("create", () => {}, () => v2.launchCreateStepV2(ME, CREATE));
-  await add("refund", (w) => (w.curve = { ...w.curve, phase: 3, refundQuote: 1n, refundSupply: 1n }), () => v2.launchRefundStepV2(ME, step(v2.LAUNCH_V2_STEPS.refund, { amount: "5" })));
-  await add("graduate_fallback", STUCK(now - 2 * HOUR), () => v2.launchGraduateFallbackStepV2(ME, step(v2.LAUNCH_V2_STEPS.graduate_fallback)));
-  await add("mark_stuck", (w) => (w.curve = { ...w.curve, phase: 1, completedAt: now - 2 * HOUR }), () => v2.launchMarkStuckStepV2(ME, step(v2.LAUNCH_V2_STEPS.mark_stuck)));
-  await add("rescue", STUCK(now - 31 * 86_400), () => v2.launchRescueStepV2(ME, step(v2.LAUNCH_V2_STEPS.rescue)));
-  await add("claim_owed", (w) => (w.owed = 1n), () => v2.launchClaimOwedStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.claim_owed, asset: XLM }));
-  await add("claim_rewards", (w) => (w.pending = [1n, 1n]), () => v2.launchClaimRewardsStepV2(ME, step(v2.LAUNCH_V2_STEPS.claim_rewards)));
-  await add("harvest", GRADUATED(now - 3_601, 9_000n), () => v2.launchHarvestStepV2(ME, step(v2.LAUNCH_V2_STEPS.harvest, { pool: POOL })));
-  await add("recipient_transfer", GRADUATED(now - 600, 99_000n), () => v2.launchRecipientTransferStepV2(ME, step(v2.LAUNCH_V2_STEPS.recipient_transfer, { to: NEXT })));
-  await add("recipient_cancel", (w) => (w.takeover = { new: NEXT, effective: now, expires: now + 60 }), () => v2.launchRecipientCancelStepV2(ME, step(v2.LAUNCH_V2_STEPS.recipient_cancel)));
-  await add("recipient_execute", (w) => {
-    w.recipient = G(12);
-    w.takeover = { new: NEXT, effective: now - 60, expires: now + 600 };
-  }, () => v2.launchRecipientExecuteStepV2(ME, step(v2.LAUNCH_V2_STEPS.recipient_execute)));
-  return out;
+  return [
+    ["buy", () => {}, step(v2.LAUNCH_V2_STEPS.buy, { amount: "500000000", minOut: "1" })],
+    ["sell", () => {}, step(v2.LAUNCH_V2_STEPS.sell, { amount: "500000000", minOut: "1" })],
+    ["graduate", (w) => (w.curve = { ...w.curve, phase: 1, completedAt: now - 60 }), step(v2.LAUNCH_V2_STEPS.graduate)],
+    ["claim", (w) => (w.curve.creatorFees = 1n), step(v2.LAUNCH_V2_STEPS.claim)],
+    ["create", () => {}, CREATE],
+    ["refund", (w) => (w.curve = { ...w.curve, phase: 3, refundQuote: 1n, refundSupply: 1n }), step(v2.LAUNCH_V2_STEPS.refund, { amount: "5" })],
+    ["graduate_fallback", STUCK(now - 2 * HOUR), step(v2.LAUNCH_V2_STEPS.graduate_fallback)],
+    ["mark_stuck", (w) => (w.curve = { ...w.curve, phase: 1, completedAt: now - 2 * HOUR }), step(v2.LAUNCH_V2_STEPS.mark_stuck)],
+    ["rescue", STUCK(now - 31 * 86_400), step(v2.LAUNCH_V2_STEPS.rescue)],
+    ["claim_owed", (w) => (w.owed = 1n), { kind: v2.LAUNCH_V2_STEPS.claim_owed, asset: XLM }],
+    ["claim_rewards", (w) => (w.pending = [1n, 1n]), step(v2.LAUNCH_V2_STEPS.claim_rewards)],
+    ["harvest", GRADUATED(now - 3_601, 9_000n), step(v2.LAUNCH_V2_STEPS.harvest, { pool: POOL })],
+    ["recipient_transfer", GRADUATED(now - 600, 99_000n), step(v2.LAUNCH_V2_STEPS.recipient_transfer, { to: NEXT })],
+    ["recipient_cancel", (w) => (w.takeover = { new: NEXT, effective: now, expires: now + 60 }), step(v2.LAUNCH_V2_STEPS.recipient_cancel)],
+    ["recipient_execute", (w) => {
+      w.recipient = G(12);
+      w.takeover = { new: NEXT, effective: now - 60, expires: now + 600 };
+    }, step(v2.LAUNCH_V2_STEPS.recipient_execute)],
+  ];
 }
 
-/** The calls whose v1 rules (verify.ts) already fit v2's: the same arguments, the same rules. */
-const V1_RULES_FIT = ["buy", "sell", "graduate", "claim"];
-
-Deno.test("the verifier passes buy, sell, graduate and claim, whose call rules v1 already has", async () => {
-  const steps = await everyStep();
-  assertEquals(steps.map(([name]) => name).length, Object.keys(v2.LAUNCH_V2_BUILDERS).length);
-  for (const [name, built] of steps.filter(([n]) => V1_RULES_FIT.includes(n))) {
-    const { outflow } = verifyTransaction(built.tx, built.intent, ctx());
-    assertEquals(outflow, outflowOf(built.tx), name);
+Deno.test("the server verifier (verify.ts) passes every builder's step against its own intent, as plans.ts runs it", async () => {
+  const specs = everySpec();
+  assertEquals(specs.map(([, , spec]) => spec.kind).sort(), Object.keys(v2.LAUNCH_V2_BUILDERS).sort(), "one step per builder");
+  for (const [name, change, spec] of specs) {
+    reset(change);
+    const built = await v2.LAUNCH_V2_BUILDERS[spec.kind](ME, spec);
+    try {
+      const { outflow } = verifyTransaction(built.tx, built.intent, ctx());
+      assertEquals(outflow, outflowOf(built.tx), `${name}: the verifier counts what the authorization takes`);
+    } catch (err) {
+      throw new Error(`${name}: ${(err as Error).message}`);
+    }
   }
 });
 
-Deno.test({
-  name: "the verifier passes every other v2 step against its own intent (needs CT-16's v2 call rules in verify.ts)",
-  ignore: SKIP_V2_VERIFY,
-  fn: async () => {
-    for (const [name, built] of (await everyStep()).filter(([n]) => !V1_RULES_FIT.includes(n))) {
-      try {
-        verifyTransaction(built.tx, built.intent, ctx());
-      } catch (err) {
-        throw new Error(`${name}: ${(err as Error).message}`);
-      }
-    }
-  },
+Deno.test("plans.ts builds every v2 step through the verifier: each one built, with its own v2 step kind and fee estimate", async () => {
+  const estimates = (await feeEstimates()).estimates as Record<string, bigint>;
+  for (const [name, change, spec] of everySpec()) {
+    reset(change);
+    // createPlan builds the step at once (plans.ts build()): the builder, the fee caps, then verifyTransaction.
+    const plan = await createPlan(ME, `launch_${name}`, [{ label: name, spec }]);
+    const [s] = plan.steps;
+    assertEquals([s.status, s.stepKind, s.feePayer], ["built", spec.kind, "user"], name);
+    assert(estimates[spec.kind] > 0n, `${name}: ${spec.kind} has a fee estimate`);
+  }
+  // Unbuilt, a v2 step is priced at its own kind's estimate, under the kind it is built as.
+  reset(GRADUATED(nowS() - 3_601, 99_000n));
+  const plan = await v2.buildLaunchV2(ME, { action: "recipient_transfer", token: TOKEN, to: NEXT });
+  assertEquals(plan.steps.map((s) => [s.status, s.stepKind]), [["built", v2.LAUNCH_V2_STEPS.harvest], ["pending", v2.LAUNCH_V2_STEPS.recipient_transfer]]);
+  assertEquals(plan.steps[1].maxFee, estimates[v2.LAUNCH_V2_STEPS.recipient_transfer].toString());
+});
+
+Deno.test("plans.ts hands out no v2 step its verifier refuses: 500 self_check_failed", async () => {
+  // A token.claim whose intent says it spends: a claim spends nothing (§20.4), whatever the builder says.
+  registerBuilder("launch_v2_test_spends", async (user, spec) => {
+    const built = await v2.launchClaimRewardsStepV2(user, { ...spec, kind: v2.LAUNCH_V2_STEPS.claim_rewards });
+    return { ...built, intent: { ...built.intent, spend: { [XLM]: "1" } } };
+  });
+  reset((w) => (w.pending = [1n, 1n]));
+  const err = await rejects(() => createPlan(ME, "launch_claim_rewards", [{ label: "claim", spec: { kind: "launch_v2_test_spends", token: TOKEN } }]));
+  assertEquals([err.status, err.code, (err.detail as { reason: string }).reason], [500, "self_check_failed", "a claim must not spend anything"]);
 });
 
 Deno.test("every step kind has its builder, and plans name v2's kinds apart from v1's", () => {
@@ -1270,24 +1267,20 @@ Deno.test("no economics block where v2 isn't deployed; a launch that isn't one i
 Deno.test("plans: a buy's plan, built and checked as the phone will see it", async () => {
   reset();
   const plan = await v2.buildLaunchV2(ME, { action: "buy", token: TOKEN, amount: "500000000", minOut: "11880000000000" });
-  assertEquals([plan.kind, plan.steps.length, plan.steps[0].label, plan.steps[0].status, plan.steps[0].stepKind], ["launch_buy", 1, "Buy ECAT", "built", "launch_buy"]);
+  assertEquals([plan.kind, plan.steps.length, plan.steps[0].label, plan.steps[0].status, plan.steps[0].stepKind], ["launch_buy", 1, "Buy ECAT", "built", "launch_v2_buy"]);
   assertEquals(plan.steps[0].intent!.spend, { [XLM]: "500000000" });
   const unknown = await rejects(() => v2.buildLaunchV2(ME, { action: "harvest" as any, token: TOKEN }));
   assertEquals(unknown.code, "bad_action");
 });
 
-Deno.test({
-  name: "plans: a recipient change on a graduated launch, harvest first, answers its backlog (needs CT-16's v2 call rules)",
-  ignore: SKIP_V2_VERIFY,
-  fn: async () => {
-    reset(GRADUATED(nowS() - 3_601, 99_000n));
-    const plan = await v2.buildLaunchV2(ME, { action: "recipient_transfer", token: TOKEN, to: NEXT });
-    assertEquals(plan.steps.map((s) => [s.label, s.status]), [["Collect ECAT's pool fees first", "built"], [`Hand ECAT's creator fees to ${NEXT.slice(0, 4)}…${NEXT.slice(-4)}`, "pending"]]);
-    assert(plan.harvestBacklog && plan.harvestBacklog.roundsToDrain > 1);
-    reset(STUCK(nowS() - 2 * HOUR));
-    const fallback = await v2.buildLaunchV2(ME, { action: "graduate_fallback", token: TOKEN });
-    assertEquals(fallback.steps.map((s) => s.label), ["Graduate ECAT to Soroswap (fallback)"]);
-  },
+Deno.test("plans: a recipient change on a graduated launch, harvest first, answers its backlog", async () => {
+  reset(GRADUATED(nowS() - 3_601, 99_000n));
+  const plan = await v2.buildLaunchV2(ME, { action: "recipient_transfer", token: TOKEN, to: NEXT });
+  assertEquals(plan.steps.map((s) => [s.label, s.status]), [["Collect ECAT's pool fees first", "built"], [`Hand ECAT's creator fees to ${NEXT.slice(0, 4)}…${NEXT.slice(-4)}`, "pending"]]);
+  assert(plan.harvestBacklog && plan.harvestBacklog.roundsToDrain > 1);
+  reset(STUCK(nowS() - 2 * HOUR));
+  const fallback = await v2.buildLaunchV2(ME, { action: "graduate_fallback", token: TOKEN });
+  assertEquals(fallback.steps.map((s) => s.label), ["Graduate ECAT to Soroswap (fallback)"]);
 });
 
 Deno.test("plans: a keeper harvest between the read and the harvest step's simulation makes the plan again, once", async () => {
@@ -1306,15 +1299,11 @@ Deno.test("plans: a keeper harvest between the read and the harvest step's simul
       return contractError(LOCKER_ERRORS[name]);
     };
     const { plan, err } = await transfer();
+    assertEquals(err, null, name);
     assertEquals(calls.filter((c) => c === "harvest").length, 1, `${name}: the harvest is simulated once`);
     assert(calls.lastIndexOf("transfer_creator_fee_recipient") > calls.indexOf("harvest"), `${name}: then the change is built on its own`);
-    if (V2_RULES) {
-      assertEquals(plan!.steps.map((s) => [s.label, s.status]), [[label, "built"]]);
-      assertEquals(plan!.harvestBacklog, v2.harvestBacklog(POSITION(99_000n), harvestedAt + 3_600, 3_600, 5_000));
-    } else {
-      // v1's verifier has no rule for the change yet (CT-16): its self-check refuses the step the second plan built.
-      assertEquals([err.code, /transfer_creator_fee_recipient/.test(err.detail.reason)], ["self_check_failed", true]);
-    }
+    assertEquals(plan!.steps.map((s) => [s.label, s.status]), [[label, "built"]]);
+    assertEquals(plan!.harvestBacklog, v2.harvestBacklog(POSITION(99_000n), harvestedAt + 3_600, 3_600, 5_000));
   }
 
   // Refused again: the plan is made again only once, and the locker's refusal is the answer.

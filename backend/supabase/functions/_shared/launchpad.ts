@@ -8,6 +8,9 @@
 // - The launchpad's own refusals carry their stable codes (§6.13).
 // - The board and a launch's page are viewer routes (§6.0): in the public view `you` holds on-chain facts only (the
 //   indexed balance), never DyorHQ's history.
+// - This is the retired generation 1 (DESIGN-stellar-contracts-v2 §17): the board, a launch's page, My Launchpad and
+//   the plans read v1's launches only, though lite.launches holds v2's too (launchpad_v2.ts serves those). The markets
+//   and the asset search list launch tokens of both generations.
 import type postgres from "postgres";
 import type {
   ActivityItem,
@@ -287,6 +290,12 @@ export function launchRowOf(r: Row, p: PriceContext): FullLaunchRow {
   };
 }
 
+/** v1's launches (`l`): lite.launches holds v2's too (migration 20261015000012). A v1 launch has its launchpad's launch
+ *  index and a v2 one none (L15), which holds on a database without that migration too, where every row is v1's. */
+function v1Launch(): Fragment {
+  return sql()`l.launch_index is not null`;
+}
+
 /** lite.launches rows (`l`) with what a LaunchRow adds up from the other tables: every burn seen (`b`: the graduation's
  *  is also on the row, so the larger counts), holders besides the launchpad and the pair, the last 24 hours' volume on
  *  the curve and in the pool, and the price a day ago. */
@@ -385,18 +394,18 @@ export async function launchBoard(query: BoardQuery, scope: View, now: number = 
   const search = searchFilter(query.q);
   if (query.section === null) {
     const [where, order] = legacyBoard(query.sort);
-    const rows = await launchQuery(sql()`${where} ${search}`, order, query.limit, 0, dayAgo);
+    const rows = await launchQuery(sql()`${where} and ${v1Launch()} ${search}`, order, query.limit, 0, dayAgo);
     const p = await priceContext(rows, net, now);
     return { launches: rows.map((r) => launchRowOf(r, p)), view: scope };
   }
   const refs = await referencePrices(now, net);
   const graduated = query.section === "graduated";
-  const where = sql()`where l.listed and ${graduated ? sql()`l.graduated` : sql()`not l.graduated`} ${search}`;
+  const where = sql()`where l.listed and ${v1Launch()} and ${graduated ? sql()`l.graduated` : sql()`not l.graduated`} ${search}`;
   const order = boardOrder(query.section, query.sort as BoardSort, usdByContract(net, refs));
   const [rows, counts] = await Promise.all([
     launchQuery(where, order, query.limit + 1, (query.page - 1) * query.limit, dayAgo),
     sql()`select count(*) filter (where not l.graduated)::int as explore, count(*) filter (where l.graduated)::int as graduated
-            from lite.launches l where l.listed ${search}`,
+            from lite.launches l where l.listed and ${v1Launch()} ${search}`,
   ]);
   const page = rows.slice(0, query.limit);
   const p = await priceContext(page, net, now, refs);
@@ -587,7 +596,7 @@ async function youOf(r: Row, viewer: LaunchViewer): Promise<LaunchDetail["you"]>
 export async function launchDetail(token: string, viewer: LaunchViewer, candles?: string, now: number = Date.now()): Promise<LaunchDetail> {
   if (!isContractId(token)) throw notFound("Launch");
   const net = env.network;
-  const rows = await launchQuery(sql()`where l.token = ${token}`, sql()``, 1, 0, new Date(now - DAY));
+  const rows = await launchQuery(sql()`where l.token = ${token} and ${v1Launch()}`, sql()``, 1, 0, new Date(now - DAY));
   if (rows.length === 0) throw notFound("Launch");
   const r = rows[0];
   const interval = candles ? CANDLES[candles] : undefined;
@@ -712,7 +721,7 @@ function tokenArg(v: unknown): string {
 
 /** A launch's quote asset, ticker and creator: indexed, or read from the launchpad; 404 for a token it didn't launch. */
 async function launchOf(token: string): Promise<{ quote: string; symbol: string; creator: string }> {
-  const rows = await sql()`select quote, symbol, creator from lite.launches where token = ${token}`;
+  const rows = await sql()`select l.quote, l.symbol, l.creator from lite.launches l where l.token = ${token} and ${v1Launch()}`;
   if (rows.length) return { quote: String(rows[0].quote), symbol: String(rows[0].symbol), creator: String(rows[0].creator) };
   const pad = launchpadId();
   try {
@@ -780,7 +789,7 @@ export async function buildLaunch(user: string, input: Partial<LaunchBuildInput>
         if (launch.creator !== user) throw bad("bad_arg", "Only the coin's creator can claim its fees.");
         return await createPlan(user, "launch_claim", [{ label: `Claim ${launch.symbol} fees`, spec: { kind: "launch_claim", token } }]);
       }
-      const created = await sql()`select token, symbol from lite.launches where creator = ${user} order by created_at`;
+      const created = await sql()`select l.token, l.symbol from lite.launches l where l.creator = ${user} and ${v1Launch()} order by l.created_at`;
       const live = await Promise.all(created.map((c) => liveCurve(String(c.token), Date.now(), 0)));
       const waiting = created.filter((_, i) => live[i] !== null && BigInt(live[i]!.creator_fees) > 0n);
       if (waiting.length === 0) {
@@ -1027,8 +1036,8 @@ export async function myLaunchpad(user: string, now: number = Date.now()): Promi
   const dayAgo = new Date(now - DAY);
   const order = sql()`order by l.created_at desc, l.token`;
   const [held, created, balances] = await Promise.all([
-    launchQuery(sql()`where l.token in (select tb.token from lite.token_balances tb where tb.address = ${user} and tb.balance > 0)`, order, 200, 0, dayAgo),
-    launchQuery(sql()`where l.creator = ${user}`, order, 200, 0, dayAgo),
+    launchQuery(sql()`where l.token in (select tb.token from lite.token_balances tb where tb.address = ${user} and tb.balance > 0) and ${v1Launch()}`, order, 200, 0, dayAgo),
+    launchQuery(sql()`where l.creator = ${user} and ${v1Launch()}`, order, 200, 0, dayAgo),
     sql()`select token, balance from lite.token_balances where address = ${user} and balance > 0`,
   ]);
   const p = await priceContext([...held, ...created], net, now);

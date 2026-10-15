@@ -1,8 +1,8 @@
 // Contract deployments by name (docs/DESIGN-stellar-parity.md §6.16), in two generations
 // (docs/DESIGN-stellar-contracts-v2.md §17, §20.1): v1 (retired) and v2 (live). LITE_DEPLOYMENT picks a deployment and
 // defaults to the network's name:
-// - testnet: v1 from testnet.json, v2 from testnet-v2.json once the owner's file is committed and imported here
-//   (BUNDLED_V2); both are bundled, so the hosted functions never read a file;
+// - testnet: v1 from testnet.json, v2 from the owner's testnet-v2.json, imported here (BUNDLED_V2); both are bundled,
+//   so the hosted functions never read a file;
 // - testnet-qa: v2 from testnet-qa-v2.json and v1 from testnet-qa.json, each where it was made (read when testnet-qa is
 //   first selected);
 // - mainnet: nothing deployed yet.
@@ -11,6 +11,7 @@
 // parseDeploymentV2, parseEconomics).
 import type { AssetInfo, NetworkConfig } from "../networks.ts";
 import testnet from "./testnet.json" with { type: "json" };
+import testnetV2 from "./testnet-v2.json" with { type: "json" };
 
 /** The contract generations (DESIGN-stellar-contracts-v2 §17). v1 is retired: immutable and never redeployed, its
  *  launches keep selling and claiming and its Moments stay collectible to their deadlines. v2 is live. */
@@ -461,12 +462,10 @@ export function parseDeploymentV2(id: string, raw: Record<string, unknown>): Dep
 }
 
 /** v2 files bundled with the functions, by file. testnet's v2 deployment comes from here only: a hosted function has
- *  only what is imported, and it can't read a file while serving. When the owner's testnet-v2.json is committed it
- *  joins this map, imported beside testnet.json (a unit test and gen-pinned.ts check it did):
- *    import testnetV2 from "./testnet-v2.json" with { type: "json" };
- *  and { "testnet-v2": testnetV2 } here. Until then testnet has no v2 deployment and the v2 routes answer
- *  not_deployed. testnet-qa-v2.json is never bundled: it is read where it exists. */
-export const BUNDLED_V2: Readonly<Record<string, Record<string, unknown>>> = {};
+ *  only what is imported, and it can't read a file while serving. The owner's testnet-v2.json is imported beside
+ *  testnet.json (a unit test and gen-pinned.ts check it is). testnet-qa-v2.json is never bundled: it is read where it
+ *  exists. */
+export const BUNDLED_V2: Readonly<Record<string, Record<string, unknown>>> = { "testnet-v2": testnetV2 };
 
 const v2Parsed = new Map<string, DeploymentV2 | null>();
 

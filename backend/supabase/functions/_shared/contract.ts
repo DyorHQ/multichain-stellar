@@ -65,7 +65,31 @@ export type StepKind =
   | "moment_publish"
   | "moment_collect"
   | "token_approve"
-  | "cctp_burn";
+  | "cctp_burn"
+  // added: contracts v2 (DESIGN-stellar-contracts-v2 §20.3), each v2 step by its own kind (launchpad_v2.ts
+  // LAUNCH_V2_STEPS, moments_v2.ts SPEC_KINDS), so its fees are learned apart from v1's
+  | "launch_v2_create"
+  | "launch_v2_buy"
+  | "launch_v2_sell"
+  | "launch_v2_refund"
+  | "launch_v2_graduate"
+  | "launch_v2_graduate_fallback"
+  | "launch_v2_mark_stuck"
+  | "launch_v2_rescue"
+  | "launch_v2_claim"
+  | "launch_v2_claim_owed"
+  | "launch_v2_claim_rewards"
+  | "launch_v2_harvest"
+  | "launch_v2_recipient_transfer"
+  | "launch_v2_recipient_cancel"
+  | "launch_v2_recipient_execute"
+  | "moment_v2_publish"
+  | "moment_v2_collect"
+  | "moment_v2_claim"
+  | "moment_v2_claim_all"
+  | "moment_v2_withdraw"
+  | "moment_v2_graduate"
+  | "moment_v2_expire";
 
 // ------------------------------------------------------------------------------------------------ errors
 
@@ -162,7 +186,13 @@ export type ErrorCode =
   // added: sessions without gating (DESIGN-stellar-parity §6.13, §6.18)
   | "refresh_invalid"
   | "refresh_reused"
-  | "address_required";
+  | "address_required"
+  // added: contracts v2 (launchpad_v2.ts): an action not open yet (with when it opens), a launch's XLM short of the
+  // fee and the minimum balance (F18), a venue the quote doesn't allow, live terms the app doesn't pin
+  | "not_available"
+  | "insufficient_xlm"
+  | "bad_venue"
+  | "terms_unpinned";
 
 /** A contract's own refusal, named in `simulation_failed`'s detail. Stable across contract versions, and always
  *  `<area>.<reason>`: an ErrorCode never holds a dot, so the two can't be confused. */

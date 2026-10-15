@@ -190,7 +190,7 @@ replaceSql(fakeSql((q, p) => {
   return respond(q, p);
 }));
 
-const LAUNCH_OF_ECAT = (q: string) => (q === "select quote, symbol, creator from lite.launches where token = ?" ? [{ quote: XLM, symbol: "ECAT", creator: CREATOR }] : null);
+const LAUNCH_OF_ECAT = (q: string) => (q === "select l.quote, l.symbol, l.creator from lite.launches l where l.token = ? and l.launch_index is not null" ? [{ quote: XLM, symbol: "ECAT", creator: CREATOR }] : null);
 
 // ------------------------------------------------------------------------------------------------ decoding
 
@@ -520,7 +520,7 @@ Deno.test("create acts for the creator; graduation is any user's to call; claims
   assertEquals([notCreator.status, notCreator.code], [400, "bad_arg"]);
   // Claim all with nothing waiting: the contract's own answer.
   lp.forgetLaunchReads();
-  respond = (q) => (q.startsWith("select token, symbol from lite.launches where creator = ?") ? [{ token: ECAT, symbol: "ECAT" }] : []);
+  respond = (q) => (q.startsWith("select l.token, l.symbol from lite.launches l where l.creator = ? and l.launch_index is not null") ? [{ token: ECAT, symbol: "ECAT" }] : []);
   answer = (_c, fn) => (fn === "get_curve" ? struct({ creator_fees: i128(0n) }) : { error: "x" });
   const nothing = await lp.buildLaunch(CREATOR, { action: "claim" }).catch((e) => e);
   assertEquals([nothing.status, nothing.code, nothing.detail.contractCode], [422, "simulation_failed", "launch.nothing_to_claim"]);

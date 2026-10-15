@@ -32,6 +32,31 @@ export const DEFAULT_ESTIMATES: Readonly<Record<EstimatedKind, bigint>> = {
   moment_collect: 10_000_000n,
   token_approve: 300_000n,
   cctp_burn: 500_000n,
+  // Contracts v2, as their v1 counterparts where there is one. Creating a launch or publishing a Moment deploys a
+  // contract, as a v1 launch does; graduating a Moment deploys its coin and pool, as a launch's graduation does; a
+  // harvest or a claim over up to 20 Moments takes several token calls.
+  launch_v2_create: 10_000_000n,
+  launch_v2_buy: 500_000n,
+  launch_v2_sell: 500_000n,
+  launch_v2_refund: 500_000n,
+  launch_v2_graduate: 15_000_000n,
+  launch_v2_graduate_fallback: 15_000_000n,
+  launch_v2_mark_stuck: 500_000n,
+  launch_v2_rescue: 500_000n,
+  launch_v2_claim: 500_000n,
+  launch_v2_claim_owed: 500_000n,
+  launch_v2_claim_rewards: 500_000n,
+  launch_v2_harvest: 3_000_000n,
+  launch_v2_recipient_transfer: 500_000n,
+  launch_v2_recipient_cancel: 500_000n,
+  launch_v2_recipient_execute: 500_000n,
+  moment_v2_publish: 10_000_000n,
+  moment_v2_collect: 10_000_000n,
+  moment_v2_claim: 500_000n,
+  moment_v2_claim_all: 3_000_000n,
+  moment_v2_withdraw: 500_000n,
+  moment_v2_graduate: 15_000_000n,
+  moment_v2_expire: 500_000n,
 };
 
 export const ESTIMATED_KINDS = Object.keys(DEFAULT_ESTIMATES) as EstimatedKind[];
