@@ -60,12 +60,14 @@ declare
   v_pad text := 'C' || repeat('P', 55);
   v_token text := 'C' || repeat('T', 55);
   v_creator text := 'G' || repeat('C', 55);
+  -- A v1 Moment number no deployment reaches: the test also runs on a local stack that indexed real ones.
+  v_id int := 2147483000;
   n int;
 begin
   -- A v1 Moment numbered 1 (in the v1 Moments contract v_old) and v2 Moments (in v_new), which have no number of their
   -- own, coexist.
   insert into lite.moments (id, generation, contract, creator, uri, price, quote, max_editions, deadline, created_ledger)
-  values (1, 1, v_old, v_creator, 'u1', 1, 'CQ', 10, now() + interval '1 day', 1);
+  values (v_id, 1, v_old, v_creator, 'u1', 1, 'CQ', 10, now() + interval '1 day', 1);
   insert into lite.moments (id, nft, generation, contract, nonce, number, creator, uri, price, quote, max_editions, deadline,
                             created_ledger, state, durations)
   values (null, v_nft, 2, v_new, 18446744073709551615, 1, v_creator, 'u2', 1, 'CQ', 0, now() + interval '1 day', 2,
@@ -76,21 +78,21 @@ begin
   if n <> 3 then raise exception 'expected 3 Moments, got %', n; end if;
   -- v1's handler inserts with ON CONFLICT (id): the unique constraint is its arbiter, and a v2 row never conflicts.
   insert into lite.moments (id, generation, contract, creator, uri, price, quote, max_editions, deadline, created_ledger)
-  values (1, 1, v_old, v_creator, 'again', 1, 'CQ', 10, now(), 9) on conflict (id) do nothing;
-  if (select uri from lite.moments where id = 1) <> 'u1' then raise exception 'ON CONFLICT (id) did not hold the v1 row'; end if;
+  values (v_id, 1, v_old, v_creator, 'again', 1, 'CQ', 10, now(), 9) on conflict (id) do nothing;
+  if (select uri from lite.moments where id = v_id) <> 'u1' then raise exception 'ON CONFLICT (id) did not hold the v1 row'; end if;
   insert into lite.moments (id, nft, generation, contract, creator, uri, price, quote, max_editions, deadline, created_ledger)
   values (null, v_nft, 2, v_new, v_creator, 'again', 1, 'CQ', 0, now(), 9) on conflict (nft) do nothing;
   if (select uri from lite.moments where nft = v_nft) <> 'u2' then raise exception 'ON CONFLICT (nft) did not hold the v2 row'; end if;
   -- Collects and editions of each: v1's by number, v2's by NFT address (the edition's own collection).
   insert into lite.moment_collects (event_id, moment_id, collector, quantity, first_token_id, paid, ledger, ts)
-  values ('c1', 1, v_creator, 1, 1, 1, 1, now());
+  values ('c1', v_id, v_creator, 1, 1, 1, 1, now());
   insert into lite.moment_collects (event_id, moment_id, nft, collector, quantity, first_token_id, paid, ledger, ts)
   values ('c2', null, v_nft, v_creator, 2, 1, 2, 2, now());
   insert into lite.moment_editions (contract, token_id, moment_id, owner, owner_event, updated_ledger)
-  values (v_old, 1, 1, v_creator, 'c1', 1), (v_nft, 1, null, v_creator, 'c2', 2), (v_nft, 2, null, v_creator, 'c2', 2);
+  values (v_old, 1, v_id, v_creator, 'c1', 1), (v_nft, 1, null, v_creator, 'c2', 2), (v_nft, 2, null, v_creator, 'c2', 2);
   -- A v1 Moment's rows still go with it; a v2 Moment's stay.
-  delete from lite.moments where id = 1;
-  select count(*) into n from lite.moment_collects where moment_id = 1;
+  delete from lite.moments where id = v_id;
+  select count(*) into n from lite.moment_collects where moment_id = v_id;
   if n <> 0 then raise exception 'a v1 collect outlived its Moment'; end if;
   select count(*) into n from lite.moment_collects where nft = v_nft;
   if n <> 1 then raise exception 'the v2 collect went with a v1 Moment'; end if;
@@ -202,7 +204,7 @@ begin
     into n;
   if n <> 0 then raise exception 'the reset left % rows', n; end if;
   -- keeper_skip is the e2e's, not indexed: the reset keeps it.
-  select count(*) into n from lite.keeper_skip;
+  select count(*) into n from lite.keeper_skip where note in ('rescue journey', 'held pending');
   if n <> 2 then raise exception 'keeper_skip has % rows', n; end if;
   raise notice 'ok: the testnet reset clears the v1 and v2 tables, as lite_api';
 end $$;
