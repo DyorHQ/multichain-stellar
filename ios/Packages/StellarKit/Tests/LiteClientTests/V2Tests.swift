@@ -354,7 +354,7 @@ final class V2ModelTests: XCTestCase {
 }
 
 /// The v2 Moments as the API's indexer recorded them: a card's and a page's figures, an account's and a creator's
-/// Moments.
+/// Moments, and launch rows' generation.
 final class V2IndexedReadTests: XCTestCase {
     func testTheFeedNamesTheCoinAndPoolOnceGraduated() throws {
         let feed = try ApiFixtures.decode("moments-v2", as: StellarMomentFeedV2.self)
@@ -403,6 +403,15 @@ final class V2IndexedReadTests: XCTestCase {
         XCTAssertEqual(mine.collected, owned.moments)
         XCTAssertEqual(mine.totals.editions, 3)
         XCTAssertEqual(mine.totals.earnedByQuote, ["USDC": "200000000"])
+    }
+
+    func testLaunchRowsCarryTheirGeneration() throws {
+        let board = try ApiFixtures.decode("launches", as: StellarLaunchBoard.self)
+        XCTAssertEqual(board.launches.map(\.generation), [1, 1])
+        XCTAssertEqual(try ApiFixtures.decode("launch", as: StellarLaunchDetail.self).launch.generation, 1)
+        XCTAssertEqual(try ApiFixtures.decode("launchpad-me", as: StellarMyLaunchpad.self).created.map(\.launch.generation), [1])
+        // Older servers leave it out.
+        XCTAssertNil(try ApiFixtures.decode("launches.legacy", as: StellarLaunchBoard.self).launches[0].generation)
     }
 }
 

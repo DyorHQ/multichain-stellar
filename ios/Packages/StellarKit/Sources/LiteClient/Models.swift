@@ -377,6 +377,8 @@ public struct StellarLaunch: Codable, Equatable, Sendable, Identifiable {
     public let lookAlike: Bool?
     public let graduatedAt: String?
     public let lastTradeAt: String?
+    /// The launchpad generation it was launched on: 1 (retired: shown as Retired) or 2 (live). Nil from older servers.
+    public let generation: Int?
     public var id: String { token }
 }
 

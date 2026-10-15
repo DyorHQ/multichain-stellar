@@ -34,7 +34,8 @@ export type NetworkName = "testnet" | "mainnet";
 export type Section = "spot" | "earn" | "launch" | "moments" | "bridge" | "cash" | "account";
 export type FeePayer = "user" | "sponsor" | "external";
 export type SponsorReason = "setup" | "starter_swap";
-export type LaunchPhase = "curve" | "completed" | "graduated";
+/** `rescued`: a v2 launch in refund mode (DESIGN-stellar-contracts-v2 §5.1, O2). */
+export type LaunchPhase = "curve" | "completed" | "graduated" | "rescued";
 export type MomentState = "collecting" | "sold_out" | "closed";
 export type PartStatus = "ok" | "failed";
 export type SwapVenue = "sdex" | "soroswap" | "aquarius";
@@ -851,6 +852,9 @@ export interface LaunchRow {
   lookAlike?: boolean;
   graduatedAt?: IsoTime | null;
   lastTradeAt?: IsoTime | null;
+  /** Added (contracts v2): the launchpad generation it was launched on, 1 (retired) or 2 (live). The app shows v1's
+   *  launches as Retired. */
+  generation?: 1 | 2;
 }
 
 export interface LaunchBoard {
