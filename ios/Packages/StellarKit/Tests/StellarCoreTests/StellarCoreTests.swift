@@ -12,17 +12,45 @@ private struct KeyVectors: Decodable {
 }
 
 private struct VerifierVector: Decodable {
-    struct Expect: Decodable { let ok: Bool; let reason: String?; let outflow: [String: String]? }
-    struct Decoded: Decodable { let source: String; let fee: UInt32; let seq: String; let maxTime: UInt64; let ops: [String] }
+    struct StepVerdict: Decodable { let ok: Bool; let payer: String?; let reason: String? }
+    struct Expect: Decodable { let ok: Bool; let reason: String?; let outflow: [String: String]?; let step: StepVerdict? }
+    struct Memo: Decodable, Equatable { let type: String; let value: String }
+    struct Decoded: Decodable {
+        let source: String
+        let fee: UInt32
+        let seq: String
+        let maxTime: UInt64
+        let ops: [String]
+        let resourceFee: String?
+        let memo: Memo?
+        let to: String?
+    }
+    struct Fees: Decodable { let maxFee: String; let maxInclusionPerOp: String; let starterInnerFeeMax: String }
+    struct Step: Decodable { let feePayer: String?; let sponsorReason: String? }
     let name: String
     let envelope: String
     let intent: Intent
     let user: String
     let sponsor: String
     let allowed: [String]
+    let launchTokens: [String]
+    let launchTokenWasmHash: String
+    let monadDomain: UInt32
+    let feePolicy: Fees
     let now: Double
+    let step: Step?
     let expect: Expect
     let decoded: Decoded
+
+    var pinned: PinnedContracts {
+        let fees = FeePolicy(maxFee: Int64(feePolicy.maxFee)!, maxInclusionFeePerOp: Int64(feePolicy.maxInclusionPerOp)!, starterInnerFeeMax: Int64(feePolicy.starterInnerFeeMax)!)
+        return PinnedContracts(network: .testnet, sponsor: sponsor, launchTokenWasmHash: launchTokenWasmHash, roles: ["all": allowed], feePolicy: fees, monadDomain: monadDomain)
+    }
+}
+
+/// The TS verifier's reason as the Swift verifier words it: a capital letter and a full stop.
+private func swiftReason(_ reason: String) -> String {
+    reason.prefix(1).uppercased() + reason.dropFirst() + "."
 }
 
 private func loadVectors<T: Decodable>(_ name: String) throws -> T {
@@ -99,6 +127,54 @@ final class KeyTests: XCTestCase {
     }
 }
 
+final class XDRTests: XCTestCase {
+    private func xdr(_ bytes: [UInt8]) -> XDRReader {
+        var w = XDRWriter()
+        w.variable(bytes)
+        return XDRReader(w.bytes)
+    }
+
+    func testStringsAreReadByteForByte() throws {
+        let marked: [UInt8] = [0xEF, 0xBB, 0xBF] + Array("transfer".utf8)
+        var r = xdr(marked)
+        let name = try r.string(max: 32)
+        XCTAssertEqual(Array(name.utf8), marked, "the byte-order mark is kept")
+        XCTAssertNotEqual(name, "transfer")
+        var invalid = xdr([0x61, 0xFF])
+        XCTAssertThrowsError(try invalid.string(max: 32)) { XCTAssertEqual($0 as? XDRError, .invalid("string")) }
+    }
+
+    func testPaddingIsZeros() throws {
+        var zeros = XDRReader([0, 0, 0, 1, 0x61, 0, 0, 0])
+        XCTAssertEqual(try zeros.variable(max: 4), [0x61])
+        var other = XDRReader([0, 0, 0, 1, 0x61, 0, 0, 1])
+        XCTAssertThrowsError(try other.variable(max: 4)) { XCTAssertEqual($0 as? XDRError, .invalid("padding")) }
+    }
+
+    func testValuesAndCallsAreTheSameOnlyByteForByte() throws {
+        // Swift's == on text calls the two spellings of "Café" equal; their XDR differs, and so do the values.
+        let nfc = "Caf\u{E9}", nfd = "Cafe\u{301}"
+        XCTAssertNotEqual(SCVal.string(nfc), SCVal.string(nfd))
+        XCTAssertNotEqual(SCVal.symbol(nfc), SCVal.symbol(nfd))
+        XCTAssertNotEqual(SCVal.error(type: 0, code: 1), SCVal.error(type: 0, code: 2))
+        XCTAssertEqual(SCVal.error(type: 0, code: 1), SCVal.error(type: 0, code: 1))
+        // A call to `launch` with one string argument, decoded.
+        func call(_ text: String) throws -> InvokeContractArgs {
+            var w = XDRWriter()
+            w.uint32(1) // SC_ADDRESS_TYPE_CONTRACT
+            w.raw([UInt8](repeating: 0x22, count: 32))
+            w.variable(Array("launch".utf8))
+            w.uint32(1) // one argument
+            w.uint32(14) // SCV_STRING
+            w.variable(Array(text.utf8))
+            var r = XDRReader(w.bytes)
+            return try XDRDecode.invokeContractArgs(&r)
+        }
+        XCTAssertEqual(try call(nfc), try call(nfc))
+        XCTAssertNotEqual(try call(nfc), try call(nfd))
+    }
+}
+
 final class AmountTests: XCTestCase {
     func testParseAndFormat() {
         XCTAssertEqual(StellarAmount.parse("12.5"), 125_000_000)
@@ -113,7 +189,8 @@ final class AmountTests: XCTestCase {
 }
 
 final class VerifierVectorTests: XCTestCase {
-    /// Every vector the TypeScript verifier judged: the Swift verifier must reach the same verdict and outflow.
+    /// Every vector the TypeScript verifier judged: the Swift verifier must reach the same verdict, for the same reason,
+    /// with the same outflow, and say the same about who pays.
     func testAgreesWithTheServerVerifier() throws {
         let vectors: [VerifierVector] = try loadVectors("verifier")
         XCTAssertGreaterThan(vectors.count, 30)
@@ -128,30 +205,99 @@ final class VerifierVectorTests: XCTestCase {
                 continue
             }
             // Decoding agrees with stellar-sdk.
-            XCTAssertEqual(envelope.transaction.source, v.decoded.source, v.name)
-            XCTAssertEqual(envelope.transaction.fee, v.decoded.fee, v.name)
-            XCTAssertEqual(String(envelope.transaction.sequence), v.decoded.seq, v.name)
-            XCTAssertEqual(envelope.transaction.timeBounds?.maxTime ?? 0, v.decoded.maxTime, v.name)
-            XCTAssertEqual(envelope.transaction.operations.map(\.body.typeName), v.decoded.ops, v.name)
+            let tx = envelope.transaction
+            XCTAssertEqual(tx.source, v.decoded.source, v.name)
+            XCTAssertEqual(tx.fee, v.decoded.fee, v.name)
+            XCTAssertEqual(String(tx.sequence), v.decoded.seq, v.name)
+            XCTAssertEqual(tx.timeBounds?.maxTime ?? 0, v.decoded.maxTime, v.name)
+            XCTAssertEqual(tx.operations.map(\.body.typeName), v.decoded.ops, v.name)
+            XCTAssertEqual(tx.resourceFee.map(String.init), v.decoded.resourceFee, v.name)
+            XCTAssertEqual(Self.memo(tx.memo), v.decoded.memo, v.name)
+            XCTAssertEqual(Self.destination(tx), v.decoded.to, v.name)
             // Re-encoding is byte-exact.
             XCTAssertEqual(envelope.base64(), v.envelope, v.name)
 
-            let pinned = PinnedContracts(network: .testnet, sponsor: v.sponsor, launchTokenWasmHash: "", roles: ["all": v.allowed])
-            let verifier = TxVerifier(user: v.user, pinned: pinned, now: { Date(timeIntervalSince1970: v.now) })
+            let verifier = TxVerifier(user: v.user, pinned: v.pinned, verifiedLaunchTokens: Set(v.launchTokens), now: { Date(timeIntervalSince1970: v.now) })
             do {
                 let outflow = try verifier.verify(envelope, intent: v.intent)
                 XCTAssertTrue(v.expect.ok, "\(v.name): Swift accepted, server refused: \(v.expect.reason ?? "")")
                 XCTAssertEqual(outflow.mapValues(String.init), v.expect.outflow ?? [:], v.name)
             } catch let f as VerificationFailure {
                 XCTAssertFalse(v.expect.ok, "\(v.name): Swift refused (\(f.reason)), server accepted")
-                if let reason = v.expect.reason {
-                    let key = String(reason.lowercased().prefix(24))
-                    XCTAssertTrue(f.reason.lowercased().contains(key), "\(v.name): '\(f.reason)' vs '\(reason)'")
+                XCTAssertEqual(f.reason, v.expect.reason.map(swiftReason), v.name)
+            }
+            if let step = v.step {
+                let verdict = try XCTUnwrap(v.expect.step, v.name)
+                do {
+                    let payer = try verifier.feePayer(envelope, intent: v.intent, flaggedPayer: step.feePayer, sponsorReason: step.sponsorReason)
+                    XCTAssertTrue(verdict.ok, "\(v.name): Swift found a payer, server refused: \(verdict.reason ?? "")")
+                    XCTAssertEqual(Self.payerName(payer), verdict.payer, v.name)
+                } catch let f as VerificationFailure {
+                    XCTAssertFalse(verdict.ok, "\(v.name): Swift refused the payer (\(f.reason)), server accepted")
+                    XCTAssertEqual(f.reason, verdict.reason.map(swiftReason), v.name)
                 }
             }
             compared += 1
         }
         XCTAssertGreaterThan(compared, 30)
+    }
+
+    /// The design's list of cases (§12.4) is in the vectors, so dropping one fails here as well as in Deno.
+    func testCoversTheDesignsCases() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let names = Set(vectors.map(\.name))
+        for name in [
+            "classic fee at the cap ok", "inclusion over the cap", "soroban fee over the cap", "resource fee above fee",
+            "activate ok", "activate funds XLM", "user-paid trust ok", "sponsor outside activation",
+            "payment to another destination", "memo mismatch", "SAC transfer to another to", "soroswap to another account",
+            "soroswap min below receive", "curve buy min_tokens_out below receive", "blend submit to another account",
+            "cctp burn to another mint recipient", "restore with a footprint outside the allowlist", "restore ok",
+            "starter step with an inner fee above the cap",
+        ] {
+            XCTAssertTrue(names.contains(name), name)
+        }
+    }
+
+    /// So are the cases where a decoder or a comparison could tell the two verifiers apart (verify.test.ts keeps the
+    /// same list, with their verdicts).
+    func testCoversTheParityCases() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let names = Set(vectors.map(\.name))
+        for name in [
+            "auth root that is the call in another normalization", "auth root that is the call with another error code",
+            "call to a function name with a byte-order mark", "trust removed", "trust with a negative limit",
+            "soroban swap with a footprint ok",
+        ] {
+            XCTAssertTrue(names.contains(name), name)
+        }
+    }
+
+    private static func memo(_ memo: StellarMemo) -> VerifierVector.Memo? {
+        switch memo {
+        case .none: return nil
+        case let .text(bytes): return .init(type: "text", value: String(decoding: bytes, as: UTF8.self))
+        case let .id(id): return .init(type: "id", value: String(id))
+        case let .hash(bytes): return .init(type: "hash", value: bytes.map { String(format: "%02x", $0) }.joined())
+        case let .returnHash(bytes): return .init(type: "return", value: bytes.map { String(format: "%02x", $0) }.joined())
+        }
+    }
+
+    /// The first operation's destination, as gen-vectors.ts records it.
+    private static func destination(_ tx: Transaction) -> String? {
+        switch tx.operations.first?.body {
+        case let .payment(destination, _, _)?, let .createAccount(destination, _)?: return destination
+        case let .pathPaymentStrictSend(_, _, destination, _, _, _)?: return destination
+        case let .invokeHostFunction(.invokeContract(call), _)?:
+            return call.function == "transfer" && call.args.count > 1 ? call.args[1].addressString : nil
+        default: return nil
+        }
+    }
+
+    private static func payerName(_ payer: StellarFeePayer) -> String {
+        switch payer {
+        case .user: return "user"
+        case let .dyorHQ(reason): return reason.rawValue
+        }
     }
 
     func testSigningAddsAVerifiableSignature() throws {
