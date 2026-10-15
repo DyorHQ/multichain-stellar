@@ -12,7 +12,8 @@
 //   terms by value and on display), collect (max_total spent in USDC only), claim, claim all (≤ 20, unknown Moments
 //   skipped), withdraw, graduate (only an attempt worth its fee) and expire; their refusals, before anyone signs, with
 //   §6.13's stable codes only where the API contract has one; and the call rules each transaction is checked with:
-//   the account each call acts for, collect's USDC pull, and every builder's transaction against its intent.
+//   the account each call acts for, collect's USDC pull, and every builder's transaction against its intent, by
+//   moments_v2.ts's own rules and by the server verifier (verify.ts) as plans.ts runs it on every step it builds.
 import { Account, Address, nativeToScVal, Operation, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -26,10 +27,11 @@ Deno.env.set("SUPABASE_URL", STORAGE);
 Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "service-role-for-unit-tests");
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const { TESTNET, withDeploymentV2 } = await import("../../supabase/functions/_shared/networks.ts");
-const { DURATION_SETS_V2, parseDeploymentV2 } = await import("../../supabase/functions/_shared/deployments/index.ts");
+const { BUNDLED_V2, DURATION_SETS_V2, parseDeploymentV2 } = await import("../../supabase/functions/_shared/deployments/index.ts");
 const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
 const { native, sponsor } = await import("../../supabase/functions/_shared/stellar.ts");
 const { verifyTransaction, VerifyError } = await import("../../supabase/functions/_shared/verify.ts");
+const { createPlan, verifyContext } = await import("../../supabase/functions/_shared/plans.ts");
 const { forgetReferencePrices } = await import("../../supabase/functions/_shared/refprices.ts");
 const mv = await import("../../supabase/functions/_shared/moments_v2.ts");
 
@@ -87,6 +89,9 @@ function record(deployment: "testnet" | "testnet-qa"): Record<string, any> {
 }
 
 const NET = withDeploymentV2(TESTNET, parseDeploymentV2("testnet-v2", record("testnet")));
+// testnet's v2 deployment as plans.ts and the verifier see it (env.network): this one, bundled in place of the owner's
+// before anything reads env.network, as launchpad_v2.test.ts does.
+(BUNDLED_V2 as Record<string, Record<string, unknown>>)["testnet-v2"] = record("testnet");
 const QA_NET = withDeploymentV2(TESTNET, parseDeploymentV2("testnet-qa-v2", record("testnet-qa")));
 const MOMENTS = C(5);
 const GRADUATOR = C(3);
@@ -522,6 +527,9 @@ replaceSql(fakeSql((q, p) => {
   if (q === "select ref, usd, source, market, change_24h, volume_24h_usd, quoted_at from lite.ref_quotes") {
     return [{ ref: "USDC", usd: "1.0000", source: "kraken", market: "Kraken USDC/USD", change_24h: "0", volume_24h_usd: "1", quoted_at: new Date(NOW) }];
   }
+  // plans.ts: no fee history (every estimate its default), and the plan stored.
+  if (q.startsWith("select step_kind, percentile_disc(0.9)")) return [];
+  if (q.startsWith("insert into lite.plans")) return [{ id: "5b0d7f8e-1c2a-4e3b-9f6d-000000000014", expires_at: new Date(Date.now() + 15 * 60_000) }];
   throw new Error(`unexpected query: ${q}`);
 }));
 
@@ -544,8 +552,9 @@ async function refusedWith(run: () => unknown): Promise<[number, string, unknown
 const argsOf = (tx: Transaction) => (tx.operations[0] as any).func.invokeContract().args() as xdr.ScVal[];
 const fnOf = (tx: Transaction) => (tx.operations[0] as any).func.invokeContract().functionName().toString() as string;
 const v2Ctx = (user = ME) => ({ user, contract: MOMENTS, usdc: USDC.contract });
-/** The server verifier's context, as plans.ts builds it: moments-v2 and the registry's tokens. */
-const verifyCtx = { user: ME, sponsor: sponsor().publicKey(), passphrase: TESTNET.passphrase, allowedContracts: new Set([MOMENTS, ...TESTNET.assets.map((a) => a.contract)]) };
+/** The server verifier's context, as plans.ts builds it: env.network's allowlist (moments-v2 among v2's roles, the
+ *  registry's tokens) and v2's pins. */
+const verifyCtx = verifyContext(ME);
 
 function assertRuleRefuses(tx: Transaction, intent: any, message: string, user = ME) {
   const err = assertThrows(() => mv.verifyMomentsV2Call(tx, intent, v2Ctx(user)), VerifyError);
@@ -1220,22 +1229,42 @@ Deno.test("every builder's transaction verifies against its intent with the v2 c
   }
 });
 
-// plans.ts runs the server verifier on every step it builds. Until CT-16 gives verify.ts the v2 rules, chosen per
-// contract (v1's publish and collect share v2's names, §20.4), it refuses publish (v1's arity) and the functions it has
-// no rule for, and plans.ts answers 500 self_check_failed for them: CT-16 turns this test on.
-Deno.test({
-  name: "the server verifier (verify.ts) passes every builder's transaction against its intent, as plans.ts runs it",
-  ignore: true,
-  fn: async () => {
-    reset();
-    for (const [action, b] of Object.entries(await everyBuilt())) {
-      try {
-        verifyTransaction(b.tx, b.intent, verifyCtx);
-      } catch (err) {
-        throw new Error(`${action}: ${(err as Error).message}`);
-      }
+// plans.ts runs the server verifier on every step it builds, with v2's call rules chosen per contract (v1's publish
+// and collect share v2's names, §20.4).
+Deno.test("the server verifier (verify.ts) passes every builder's transaction against its intent, as plans.ts runs it", async () => {
+  reset();
+  assertEquals(verifyCtx.allowedContracts.has(MOMENTS), true, "env.network is this file's deployment");
+  for (const [action, b] of Object.entries(await everyBuilt())) {
+    try {
+      verifyTransaction(b.tx, b.intent, verifyCtx);
+    } catch (err) {
+      throw new Error(`${action}: ${(err as Error).message}`);
     }
-  },
+  }
+});
+
+Deno.test("plans.ts builds every v2 step through the verifier: each one built, with its own v2 step kind", async () => {
+  reset();
+  writeMetadata();
+  trustlines = [USDC.classic!];
+  const backstopAt = NOW_S - 7_200 + 30 * DAY;
+  const inputs: [Record<string, unknown>, number][] = [
+    [{ action: "publish", uri: URI, symbol: "DUSK", price: "10000000" }, NOW],
+    [{ action: "collect", nft: NFT_A, quantity: 3 }, NOW],
+    [{ action: "claim", nft: NFT_G }, NOW],
+    [{ action: "claim_all", nfts: [NFT_G] }, NOW],
+    [{ action: "withdraw", nft: NFT_G }, NOW],
+    [{ action: "graduate", nft: NFT_P }, NOW],
+    [{ action: "expire", nft: NFT_P }, backstopAt * 1000],
+  ];
+  assertEquals(inputs.map(([i]) => i.action).sort(), Object.keys(mv.SPEC_KINDS).sort(), "every action");
+  for (const [input, now] of inputs) {
+    const { kind, steps } = await mv.momentV2Steps(ME, input as any, NET, now);
+    // createPlan builds the step at once (plans.ts build()): the builder, the fee caps, then verifyTransaction.
+    const plan = await createPlan(ME, kind, steps);
+    const action = String(input.action) as keyof typeof mv.SPEC_KINDS;
+    assertEquals([plan.steps.length, plan.steps[0].status, plan.steps[0].stepKind], [1, "built", mv.SPEC_KINDS[action]], action);
+  }
 });
 
 // ------------------------------------------------------------------------------------------------ refusals

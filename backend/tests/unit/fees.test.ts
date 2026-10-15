@@ -269,7 +269,8 @@ Deno.test("estimates: history's p90 × 5/4, the defaults without it, never above
   const none = fees.estimatesFrom([], POLICY.maxFee);
   assertEquals([none.estimates.trust, none.estimates.launch_create, none.estimates.moment_collect, none.updatedAt], [10_000n, 10_000_000n, 10_000_000n, null]);
   assert(Object.values(none.basis).every((b) => b === "default"));
-  assertEquals(Object.keys(none.estimates).length, 18);
+  // v1's 18 kinds and contracts v2's 22.
+  assertEquals(Object.keys(none.estimates).length, 40);
   const at = (s: string) => new Date(`2026-10-14T${s}.000Z`);
   const est = fees.estimatesFrom([
     { stepKind: "trust", p90: 8_000n, latest: at("09:40:00") },
