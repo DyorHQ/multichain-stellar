@@ -321,6 +321,8 @@ final class VerifierVectorTests: XCTestCase {
             "v2 launch terms with the qa-exec-fail venue on the testnet pins", "v2 refund for another holder", "v2 moments collect from another account",
             "v2 claim rewards for another account", "v2 claim owed for another account", "v2 claim rewards from an unknown runtime WASM",
             "v2 graduate with your authorization", "v2 launch with a ticker that is not letters or digits",
+            "v2 moments claim with a spend", "v2 moments claim all with a spend", "v2 moments publish with another locker",
+            "v2 moments publish with another coin WASM", "v2 restore of an unknown runtime WASM's code",
         ] {
             XCTAssertEqual(byName[name]?.expect.ok, false, name)
         }
@@ -350,8 +352,8 @@ final class VerifierVectorTests: XCTestCase {
         XCTAssertThrowsError(try rewards.verifier(withV2: false).verify(try TransactionEnvelope(base64: rewards.envelope), intent: rewards.intent)) {
             XCTAssertEqual(($0 as? VerificationFailure)?.reason, "Contract \(token) is not on the allowlist.")
         }
-        // Today's testnet pins have no v2 yet.
-        XCTAssertNil(TxVerifier.V2Pins(.testnet))
+        // Pins without v2's roles have no v2 pins.
+        XCTAssertNil(TxVerifier.V2Pins(try launch.pinned(withV2: false)))
     }
 
     /// So are the cases where a decoder or a comparison could tell the two verifiers apart (verify.test.ts keeps the

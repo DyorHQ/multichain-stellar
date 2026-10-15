@@ -4,7 +4,7 @@
 // for the rules the vectors don't reach. Contracts v2 (DESIGN-stellar-contracts-v2 §20.4): the vectors cover every
 // binding of a launch, a refund, a collect and the claims, calls anyone may make, and runtime contracts by WASM hash;
 // the tests below cover where v2's pins come from.
-import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, scValToNative, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertGreater, assertThrows } from "jsr:@std/assert@1";
 import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
 import { TESTNET, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
@@ -146,6 +146,16 @@ Deno.test("the vectors cover v2's bindings (§20.4), with the verdict each gives
     ["v2 moments claim for another account", "the call acts for another account"],
     ["v2 moments claim all for another account", "the call acts for another account"],
     ["v2 claim owed with a spend", "a claim must not spend anything"],
+    ["v2 claim rewards with a spend", "a claim must not spend anything"],
+    ["v2 moments claim with a spend", "a claim must not spend anything"],
+    ["v2 moments claim all with a spend", "a claim must not spend anything"],
+    // A Moment's terms: the pinned graduator, executor, locker, NFT and coin WASMs and durations.
+    ["v2 moments publish with another graduator", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another executor", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another locker", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another NFT WASM", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another coin WASM", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with durations other than the pins", "the Moment's terms are not the ones this app pins"],
     // Calls anyone may make carry none of the user's authorization.
     ["v2 graduate with your authorization", "a call anyone may make carries your authorization"],
     ["v2 claim owed with your authorization", "a call anyone may make carries your authorization"],
@@ -153,6 +163,7 @@ Deno.test("the vectors cover v2's bindings (§20.4), with the verdict each gives
     ["v2 moments expire with your authorization", "a call anyone may make carries your authorization"],
     // Runtime contracts only by a pinned WASM hash.
     ["v2 restore of an unknown runtime WASM's data", "the restore touches data outside the allowlist"],
+    ["v2 restore of an unknown runtime WASM's code", "the restore touches data outside the allowlist"],
   ];
   for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
   const stranger = vectors.find((v) => v.name === "v2 claim rewards from an unknown runtime WASM")!;
@@ -423,11 +434,20 @@ Deno.test("v2's pins come from the deployment: its own executors (qa-exec-fail o
   assertEquals(testnet.durations, { launch: DURATION_SETS_V2.production.launch, moments: DURATION_SETS_V2.production.moments });
   assertEquals(testnet.maxLaunchFeeStroops, 100_000_000n);
   // testnet-qa's API builds launches on its failing venue (CT-18's e2e); the app's pins never name it (finding F4).
-  const qa = v2PinsOf(withDeploymentV2(TESTNET, parseDeploymentV2("testnet-qa-v2", v2File("testnet-qa"))))!;
+  const qaDeployment = parseDeploymentV2("testnet-qa-v2", v2File("testnet-qa"));
+  const qaNet = withDeploymentV2(TESTNET, qaDeployment);
+  const qa = v2PinsOf(qaNet)!;
   assertEquals(qa.executors, [fixed(0x44), fixed(0x46)]);
   assertEquals(qa.durations.launch, DURATION_SETS_V2["testnet-qa"].launch);
-  // Before the owner's file is bundled, testnet has no v2.
-  assertEquals(v2PinsOf(TESTNET), null);
+  // The shared vector's failing venue is testnet-qa's as its deployment lists it: its id, kind QaFail (3) and executor.
+  const qaVenue = qaDeployment.venues.find((v) => v.kind === "QaFail")!;
+  const qaLaunch = vectors.find((v) => v.name === "v2 launch terms with the qa-exec-fail venue on the testnet pins")!;
+  const launch = (TransactionBuilder.fromXDR(qaLaunch.envelope, PASS) as Transaction).operations[0] as Operation.InvokeHostFunction;
+  const [, launchParams, launchTerms] = launch.func.invokeContract().args().map((a) => scValToNative(a));
+  assertEquals(launchParams.venue, qaVenue.id);
+  assertEquals([launchTerms.venue.id, launchTerms.venue.kind, launchTerms.venue.executor], [qaVenue.id, 3, qaVenue.executor]);
+  // A network whose v2 deployment is taken away has no v2 pins.
+  assertEquals(v2PinsOf(withDeploymentV2(qaNet, null)), null);
 });
 
 Deno.test("without v2's pins a call is judged by v1's rules, and a runtime contract's hash allows nothing", () => {
