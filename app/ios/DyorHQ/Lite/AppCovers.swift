@@ -2,10 +2,11 @@
 #if STELLAR_LITE
 import SwiftUI
 
-/// What opens over the app as a full-screen cover: the side menu, and Portfolio, News, Get Help, Profile and the
-/// notification center, as build 23's `MainTabView` presents them. Out of it, so the root can present them above the swap
-/// between the networks' trees: a switch made from Profile happens under Profile, which then closes onto the new Home
-/// (§2.5). `MainTabView(hostsCovers: false)` leaves them to the root; `isHosting` false applies nothing.
+/// What opens over the app as a full-screen cover: the side menu, and Portfolio (Stellar's while Stellar is on screen),
+/// News, Get Help, Profile and the notification center, as build 23's `MainTabView` presents them. Out of it, so the
+/// root can present them above the swap between the networks' trees: a switch made from Profile happens under Profile,
+/// which then closes onto the new Home (§2.5). `MainTabView(hostsCovers: false)` leaves them to the root; `isHosting`
+/// false applies nothing.
 struct AppCovers: ViewModifier {
     let isHosting: Bool
     @Environment(Router.self) private var router
@@ -21,7 +22,8 @@ struct AppCovers: ViewModifier {
                 .fullScreenCover(isPresented: $router.menuOpen) { SideMenuView() }
                 .fullScreenCover(item: $router.presented) { screen in
                     switch screen {
-                    case .portfolio: PortfolioView()
+                    // Stellar's own on Stellar (§8.12.1): Monad's lists Monad's wallet.
+                    case .portfolio: if router.network == .stellar { StellarPortfolioView() } else { PortfolioView() }
                     case .news: NewsView()
                     case .help: GetHelpView()
                     case .profile: ProfileView(presented: true)

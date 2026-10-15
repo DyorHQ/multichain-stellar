@@ -1,0 +1,209 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Balances and markets" : {
+      "comment" : "The side menu on Stellar: what its Home holds (the account's balances and Stellar's markets), under the row's name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saldos y mercados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soldes et marchés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "잔액 및 마켓"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "余额与行情"
+          }
+        }
+      }
+    },
+    "Launch, swap, earn and collect" : {
+      "comment" : "The network sheet: what you can do on Stellar in DyorHQ, under its name, in the order of its tabs (Launch, Earn with its Swap, Moments). At most 2 lines",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lanza, intercambia, gana y colecciona"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lancez, échangez, gagnez et collectez"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "런칭, 스왑, 수익 얻기, 수집"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发射、兑换、赚取和收藏"
+          }
+        }
+      }
+    },
+    "Stellar isn't available for this account." : {
+      "comment" : "A notice at the bottom of the screen: a Stellar notification or link was tapped, but this account can't use Stellar on this iPhone. Stellar is a network's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar no está disponible para esta cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar n'est pas disponible pour ce compte."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정에서는 Stellar를 사용할 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此账户无法使用 Stellar。"
+          }
+        }
+      }
+    },
+    "Stellar testnet" : {
+      "comment" : "After a Stellar notification's text (“Swapped 10 XLM → 1.2 USDC · Stellar testnet”): Stellar's test network, where it happened. Stellar is a network's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testnet de Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar testnet"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 테스트넷"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 测试网"
+          }
+        }
+      }
+    },
+    "Swap across Stellar's venues" : {
+      "comment" : "The side menu on Stellar: what its Spot row does (swaps at the best price across Stellar's exchanges), under the row's name. Stellar is a network's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambia en las plataformas de Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échangez sur les plateformes Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 거래소에서 스왑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 交易场所兑换"
+          }
+        }
+      }
+    },
+    "Switch to %@" : {
+      "comment" : "A button on a Stellar tab while DyorHQ on Stellar is paused: go back to the Monad network. %@ is the network's name (Monad), never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passer à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@로 전환"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到 %@"
+          }
+        }
+      }
+    },
+    "Volume, fees and P&L on Stellar" : {
+      "comment" : "The side menu on Stellar: what its Portfolio holds (the account's trading volume, fees paid and profit and loss on Stellar), under the row's name. Stellar is a network's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen, comisiones y PnL en Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volume, frais et PnL sur Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar의 거래량, 수수료, 손익"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 上的交易量、手续费和盈亏"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
