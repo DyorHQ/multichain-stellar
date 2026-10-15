@@ -22,7 +22,7 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
-import { main as adminMain } from "./admin-v2.ts";
+import { ADMIN_FNS, main as adminMain } from "./admin-v2.ts";
 import { type DeployCtx, main as deployMain } from "./deploy-contracts-v2.ts";
 import { main as ownerMain, type OwnerCtx } from "./owner-v2.ts";
 import { contractIdFor } from "./lib/contract-ids.ts";
@@ -533,6 +533,8 @@ function assertClean(out: string, secrets: string[]) {
   assertFalse(SEED.test(out), "an output holds something shaped like a secret seed");
   for (const s of secrets) assertFalse(out.includes(s), "an output holds a secret");
   assertFalse(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(out), "an output holds a control character");
+  // Outside text is escaped to printable ASCII; the scripts' own marks (✓ ✗ → …) are none of these.
+  assertFalse(/[\p{Cf}\p{Zl}\p{Zp}\p{M}\p{Script=Cyrillic}\p{Script=Greek}\u3164]/u.test(out), "an output holds a format, separator, combining or look-alike character");
 }
 
 const rolesOf = async (k: Kit): Promise<Record<string, string>> =>
@@ -939,10 +941,13 @@ Deno.test("admin-v2 cutover-v1: reads config() first, writes two prepared unsign
     assertEquals(pad.code, 0, pad.out);
     assertStringIncludes(pad.out, `contract ${V1.launchpad} (v1 launchpad)`);
     assertStringIncludes(pad.out, "call     set_launches_enabled(false)");
+    assertStringIncludes(pad.out, `  description  ${V1_PAUSE}`);
+    assertStringIncludes(r.out, "cutover 2 of 2; config() says platform_bps 250 and royalty_bps 300 today");
     const mom = await owner(k, ["sign", `${out}/${files[1]}`, "--as", "v1-admin", "--decode-only"]);
     assertEquals(mom.code, 0, mom.out);
     assertStringIncludes(mom.out, `contract ${V1.moments} (v1 Moments)`);
     assertStringIncludes(mom.out, "call     set_policy(250, 300, false)", "the values come from config()");
+    assertStringIncludes(mom.out, "  description  v1 Moments set_policy(250, 300, false): publishing stops; platform_bps is set to 250 and royalty_bps to 300 (cutover-v1 keeps the current ones)");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -985,8 +990,14 @@ Deno.test("sign: refuses another network, another source and a missing TTY; sign
     const net = await owner(k, ["sign", `${k.root}mainnet.json`, "--as", "admin", "--decode-only"]);
     assertEquals(net.code, 1);
     assertStringIncludes(net.out, "not testnet");
-    // The admin's envelope offered to the guardian's key.
-    const src = await owner(k, ["sign", file, "--as", "guardian"]);
+    // The admin's call offered to the guardian's key: not a call the guardian signs.
+    const notGuardians = await owner(k, ["sign", file, "--as", "guardian"]);
+    assertEquals(notGuardians.code, 1);
+    assertStringIncludes(notGuardians.out, "refused: admin-v2.ts writes launchpad-v2 propose_treasury for --as admin, not --as guardian");
+    // cancel_treasury is the admin's or the guardian's: the admin's envelope offered to the guardian's key.
+    const cancel = `${k.root}cancel.json`;
+    assertEquals((await admin(k, ["treasury-cancel", "--as", "admin", "--out", cancel])).code, 0);
+    const src = await owner(k, ["sign", cancel, "--as", "guardian"]);
     assertEquals(src.code, 1);
     assertStringIncludes(src.out, `the envelope's source is ${roles.ADMIN_PUBLIC}, not the guardian key's address`);
     // No terminal: refused before any prompt.
@@ -1014,6 +1025,8 @@ Deno.test("sign: refuses another network, another source and a missing TTY; sign
 // ------------------------------------------------------------------------------------------------ sign: only what admin-v2 writes
 
 const ATTACKER = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 7)).publicKey();
+/** The description admin-v2.ts writes for the first cutover envelope, and `sign` derives from its call. */
+const V1_PAUSE = "v1 launchpad set_launches_enabled(false): new launches stop; sells, claims and graduations go on";
 
 interface Craft {
   /** Operations instead of the one contract call. */
@@ -1032,6 +1045,8 @@ interface Craft {
   signWith?: Keypair;
   feeBump?: boolean;
   source?: string;
+  /** The prepared resource fee, in stroops (50,000 by default); the builder adds it to `fee`. */
+  resourceFee?: number;
   meta?: Record<string, string>;
 }
 
@@ -1056,7 +1071,7 @@ function craft(c: Craft = {}): string {
     }),
   ];
   for (const o of ops) b.addOperation(o);
-  if (c.soroban ?? !c.ops) b.setSorobanData(new SorobanDataBuilder().setResourceFee(50_000).build());
+  if (c.soroban ?? !c.ops) b.setSorobanData(new SorobanDataBuilder().setResourceFee(c.resourceFee ?? 50_000).build());
   const tx = b.build();
   if (c.signWith) tx.sign(c.signWith);
   const env = c.feeBump ? TransactionBuilder.buildFeeBumpTransaction(source, "1000", tx, PASSPHRASE) : tx;
@@ -1067,7 +1082,7 @@ function craft(c: Craft = {}): string {
     source,
     contract: call.contract,
     function: call.fn,
-    description: "v1 cutover 1 of 2: v1 launchpad set_launches_enabled(false)",
+    description: V1_PAUSE,
     builtAt: "2026-10-15T00:00:00.000Z",
     ...c.meta,
     xdr: env.toEnvelope().toXDR("base64"),
@@ -1082,12 +1097,82 @@ const transferAll = (to: string) =>
     subInvocations: [],
   });
 
+const u32v = (n: number) => nativeToScVal(n, { type: "u32" });
+const i128v = (n: bigint) => nativeToScVal(n, { type: "i128" });
+const addr = (a: string) => new Address(a).toScVal();
+const invocation = (contract: string, fn: string, args: xdr.ScVal[], subs: xdr.SorobanAuthorizedInvocation[] = []) =>
+  new xdr.SorobanAuthorizedInvocation({
+    function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(callArgs({ contract, fn, args })),
+    subInvocations: subs,
+  });
+/** The review's look-alike text (craft3.ts n3): Cyrillic у, a right-to-left override, a pop-direction mark, the Hangul
+ *  filler, a combining long stroke, and a line separator. */
+const LOOKALIKE = "https://dуorhq.fun/m/‮gpj.evil‬ xㅤy̶z ";
+const LOOKALIKE_SHOWN = "https://d\\u{443}orhq.fun/m/\\u{202e}gpj.evil\\u{202c} x\\u{3164}y\\u{336}z\\u{2028}";
+/** v2 contracts for the table: testnet-v2.json lists them. */
+const LP2 = StrKey.encodeContract(Buffer.alloc(32, 11));
+const MO2 = StrKey.encodeContract(Buffer.alloc(32, 12));
+const LOCK = StrKey.encodeContract(Buffer.alloc(32, 13));
+
+/** craft4.ts n8: the cutover call in a v0 envelope (ENVELOPE_TYPE_TX_V0). */
+function v0Envelope(): string {
+  const v1tx = new TransactionBuilder(new Account(V1.admin, "1"), { fee: "100", networkPassphrase: PASSPHRASE, timebounds: { minTime: 0, maxTime: Math.floor(Date.now() / 1000) + 1_800 } })
+    .addOperation(Operation.invokeContractFunction({ contract: V1.launchpad, function: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] }))
+    .build();
+  const b = v1tx.toEnvelope().v1().tx();
+  const v0 = xdr.TransactionEnvelope.envelopeTypeTxV0(
+    new xdr.TransactionV0Envelope({
+      tx: new xdr.TransactionV0({
+        sourceAccountEd25519: StrKey.decodeEd25519PublicKey(V1.admin),
+        fee: b.fee(),
+        seqNum: b.seqNum(),
+        timeBounds: b.cond().timeBounds(),
+        memo: b.memo(),
+        operations: b.operations(),
+        ext: new xdr.TransactionV0Ext(0),
+      }),
+      signatures: [],
+    }),
+  );
+  return JSON.stringify({
+    format: "dyorhq-unsigned-envelope/1",
+    networkPassphrase: PASSPHRASE,
+    role: "v1-admin",
+    source: V1.admin,
+    contract: V1.launchpad,
+    function: "set_launches_enabled",
+    description: V1_PAUSE,
+    builtAt: "2026-10-15T00:00:00.000Z",
+    xdr: v0.toXDR("base64"),
+  });
+}
+
+/** Runs each case through sign, --decode-only and with a terminal and a yes: refused with its reason, no prompt,
+ *  nothing sent. */
+async function assertRefused(k: Kit, cases: [string, string, string][]) {
+  for (const [name, text, reason] of cases) {
+    const file = `${k.root}${name.replace(/[^A-Za-z0-9]+/g, "-")}.json`;
+    await Deno.writeTextFile(file, text);
+    const before = k.ledger.log.length;
+    const decode = await owner(k, ["sign", file, "--as", "v1-admin", "--decode-only"]);
+    assertEquals(decode.code, 1, `${name}: ${decode.out}`);
+    assertStringIncludes(decode.out, reason, name);
+    const signing = await owner(k, ["sign", file, "--as", "v1-admin"], { terminal: true, answer: "y" });
+    assertEquals(signing.code, 1, name);
+    assertStringIncludes(signing.out, reason, name);
+    assertFalse(signing.out.includes("Sign and submit"), `${name}: no prompt`);
+    assertEquals(k.ledger.log.slice(before).filter((l) => !l.startsWith("view")), [], `${name}: nothing sent`);
+  }
+}
+
 Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prompt (the review's crafted envelopes and each rule)", async () => {
   const k = await kit();
   try {
     await copyV1(k);
     v1Contracts(k.ledger);
+    await Deno.writeTextFile(`${k.deployments}/testnet-v2.json`, JSON.stringify({ contracts: { launchpadV2: LP2, momentsV2: MO2, lpLocker: LOCK } }));
     const launchpadCall = { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] };
+    const now = Math.floor(Date.now() / 1000);
     const cases: [string, string, string][] = [
       // craft.ts 1: several classic operations, one adding a signer that takes the account over, one paying out.
       [
@@ -1107,14 +1192,101 @@ Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prom
       [
         "unknown contract",
         craft({ call: { contract: AQ.router.contract_id, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] }, auth: [new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: transferAll(ATTACKER) })] }),
-        `refused: the call goes to ${AQ.router.contract_id}, which is none of DyorHQ's contracts`,
+        `refused: the call goes to ${AQ.router.contract_id} (Aquarius router), which admin-v2.ts never calls`,
       ],
-      // The same auth root on the real v1 launchpad call: the label says set_launches_enabled, the signature pays out.
+      // A v2 contract testnet-v2.json lists, but admin-v2.ts never calls.
+      ["v2 contract", craft({ call: { contract: LOCK, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] } }), `refused: the call goes to ${LOCK} (v2 lpLocker), which admin-v2.ts never calls`],
+      // craft3.ts n7: the auth root elsewhere, on the real v1 launchpad call: the label says set_launches_enabled, the
+      // signature pays out.
       [
-        "auth root",
-        craft({ auth: [new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: transferAll(ATTACKER) })] }),
+        "craft3 n7 auth root elsewhere",
+        craft({ auth: [new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: transferAll(ATTACKER) })], meta: { description: "d", builtAt: "x" } }),
         `refused: auth entry 1 authorizes ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${ATTACKER}, 90000000000), not the call set_launches_enabled itself`,
       ],
+      // craft3.ts n1: the call itself as the root, with a sub-invocation that pays the attacker.
+      [
+        "craft3 n1 sub-invocation",
+        craft({ auth: [sourceAuth(callArgs(launchpadCall), [transferAll(ATTACKER)])] }),
+        `refused: auth entry 1 also authorizes 1 sub-invocation(s), the first ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${ATTACKER}, 90000000000); admin-v2.ts's calls authorize nothing beyond themselves`,
+      ],
+      // craft3.ts n2a: a function admin-v2.ts never builds, on a contract testnet.json names (a 100% protocol share).
+      [
+        "craft3 n2a set_fees",
+        craft({ call: { contract: V1.launchpad, fn: "set_fees", args: [u32v(1000), u32v(10000), u32v(1000), xdr.ScVal.scvVec([])] } }),
+        "refused: v1 launchpad set_fees is a call admin-v2.ts never writes; on the v1 launchpad it writes only set_launches_enabled",
+      ],
+      // craft3.ts n2b: v1 buy(admin, token, 9,000 XLM, 0), the transfer as the sub-invocation.
+      [
+        "craft3 n2b buy",
+        (() => {
+          const buy = { contract: V1.launchpad, fn: "buy", args: [addr(V1.admin), addr(StrKey.encodeContract(Buffer.alloc(32, 9))), i128v(90_000_000_000n), i128v(0n)] };
+          return craft({ call: buy, auth: [sourceAuth(callArgs(buy), [invocation(XLM_SAC, "transfer", [addr(V1.admin), addr(V1.launchpad), i128v(90_000_000_000n)])])] });
+        })(),
+        "refused: v1 launchpad buy is a call admin-v2.ts never writes",
+      ],
+      // craft3.ts n3: v1 Moments publish with look-alike text.
+      [
+        "craft3 n3 publish",
+        craft({
+          call: {
+            contract: V1.moments,
+            fn: "publish",
+            args: [addr(V1.admin), nativeToScVal(LOOKALIKE, { type: "string" }), i128v(1_000_000n), addr(XLM_SAC), u32v(1), nativeToScVal(3600n, { type: "u64" })],
+          },
+        }),
+        "refused: v1 Moments publish is a call admin-v2.ts never writes; on the v1 Moments it writes only set_policy",
+      ],
+      // craft3.ts n5: a validity window to the year 2100; and one just over admin-v2.ts's 24 h.
+      [
+        "craft3 n5 far expiry",
+        craft({ timebounds: { minTime: 0, maxTime: 4_102_444_800 } }),
+        "refused: the transaction stays valid until 2100-01-01T00:00:00.000Z",
+      ],
+      ["a day and two minutes", craft({ timebounds: { minTime: 0, maxTime: now + 86_520 } }), "admin-v2.ts writes envelopes valid for at most 86,400 s (24 h)"],
+      // craft3.ts n6: a valid call whose description draws a fake summary and hides the rest.
+      [
+        "craft3 n6 description",
+        craft({ meta: { description: "ok\n   1. contract fake\n\x1b[8m‮" } }),
+        `refused: the file describes the call as "ok\\x0a   1. contract fake\\x0a\\x1b[8m\\u{202e}", but its transaction is: ${V1_PAUSE}`,
+      ],
+      // The review's point: the cutover's description on another call.
+      [
+        "cutover description on set_policy",
+        craft({ call: { contract: V1.moments, fn: "set_policy", args: [u32v(0), u32v(1000), xdr.ScVal.scvBool(false)] } }),
+        "but its transaction is: v1 Moments set_policy(0, 1000, false): publishing stops; platform_bps is set to 0 and royalty_bps to 1000",
+      ],
+      // craft4.ts n8: a v0 envelope.
+      ["craft4 n8 v0", v0Envelope(), "refused: a v0 transaction envelope (the format from before protocol 13); admin-v2.ts writes v1 envelopes only"],
+      // An allowed call with an argument admin-v2.ts never writes.
+      ["argument", craft({ call: { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(true)] } }), "refused: argument 1 of set_launches_enabled is true; admin-v2.ts writes false"],
+      ["argument count", craft({ call: { contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false), xdr.ScVal.scvBool(false)] } }), "refused: set_launches_enabled has 2 argument(s); admin-v2.ts writes 1 argument(s)"],
+      // A look-alike function name: Cyrillic е.
+      [
+        "look-alike function",
+        craft({ call: { contract: V1.launchpad, fn: "set_launches_enablеd", args: [xdr.ScVal.scvBool(false)] } }),
+        "refused: v1 launchpad set_launches_enabl\\u{435}d is a call admin-v2.ts never writes",
+      ],
+      ["role", craft({ meta: { role: "admin" } }), "refused: the file says --as admin, but admin-v2.ts writes v1 launchpad set_launches_enabled for --as v1-admin"],
+      [
+        "build time",
+        craft({ meta: { builtAt: "2026-10-15T00:00:00.000Z: approved by the lead " } }),
+        `refused: the file's build time "2026-10-15T00:00:00.000Z: approved by the lead\\u{2028}" isn't a time admin-v2.ts writes`,
+      ],
+      // launchpad-v2 and moments-v2: only the admin, guardian and governance calls admin-v2.ts builds.
+      [
+        "v2 set_fees",
+        craft({ call: { contract: LP2, fn: "set_fees", args: [u32v(1000), u32v(10000), u32v(1000), xdr.ScVal.scvVec([]), u32v(5)] } }),
+        "refused: launchpad-v2 set_fees is a call admin-v2.ts never writes; on the launchpad-v2 it writes only rescue, allow_fallback",
+      ],
+      // launchpad-v2 admin powers admin-v2.ts has no builder for: the admin handover, the launch fee.
+      ["v2 propose_admin", craft({ call: { contract: LP2, fn: "propose_admin", args: [addr(ATTACKER)] } }), "refused: launchpad-v2 propose_admin is a call admin-v2.ts never writes"],
+      ["v2 set_launch_fee", craft({ call: { contract: LP2, fn: "set_launch_fee", args: [i128v(0n)] } }), "refused: launchpad-v2 set_launch_fee is a call admin-v2.ts never writes"],
+      [
+        "caller other than the source",
+        craft({ call: { contract: LP2, fn: "cancel_treasury", args: [addr(ATTACKER)] }, meta: { role: "admin" } }),
+        `refused: argument 1 of cancel_treasury is ${ATTACKER}; admin-v2.ts writes the source account's address`,
+      ],
+      ["v2 publish", craft({ call: { contract: MO2, fn: "publish", args: [addr(V1.admin)] } }), "refused: moments-v2 publish is a call admin-v2.ts never writes"],
       [
         "address credentials",
         craft({
@@ -1123,10 +1295,7 @@ Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prom
               credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
                 new xdr.SorobanAddressCredentials({ address: new Address(ATTACKER).toScAddress(), nonce: xdr.Int64.fromString("1"), signatureExpirationLedger: 1, signature: xdr.ScVal.scvVoid() }),
               ),
-              rootInvocation: new xdr.SorobanAuthorizedInvocation({
-                function: xdr.SorobanAuthorizedFunction.sorobanAuthorizedFunctionTypeContractFn(callArgs(launchpadCall)),
-                subInvocations: [],
-              }),
+              rootInvocation: invocation(V1.launchpad, "set_launches_enabled", [xdr.ScVal.scvBool(false)]),
             }),
           ],
         }),
@@ -1136,11 +1305,11 @@ Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prom
       ["memo", craft({ memo: Memo.text("pay me") }), "refused: the transaction has a memo"],
       ["ledger bounds", craft({ ledgerbounds: { minLedger: 0, maxLedger: 9_999_999 } }), "refused: the transaction has preconditions beyond a time bound"],
       ["no expiry", craft({ timebounds: null }), "refused: the transaction never expires"],
-      ["start time", craft({ timebounds: { minTime: 1_000, maxTime: Math.floor(Date.now() / 1000) + 600 } }), "refused: the transaction has a start time"],
+      ["start time", craft({ timebounds: { minTime: 1_000, maxTime: now + 600 } }), "refused: the transaction has a start time"],
       ["signed", craft({ signWith: Keypair.random() }), "refused: the envelope already carries 1 signature(s)"],
       [
         "metadata",
-        craft({ call: { contract: V1.moments, fn: "set_policy", args: [nativeToScVal(0, { type: "u32" }), nativeToScVal(0, { type: "u32" }), xdr.ScVal.scvBool(true)] }, meta: { contract: V1.launchpad, function: "set_launches_enabled" } }),
+        craft({ call: { contract: V1.moments, fn: "set_policy", args: [u32v(0), u32v(0), xdr.ScVal.scvBool(true)] }, meta: { contract: V1.launchpad, function: "set_launches_enabled" } }),
         "refused: the file says set_launches_enabled on",
       ],
       ["not prepared", craft({ soroban: false }), "refused: the transaction isn't prepared (no Soroban data)"],
@@ -1156,26 +1325,14 @@ Deno.test("sign refuses every envelope admin-v2.ts never writes, before any prom
       ],
       ["not json", "AAAAAgAAAAA=", "not an envelope file written by admin-v2.ts"],
     ];
-    for (const [name, text, reason] of cases) {
-      const file = `${k.root}${name.replace(/ /g, "-")}.json`;
-      await Deno.writeTextFile(file, text);
-      const before = k.ledger.log.length;
-      const decode = await owner(k, ["sign", file, "--as", "v1-admin", "--decode-only"]);
-      assertEquals(decode.code, 1, `${name}: ${decode.out}`);
-      assertStringIncludes(decode.out, reason, name);
-      const signing = await owner(k, ["sign", file, "--as", "v1-admin"], { terminal: true, answer: "y" });
-      assertEquals(signing.code, 1, name);
-      assertStringIncludes(signing.out, reason, name);
-      assertFalse(signing.out.includes("Sign and submit"), `${name}: no prompt`);
-      assertEquals(k.ledger.log.slice(before).filter((l) => !l.startsWith("view")), [], `${name}: nothing sent`);
-    }
+    await assertRefused(k, cases);
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
   }
 });
 
-Deno.test("sign: an expired envelope is shown and refused, with --decode-only too; a good one passes decode-only", async () => {
+Deno.test("sign: an expired envelope is shown and refused, with --decode-only too; a good one passes decode-only with the derived description", async () => {
   const k = await kit();
   try {
     await copyV1(k);
@@ -1188,54 +1345,71 @@ Deno.test("sign: an expired envelope is shown and refused, with --decode-only to
       assertStringIncludes(r.out, "valid until  2023-11-14T22:13:20.000Z (expired: build it again)");
       assertStringIncludes(r.out, "refused: the envelope has expired");
     }
-    await Deno.writeTextFile(`${k.root}good.json`, craft());
-    const good = await owner(k, ["sign", `${k.root}good.json`, "--as", "v1-admin", "--decode-only"]);
+    // A good envelope, its file named with a Cyrillic о: the name is shown escaped.
+    await Deno.writeTextFile(`${k.root}cutоver.json`, craft());
+    const good = await owner(k, ["sign", `${k.root}cutоver.json`, "--as", "v1-admin", "--decode-only"]);
     assertEquals(good.code, 0, good.out);
     for (
       const s of [
+        `Envelope ${k.root}cut\\u{43e}ver.json`,
         "  network      testnet ✓",
         `  source       ${V1.admin} (v1-admin) ✓`,
+        `  description  ${V1_PAUSE}`,
+        "  built        2026-10-15T00:00:00.000Z",
         "  memo         none; no signatures yet",
         "  operation    one contract call, no operation source",
         `      contract ${V1.launchpad} (v1 launchpad)`,
         "      call     set_launches_enabled(false)",
-        "      auth 1   the source account authorizes:",
-        `              ${V1.launchpad} (v1 launchpad) set_launches_enabled(false)`,
+        "      arg 1    Bool false",
+        "      auth 1   the source account authorizes this call only, no sub-invocations",
       ]
     ) assertStringIncludes(good.out, s);
+    // craft3.ts n4: fee and resources inflated up to the 3 XLM cap are shown, and accepted within it.
+    await Deno.writeTextFile(`${k.root}inflated.json`, craft({ fee: "1000", resourceFee: 29_999_000 }));
+    const inflated = await owner(k, ["sign", `${k.root}inflated.json`, "--as", "v1-admin", "--decode-only"]);
+    assertEquals(inflated.code, 0, inflated.out);
+    assertStringIncludes(inflated.out, "  max fee      3 XLM (30,000,000 stroops; resource fee 2.9999 XLM)");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
   }
 });
 
-Deno.test("sign escapes every control character from the file and the chain: nothing can fake a line or hide the prompt", async () => {
+Deno.test("sign shows outside text as printable ASCII only: look-alike letters, invisible, combining and control characters are escaped", async () => {
   const k = await kit();
   try {
     await copyV1(k);
     v1Contracts(k.ledger);
-    // craft.ts 3's text, on an otherwise valid envelope: fake lines, then ESC[8m to hide what follows.
-    const fake = "v1 cutover 1 of 2\n  source ... (v1-admin) OK\n   1. contract " + V1.launchpad + " (v1 launchpad)\n      call     set_launches_enabled(false)\n\x1b[8m";
-    const text = craft({
-      call: { contract: V1.launchpad, fn: "set_label\x1b[2J", args: [nativeToScVal("https://x\x1b[8m‮evil", { type: "string" }), xdr.ScVal.scvSymbol("a\x07b")] },
-      meta: { description: fake, builtAt: "\x1b]0;title\x07", role: "v1-admin\x1b[2J" },
-    });
-    await Deno.writeTextFile(`${k.root}escapes.json`, text);
-    const r = await owner(k, ["sign", `${k.root}escapes.json`, "--as", "v1-admin", "--decode-only"]);
-    assertEquals(r.code, 0, r.out);
-    // Shown as text, on the lines where they belong.
-    assertStringIncludes(r.out, "  built        \\x1b]0;title\\x07: v1 cutover 1 of 2\\x0a  source ... (v1-admin) OK\\x0a");
-    assertStringIncludes(r.out, "\\x1b[8m");
-    assertStringIncludes(r.out, "  note: the envelope was built for --as v1-admin\\x1b[2J");
-    assertStringIncludes(r.out, `      call     set_label\\x1b[2J("https://x\\x1b[8m\\u{202e}evil", a\\x07b)`);
-    // The recorded output (before the console's own escaping) holds no control character at all.
+    const cases: [string, string, string][] = [
+      // The look-alike text as a decoded string argument (craft3.ts n3's string on an allowed call).
+      [
+        "string argument",
+        craft({ call: { contract: V1.launchpad, fn: "set_launches_enabled", args: [nativeToScVal(LOOKALIKE, { type: "string" })] } }),
+        `refused: argument 1 of set_launches_enabled is "${LOOKALIKE_SHOWN}"; admin-v2.ts writes false`,
+      ],
+      // ...as a symbol in a sub-invocation, which is refused.
+      [
+        "symbol in a sub-invocation",
+        craft({ auth: [sourceAuth(callArgs({ contract: V1.launchpad, fn: "set_launches_enabled", args: [xdr.ScVal.scvBool(false)] }), [invocation(XLM_SAC, "apprоve", [xdr.ScVal.scvSymbol("a‍b")])])] }),
+        `the first ${XLM_SAC} (XLM SAC) appr\\u{43e}ve(a\\u{200d}b)`,
+      ],
+      // ...in the description, the file's role and its metadata.
+      ["description", craft({ meta: { description: LOOKALIKE } }), `refused: the file describes the call as "${LOOKALIKE_SHOWN}"`],
+      ["role", craft({ meta: { role: "v1-аdmin" } }), "refused: the file says --as v1-\\u{430}dmin"],
+      ["metadata", craft({ meta: { function: "set_launches_enabled   ok" } }), "refused: the file says set_launches_enabled\\u{2028}  ok on"],
+      ["passphrase", JSON.stringify({ ...JSON.parse(craft()), networkPassphrase: "Test SDF Network ; September 2015‮" }), 'refused: the envelope is for the network "Test SDF Network ; September 2015\\u{202e}", not testnet'],
+      // A backslash can't pass for an escape: it's doubled.
+      ["backslash", craft({ meta: { description: "v1 launchpad\\u{2028}" } }), 'refused: the file describes the call as "v1 launchpad\\\\u{2028}"'],
+    ];
+    await assertRefused(k, cases);
+    // Nothing recorded (before the console's own escaping) holds a control, format, combining or look-alike character.
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
   }
 });
 
-Deno.test("sign prints the full invocation tree with decoded arguments", async () => {
+Deno.test("sign refuses sub-invocations anywhere in an auth tree", async () => {
   const k = await kit();
   try {
     await copyV1(k);
@@ -1248,21 +1422,106 @@ Deno.test("sign prints the full invocation tree with decoded arguments", async (
             new xdr.ContractIdPreimageFromAddress({ address: new Address(V1.admin).toScAddress(), salt: Buffer.alloc(32, 2) }),
           ),
           executable: xdr.ContractExecutable.contractExecutableWasm(Buffer.alloc(32, 1)),
-          constructorArgs: [new Address(ATTACKER).toScVal(), nativeToScVal(7, { type: "u32" })],
+          constructorArgs: [new Address(ATTACKER).toScVal(), u32v(7)],
         }),
       ),
       subInvocations: [],
     });
-    const sub = new xdr.SorobanAuthorizedInvocation({ function: transferAll(V1.launchpad).function(), subInvocations: [create] });
-    await Deno.writeTextFile(`${k.root}tree.json`, craft({ auth: [sourceAuth(callArgs(call), [sub])] }));
-    const r = await owner(k, ["sign", `${k.root}tree.json`, "--as", "v1-admin", "--decode-only"]);
-    assertEquals(r.code, 0, r.out);
-    assertStringIncludes(r.out, `              ${V1.launchpad} (v1 launchpad) set_launches_enabled(false)`);
-    assertStringIncludes(r.out, `                ↳ ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${V1.launchpad}, 90000000000)`);
-    assertStringIncludes(
-      r.out,
-      `                  ↳ create a contract from WASM ${"01".repeat(32)} by ${V1.admin} with salt ${"02".repeat(32)}(${ATTACKER}, 7)`,
-    );
+    await assertRefused(k, [
+      // A creation directly under the call.
+      [
+        "creation",
+        craft({ auth: [sourceAuth(callArgs(call), [create])] }),
+        `refused: auth entry 1 also authorizes 1 sub-invocation(s), the first create a contract from WASM ${"01".repeat(32)} by ${V1.admin} with salt ${"02".repeat(32)}(${ATTACKER}, 7)`,
+      ],
+      // A transfer with a creation under it, beside a harmless-looking second call.
+      [
+        "deep tree",
+        craft({ auth: [sourceAuth(callArgs(call), [new xdr.SorobanAuthorizedInvocation({ function: transferAll(V1.launchpad).function(), subInvocations: [create] }), invocation(V1.launchpad, "config", [])])] }),
+        `refused: auth entry 1 also authorizes 2 sub-invocation(s), the first ${XLM_SAC} (XLM SAC) transfer(${V1.admin}, ${V1.launchpad}, 90000000000)`,
+      ],
+      // A second, clean entry doesn't hide a first one with a sub-invocation.
+      [
+        "second entry",
+        craft({ auth: [sourceAuth(callArgs(call)), sourceAuth(callArgs(call), [transferAll(ATTACKER)])] }),
+        "refused: auth entry 2 also authorizes 1 sub-invocation(s)",
+      ],
+    ]);
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("every call admin-v2.ts writes is one sign accepts, with the same derived description; the takeover calls use CT-05's names", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    assertEquals((await deploy(k, ["--deployment", "testnet"])).code, 0);
+    const roles = await rolesOf(k);
+    const v2 = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-v2.json`)).contracts;
+    const token = StrKey.encodeContract(Buffer.alloc(32, 21));
+    const someone = Keypair.random().publicKey();
+    const commands: string[][] = [
+      ["rescue", "--token", token],
+      ["allow-fallback", "--token", token],
+      ["takeover-propose", "--token", token, "--to", someone],
+      ["takeover-cancel", "--token", token],
+      ["takeover-execute", "--token", token],
+      ["treasury-propose", "--to", someone],
+      ["treasury-apply"],
+      ["treasury-cancel", "--as", "admin"],
+      ["treasury-cancel", "--as", "guardian"],
+      ["venue-propose", "--kind", "aquarius", "--executor", token],
+      ["venue-apply", "--id", "2"],
+      ["venue-cancel", "--id", "2", "--as", "guardian"],
+      ["venue-enable", "--id", "1", "--enabled", "false"],
+      ["quote", "--asset", "USDC", "--phantom", "200000000", "--threshold", "432455532", "--enabled", "true", "--fallback", "0", "--venues", "0,1"],
+      ["launches-enabled", "--enabled", "false"],
+      ["guardian-transfer", "--to", someone],
+      ["guardian-accept", "--from", roles.LAUNCHPAD_GUARDIAN_PUBLIC],
+      ["guardian-renounce"],
+      ["guardian-propose", "--to", "none"],
+      ["guardian-apply"],
+      ["guardian-cancel"],
+      ["policy-propose", "--royalty-bps", "400"],
+      ["policy-apply"],
+      ["policy-cancel", "--as", "governance"],
+      ["policy-cancel", "--as", "guardian"],
+      ["publishing-paused", "--paused", "true"],
+      ["guardian-paused", "--paused", "true"],
+      ["moments-guardian-transfer", "--to", "none"],
+    ];
+    const built = new Set<string>();
+    const descriptions: string[] = [];
+    for (const [i, cmd] of commands.entries()) {
+      const file = `${k.root}${i}-${cmd[0]}.json`;
+      const r = await admin(k, [...cmd, "--out", file]);
+      assertEquals(r.code, 0, `${cmd.join(" ")}: ${r.out}`);
+      const env = JSON.parse(await Deno.readTextFile(file));
+      const target = env.contract === v2.launchpadV2 ? "launchpad-v2" : env.contract === v2.momentsV2 ? "moments-v2" : "?";
+      built.add(`${target} ${env.function}`);
+      const s = await owner(k, ["sign", file, "--as", env.role, "--decode-only"]);
+      assertEquals(s.code, 0, `${cmd.join(" ")}: ${s.out}`);
+      assertStringIncludes(s.out, `  description  ${env.description}`);
+      descriptions.push(env.description);
+      if (cmd[0] === "policy-propose") assertMatch(r.out, /changes: royalty_bps \d+ → 400/);
+    }
+    // Every v2 call ADMIN_FNS lists is one admin-v2.ts builds.
+    assertEquals([...built].sort(), ADMIN_FNS.filter((f) => !f.target.startsWith("v1")).map((f) => `${f.target} ${f.fn}`).sort());
+    for (
+      const d of [
+        `launchpad-v2 cancel_recipient_change(${token}, ${roles.ADMIN_PUBLIC}): the admin cancels the launch's pending takeover`,
+        `launchpad-v2 execute_recipient_change(${token}): executes the launch's pending takeover inside its window`,
+        "launchpad-v2 set_quote(USDC, phantom 200000000, threshold 432455532, enabled true, venues [0, 1], fallback 0): the economics of future launches quoted in this asset",
+        `launchpad-v2 propose_venue(Aquarius, ${token}, fee_fraction 30): a new venue with this executor, applied after the timelock; it starts disabled`,
+        `launchpad-v2 accept_guardian(): ${roles.LAUNCHPAD_GUARDIAN_PUBLIC}, the source, becomes the launchpad's guardian`,
+        "launchpad-v2 propose_guardian(none): removes the guardian after the 48 h timelock",
+        `moments-v2 cancel_policy(${roles.MOMENTS_GUARDIAN_PUBLIC}): cancels the pending policy`,
+        "moments-v2 transfer_guardian(none): Moments has no guardian afterwards",
+      ]
+    ) assert(descriptions.includes(d), `missing: ${d}\n${descriptions.join("\n")}`);
+    await assertNoSecrets(k);
   } finally {
     await cleanup(k);
   }
@@ -1275,6 +1534,8 @@ Deno.test("the secret and control-character checks can fail: the recorder sees w
   assertEquals(io.stdout, [`leaked ${seed}`], "the recorder doesn't redact");
   assertThrows(() => assertClean(io.stdout.join("\n"), [seed]), Error, "secret seed");
   assertThrows(() => assertClean("ok\x1b[8m", []), Error, "control character");
+  assertThrows(() => assertClean("d\u0443orhq", []), Error, "look-alike character");
+  assertThrows(() => assertClean("a\u202eb", []), Error, "look-alike character");
   assertClean("line one\nline two ✓", []);
 });
 
