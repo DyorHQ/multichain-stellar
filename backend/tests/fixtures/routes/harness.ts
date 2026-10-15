@@ -163,6 +163,10 @@ export const routeRows: Responder = (q) => {
   // The launch board and a launch's page (launchpad.ts launchQuery): the board lists LAUNCH_ROW, and TOKEN has no page.
   if (q.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total")) return q.includes("where l.token = ?") ? [] : [LAUNCH_ROW];
   if (q.startsWith("select * from lite.moments order by created_at desc")) return [MOMENT_ROW];
+  // The Moments feed lists MOMENT_ROW; nobody holds an edition, published one or collected (moments.ts).
+  if (q.startsWith("select * from lite.moments where listed and title is not null")) return [MOMENT_ROW];
+  if (q.includes("from lite.moment_editions e join lite.moments m")) return [];
+  if (q.startsWith("select * from lite.moments where creator = ?")) return [];
   if (q.includes("from lite.moment_collects c join lite.moments m")) return [];
   if (q === "select * from lite.moments where id = ?") return [];
   if (q.startsWith("update lite.bridge_transfers set dest_tx")) return [];
@@ -236,9 +240,9 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "launch-quote-bad-side", method: "POST", path: `/v1/launches/${TOKEN}/quote`, body: { side: "hold", amount: "1" }, auth: true },
   { name: "launch-build-no-name", method: "POST", path: "/v1/launches/build", body: { action: "create", quote: "XLM", name: "", symbol: "ECAT" }, auth: true },
   { name: "media-upload-bad-type", method: "POST", path: "/v1/media/upload-url", body: { contentType: "text/plain", bytes: 10 }, auth: true },
-  { name: "moments", method: "GET", path: "/v1/moments?limit=5", auth: true },
-  { name: "moments-owned", method: "GET", path: "/v1/moments/owned", auth: true },
-  { name: "moment-unknown", method: "GET", path: "/v1/moments/7", auth: true },
+  { name: "moments", method: "GET", path: "/v1/moments?limit=5", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.9, and the public view without a token" },
+  { name: "moments-owned", method: "GET", path: "/v1/moments/owned", auth: true, grown: "the view (§6.0); without a token, 400 address_required without ?address=" },
+  { name: "moment-unknown", method: "GET", path: "/v1/moments/7", auth: true, grown: "the public view without a token (§6.0): still 404 for an id with no Moment" },
   { name: "moment-metadata-no-title", method: "POST", path: "/v1/moments/metadata", body: { title: "" }, auth: true },
   { name: "moment-build-bad-action", method: "POST", path: "/v1/moments/build", body: { action: "burn" }, auth: true },
   { name: "bridge-quote", method: "POST", path: "/v1/bridge/quote", body: { direction: "stellar_to_monad", amount: "10000000" }, auth: true },
