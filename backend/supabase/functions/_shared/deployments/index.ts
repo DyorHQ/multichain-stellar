@@ -1,7 +1,8 @@
 // Contract deployments by name (docs/DESIGN-stellar-parity.md §6.16): the live testnet one, a QA one where the owner
 // allowed it (testnet-qa.json, read when it is first selected) and none on mainnet yet. LITE_DEPLOYMENT picks one and
 // defaults to the network's name. deploy-contracts.ts writes the files, from economics.<name>.json beside them;
-// gen-pinned.ts pins the app to one of them.
+// gen-pinned.ts pins the app to one of them. Both formats are checked here (parseDeployment, parseEconomics).
+import type { AssetInfo, NetworkConfig } from "../networks.ts";
 import testnet from "./testnet.json" with { type: "json" };
 
 export interface Deployment {
@@ -30,9 +31,9 @@ export const DEPLOYMENT_NETWORKS: Record<string, "testnet" | "mainnet"> = {
 
 const CONTRACT_ID = /^C[A-Z2-7]{55}$/;
 
-// The files also record the admin and the treasury, for the runbook. Nothing here reads them: the API never depends
-// on who they are.
-function load(id: string, raw: Record<string, unknown>): Deployment {
+/** deployments/<id>.json, checked: throws on anything a deploy wouldn't have written. The files also record the admin
+ *  and the treasury, for the runbook. Nothing here reads them: the API never depends on who they are. */
+export function parseDeployment(id: string, raw: Record<string, unknown>): Deployment {
   const fail = (what: string): never => {
     throw new Error(`deployments/${id}.json: ${what}`);
   };
@@ -75,7 +76,7 @@ function load(id: string, raw: Record<string, unknown>): Deployment {
 }
 
 export const DEPLOYMENTS: Record<string, Deployment | null> = {
-  testnet: load("testnet", testnet),
+  testnet: parseDeployment("testnet", testnet),
   mainnet: null,
 };
 
@@ -104,7 +105,7 @@ function qaDeployment(): Deployment | null {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
       throw new Error(`deployments/${QA}.json is not an object`);
     }
-    testnetQa = load(QA, raw as Record<string, unknown>);
+    testnetQa = parseDeployment(QA, raw as Record<string, unknown>);
   }
   return testnetQa;
 }
@@ -118,4 +119,75 @@ export function deploymentByName(name: string): Deployment | null {
     throw new Error(`No deployments/${QA}.json here (LITE_DEPLOYMENT): it exists only where it was made`);
   }
   throw new Error(`Unknown deployment "${name}" (LITE_DEPLOYMENT): ${[...Object.keys(DEPLOYMENTS), QA].join(", ")}`);
+}
+
+/** One quote asset's launch curve: the launchpad's set_quote arguments, in base units. */
+export interface CurveQuote {
+  asset: AssetInfo;
+  phantom: bigint;
+  threshold: bigint;
+  enabled: boolean;
+}
+
+/** One quote asset's minimum Moment price: Moments' set_quote arguments, in base units. */
+export interface MomentsQuote {
+  asset: AssetInfo;
+  minPrice: bigint;
+  enabled: boolean;
+}
+
+/** What deploy-contracts.ts configures a new deployment with, from economics.<name>.json. */
+export interface Economics {
+  launchpad: CurveQuote[];
+  moments: MomentsQuote[];
+}
+
+/** economics.<name>.json, checked against the network's asset registry (networks.ts): throws on anything unexpected,
+ *  so a deploy never sets a quote nobody meant. Amounts are base units, as strings:
+ *    {"launchpad": {"XLM": {"phantom": "…", "threshold": "…", "enabled": true}, …},
+ *     "moments": {"XLM": {"minPrice": "…", "enabled": true}, …}} */
+export function parseEconomics(file: string, raw: unknown, net: Pick<NetworkConfig, "name" | "assets">): Economics {
+  const bad = (what: string): never => {
+    throw new Error(`${file}: ${what}`);
+  };
+  const object = (v: unknown, what: string, keys: string[]): Record<string, unknown> => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) bad(`${what} must be an object`);
+    const extra = Object.keys(v as object).filter((k) => !keys.includes(k));
+    if (extra.length) bad(`${what}: unknown ${extra.join(", ")} (expected ${keys.join(", ")})`);
+    return v as Record<string, unknown>;
+  };
+  const amount = (v: unknown, what: string): bigint => {
+    if (typeof v !== "string" || !/^[1-9][0-9]{0,29}$/.test(v)) {
+      bad(`${what} must be a positive whole number of base units, as a string`);
+    }
+    return BigInt(v as string);
+  };
+  const quotes = (section: string, fields: string[]): [AssetInfo, Record<string, unknown>][] => {
+    const byAsset = (raw as Record<string, unknown>)[section];
+    if (typeof byAsset !== "object" || byAsset === null || Array.isArray(byAsset)) {
+      bad(`"${section}" must map asset ids to their settings`);
+    }
+    const entries = Object.entries(byAsset as object);
+    if (!entries.length) bad(`"${section}" lists no quote asset`);
+    return entries.map(([id, v]) => {
+      const asset = net.assets.find((a) => a.id === id) ??
+        bad(`${section}.${id}: not an asset of ${net.name} (networks.ts)`);
+      const settings = object(v, `${section}.${id}`, [...fields, "enabled"]);
+      if (typeof settings.enabled !== "boolean") bad(`${section}.${id}.enabled must be true or false`);
+      return [asset, settings];
+    });
+  };
+  object(raw, file, ["launchpad", "moments"]);
+  const launchpad = quotes("launchpad", ["phantom", "threshold"]).map(([asset, v]) => ({
+    asset,
+    phantom: amount(v.phantom, `launchpad.${asset.id}.phantom`),
+    threshold: amount(v.threshold, `launchpad.${asset.id}.threshold`),
+    enabled: v.enabled as boolean,
+  }));
+  const moments = quotes("moments", ["minPrice"]).map(([asset, v]) => ({
+    asset,
+    minPrice: amount(v.minPrice, `moments.${asset.id}.minPrice`),
+    enabled: v.enabled as boolean,
+  }));
+  return { launchpad, moments };
 }

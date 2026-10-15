@@ -9,8 +9,8 @@ Lite writes only its own schema (`lite`), role (`lite_api`), functions, cron job
 |---|---|---|
 | Deployer / admin | Deploys contracts, sets launch economics, pays the first TTL extension | The owner's own key, in a password manager (testnet-qa: `.secrets/testnet-qa-deployer.env`, §2) |
 | Treasury | Receives protocol fees (fixed per deployment); needs a trustline for every classic quote asset (USDC) | Public key in `deployments/<name>.json`; secret in the password manager |
-| Sponsor | Pays account setup where DyorHQ pays it (a sponsored account on mainnet, `--activation sponsored` locally) and, on mainnet, one first swap into XLM; users pay every other network fee in XLM (DESIGN-stellar-parity §4.1) | Supabase secret `SPONSOR_SECRET` only |
-| Keeper | Pays protocol upkeep: graduations, TTL extensions and the CCTP relay. It never appears in a user's transaction | Supabase secret `KEEPER_SECRET` only. On testnet, when it is missing, the sponsor pays with a warning; mainnet needs a key of its own |
+| Sponsor | Pays account setup where DyorHQ pays it (a sponsored account on mainnet, `--activation sponsored` locally) and, on mainnet, one first swap into XLM; users pay every other network fee in XLM (DESIGN-stellar-parity §4.1) | Supabase secret `SPONSOR_SECRET`; on this Mac, `.secrets/testnet-functions.env` for the local stacks (below) |
+| Keeper | Pays protocol upkeep: graduations, TTL extensions and the CCTP relay. It never appears in a user's transaction | Supabase secret `KEEPER_SECRET`; on this Mac, the same file. On testnet, when it is missing, the sponsor pays with a warning; mainnet needs a key of its own |
 
 To create the sponsor, the keeper and the other function secrets without printing any of them:
 
@@ -20,8 +20,14 @@ deno run -A --config backend/supabase/functions/deno.json backend/scripts/new-te
 
 It writes `.secrets/testnet-functions.env` (git-ignored, mode 600) with `LITE_NETWORK`, `LITE_MIN_BUILD`,
 `SPONSOR_SECRET`, `KEEPER_SECRET`, `LITE_JWT_SECRET` and `LITE_CRON_SECRET`, funds the sponsor and the keeper through
-Friendbot and prints only their public keys (the sponsor's is for `gen-pinned.ts`). Once the secrets are in Supabase
-(§3), move the file to the password manager and delete it.
+Friendbot and prints only their public keys (the sponsor's is for `gen-pinned.ts`).
+
+**Keep the file while local stacks are used.** Every local stack makes its env file from it (§8), and every
+worktree's `.secrets` links to this one directory. Keep a copy in the password manager, and delete the file only once
+no local stack needs it. Without it, a stack that has started before still starts with the same options, from its own
+env file; a new stack, or other options, stop and ask for the file. If it is lost, restore it from the password
+manager rather than running the script again. New keys are a rotation: the app pins the sponsor (a `gen-pinned.ts`
+run, a commit and a new internal build), and the hosted project keeps the old keys until `supabase secrets set` (§3).
 
 **Adding the keeper to an older file.** A `testnet-functions.env` made before the keeper existed has no
 `KEEPER_SECRET`:
@@ -72,10 +78,11 @@ script talks to RPC and Horizon itself. From the repository root:
 2. **Economics.** `backend/supabase/functions/_shared/deployments/economics.<name>.json` holds each contract's
    `set_quote` arguments per quote asset (the asset ids of `networks.ts`), in base units as strings:
    `{"launchpad": {"XLM": {"phantom", "threshold", "enabled"}, …}, "moments": {"XLM": {"minPrice", "enabled"}, …}}`.
-   `economics.testnet.json` is what the live set was configured with (XLM phantom 2,000 and threshold 4,324.555532;
-   USDC 200 and 432.4555532; Moments minimum 0.1 in either). `economics.testnet-qa.json` has launch curves ten times
-   smaller (phantom 200 XLM or 20 USDC), so one tester can graduate a launch. The threshold is phantom · (√10 − 1), for
-   a graduation FDV ten times the launch FDV.
+   `economics.testnet.json` is what the live set was configured with (XLM phantom 2,000 and threshold 4,324.55532;
+   USDC 200 and 432.455532; Moments minimum 0.1 in either). `economics.testnet-qa.json` has launch curves ten times
+   smaller (phantom 200 XLM or 20 USDC, threshold 432.455532 XLM or 43.2455532 USDC), so a QA graduation costs about
+   437 XLM with the 1% curve fee instead of about 4,370: one Friendbot account (10,000 XLM) pays for about twenty of
+   them rather than two. The threshold is phantom · (√10 − 1), for a graduation FDV ten times the launch FDV.
 3. **Keys.**
    - `testnet-qa` makes its own on its first run: an admin and a treasury, in `.secrets/testnet-qa-deployer.env`
      (mode 600), funded by Friendbot, with the treasury's USDC trustline. Nothing is printed but the public keys.
@@ -157,7 +164,8 @@ is ready, and none of these steps has run yet.
      jobname = 'lite-indexer') order by start_time desc limit 5;` shows succeeded runs.
    - The `lite-indexer` logs report each run.
 
-Then move `.secrets/testnet-functions.env` to the password manager and delete it.
+Then keep a copy of `.secrets/testnet-functions.env` in the password manager. The file stays on this Mac while local
+stacks are used (§1, §8).
 
 ## 4. Testers
 
@@ -238,15 +246,20 @@ backend/scripts/local-stack.sh stop
   - `--invite-required`: `LITE_INVITE_REQUIRED=1`, for the mainnet-style sign-in with an invite.
 - **Commands.** `migrate` applies the migrations this database hasn't had, each in its own transaction with its row in
   `public.local_stack_migrations`, then checks the schema with `backend/tests/sql/lite_schema_test.sql` (rolled back);
-  `start` does the same. A database made by an older `local-stack.sh` has no such record and is rebuilt once: indexed
-  rows come back from the chain, and testers sign in again. `status` prints what runs, the network and deployment,
-  the fee mode, the sponsor's and keeper's XLM from the indexer's last `ops` run, the reference prices' age and the
-  watch groups. `e2e [phases…]` runs `backend/tests/e2e/lite_e2e.ts` against the stack with its own settings. `logs
-  [lite|indexer|loop|postgres|all]` tails the logs.
+  `start` does the same. A database made by an older `local-stack.sh` (a default stack, in practice the lead's) has no
+  such record and is rebuilt once, which deletes everything in it. The indexed rows come back from the chain; DyorHQ's
+  own records don't: the transaction log and plans (the simulator's Recent Activity, and the Portfolio figures drawn
+  from it, start over), refresh tokens (every session ends), testers (testnet registers them again at their next
+  sign-in) and invites (the codes in `.secrets/local-invites.txt` stop working; `invite` makes new ones). `status`
+  prints what runs, the network and deployment, the fee mode, the sponsor's and keeper's XLM from the indexer's last
+  `ops` run, the reference prices' age and the watch groups. `e2e [phases…]` runs `backend/tests/e2e/lite_e2e.ts`
+  against the stack with its own settings. `logs [lite|indexer|loop|postgres|all]` tails the logs.
 - **Secrets** reach the processes only through the stack's `<state>/functions.env` (mode 600), which
   `backend/scripts/local/make-local-env.ts` derives from `.secrets/testnet-functions.env`: the function secrets
   (`KEEPER_SECRET` when it is there) and the stack's settings, never the hosted `LITE_DB_URL`. Every process starts from
-  an empty environment. A `PORT_BASE` stack only reads `.secrets`: its invites go to `<state>/invites.txt`. The old
+  an empty environment. Keep that file while stacks are used (§1): without it, a stack that has started before starts
+  only with the options it had, from its own env file, and a new stack or other options stop with a message. A
+  `PORT_BASE` stack only reads `.secrets`: its invites go to `<state>/invites.txt`. The old
   `.secrets/local-functions.env` isn't used any more and can be deleted.
 - **The app.** The Debug internal build (`app/ios/Internal/generate.py`) uses the default stack,
   `http://127.0.0.1:8000/lite`; the simulator shares the Mac's loopback. Its media base is the API's local stand-in for

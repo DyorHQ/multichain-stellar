@@ -8,7 +8,8 @@
 //     --deployment <testnet|testnet-qa|mainnet> [--dry-run] [--replace]
 //
 // Both files live in backend/supabase/functions/_shared/deployments/. economics.<name>.json maps the network's asset
-// ids (networks.ts) to each contract's set_quote arguments, in base units as strings:
+// ids (networks.ts) to each contract's set_quote arguments, in base units as strings (deployments/index.ts's
+// parseEconomics checks it):
 //   {"launchpad": {"XLM": {"phantom": "…", "threshold": "…", "enabled": true}, …},
 //    "moments": {"XLM": {"minPrice": "…", "enabled": true}, …}}
 //
@@ -23,8 +24,8 @@
 // an existing deployments/<name>.json only with --replace.
 //
 // SMOKE=1 also launches "Deploy Check" (CHECK), publishes a Moment and collects one edition, and records both as the
-// deployment's smoke items, which the indexer never lists. It is refused on mainnet. indexFromLedger is the first
-// ledger after the configuration and any smoke test.
+// deployment's smoke items, which the indexer never lists, each as soon as it exists. It is refused on mainnet.
+// indexFromLedger is the first ledger after the configuration and any smoke test.
 import {
   Address,
   Asset,
@@ -41,7 +42,7 @@ import {
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
-import { DEPLOYMENT_NETWORKS } from "../supabase/functions/_shared/deployments/index.ts";
+import { DEPLOYMENT_NETWORKS, Economics, parseEconomics } from "../supabase/functions/_shared/deployments/index.ts";
 import { AssetInfo, NetworkConfig, networkByName } from "../supabase/functions/_shared/networks.ts";
 
 const root = new URL("../../", import.meta.url).pathname;
@@ -83,25 +84,8 @@ const rpcUrl = Deno.env.get("STELLAR_RPC_URL")?.trim() || base.rpcUrl;
 if (!rpcUrl) refuse(`${base.name} has no keyless RPC here: set STELLAR_RPC_URL`);
 const net: NetworkConfig = { ...base, rpcUrl };
 
-interface CurveQuote {
-  asset: AssetInfo;
-  phantom: bigint;
-  threshold: bigint;
-  enabled: boolean;
-}
-interface MomentsQuote {
-  asset: AssetInfo;
-  minPrice: bigint;
-  enabled: boolean;
-}
-interface Economics {
-  file: string;
-  launchpad: CurveQuote[];
-  moments: MomentsQuote[];
-}
-
 /** economics.<name>.json, checked against the network's asset registry. Anything unexpected refuses the deploy. */
-async function readEconomics(): Promise<Economics> {
+async function readEconomics(): Promise<Economics & { file: string }> {
   const file = `economics.${name}.json`;
   let raw: unknown;
   try {
@@ -109,42 +93,11 @@ async function readEconomics(): Promise<Economics> {
   } catch (e) {
     refuse(e instanceof Deno.errors.NotFound ? `no deployments/${file}: write ${name}'s economics first` : `${file}: ${(e as Error).message}`);
   }
-  const bad = (what: string): never => refuse(`${file}: ${what}`);
-  const object = (v: unknown, what: string, keys: string[]): Record<string, unknown> => {
-    if (typeof v !== "object" || v === null || Array.isArray(v)) bad(`${what} must be an object`);
-    const extra = Object.keys(v as object).filter((k) => !keys.includes(k));
-    if (extra.length) bad(`${what}: unknown ${extra.join(", ")} (expected ${keys.join(", ")})`);
-    return v as Record<string, unknown>;
-  };
-  const amount = (v: unknown, what: string): bigint => {
-    if (typeof v !== "string" || !/^[1-9][0-9]{0,29}$/.test(v)) bad(`${what} must be a positive whole number of base units, as a string`);
-    return BigInt(v as string);
-  };
-  const quotes = (section: string, fields: string[]): [AssetInfo, Record<string, unknown>][] => {
-    const byAsset = (raw as Record<string, unknown>)[section];
-    if (typeof byAsset !== "object" || byAsset === null || Array.isArray(byAsset)) bad(`"${section}" must map asset ids to their settings`);
-    const entries = Object.entries(byAsset as object);
-    if (!entries.length) bad(`"${section}" lists no quote asset`);
-    return entries.map(([id, v]) => {
-      const asset = net.assets.find((a) => a.id === id) ?? bad(`${section}.${id}: not an asset of ${net.name} (networks.ts)`);
-      const settings = object(v, `${section}.${id}`, [...fields, "enabled"]);
-      if (typeof settings.enabled !== "boolean") bad(`${section}.${id}.enabled must be true or false`);
-      return [asset, settings];
-    });
-  };
-  object(raw, file, ["launchpad", "moments"]);
-  const launchpad = quotes("launchpad", ["phantom", "threshold"]).map(([asset, v]) => ({
-    asset,
-    phantom: amount(v.phantom, `launchpad.${asset.id}.phantom`),
-    threshold: amount(v.threshold, `launchpad.${asset.id}.threshold`),
-    enabled: v.enabled as boolean,
-  }));
-  const moments = quotes("moments", ["minPrice"]).map(([asset, v]) => ({
-    asset,
-    minPrice: amount(v.minPrice, `moments.${asset.id}.minPrice`),
-    enabled: v.enabled as boolean,
-  }));
-  return { file, launchpad, moments };
+  try {
+    return { file, ...parseEconomics(file, raw, net) };
+  } catch (e) {
+    refuse((e as Error).message);
+  }
 }
 
 interface Keys {
@@ -445,27 +398,32 @@ const deployment = {
   indexFromLedger: lastLedger + 1,
   smoke: { launches: [] as string[], moments: [] as number[] },
 };
-const save = async () => {
+const save = async (what: string) => {
   await Deno.writeTextFile(outFile, JSON.stringify(deployment, null, 2) + "\n");
-  console.log(`wrote deployments/${name}.json (index from ledger ${deployment.indexFromLedger})`);
+  console.log(`wrote deployments/${name}.json: ${what}`);
 };
-await save();
+await save(`index from ledger ${deployment.indexFromLedger}`);
 
 // ------------------------------------------------------------------------------------------------ smoke test
 
+// Each smoke item is recorded as soon as it exists: a smoke test that stops half-way, after its launch or its publish,
+// still leaves nothing in the deployment that the indexer would list.
 if (smoke) {
   const xlm = net.assets.find((x) => x.id === "XLM")!.contract;
   const token = String(await call(pad.id, "launch", [a(admin), a(xlm), text("Deploy Check"), text("CHECK"), text(""), u32(0), i128(10n * ONE), i128(0n)]));
+  deployment.smoke.launches.push(token);
+  await save(`smoke launch ${token}`);
   const curve = await call(pad.id, "get_curve", [a(token)]);
   console.log("smoke: launched", token, "real_quote", String(curve.real_quote));
   const price = xlmMoments!.minPrice > ONE ? xlmMoments!.minPrice : ONE;
   // Not a URL: the indexer reads metadata only from DyorHQ's storage, and a smoke Moment has none.
   const id = Number(await call(moments.id, "publish", [a(admin), text("urn:dyorhq:deploy-check"), i128(price), a(xlm), u32(0), nativeToScVal(3_600n, { type: "u64" })]));
+  deployment.smoke.moments.push(id);
+  await save(`smoke Moment ${id}`);
   const first = await call(moments.id, "collect", [a(admin), u32(id), u32(1), i128(price)]);
   console.log("smoke: Moment", id, "collected edition", first, "owner", await call(moments.id, "owner_of", [u32(Number(first))]));
-  deployment.smoke = { launches: [token], moments: [id] };
   deployment.indexFromLedger = lastLedger + 1;
-  await save();
+  await save(`index from ledger ${deployment.indexFromLedger}, after the smoke test`);
 }
 
 const pin = ({ testnet: "Testnet", [QA]: "TestnetQA" } as Record<string, string>)[name];

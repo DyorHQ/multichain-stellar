@@ -20,7 +20,9 @@
 # make-local-env.ts derives from .secrets/testnet-functions.env WITHOUT that file's hosted LITE_DB_URL. Every process
 # starts from `env -i`, so nothing exported in your shell (LITE_DB_URL, SUPABASE_*, PG*) reaches it. This script holds
 # no secret and prints none. A stack with PORT_BASE only reads .secrets (every worktree's .secrets links to the same
-# directory): its env file and its invites stay in its state directory.
+# directory): its env file and its invites stay in its state directory. Without .secrets/testnet-functions.env, a stack
+# that has started before starts again from its env file as it is, with the same options; a new stack, or other
+# options, need the file back (docs/RUNBOOK-testnet.md §1).
 #
 #   local-stack.sh start [options]   idempotent: initdb once, the new migrations, then whatever isn't running
 #     --no-loop                    no indexer loop, and LITE_KEEPER=off: a package's stack never races the shared
@@ -196,14 +198,17 @@ create_db() {
 
 # Each migration this database hasn't had, in filename order, in a transaction of its own together with its row in
 # local_stack_migrations: one that fails leaves nothing behind and runs again next time. A database made before
-# migrations were recorded (or half-made) is rebuilt once: indexed rows come back from the chain, and on testnet a
-# tester's next sign-in registers them again.
+# migrations were recorded (or half-made) is rebuilt once, and that deletes everything in it. The indexed rows come
+# back from the chain; DyorHQ's own records don't: the transaction log and plans (Recent Activity, and the Portfolio
+# figures drawn from it, start over), refresh tokens (every session ends), testers (testnet registers them again at
+# their next sign-in) and invites (the codes in .secrets/local-invites.txt stop working).
 migrate_db() {
   local f name done_names newest applied=0 total=0
   if [ "$(psql_as postgres postgres -tAc "select count(*) from pg_database where datname = 'lite'")" = 0 ]; then
     create_db
   elif [ "$(psql_as postgres lite -tAc "select to_regclass('$MIGRATIONS_TABLE') is not null")" != t ]; then
-    say "postgres: database lite has no record of its migrations (an older local-stack.sh made it); rebuilding it once"
+    say "postgres: database lite has no record of its migrations (an older local-stack.sh made it); rebuilding it once,"
+    say "          which deletes its transaction history, plans, sessions, testers and invites"
     create_db
   fi
   done_names="$(psql_as postgres lite -tAc "select name from $MIGRATIONS_TABLE")"
@@ -290,11 +295,22 @@ write_settings() {
 }
 
 # The stack's env file, from .secrets/testnet-functions.env and this start's settings. A running stack keeps the env
-# its processes started with: other settings or secrets need a stop first.
+# its processes started with: other settings or secrets need a stop first. Without the source file, a stack that
+# started before with the same settings keeps its env file as it is.
 make_env() {
   local next="$LOCAL_ENV.next" vars
-  [ -f "$SOURCE_ENV" ] || die "missing $SOURCE_ENV (backend/scripts/new-testnet-secrets.ts creates it, docs/RUNBOOK-testnet.md §1)"
   write_settings >"$SETTINGS.next"
+  if [ ! -f "$SOURCE_ENV" ]; then
+    if [ -f "$LOCAL_ENV" ] && [ -f "$SETTINGS" ] && cmp -s "$SETTINGS.next" "$SETTINGS"; then
+      rm -f "$SETTINGS.next"
+      chmod 600 "$LOCAL_ENV"
+      say "env: $LOCAL_ENV as it was ($SOURCE_ENV isn't here)"
+      return 0
+    fi
+    rm -f "$SETTINGS.next"
+    die "missing $SOURCE_ENV, which a new stack or other settings need: restore it from the password manager" \
+      "(docs/RUNBOOK-testnet.md §1). Don't run new-testnet-secrets.ts for it: its new sponsor isn't the one the app pins"
+  fi
   vars=(LITE_DB_URL="$LOCAL_DB_URL" LITE_DEPLOYMENT="$DEPLOYMENT" LITE_KEEPER="$KEEPER" LITE_LOCAL_STORAGE_DIR="$MEDIA"
     LITE_PUBLIC_BASE="$API_URL")
   if [ -n "$ACTIVATION" ]; then vars+=(LITE_ACTIVATION="$ACTIVATION"); fi
@@ -418,12 +434,30 @@ config_lines() {
     say "config    GET $API_URL/v1/config answered something else than the config"
 }
 
+# A query as lite_api, the role the functions use: prints its result, or on failure psql's error (its first line) and
+# returns 1.
+lite_api_query() { # sql
+  local err out
+  err="$(mktemp "$STACK/query.XXXXXX")"
+  if out="$(psql_as lite_api lite -tAc "$1" 2>"$err")"; then
+    rm -f "$err"
+    printf '%s' "$out"
+    return 0
+  fi
+  head -1 "$err" | sed -E 's/^.*(ERROR|FATAL): +//'
+  rm -f "$err"
+  return 1
+}
+
 # What the indexer recorded: the ops job's balances (migration 05), reference prices (06) and watch groups (07), each
 # once its migration is applied.
 indexer_lines() {
   local tables facts ops=null quotes=null groups=null members=null
-  tables="$(psql_as lite_api lite -tAc "select string_agg(t, ' ') from unnest(array['lite.job_runs', 'lite.ref_quotes',
-    'lite.watch_groups', 'lite.watch_contracts']) as t where to_regclass(t) is not null" 2>/dev/null)" || return 0
+  if ! tables="$(lite_api_query "select string_agg(t, ' ') from unnest(array['lite.job_runs', 'lite.ref_quotes',
+    'lite.watch_groups', 'lite.watch_contracts']) as t where to_regclass(t) is not null")"; then
+    say "indexer   lite_api can't read the indexer's tables${tables:+: $tables}"
+    return 0
+  fi
   case " $tables " in *" lite.job_runs "*)
     ops="(select json_build_object('age', extract(epoch from now() - started_at)::int, 'ok', ok, 'result', result)
       from lite.job_runs where job = 'ops' order by started_at desc limit 1)" ;;
@@ -434,8 +468,11 @@ indexer_lines() {
   esac
   case " $tables " in *" lite.watch_groups "*) groups="(select count(*) from lite.watch_groups)" ;; esac
   case " $tables " in *" lite.watch_contracts "*) members="(select count(*) from lite.watch_contracts)" ;; esac
-  facts="$(psql_as lite_api lite -tAc "select json_build_object('tables', '$tables', 'ops', $ops, 'quotes', $quotes,
-    'groups', $groups, 'members', $members, 'keeper', '$(setting keeper)')" 2>/dev/null)" || return 0
+  if ! facts="$(lite_api_query "select json_build_object('tables', '$tables', 'ops', $ops, 'quotes', $quotes,
+    'groups', $groups, 'members', $members, 'keeper', '$(setting keeper)')")"; then
+    say "indexer   lite_api can't read the indexer's tables${facts:+: $facts}"
+    return 0
+  fi
   printf '%s' "$facts" | clean "$DENO" eval --no-config '
       const d = JSON.parse(await new Response(Deno.stdin.readable).text());
       const has = (t) => d.tables.split(" ").includes(t);
