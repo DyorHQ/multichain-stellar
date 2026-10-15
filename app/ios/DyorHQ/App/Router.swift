@@ -91,15 +91,23 @@ final class Router {
     var network: AppNetwork = .monad
     /// Stellar's tab, while Stellar is on screen: its tab bar and the side menu's Stellar rows.
     var stellarTab: StellarTab = .home
+    /// Which side of Stellar's Earn tab is shown (Swap vs Earn): it opens on Earn, and the side stays through tab switches.
+    var stellarTradeMode: StellarTradeMode = .earn
+    /// What Stellar's tab opens once it is on screen (a swap's pair, a market, a launch, a Moment, a bridge), set by
+    /// `openStellar` and cleared by the screen that opens it.
+    var pendingStellar: StellarDestination?
+    /// Whether the account signed in can use Stellar on this iPhone: the network control offers it and its session exists
+    /// (`NetworkRoot.follow`). A Stellar destination switches to Stellar only then (`ensureStellar`).
+    var stellarAvailable = false
     /// The network sheet asked for with either Home's chip, which the root presents (origin `.home`). Profile presents its
     /// own, from its Network row.
     var networkSheet: NetworkSheetRequest?
     /// Set with a network swap: the new Home's chip takes VoiceOver's focus as it appears, then clears it (§6).
     var focusesNetworkChip = false
 
-    /// A Monad-only destination switches to Monad first, at once and with no sheet (§2.6 rule 3): a Moment link, a
-    /// notification's screen (a banner's too, through `open(route:)`), Portfolio, Swap, Perps, a launch, a Moment, and the
-    /// menu's Monad sections.
+    /// A Monad-only destination switches to Monad first, at once and with no sheet (§2.6 rule 3): a Moment link, a Monad
+    /// notification's screen (a banner's too, through `open(route:)`; a Stellar one opens on Stellar, `openStellar`),
+    /// Swap, Perps, a launch, a Moment, and the menu's Monad sections.
     func ensureMonad() {
         guard network != .monad else { return }
         network = .monad
@@ -252,6 +260,7 @@ final class Router {
     func open(route: NotificationRoute, reference: String? = nil) {
         guard route != .none else { return }
         #if STELLAR_LITE
+        if openStellar(reference: reference) { return }
         ensureMonad()
         #endif
         presented = nil
@@ -272,11 +281,8 @@ final class Router {
     func open(_ item: MenuItem) {
         menuOpen = false
         #if STELLAR_LITE
-        // On Stellar its four sections are its tabs. News and Get Help are both networks'; every other section is Monad's.
-        if network == .stellar, let stellarTab = item.stellarTab {
-            self.stellarTab = stellarTab
-            return
-        }
+        // On Stellar its sections open Stellar's own screens. News and Get Help are both networks'; Perps is Monad's.
+        if network == .stellar, openOnStellar(item) { return }
         if item != .news, item != .help { ensureMonad() }
         #endif
         switch item {
@@ -403,24 +409,24 @@ enum MenuItem: String, CaseIterable, Identifiable {
 #if STELLAR_LITE
 
 extension MenuItem {
-    /// The side menu's rows on `network` (§3.4): Monad's sections as in build 23; on Stellar its four tabs, then News and
-    /// Get Help.
+    /// The side menu's rows on `network` (docs/DESIGN-stellar-parity.md §8.13): Monad's sections as in build 23; on Stellar
+    /// the same list, with Earn in Perps' row.
     static func items(for network: AppNetwork) -> [MenuItem] {
         switch network {
         case .monad: return [.home, .spot, .perps, .launch, .moments, .news, .portfolio, .help]
-        case .stellar: return [.home, .earn, .launch, .moments, .news, .help]
+        case .stellar: return [.home, .spot, .earn, .launch, .moments, .news, .portfolio, .help]
         }
     }
 
-    /// The Stellar tab the row opens on Stellar; nil for a row that presents a screen there (News, Get Help), or isn't
-    /// listed there.
+    /// The Stellar tab the row opens on Stellar: Spot and Earn both open the Earn tab, on its Swap and Earn sides. Nil for
+    /// a row that presents a screen there (Portfolio, News, Get Help), or isn't listed there (Perps).
     var stellarTab: StellarTab? {
         switch self {
         case .home: return .home
-        case .earn: return .earn
+        case .spot, .earn: return .earn
         case .launch: return .launch
         case .moments: return .moments
-        case .spot, .perps, .news, .portfolio, .help: return nil
+        case .perps, .news, .portfolio, .help: return nil
         }
     }
 
@@ -429,15 +435,18 @@ extension MenuItem {
         liteTr(LocalizedStringResource("stellarTab.earn", defaultValue: "Earn", table: "Lite", comment: "[tight] The Stellar section for lending to earn interest: its side menu row and its tab"))
     }
 
-    /// What the section holds on `network`, under its name in the menu: on Stellar, its tabs' own lines.
+    /// What the section holds on `network`, under its name in the menu: on Stellar, its sections' own lines; News and Get
+    /// Help are Monad's.
     func subtitle(on network: AppNetwork) -> String {
         guard network == .stellar else { return subtitle }
         switch self {
-        case .home: return liteTr(LocalizedStringResource("Balance and activity", table: "Lite", comment: "The side menu on Stellar: what its Home holds, under the row's name"))
+        case .home: return liteTr(LocalizedStringResource("Balances and markets", table: "StellarShell", comment: "The side menu on Stellar: what its Home holds (the account's balances and Stellar's markets), under the row's name"))
+        case .spot: return liteTr(LocalizedStringResource("Swap across Stellar's venues", table: "StellarShell", comment: "The side menu on Stellar: what its Spot row does (swaps at the best price across Stellar's exchanges), under the row's name. Stellar is a network's name, never translated"))
         case .earn: return liteTr(LocalizedStringResource("Lend XLM and USDC on Blend", table: "Lite", comment: "The side menu on Stellar: what Earn does, under the row's name. “Blend” is a lending protocol's name"))
         case .launch: return liteTr(LocalizedStringResource("Launch and trade coins on Stellar", table: "Lite", comment: "The side menu on Stellar: what its Launch tab does, under the row's name"))
         case .moments: return liteTr(LocalizedStringResource("Collect editions on Stellar", table: "Lite", comment: "The side menu on Stellar: what its Moments tab does, under the row's name"))
-        case .spot, .perps, .news, .portfolio, .help: return subtitle
+        case .portfolio: return liteTr(LocalizedStringResource("Volume, fees and P&L on Stellar", table: "StellarShell", comment: "The side menu on Stellar: what its Portfolio holds (the account's trading volume, fees paid and profit and loss on Stellar), under the row's name. Stellar is a network's name, never translated"))
+        case .perps, .news, .help: return subtitle
         }
     }
 }

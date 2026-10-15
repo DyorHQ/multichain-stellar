@@ -22,7 +22,7 @@ struct SideMenuView: View {
                     profileRow
                     VStack(spacing: 10) {
                         #if STELLAR_LITE
-                        // The rows follow the network (§3.4): Monad's as in build 23, or Stellar's tabs, News and Get Help.
+                        // The rows follow the network: Monad's as in build 23, or Stellar's, Earn in Perps' row.
                         ForEach(MenuItem.items(for: router.network)) { item in
                             MenuRow(item: item, isCurrent: isCurrent(item), network: router.network) { open(item) }
                         }
@@ -151,8 +151,8 @@ struct SideMenuView: View {
 
     private func isCurrent(_ item: MenuItem) -> Bool {
         #if STELLAR_LITE
-        // On Stellar the "Now" badge follows Stellar's tab.
-        if router.network == .stellar { return item.stellarTab == router.stellarTab }
+        // On Stellar the "Now" badge follows Stellar's tab, and on its Earn tab, Spot and Earn follow its Swap | Earn switch.
+        if router.network == .stellar { return router.isCurrentOnStellar(item) }
         #endif
         switch item {
         case .home: return router.tab == .home
