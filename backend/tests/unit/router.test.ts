@@ -46,9 +46,12 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/tx/:hash", `/v1/tx/${"ab".repeat(32)}`, false],
   ["POST /v1/swap/quote", "/v1/swap/quote", false],
   ["POST /v1/swap/build", "/v1/swap/build", false],
-  // Public once it reads the reference cache (§6.6); until then its handler signs in. So do economics (WP-14) and
-  // Earn's markets and history (WP-15) until those packages serve them without a session.
-  ["GET /v1/prices", "/v1/prices", false],
+  // Market data reads the reference cache and needs no session (§6.6). Economics (WP-14) and Earn's markets and
+  // history (WP-15) still sign in until those packages serve them without a session.
+  ["GET /v1/markets", "/v1/markets", true],
+  ["GET /v1/markets/:id", "/v1/markets/XLM", true],
+  ["GET /v1/markets/:id/history", "/v1/markets/XLM/history", true],
+  ["GET /v1/prices", "/v1/prices", true],
   ["GET /v1/launches", "/v1/launches", false],
   ["GET /v1/launches/:token", `/v1/launches/${TOKEN}`, false],
   ["POST /v1/launches/:token/quote", `/v1/launches/${TOKEN}/quote`, false],
