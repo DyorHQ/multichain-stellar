@@ -15,7 +15,9 @@ It checks every path of app/ that differs from the snapshot (the paths below are
     ios/DyorKit/**                          never changes (Package.resolved included)
     ios/Internal/**                         anything: the internal project only
     added ios/DyorHQ/Lite/**.swift          wholly inside #if STELLAR_LITE: outside it, blank lines and // comments only
+    any other added ios/DyorHQ/Lite/**      fails: it would ship in the App Store app (resources go in ios/Internal)
     any other added .swift                  fails, as does a deleted or renamed app file (ios/DyorHQ/**)
+    a nested repository (gitlink)           fails, wherever it is
     ios/project.yml, ios/DyorHQ/Info.plist  only the CFBundleVersion line
     ios/.gitignore                          only added project-internal.json and DerivedData* lines (and comments)
     modified ios/DyorHQ/**.swift            with its #if STELLAR_LITE blocks stripped, byte for byte the snapshot's file
@@ -495,6 +497,16 @@ def contents(rev, path):
     return data.decode("utf-8", errors="surrogateescape")
 
 
+def is_gitlink(rev, path):
+    """Whether `path` is a nested repository: a gitlink (mode 160000) at `rev` (the base, with the app at its root, or
+    HEAD, under app/), or a directory in the working tree (None) where a file was expected."""
+    if rev is None:
+        file = ROOT / shown(path)
+        return file.is_dir() and not file.is_symlink()
+    out = run_git("ls-tree", "-z", rev, "--", shown(path) if rev == "HEAD" else path, cwd=ROOT)
+    return bool(out) and out.split(b" ", 1)[0] == b"160000"
+
+
 def check_path(status, path, base, worktree, unflagged):
     where = shown(path)
     if path.startswith("ios/DyorKit/"):
@@ -505,6 +517,10 @@ def check_path(status, path, base, worktree, unflagged):
     if status not in "ADMT":
         fail(where, f"git status {status!r}: resolve it first")
         return
+    # A nested repository (a gitlink) has no text to compare: it is a finding of its own, whatever the path.
+    if is_gitlink(base, path) or is_gitlink(None if worktree else "HEAD", path):
+        fail(where, "a nested repository (a git submodule or gitlink): the app copy holds files only")
+        return
     old = None if status == "A" else contents(base, path)
     new = None if status == "D" else contents(None if worktree else "HEAD", path)
     # The strict rules first: an entry in unflagged-changes.txt never widens them (read_unflagged refuses those too).
@@ -513,6 +529,10 @@ def check_path(status, path, base, worktree, unflagged):
             check_lite_file(where, new)
         else:
             fail(where, "a new Swift file outside ios/DyorHQ/Lite")
+    elif status == "A" and path.startswith("ios/DyorHQ/Lite/"):
+        # The App Store project builds every file under ios/DyorHQ into the app, so a resource here would ship in it.
+        fail(where, "a new file in ios/DyorHQ/Lite that isn't Swift would ship in the App Store app: the internal build's "
+                    "resources (string tables, images) go in ios/Internal/Resources")
     elif status == "D" and path.startswith("ios/DyorHQ/"):
         fail(where, "an app file of the snapshot is deleted or renamed")
     elif path in VERSION_ONLY or path == GITIGNORE:
