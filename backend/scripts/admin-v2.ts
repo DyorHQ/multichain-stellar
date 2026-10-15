@@ -211,7 +211,9 @@ export const ADMIN_FNS: readonly AdminFn[] = [
     fn: "set_policy",
     roles: ["v1-admin"],
     args: ["u32", "u32", "false"],
-    effect: (a) => `publishing stops; platform_bps is set to ${a[0]} and royalty_bps to ${a[1]} (cutover-v1 keeps the current ones)`,
+    // The values as the envelope carries them; cutover-v1 copies them from config() when it builds the envelope, and
+    // prints config()'s values beside them.
+    effect: (a) => `publishing stops; platform_bps is set to ${a[0]} and royalty_bps to ${a[1]}`,
   },
   // launchpad-v2.
   { target: LP, fn: "rescue", roles: ADMIN, args: ["contract"], effect: said("the admin rescues the stuck launch (from stuck_since + 7 days)") },

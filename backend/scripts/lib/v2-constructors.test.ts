@@ -10,6 +10,7 @@ import {
   constructors,
   type EconomicsV2,
   encodeArgs,
+  identityLeaves,
   initialVenues,
   launchpadCalls,
   type LaunchpadState,
@@ -140,7 +141,8 @@ function plan(profile: V2Profile, aquarius: boolean, withHashes = true): Constru
 }
 
 // The `__constructor` entries (and the user-defined types they use) of the merged contracts, cut byte for byte from
-// the contractspecv0 sections of their release WASMs (main 9354d56, cargo build --target wasm32v1-none --release).
+// the contractspecv0 sections of their release WASMs (main 9354d56, cargo build --target wasm32v1-none --release);
+// launchpad-v2, moments-v2 and moments-graduator from contracts/build.sh's dist (CT-11: main dad21a4 + stellar/CT-08).
 const MERGED_CTOR_SPECS: Partial<Record<WasmKey, string>> = {
   "exec-soroswap":
     "AAAAAAAAAGNgY2FsbGVyc2AgYXJlIGxhdW5jaHBhZC12MiBhbmQgbW9tZW50cy1ncmFkdWF0b3IsIGJ5IHRoZSBpZHMgdGhlIGRlcGxveSBzY3JpcHQgcHJlY29tcHV0ZXMgKMKnMy40KS4AAAAADV9fY29uc3RydWN0b3IAAAAAAAACAAAAAAAAAAdmYWN0b3J5AAAAABMAAAAAAAAAB2NhbGxlcnMAAAAD6gAAABMAAAAA",
@@ -156,6 +158,12 @@ const MERGED_CTOR_SPECS: Partial<Record<WasmKey, string>> = {
     "AAAAAAAAAL5tb21lbnRzLXYyIGRlcGxveXMgdGhpcyBhdCBwdWJsaXNoIHdpdGggaXRzZWxmIGFzIGBtaW50ZXJgLiBgcm95YWx0eV9icHNgIG9mIGV2ZXJ5IHNhbGUgaXMgc3VnZ2VzdGVkIHRvIHRoZQpjcmVhdG9yOyBPcGVuWmVwcGVsaW4gcmVmdXNlcyBtb3JlIHRoYW4gMTAwJSAobW9tZW50cy12MidzIHBvbGljeSBjYXBzIGl0IGF0IDEwJSkuAAAAAAANX19jb25zdHJ1Y3RvcgAAAAAAAAoAAAAAAAAABm1pbnRlcgAAAAAAEwAAAAAAAAAEbmFtZQAAABAAAAAAAAAABnN5bWJvbAAAAAAAEAAAAAAAAAAMbWV0YWRhdGFfdXJpAAAAEAAAAAAAAAAHY3JlYXRvcgAAAAATAAAAAAAAAAtyb3lhbHR5X2JwcwAAAAAEAAAAAAAAAAptZWRpYV9oYXNoAAAAAAPuAAAAIAAAAAAAAAAFcGxhY2UAAAAAAAAQAAAAAAAAAARkYXRlAAAAEAAAAAAAAAAMZXh0ZXJuYWxfdXJsAAAAEAAAAAA=",
   "moment-coin":
     "AAAAAAAAAQFSZWNvcmRzIGBtaW50ZXJgIGFuZCB0aGUgY2FwLCB0aGVuIG1pbnRzIGBpbml0aWFsX2Ftb3VudGAgdG8gYGluaXRpYWxfdG9gIHdpdGhpbiB0aGUgY2FwLiBBbiBpbml0aWFsIGFtb3VudCBvZgowIG1pbnRzIG5vdGhpbmc7IGEgbmVnYXRpdmUgb25lIGZhaWxzIGBaZXJvQW1vdW50YCwgbGlrZSBgbWludGAuIG1vbWVudHMtZ3JhZHVhdG9yIHBhc3NlcwpgKG1vbWVudHMsIG5hbWUsIHN5bWJvbCwgUywgaXRzZWxmLCBwb29sX2NvaW5zKWAgKMKnMTIpLgAAAAAAAA1fX2NvbnN0cnVjdG9yAAAAAAAABgAAAAAAAAAGbWludGVyAAAAAAATAAAAAAAAAARuYW1lAAAAEAAAAAAAAAAGc3ltYm9sAAAAAAAQAAAAAAAAAANjYXAAAAAACwAAAAAAAAAKaW5pdGlhbF90bwAAAAAAEwAAAAAAAAAOaW5pdGlhbF9hbW91bnQAAAAAAAsAAAAA",
+  "launchpad-v2":
+    "AAAAAAAAAAAAAAANX19jb25zdHJ1Y3RvcgAAAAAAAAwAAAAAAAAABWFkbWluAAAAAAAAEwAAAAAAAAAIZ3VhcmRpYW4AAAPoAAAAEwAAAAAAAAAIdHJlYXN1cnkAAAATAAAAAAAAAAN4bG0AAAAAEwAAAAAAAAAPdG9rZW5fd2FzbV9oYXNoAAAAA+4AAAAgAAAAAAAAAAZsb2NrZXIAAAAAABMAAAAAAAAAEHNvcm9zd2FwX2ZhY3RvcnkAAAATAAAAAAAAAA9hcXVhcml1c19yb3V0ZXIAAAAAEwAAAAAAAAAKbGF1bmNoX2ZlZQAAAAAACwAAAAAAAAAGdmVudWVzAAAAAAPqAAAH0AAAAAlWZW51ZUluaXQAAAAAAAAAAAAACWR1cmF0aW9ucwAAAAAAB9AAAAAPTGF1bmNoRHVyYXRpb25zAAAAAAAAAAADdHRsAAAAB9AAAAAJVHRsUG9saWN5AAAAAAAAAAAAAAEAAAAAAAAAAAAAAAlWZW51ZUluaXQAAAAAAAADAAAAAAAAAAhleGVjdXRvcgAAABMAAAAAAAAABGtpbmQAAAfQAAAACVZlbnVlS2luZAAAAAAAAAAAAAAGcGFyYW1zAAAAAAfQAAAAC1ZlbnVlUGFyYW1zAAAAAAMAAABoQSBncmFkdWF0aW9uIHZlbnVlJ3Mga2luZC4gVGhlIGxhdW5jaHBhZCdzIHZlbnVlIHRhYmxlIG1hcHMgdmVudWUgaWRzIHRvIGEga2luZCBhbmQgYW4gZXhlY3V0b3IgKMKnNS4zKS4AAAAAAAAACVZlbnVlS2luZAAAAAAAAAQAAAAAAAAACFNvcm9zd2FwAAAAAAAAAAAAAAAIQXF1YXJpdXMAAAABAAAAL0EgcG9zaXRpb24gdGhlIGxvY2tlciBob2xkcyB3aXRob3V0IGhhcnZlc3RpbmcuAAAAAAhIb2xkT25seQAAAAIAAAAqdGVzdG5ldC1xYSdzIGBxYS1leGVjLWZhaWxgIHZlbnVlICjCpzcuMykuAAAAAAAGUWFGYWlsAAAAAAADAAAAAQAAAB5QZXItdmVudWUgZXhlY3V0b3IgcGFyYW1ldGVycy4AAAAAAAAAAAALVmVudWVQYXJhbXMAAAAAAQAAAEdBcXVhcml1cyBmZWUgdGllcjogMTAsIDMwIG9yIDEwMCAodGVzdG5ldDogMzApLiAwIGZvciBldmVyeSBvdGhlciBraW5kLgAAAAAMZmVlX2ZyYWN0aW9uAAAABAAAAAEAAABpbGF1bmNocGFkLXYyJ3MgZHVyYXRpb25zIGluIHNlY29uZHM6IGNvbnN0cnVjdG9yIGFyZ3VtZW50cywgaW1tdXRhYmxlIGFuZCBwYXJ0IG9mIHRoZSB0ZXJtcyAowqcxNC4zLCBPMykuAAAAAAAAAAAAAA9MYXVuY2hEdXJhdGlvbnMAAAAACgAAADRgc3R1Y2tfc2luY2VgIOKGkiBgZ3JhZHVhdGVfZmFsbGJhY2tgIGFsbG93ZWQgKEYxNCkuAAAADmZhbGxiYWNrX2RlbGF5AAAAAAAGAAAAI0NvbXBsZXRlZCDihpIgYG1hcmtfc3R1Y2tgIGFsbG93ZWQuAAAAAAVncmFjZQAAAAAAAAYAAAAyTXVzdCBlcXVhbCB0aGUgbG9ja2VyJ3MgYGhhcnZlc3RfaW50ZXJ2YWwoKWAgKEY2KS4AAAAAABBoYXJ2ZXN0X2ludGVydmFsAAAABgAAAFJgc3R1Y2tfc2luY2VgIOKGkiB0aGUgZmFsbGJhY2sgb2YgYSB2ZW51ZS1sb2NrZWQgbGF1bmNoLCB3aXRob3V0IGBhbGxvd19mYWxsYmFja2AuAAAAAAAPbG9ja2VkX2ZhbGxiYWNrAAAAAAYAAAApYHN0dWNrX3NpbmNlYCDihpIgdGhlIGFkbWluIG1heSBgcmVzY3VlYC4AAAAAAAAMcmVzY3VlX2FkbWluAAAABgAAACZgc3R1Y2tfc2luY2VgIOKGkiBhbnlvbmUgbWF5IGByZXNjdWVgLgAAAAAADXJlc2N1ZV9wdWJsaWMAAAAAAAAGAAAATkNyZWF0b3ItZmVlLXJlY2lwaWVudCB0YWtlb3Zlcjogd2FpdCwgdGhlbiB0aGUgd2luZG93IGluIHdoaWNoIGl0IGNhbiBleGVjdXRlLgAAAAAADnRha2VvdmVyX2RlbGF5AAAAAAAGAAAAAAAAAA90YWtlb3Zlcl93aW5kb3cAAAAABgAAAFZUcmVhc3VyeSwgZ3VhcmRpYW4gYW5kIHZlbnVlIHByb3Bvc2Fsczogd2FpdCwgdGhlbiB0aGUgd2luZG93IGluIHdoaWNoIHRoZXkgY2FuIGFwcGx5LgAAAAAACHRpbWVsb2NrAAAABgAAAAAAAAAPdGltZWxvY2tfd2luZG93AAAAAAYAAAABAAAAmFRUTCBleHRlbnNpb24gZm9yIHBlcnNpc3RlbnQgZW50cmllcywgaW4gbGVkZ2Vycy4gQSBjb25zdHJ1Y3RvciBhcmd1bWVudCwgdmFsaWRhdGVkIHdpdGgKW2BjcmF0ZTo6dmFsaWRhdGVfdHRsX3BvbGljeWBdIGFnYWluc3QgYGUuc3RvcmFnZSgpLm1heF90dGwoKWAuAAAAAAAAAAlUdGxQb2xpY3kAAAAAAAACAAAAAAAAAAlleHRlbmRfdG8AAAAAAAAEAAAAAAAAAAl0aHJlc2hvbGQAAAAAAAAE",
+  "moments-v2":
+    "AAAAAAAAAshFdmVyeSBwZWVyIGlzIGEgY29uc3RydWN0b3IgYXJndW1lbnQgKMKnMy40KTogdGhlIGRlcGxveSBzY3JpcHQgcHJlY29tcHV0ZXMgdGhlIGlkcywgZGVwbG95aW5nIHRoZSBsb2NrZXIgYW5kCnRoZSBncmFkdWF0b3IgZmlyc3QuIEJvdGggcGF1c2VzIHN0YXJ0IG9mZi4gUmVmdXNlcyB3aXRoIGBJbnZhbGlkUG9saWN5YCBhIHBvbGljeSBvdXRzaWRlIMKnOS4yJ3MgcnVsZXMsIGFuZAp3aXRoIGBJbnZhbGlkQ29uZmlnYCBhIFVTREMgdGhhdCBpc24ndCBhIFN0ZWxsYXIgQXNzZXQgQ29udHJhY3QsIGludmFsaWQgZHVyYXRpb25zIG9yIFRUTCBwb2xpY3ksIGEgbG9ja2VyIHdob3NlCmBoYXJ2ZXN0X2ludGVydmFsKClgIGRpZmZlcnMgZnJvbSBgZHVyYXRpb25zLmhhcnZlc3RfaW50ZXJ2YWxgIChGNiksIGFuIGV4dGVybmFsIGJhc2UgdGhhdCBpc24ndCBodHRwcyBvciBpcwpsb25nZXIgdGhhbiAyNTYgYnl0ZXMsIG9yIGEgZ3JhZHVhdG9yIHdpcmVkIHRvIGFueXRoaW5nIGJ1dCB0aGlzIGNvbnRyYWN0IGFuZCB0aGlzIGNvbnN0cnVjdG9yJ3MgbG9ja2VyLApleGVjdXRvciBhbmQgU29yb3N3YXAgZmFjdG9yeSAobGVhZCBydWxpbmcgYWZ0ZXIgcmV2aWV3KSwgc28gYSBtaXMtd2lyZWQgc3RhY2sgY2FuJ3QgYmUgZGVwbG95ZWQuIFRoZSBjb2luJ3MKV0FTTSBoYXNoLCBwYXJ0IG9mIHRoZSB0ZXJtcywgaXMgcmVhZCBmcm9tIHRoZSBncmFkdWF0b3IuAAAADV9fY29uc3RydWN0b3IAAAAAAAAMAAAAAAAAAApnb3Zlcm5hbmNlAAAAAAATAAAAAAAAAAhndWFyZGlhbgAAA+gAAAATAAAAAAAAAAR1c2RjAAAAEwAAAAAAAAANbmZ0X3dhc21faGFzaAAAAAAAA+4AAAAgAAAAAAAAAAlncmFkdWF0b3IAAAAAAAATAAAAAAAAAAZsb2NrZXIAAAAAABMAAAAAAAAACGV4ZWN1dG9yAAAAEwAAAAAAAAAQc29yb3N3YXBfZmFjdG9yeQAAABMAAAAAAAAADWV4dGVybmFsX2Jhc2UAAAAAAAAQAAAAAAAAAAZwb2xpY3kAAAAAB9AAAAAGUG9saWN5AAAAAAAAAAAACWR1cmF0aW9ucwAAAAAAB9AAAAAQTW9tZW50c0R1cmF0aW9ucwAAAAAAAAADdHRsAAAAB9AAAAAJVHRsUG9saWN5AAAAAAAAAAAAAAEAAABVVGhlIGVjb25vbWljcyBhIE1vbWVudCBwdWJsaXNoZWQgbm93IHNuYXBzaG90cyAowqc5LjEpLiBVU0RDIGFtb3VudHMgaGF2ZSA3IGRlY2ltYWxzLgAAAAAAAAAAAAAGUG9saWN5AAAAAAAKAAAASkVhY2ggY29sbGVjdCdzIHNwbGl0OyB0aGUgdGhyZWUgc3VtIHRvIGBCUFNgICgyMC81Lzc1IG9uIHRlc3RuZXQsIMKnMTQuMikuAAAAAAALY3JlYXRvcl9icHMAAAAABAAAAE9UaGUgY3JlYXRvcidzIHNoYXJlIG9mIGFuIGV4cGlyZWQgTW9tZW50J3MgcmVzZXJ2ZTsgdGhlIHRyZWFzdXJ5IGdldHMgdGhlIHJlc3QuAAAAABJleHBpcnlfY3JlYXRvcl9icHMAAAAAAAQAAAA5VGhlIG1vc3QgY29pbiBhbGxvY2F0aW9uIGEgY3JlYXRvciBtYXkgdGFrZSwgaW4gYnBzIG9mIFMuAAAAAAAAFW1heF9jcmVhdG9yX2FsbG9jX2JwcwAAAAAAAAQAAAAAAAAACW1pbl9wcmljZQAAAAAAAAsAAAAAAAAACHBsYXRmb3JtAAAAEwAAAAAAAAAMcGxhdGZvcm1fYnBzAAAABAAAAAAAAAALcmVzZXJ2ZV9icHMAAAAABAAAAEhUaGUgcm95YWx0eSBldmVyeSBlZGl0aW9uIHN1Z2dlc3RzIHRvIG1hcmtldHBsYWNlcywgcGFpZCB0byB0aGUgY3JlYXRvci4AAAALcm95YWx0eV9icHMAAAAABAAAACRUaGUgcmVzZXJ2ZSB0aGF0IGNvbXBsZXRlcyBhIE1vbWVudC4AAAAJdGhyZXNob2xkAAAAAAAACwAAAAAAAAAIdHJlYXN1cnkAAAATAAAAAQAAAGJtb21lbnRzLXYyJ3MgZHVyYXRpb25zIGluIHNlY29uZHMgKMKnMTQuMykuIFRoZXJlIGlzIG5vIGdyYWNlOiBNb21lbnRzIGhhdmUgbm8gYG1hcmtfc3R1Y2tgIChGMTUpLgAAAAAAAAAAABBNb21lbnRzRHVyYXRpb25zAAAACAAAADJNdXN0IGVxdWFsIHRoZSBsb2NrZXIncyBgaGFydmVzdF9pbnRlcnZhbCgpYCAoRjYpLgAAAAAAEGhhcnZlc3RfaW50ZXJ2YWwAAAAGAAAAAAAAAAptYXhfd2luZG93AAAAAAAGAAAAJEJvdW5kcyBvZiBhIE1vbWVudCdzIGNvbGxlY3Qgd2luZG93LgAAAAptaW5fd2luZG93AAAAAAAGAAAAXWBjb21wbGV0ZWRfYXRgIOKGkiBleHBpcnkgb2YgYSBNb21lbnQgc3RpbGwgR3JhZHVhdGlvblBlbmRpbmcgd2l0aCBubyByZWNvcmRlZCBmYWlsdXJlIChWMTEpLgAAAAAAABBwZW5kaW5nX2JhY2tzdG9wAAAABgAAADhBIHJlY29yZGVkIGZhaWxlZCBncmFkdWF0aW9uIChgc3R1Y2tfc2luY2VgKSDihpIgZXhwaXJ5LgAAAAxzdHVja19leHBpcnkAAAAGAAAAQFBvbGljeSBwcm9wb3NhbHM6IHdhaXQsIHRoZW4gdGhlIHdpbmRvdyBpbiB3aGljaCB0aGV5IGNhbiBhcHBseS4AAAAIdGltZWxvY2sAAAAGAAAAAAAAAA90aW1lbG9ja193aW5kb3cAAAAABgAAABNPbmUgdmVzdGluZyBwZXJpb2QuAAAAAAt2ZXN0X3BlcmlvZAAAAAAGAAAAAQAAAJhUVEwgZXh0ZW5zaW9uIGZvciBwZXJzaXN0ZW50IGVudHJpZXMsIGluIGxlZGdlcnMuIEEgY29uc3RydWN0b3IgYXJndW1lbnQsIHZhbGlkYXRlZCB3aXRoCltgY3JhdGU6OnZhbGlkYXRlX3R0bF9wb2xpY3lgXSBhZ2FpbnN0IGBlLnN0b3JhZ2UoKS5tYXhfdHRsKClgLgAAAAAAAAAJVHRsUG9saWN5AAAAAAAAAgAAAAAAAAAJZXh0ZW5kX3RvAAAAAAAABAAAAAAAAAAJdGhyZXNob2xkAAAAAAAABA==",
+  "moments-graduator":
+    "AAAAAAAAANVUaGUgcGVlcnMgYXJlIHRoZSBpZHMgdGhlIGRlcGxveSBzY3JpcHQgcHJlY29tcHV0ZXMgKMKnMy40KTogYG1vbWVudHNgIChtb21lbnRzLXYyKSwgYGV4ZWN1dG9yYAooZXhlYy1zb3Jvc3dhcCwgb3IgcWEtZXhlYy1mYWlsIGZvciB0ZXN0bmV0LXFhJ3MgZmFpbGluZyBzdGFjaykgYW5kIGBsb2NrZXJgOyBgY29pbl93YXNtX2hhc2hgIGlzCm1vbWVudC1jb2luJ3MgV0FTTS4AAAAAAAANX19jb25zdHJ1Y3RvcgAAAAAAAAUAAAAAAAAAB21vbWVudHMAAAAAEwAAAAAAAAAOY29pbl93YXNtX2hhc2gAAAAAA+4AAAAgAAAAAAAAAAhleGVjdXRvcgAAABMAAAAAAAAABmxvY2tlcgAAAAAAEwAAAAAAAAAQc29yb3N3YXBfZmFjdG9yeQAAABMAAAAA",
 };
 
 Deno.test("the builders pass the constructor guard against every merged contract's real constructor", () => {
@@ -369,18 +377,22 @@ Deno.test("a re-run compares each contract's config views with the plan", () => 
   assertThrows(() => plannedContracts(plan(TESTNET, true, false), constructors(plan(TESTNET, true, false))), Error, "absent from dist");
 });
 
-Deno.test("a re-run also compares the instance storage: every address, WASM hash and string of the constructor", () => {
+Deno.test("a re-run reads the views first and compares the instance storage only for what no view shows", () => {
   const p = plan(TESTNET, true);
   const planned = plannedContracts(p, constructors(p));
+  const views = (n: string) => planned.find((c) => c.name === n)!.views;
   const stored = (n: string): Record<string, string | undefined> => Object.fromEntries(planned.find((c) => c.name === n)!.stored.map((s) => [s.label, s.value]));
-  // moments-graduator has no view: the storage is its whole check.
-  assertEquals(stored("moments-graduator"), {
-    moments: p.ids["moments-v2"],
-    coin_wasm_hash: hashes["moment-coin"],
-    executor: p.ids["exec-soroswap"],
-    locker: p.ids["lp-locker"],
-    soroswap_factory: net.soroswapFactory,
-  });
+  // moments-graduator (CT-08) shows its five constructor arguments as views: the same ones moments-v2 checks.
+  assertEquals(views("moments-graduator").map((v) => [v.label, v.expected]), [
+    ["moments-graduator moments()", p.ids["moments-v2"]],
+    ["moments-graduator coin_wasm_hash()", hashes["moment-coin"]],
+    ["moments-graduator executor()", p.ids["exec-soroswap"]],
+    ["moments-graduator locker()", p.ids["lp-locker"]],
+    ["moments-graduator soroswap_factory()", net.soroswapFactory],
+  ]);
+  // Every constructor value of these contracts is in a view, so nothing is left to the storage.
+  for (const n of ["exec-soroswap", "lp-locker", "moments-graduator", "launchpad-v2", "moments-v2"]) assertEquals(stored(n), {}, n);
+  assert(views("moments-v2").some((v) => v.label === "moments-v2 config().external_base"));
   // exec-aquarius shows only max_pool_payment: its router, payment asset and callers come from the storage.
   assertEquals(stored("exec-aquarius"), {
     router: net.aquariusRouter,
@@ -388,15 +400,25 @@ Deno.test("a re-run also compares the instance storage: every address, WASM hash
     "callers[0]": p.ids["launchpad-v2"],
     "callers[1]": p.ids["moments-graduator"],
   });
-  // Nested values too (the venue executors, the policy's platform and treasury), each value once.
-  const lp = stored("launchpad-v2");
+  // A coin hash read back as bytes compares equal to the planned hex.
+  const coin = views("moments-graduator")[1];
+  assertEquals(coin.pick!(Buffer.from(hashes["moment-coin"], "hex")), hashes["moment-coin"]);
+  // testnet-qa: qa-exec-fail's views (callers, qa_admin) cover it too.
+  const qa = plan(QA, false);
+  assertEquals(plannedContracts(qa, constructors(qa)).find((c) => c.name === "qa-exec-fail")!.stored, []);
+});
+
+Deno.test("the identity leaves of a constructor: every address, WASM hash and string, nested values too, each once", () => {
+  const p = plan(TESTNET, true);
+  const leaves = (n: string) => Object.fromEntries(identityLeaves(constructors(p).find((c) => c.contract === n)!).map((s) => [s.label, s.value]));
+  const lp = leaves("launchpad-v2");
   assertEquals(lp["venues[1].executor"], p.ids["exec-aquarius"]);
   assertEquals(lp.token_wasm_hash, hashes["launch-token-v2"]);
-  const mo = stored("moments-v2");
+  const mo = leaves("moments-v2");
   assertEquals(mo.external_base, "https://dyorhq.fun/moments/");
   assertEquals([mo["policy.platform"], mo["policy.treasury"]], [roles.PLATFORM_PUBLIC, undefined], "the platform is the treasury here: one value, listed once");
   assertEquals(mo.governance, roles.GOVERNANCE_PUBLIC);
-  // Without Aquarius the locker stores no router, so none is expected.
-  const off = plannedContracts(plan(TESTNET, false), constructors(plan(TESTNET, false)));
-  assertEquals(off.find((c) => c.name === "lp-locker")!.stored.map((s) => s.label), ["owners[0]", "owners[1]", "soroswap_factory"]);
+  // Without Aquarius the locker stores no router.
+  const off = plan(TESTNET, false);
+  assertEquals(identityLeaves(constructors(off).find((c) => c.contract === "lp-locker")!).map((s) => s.label), ["owners[0]", "owners[1]", "soroswap_factory"]);
 });

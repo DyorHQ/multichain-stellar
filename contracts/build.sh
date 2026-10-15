@@ -6,13 +6,29 @@
 # The v2 WASMs then go through wasm-opt -Oz, what `stellar contract optimize` runs, from binaryen $BINARYEN_VERSION
 # exactly (macOS: brew install binaryen; CI downloads that release), so dist stays reproducible. v2 also builds with
 # the cargo registry's path remapped, so no home-directory path ends up in a deployed WASM.
+#
+# v2 links a $V2_STACK_SIZE-byte stack instead of Rust's 1 MiB default. Every VM the host instantiates allocates its
+# module's initial linear memory, and a graduation instantiates about 32 VMs, so the default (17 pages per module)
+# put a Moments graduation at 126% of the network's 40 MiB per-transaction memory on a module-cache miss; with
+# 128 KiB a module declares 3 pages. The value is 4× the smallest stack every test passed with (32 KiB, measured by
+# CT-10); a stack overflow traps (wasm links stack-first), and inside a graduation's try_ frame a trap is a recorded
+# failure, so keep the margin. integration-tests/tests/budgets.rs checks the declared pages of every v2 WASM.
+#
+# The WASMs embed /rustc/<commit>/ paths, so dist reproduces (and the reviewed hashes hold) only with rustc
+# $RUSTC_VERSION exactly.
 set -euo pipefail
 cd "$(dirname "$0")"
 export SOROBAN_SDK_BUILD_SYSTEM_SUPPORTS_SPEC_SHAKING_V2=1
 BINARYEN_VERSION=133
+RUSTC_VERSION="rustc 1.99.0 (b940084d7 2026-09-28)"
+V2_STACK_SIZE=131072
 
 if ! wasm-opt --version 2>/dev/null | grep -qx "wasm-opt version $BINARYEN_VERSION"; then
   echo "build.sh: needs wasm-opt from binaryen $BINARYEN_VERSION exactly (found: $(wasm-opt --version 2>/dev/null || echo none))" >&2
+  exit 1
+fi
+if [ "$(rustc --version 2>/dev/null)" != "$RUSTC_VERSION" ]; then
+  echo "build.sh: needs $RUSTC_VERSION exactly (found: $(rustc --version 2>/dev/null || echo none))" >&2
   exit 1
 fi
 
@@ -33,7 +49,8 @@ build() {
 }
 build "${V1[@]}"
 # Its own target directory: the remapped flags would otherwise rebuild v1's dependencies on every run.
-CARGO_TARGET_DIR=target/v2 RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo/registry/src" \
+CARGO_TARGET_DIR=target/v2 \
+  RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}/registry/src=/cargo/registry/src -C link-arg=-zstack-size=$V2_STACK_SIZE" \
   build "${V2[@]}"
 (cd tools/spec-shake && cargo build --release -q)
 

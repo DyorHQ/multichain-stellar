@@ -23,9 +23,10 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { ADMIN_FNS, main as adminMain } from "./admin-v2.ts";
-import { type DeployCtx, main as deployMain } from "./deploy-contracts-v2.ts";
+import { type DeployCtx, main as deployMain, TESTNET_MAX_ENTRY_TTL, TTL_EXTEND_DAYS, TTL_EXTEND_LEDGERS, TTL_THRESHOLD_DAYS } from "./deploy-contracts-v2.ts";
+import { TESTNET } from "../supabase/functions/_shared/networks.ts";
 import { main as ownerMain, type OwnerCtx } from "./owner-v2.ts";
-import { contractIdFor } from "./lib/contract-ids.ts";
+import { contractIdFor, normalize } from "./lib/contract-ids.ts";
 import { KEYS_FILE, QA_KEYS_FILE, recordingIo, ROLES_FILE } from "./lib/owner-files.ts";
 import type { AccountInfo, Chain, TxOutcome } from "./lib/preflight-v2.ts";
 import { sha256Hex } from "./lib/reviewed-hashes.ts";
@@ -44,6 +45,11 @@ const XLM = 10_000_000n;
 const SEED = /S[A-Z2-7]{55}/;
 /** Testnet's minimum persistent TTL: what a new entry starts with (about 7 days). */
 const MIN_TTL = 120_960;
+/** The Soroswap factory (networks.ts), its WASM and the pair WASM: the TTL step extends them too. */
+const SOROSWAP_FACTORY = TESTNET.contracts.soroswapFactory;
+const SOROSWAP_FACTORY_CODE = "86285a9234d3f0d687eaf88efe8d5d72172b38c9a86624c9934c0cbf2aff2993";
+const SOROSWAP_PAIR = "CDSQONFE5BS732OYYJINI2L7W4567XRBLJWDD7GPVQZLXLPC4CGA55ZO";
+const SOROSWAP_PAIR_CODE = "8447525edd62f72ffaf52136358034657ea0511a8fec1cd0ebde649f86cca464";
 
 /** The source account's auth entry for a call, its root invocation the call itself (what simulation returns). */
 function sourceAuth(call: xdr.InvokeContractArgs, sub: xdr.SorobanAuthorizedInvocation[] = []): xdr.SorobanAuthorizationEntry {
@@ -60,6 +66,7 @@ function sourceAuth(call: xdr.InvokeContractArgs, sub: xdr.SorobanAuthorizedInvo
 
 /** Native values to ScVals the way the contracts return them (integers as i128 or u32, addresses, maps by key). */
 function sv(v: unknown): xdr.ScVal {
+  if (v instanceof xdr.ScVal) return v;
   if (v === null || v === undefined) return xdr.ScVal.scvVoid();
   if (typeof v === "boolean") return xdr.ScVal.scvBool(v);
   if (typeof v === "bigint") return nativeToScVal(v, { type: "i128" });
@@ -90,6 +97,10 @@ class Ledger implements Chain {
   held = new Map<string, Map<string, bigint>>();
   wasmKinds = new Map<string, string>();
   log: string[] = [];
+  /** Every contract call a transaction made: the contract's kind, the function and the transaction's source. */
+  calls: { kind: string; fn: string; source: string }[] = [];
+  /** The ledger's close time (unix seconds): 5 s per transaction, and the smoke's waits. */
+  time = 1_760_486_400;
   pool = { xlm: 349_583_963_389n, aqua: 7_911_445_542_969n };
   failSwap = false;
   /** The router's views fail (an upgrade removed them, or its instance is archived). */
@@ -126,6 +137,12 @@ class Ledger implements Chain {
     this.addSac(`${AQ.aqua.code}:${AQ.aqua.issuer}`, AQ.aqua.sac);
     this.addSac(USDC_CLASSIC, USDC_SAC);
     this.addSac("native", XLM_SAC);
+    // Testnet's Soroswap factory with one pair, about 94 days left on each (as read on 2026-10-15).
+    this.addContract(SOROSWAP_FACTORY, { kind: "soroswap-factory", wasm: SOROSWAP_FACTORY_CODE, fns: { all_pairs_length: () => 1, all_pairs: () => SOROSWAP_PAIR } });
+    this.addContract(SOROSWAP_PAIR, { kind: "soroswap-pair", wasm: SOROSWAP_PAIR_CODE, fns: {} });
+    // The router names its factory (the deploy checks networks.ts against it).
+    this.addContract(TESTNET.contracts.soroswapRouter, { kind: "soroswap-router", wasm: "soroswap-router", fns: { get_factory: () => SOROSWAP_FACTORY } });
+    for (const k of [SOROSWAP_FACTORY, SOROSWAP_FACTORY_CODE, SOROSWAP_PAIR_CODE]) this.ttl.set(k, this.ledger + 94 * 17_280);
   }
 
   quote(xlmIn: bigint): bigint {
@@ -198,9 +215,14 @@ class Ledger implements Chain {
   liveUntil(contracts: string[], hashes: string[]) {
     return Promise.resolve(new Map([...contracts, ...hashes].map((k) => [k, this.ttl.get(k) ?? null])));
   }
-  /** What ttl.ts keepAlive does when every batch applies: 30 days from now. `skip` entries are left as they were. */
+  /** What ttl.ts keepAlive does when every batch applies: entries with less than TTL_THRESHOLD_DAYS left go to
+   *  TTL_EXTEND_DAYS from now (one ExtendFootprintTTL, which never shortens). `skip` entries are left as they were. */
   extendTtl(contracts: string[], hashes: string[], skip: string[] = []) {
-    for (const k of [...contracts, ...hashes]) if (!skip.includes(k)) this.ttl.set(k, this.ledger + 30 * 17_280);
+    for (const k of [...contracts, ...hashes]) {
+      const now = this.ttl.get(k);
+      if (skip.includes(k) || now === undefined || now - this.ledger >= TTL_THRESHOLD_DAYS * 17_280) continue;
+      this.ttl.set(k, Math.max(now, this.ledger + TTL_EXTEND_LEDGERS));
+    }
   }
   view(id: string, fn: string, args: xdr.ScVal[]) {
     const kind = this.contracts.get(id)?.kind ?? id;
@@ -248,6 +270,7 @@ class Ledger implements Chain {
       const returnValue = this.apply(tx);
       a.sequence = tx.sequence;
       this.ledger += 1;
+      this.time += 5;
       return Promise.resolve({ hash: tx.hash().toString("hex"), ledger: this.ledger, feeCharged: 1_000n, returnValue });
     } catch (e) {
       return Promise.reject(new Error(`transaction failed: ${(e as Error).message}`));
@@ -303,6 +326,7 @@ class Ledger implements Chain {
         const id = Address.fromScAddress(ic.contractAddress()).toString();
         const fn = ic.functionName().toString();
         this.log.push(`invoke ${this.contracts.get(id)?.kind ?? id}.${fn}`);
+        this.calls.push({ kind: this.contracts.get(id)?.kind ?? id, fn, source: tx.source });
         return sv(this.call(id, fn, ic.args().map((x) => scValToNative(x)), tx.source));
       }
     }
@@ -334,7 +358,8 @@ class Ledger implements Chain {
         if ((a[0] as unknown[]).length === 0) throw new Error("the locker needs an owner");
         return { kind, wasm, fns: { owners: () => a[0], soroswap_factory: () => a[1], aquarius_router: () => a[2], harvest_interval: () => BigInt(a[3] as bigint) } };
       case "moments-graduator":
-        return { kind, wasm, fns: {} };
+        // Its constructor arguments as views (§12), which moments-v2's constructor and the re-run check read.
+        return { kind, wasm, fns: { moments: () => a[0], coin_wasm_hash: () => a[1], executor: () => a[2], locker: () => a[3], soroswap_factory: () => a[4] } };
       case "launchpad-v2": {
         const [adm, guardian, treasury, xlm, tokenHash, lockerId, factory, router, launchFee, venues, durations, ttl] = a as any[];
         if (locker(lockerId) !== Number(durations.harvest_interval)) throw new Error("Error(Contract, #10129)");
@@ -376,7 +401,10 @@ class Ledger implements Chain {
       case "moments-v2": {
         const [governance, guardian, usdc, nftHash, graduator, lockerId, executor, factory, base, policy, durations, ttl] = a as any[];
         if (locker(lockerId) !== Number(durations.harvest_interval)) throw new Error("Error(Contract, #10729)");
-        const cfg = { governance, guardian, usdc, nft_wasm_hash: nftHash, graduator, locker: lockerId, executor, soroswap_factory: factory, external_base: base, publishing_paused: false, guardian_paused: false, durations, ttl };
+        // Like moments-v2's constructor: the graduator must be wired to this contract and its peers.
+        const g = (fn: string) => this.call(String(graduator), fn, [], null);
+        if (g("moments") !== id || g("locker") !== lockerId || g("executor") !== executor || g("soroswap_factory") !== factory) throw new Error("Error(Contract, #10732)");
+        const cfg = { governance, guardian, usdc, nft_wasm_hash: nftHash, coin_wasm_hash: g("coin_wasm_hash"), graduator, locker: lockerId, executor, soroswap_factory: factory, external_base: base, publishing_paused: false, guardian_paused: false, durations, ttl };
         return { kind, wasm, fns: { config: () => cfg, policy: () => policy } };
       }
     }
@@ -478,7 +506,13 @@ async function owner(k: Kit, args: string[], tty: { terminal?: boolean; answer?:
 
 const keptAlive: { contracts: string[]; hashes: string[]; payer: string }[] = [];
 
+/** deploy-contracts-v2.ts with the Aquarius path on (--aquarius auto) unless a test chooses: these tests cover it too.
+ *  `deployDefault` runs the script with exactly the arguments given (Aquarius off by default, O7). */
 async function deploy(k: Kit, args: string[]) {
+  return await deployDefault(k, args.includes("--aquarius") || args.includes("--smoke") ? args : [...args, "--aquarius", "auto"]);
+}
+
+async function deployDefault(k: Kit, args: string[]) {
   const io = recordingIo();
   const ctx: DeployCtx = {
     io,
@@ -495,6 +529,12 @@ async function deploy(k: Kit, args: string[]) {
       return Promise.resolve({ extended: contracts.length + hashes.length, fee: "123456" });
     },
     now: () => new Date("2026-10-15T00:00:00Z"),
+    // The smoke's waits: ledgers close while it waits.
+    sleep: (ms) => {
+      k.ledger.time += Math.ceil(ms / 1000);
+      k.ledger.ledger += Math.ceil(ms / 5000);
+      return Promise.resolve();
+    },
   };
   const code = await deployMain(args, ctx);
   const out = [...io.stdout, ...io.stderr].join("\n");
@@ -535,6 +575,13 @@ function assertClean(out: string, secrets: string[]) {
   assertFalse(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(out), "an output holds a control character");
   // Outside text is escaped to printable ASCII; the scripts' own marks (✓ ✗ → …) are none of these.
   assertFalse(/[\p{Cf}\p{Zl}\p{Zp}\p{M}\p{Script=Cyrillic}\p{Script=Greek}\u3164]/u.test(out), "an output holds a format, separator, combining or look-alike character");
+}
+
+/** Writes the reviewed list for the kit's dist as it is now (what CT-19's exit writes). */
+async function writeReviewed(k: Kit) {
+  const lines: string[] = [];
+  for (const key of Object.keys(WASMS) as WasmKey[]) lines.push(`${await sha256Hex(await Deno.readFile(`${k.root}contracts/dist/${WASMS[key].file}`))}  dist/${WASMS[key].file}`);
+  await Deno.writeTextFile(`${k.root}contracts/review/reviewed-wasm.sha256`, `${lines.sort().join("\n")}\ncommit 9354d56\n`);
 }
 
 const rolesOf = async (k: Kit): Promise<Record<string, string>> =>
@@ -657,7 +704,25 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     const keeper = Keypair.random();
     await Deno.writeTextFile(`${k.secrets}/testnet-functions.env`, `LITE_NETWORK=testnet\nSPONSOR_SECRET=${Keypair.random().secret()}\nKEEPER_SECRET=${keeper.secret()}\n`);
     k.ledger.fund(keeper.publicKey(), 250n * XLM);
-    const ok = await owner(k, ["check"]);
+    // No reviewed list yet: the deploy's gate would refuse, so check fails on it too (nothing else is wrong).
+    const unreviewed = await owner(k, ["check"]);
+    assertEquals(unreviewed.code, 1, unreviewed.out);
+    assertStringIncludes(unreviewed.out, `✗ reviewed WASMs: contracts/review/reviewed-wasm.sha256 is missing`);
+    assertFalse(unreviewed.out.includes("Everything the deploy needs passes."));
+    assertStringIncludes(unreviewed.out, "✗ Fix the lines above before the deploy.");
+    // The only needed line that fails is the reviewed list's (no "(reported only)" on it).
+    const failing = unreviewed.out.split("\n").filter((l) => l.startsWith("✗ ") && !l.startsWith("✗ Fix") && !l.endsWith("(reported only)"));
+    assertEquals(failing.length, 1, failing.join("\n"));
+    assertStringIncludes(failing[0], "✗ reviewed WASMs");
+    await writeReviewed(k);
+    // Aquarius is off by default (O7): the router isn't asked.
+    const off = await owner(k, ["check"]);
+    assertEquals(off.code, 0, off.out);
+    assertStringIncludes(off.out, "✓ reviewed WASMs: contracts/dist matches contracts/review/reviewed-wasm.sha256");
+    assertStringIncludes(off.out, "Everything the deploy needs passes.");
+    assertStringIncludes(off.out, "✓ Aquarius: off (owner decision O7: Soroswap only), not checked");
+    assertFalse(off.out.includes("dyor_exec_aquarius.wasm"), "exec-aquarius is not expected with Aquarius off");
+    const ok = await owner(k, ["check", "--aquarius", "auto"]);
     assertEquals(ok.code, 0, ok.out);
     for (
       const line of [
@@ -665,17 +730,33 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
         "✓ keys file mode is 600",
         "✓ deploy key is ADMIN_PUBLIC's",
         "✓ treasury trusts USDC",
-        "✓ deployer holds at least 1,000 XLM",
+        "✓ deployer holds at least 3,000 XLM",
         "✓ Aquarius router WASM hash matches fixtures.json",
         "✓ Aquarius ConstantPoolHash matches fixtures.json",
         "✓ Aquarius TokenHash matches fixtures.json",
         `✓ keeper key: ${keeper.publicKey()}, 250 XLM`,
-        "✗ reviewed WASMs",
-        "(reported only)",
+        "✓ reviewed WASMs",
       ]
     ) assertStringIncludes(ok.out, line);
-    // 2,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
+    // 4,500 XLM with --fund-aqua-float: still fine with Friendbot's 10,000.
     assertEquals((await owner(k, ["check", "--fund-aqua-float"])).code, 0);
+    // A WASM in dist that differs from the reviewed build fails the check, as it would stop the deploy.
+    const lp = `${k.root}contracts/dist/dyor_launchpad_v2.wasm`;
+    const lpBytes = await Deno.readFile(lp);
+    await Deno.writeFile(lp, Uint8Array.from([...lpBytes, 0]));
+    const drifted = await owner(k, ["check"]);
+    assertEquals(drifted.code, 1, drifted.out);
+    assertStringIncludes(drifted.out, "✗ reviewed WASMs: dyor_launchpad_v2.wasm differs from the reviewed build");
+    assertFalse(drifted.out.includes("Everything the deploy needs passes."));
+    await Deno.writeFile(lp, lpBytes);
+    // A deployer below the TTL step's rent fails it.
+    const roles = await rolesOf(k);
+    const xlmBefore = k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm;
+    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = 2_500n * XLM;
+    const poor = await owner(k, ["check"]);
+    assertEquals(poor.code, 1, poor.out);
+    assertStringIncludes(poor.out, "✗ deployer holds at least 3,000 XLM");
+    k.ledger.accounts.get(roles.ADMIN_PUBLIC)!.xlm = xlmBefore;
     // A deploy key that isn't the admin's is a failure.
     k.env.DEPLOYER_SECRET = Keypair.random().secret();
     const wrong = await owner(k, ["check"]);
@@ -684,8 +765,9 @@ Deno.test("check: one line per check; exit 0 only when everything the deploy nee
     delete k.env.DEPLOYER_SECRET;
     // A changed Aquarius router stops the deploy unless --aquarius off.
     k.ledger.contracts.get(AQ.router.contract_id)!.storage![1].val = xdr.ScVal.scvBytes(Buffer.alloc(32));
-    assertEquals((await owner(k, ["check"])).code, 1);
+    assertEquals((await owner(k, ["check", "--aquarius", "auto"])).code, 1);
     assertEquals((await owner(k, ["check", "--aquarius", "off"])).code, 0);
+    assertEquals((await owner(k, ["check"])).code, 0);
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -751,7 +833,17 @@ Deno.test("deploy: the owner's testnet end to end, then an idempotent re-run, th
     // The constructor set the launch fee, the fees and the venues; the admin adds the two quotes.
     assertEquals(log.filter((l) => l.startsWith("invoke")), ["invoke launchpad-v2.set_quote", "invoke launchpad-v2.set_quote"]);
     assertEquals(keptAlive.length, 1);
-    assertEquals([keptAlive[0].contracts.length, keptAlive[0].hashes.length], [6, 9]);
+    // Six v2 instances and nine WASMs, plus the Soroswap factory's instance, the factory WASM and the pair WASM.
+    assertEquals([keptAlive[0].contracts.length, keptAlive[0].hashes.length], [7, 11]);
+    assert(keptAlive[0].contracts.includes(SOROSWAP_FACTORY));
+    assert(keptAlive[0].hashes.includes(SOROSWAP_FACTORY_CODE) && keptAlive[0].hashes.includes(SOROSWAP_PAIR_CODE));
+    for (const k2 of [...keptAlive[0].contracts, ...keptAlive[0].hashes]) assert(k.ledger.ttl.get(k2)! >= k.ledger.ledger + TTL_EXTEND_LEDGERS - 2, `${k2} reaches ${TTL_EXTEND_DAYS} days`);
+    assertStringIncludes(r.out, "extended 18 instance and WASM entries to 75 days");
+    assertStringIncludes(r.out, "(75 days)");
+    assertStringIncludes(r.out, "3. The v2 contracts and WASMs now live 75 days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)");
+    assertStringIncludes(r.out, "must still run before testers are invited");
+    assertStringIncludes(r.out, "✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
+    assertStringIncludes(r.out, "✓ launchpad-v2 venues() Soroswap venue executor is exec-soroswap");
     const roles = await rolesOf(k);
     assertEquals(keptAlive[0].payer, roles.ADMIN_PUBLIC, "the deployer (the admin) pays the TTL");
     assertStringIncludes(r.out, "AQUA float 0 of a 50 target: fund exec-aquarius");
@@ -832,8 +924,10 @@ Deno.test("deploy: refused before anything is sent without the reviewed list, wi
     for (const d of ["mainnet", "testnet-v2"]) assertEquals((await deploy(k, ["--deployment", d, "--dry-run"])).code, 1);
     k.env.SMOKE = "1";
     delete k.env.DEPLOYER_SECRET;
-    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--dry-run"])).out, "SMOKE=1 is refused for testnet");
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--dry-run"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
     delete k.env.SMOKE;
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--smoke"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes((await deploy(k, ["--deployment", "testnet", "--smoke", "--dry-run"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -947,7 +1041,7 @@ Deno.test("admin-v2 cutover-v1: reads config() first, writes two prepared unsign
     assertEquals(mom.code, 0, mom.out);
     assertStringIncludes(mom.out, `contract ${V1.moments} (v1 Moments)`);
     assertStringIncludes(mom.out, "call     set_policy(250, 300, false)", "the values come from config()");
-    assertStringIncludes(mom.out, "  description  v1 Moments set_policy(250, 300, false): publishing stops; platform_bps is set to 250 and royalty_bps to 300 (cutover-v1 keeps the current ones)");
+    assertStringIncludes(mom.out, "  description  v1 Moments set_policy(250, 300, false): publishing stops; platform_bps is set to 250 and royalty_bps to 300");
     await assertNoSecrets(k);
   } finally {
     await cleanup(k);
@@ -1567,6 +1661,39 @@ Deno.test("--aquarius off never asks the router: a router that doesn't answer bl
   }
 });
 
+Deno.test("O7: by default Aquarius is off: no exec-aquarius is uploaded, deployed or required in the reviewed list or dist", async () => {
+  for (const deployment of ["testnet", "testnet-qa"]) {
+    const k = await kit();
+    try {
+      if (deployment === "testnet") await readyOwner(k);
+      // CT-19 reviews no exec-aquarius (O7) and dist may lack it: neither stops a Soroswap-only deploy.
+      const reviewed = `${k.root}contracts/review/reviewed-wasm.sha256`;
+      await Deno.writeTextFile(reviewed, (await Deno.readTextFile(reviewed)).split("\n").filter((l) => !l.includes("dyor_exec_aquarius.wasm")).join("\n"));
+      await Deno.remove(`${k.root}contracts/dist/dyor_exec_aquarius.wasm`);
+      const dry = await deployDefault(k, ["--deployment", deployment, "--dry-run"]);
+      assertEquals(dry.code, 0, dry.out);
+      assertStringIncludes(dry.out, "Aquarius: disabled (--aquarius off)");
+      assertStringIncludes(dry.out, "✓ every WASM matches the reviewed list");
+      assertStringIncludes(dry.out, "A real deploy would go ahead.");
+      assertFalse(dry.out.includes("exec-aquarius"), "exec-aquarius is never planned");
+      const r = await deployDefault(k, ["--deployment", deployment]);
+      assertEquals(r.code, 0, r.out);
+      assertFalse(k.ledger.log.some((l) => l.includes("exec-aquarius")), "no exec-aquarius upload or deploy");
+      assertEquals(k.ledger.log.filter((l) => l.startsWith("view router.") || l.startsWith("invoke router.")), [], "the Aquarius router was never asked");
+      const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/${deployment}-v2.json`));
+      assertEquals([file.aquarius.enabled, file.aquarius.reason], [false, "--aquarius off"]);
+      assertEquals(file.contracts.execAquarius, undefined);
+      assertEquals(file.wasmHashes.execAquarius, undefined);
+      assertEquals(file.venues.map((v: any) => v.kind), deployment === "testnet" ? ["Soroswap"] : ["Soroswap", "QaFail"]);
+      // The locker was built without the Aquarius router.
+      assertEquals(k.ledger.contracts.get(file.contracts.lpLocker)!.fns.aquarius_router([], null), null);
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
 Deno.test("testnet-qa: a router that doesn't answer means no Aquarius venue, and the deploy goes on", async () => {
   const k = await kit();
   try {
@@ -1591,7 +1718,7 @@ Deno.test("the TTL step is checked: an entry left short fails the run loudly, be
     k.ttlSkip = [launchpadWasm];
     const r = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r.code, 1);
-    assertStringIncludes(r.out, "the TTL step didn't reach 30 days");
+    assertStringIncludes(r.out, "the TTL step didn't reach 75 days");
     assertMatch(r.out, /dyor_launchpad_v2\.wasm code: live until \d+/);
     assertStringIncludes(r.out, "Run the same command again");
     assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file yet");
@@ -1638,20 +1765,18 @@ Deno.test("re-runs compare the instance storage too: a contract with the planned
     await readyOwner(k);
     assertEquals((await deploy(k, ["--deployment", "testnet"])).code, 0);
     const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-v2.json`));
-    // moments-graduator has no view: its storage is all there is. Give it another executor.
+    // moments-graduator shows its constructor arguments as views (CT-08): give it another executor.
     const grad = k.ledger.contracts.get(file.contracts.momentsGraduator)!;
-    const args = scValToNative(grad.storage![0].val) as unknown[];
-    const other = [...args];
-    other[2] = ATTACKER;
-    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(other) }];
+    const executor = grad.fns.executor;
+    grad.fns.executor = () => ATTACKER;
     const mark = k.ledger.log.length;
     const r = await deploy(k, ["--deployment", "testnet"]);
     assertEquals(r.code, 1);
-    assertStringIncludes(r.out, `moments-graduator's instance storage doesn't hold executor ${file.contracts.execSoroswap}`);
+    assertStringIncludes(r.out, `moments-graduator executor() is "${ATTACKER}" on chain, the plan has "${file.contracts.execSoroswap}"`);
     assertStringIncludes(r.out, "use a new --generation");
     assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    grad.fns.executor = executor;
     // exec-aquarius shows only max_pool_payment: its router comes from the storage.
-    grad.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv(args) }];
     const exec = k.ledger.contracts.get(file.contracts.execAquarius)!;
     const execArgs = scValToNative(exec.storage![0].val) as unknown[];
     exec.storage = [{ key: xdr.ScVal.scvSymbol("Args"), val: sv([XLM_SAC, ...execArgs.slice(1)]) }];
@@ -1669,11 +1794,789 @@ Deno.test("re-runs compare the instance storage too: a contract with the planned
   }
 });
 
+// ------------------------------------------------------------------------------------------------ the wiring read-back
+
+/** From its `from`-th read on, the view `fn` of each contract of `kind` created after this returns `wrong(right)`.
+ *  The reads before are the constructors' (moments-v2's reads its graduator) and the re-run check's after the
+ *  constructors (one per compared field: it compares with the constructor arguments), so the first wrong read is the
+ *  wiring read-back's: a mis-wiring only the read-back can see, as a wrong constructor builder would make. Returns
+ *  the switch that turns the wrong answers off. */
+function miswire(l: Ledger, kind: string, fn: string, wrong: (right: unknown) => unknown, from = 2) {
+  const instantiate = l.instantiate.bind(l);
+  let active = true;
+  l.instantiate = (k, wasm, id, a) => {
+    const c = instantiate(k, wasm, id, a);
+    if (k === kind) {
+      const right = c.fns[fn];
+      let reads = 0;
+      c.fns[fn] = (x, s) => (active && ++reads >= from ? wrong(right(x, s)) : right(x, s));
+    }
+    return c;
+  };
+  return () => {
+    active = false;
+    l.instantiate = instantiate;
+  };
+}
+
+Deno.test("wiring read-back: a mis-wired executor stops the run after the constructors, naming the field and both values; nothing more is sent", async () => {
+  // [contract kind, view, the wrong answer, the first read that is the read-back's, the refusal]
+  const cases: [string, string, (right: unknown) => unknown, number, string][] = [
+    ["exec-soroswap", "callers", (r) => [(r as string[])[0]], 2, "exec-soroswap callers() is ["],
+    ["exec-soroswap", "factory", () => XLM_SAC, 2, `exec-soroswap factory() is ${XLM_SAC} on chain; the plan has the Soroswap factory ${SOROSWAP_FACTORY}`],
+    ["lp-locker", "soroswap_factory", () => XLM_SAC, 2, `lp-locker soroswap_factory() is ${XLM_SAC} on chain; the plan has the Soroswap factory ${SOROSWAP_FACTORY}`],
+    ["moments-graduator", "soroswap_factory", () => XLM_SAC, 3, `moments-graduator soroswap_factory() is ${XLM_SAC} on chain`],
+    ["moments-graduator", "executor", () => ATTACKER, 3, `moments-graduator executor() is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+    ["launchpad-v2", "config", (r) => ({ ...(r as object), soroswap_factory: XLM_SAC }), 12, `launchpad-v2 config().soroswap_factory is ${XLM_SAC} on chain`],
+    ["launchpad-v2", "venues", (r) => (r as any[]).map((v) => ({ ...v, executor: ATTACKER })), 2, `launchpad-v2 venues() Soroswap venue executor is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+    ["moments-v2", "config", (r) => ({ ...(r as object), executor: ATTACKER }), 12, `moments-v2 config().executor is ${ATTACKER} on chain; the plan has exec-soroswap C`],
+  ];
+  for (const [kind, fn, wrong, from, message] of cases) {
+    const k = await kit();
+    try {
+      await readyOwner(k);
+      const restore = miswire(k.ledger, kind, fn, wrong, from);
+      keptAlive.length = 0;
+      const r = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(r.code, 1, `${kind}.${fn}: ${r.out}`);
+      assertStringIncludes(r.out, "the wiring read back from the chain differs from the plan; the run stopped after the constructors: no admin call, no TTL step and no deployment file");
+      assertStringIncludes(r.out, message);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+      assertFalse(r.out.includes("nothing differs so far"));
+      // Everything was deployed, and nothing was sent after the constructors.
+      const sent = k.ledger.log.filter((l) => l.startsWith("invoke") || l.startsWith("create "));
+      assertEquals(sent.filter((l) => l.startsWith("invoke")), [], `${kind}.${fn}: no admin call`);
+      assertEquals(sent.length, 5, "five contracts deployed");
+      assertEquals(keptAlive.length, 0, "no TTL step");
+      assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file");
+      // The same contracts, read again, still refuse.
+      assertEquals((await deployDefault(k, ["--deployment", "testnet"])).code, 1);
+      // Once the chain shows the planned wiring a re-run goes on from where it stopped: nothing is deployed again.
+      restore();
+      const again = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(again.code, 0, again.out);
+      assertEquals((again.out.match(/already deployed with the planned configuration, skipped/g) ?? []).length, 5);
+      assertStringIncludes(again.out, "✓ moments-v2 config().executor is exec-soroswap");
+      assert(await Deno.stat(`${k.deployments}/testnet-v2.json`));
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, and the dry run lists every check", async () => {
+  const k = await kit();
+  try {
+    const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    for (
+      const s of [
+        "After the constructors, before anything else is sent: the wiring read-back (views by simulation, no transaction)",
+        "    exec-soroswap callers() is exactly launchpad-v2 and moments-graduator",
+        "    exec-soroswap factory() is the Soroswap factory",
+        "    launchpad-v2 config().soroswap_factory is the Soroswap factory",
+        "    lp-locker soroswap_factory() is the Soroswap factory",
+        "    moments-graduator soroswap_factory() is the Soroswap factory",
+        "    moments-graduator executor() is exec-soroswap",
+        "    moments-v2 config().executor is exec-soroswap",
+        "    launchpad-v2 venues() Soroswap venue executor is exec-soroswap",
+        "    qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail",
+        "    launchpad-v2 venues() QaFail venue executor is qa-exec-fail",
+        "    moments-graduator-qa-fail executor() is qa-exec-fail",
+        "    moments-v2-qa-fail config().executor is qa-exec-fail",
+        "    moments-graduator-qa-fail soroswap_factory() is the Soroswap factory",
+        "  any mismatch stops the run there: no admin call, no TTL step and no deployment file",
+        "Wiring read-back: runs after the constructors (25 checks, listed above)",
+        "to 75 days (past the 2026-12-16 testnet reset) where they have less",
+      ]
+    ) assertStringIncludes(dry.out, s);
+    const r = await deployDefault(k, ["--deployment", "testnet-qa"]);
+    assertEquals(r.code, 0, r.out);
+    const after = r.out.split("  Wiring read-back (views, no transaction)\n")[1].split("\n");
+    const section = after.slice(0, after.findIndex((l) => !l.startsWith("    ")));
+    assertEquals(section.length, 25, section.join("\n"));
+    assert(section.every((l) => l.startsWith("    ✓ ")), "25 wiring checks pass");
+    assertStringIncludes(r.out, "✓ qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail");
+    // A re-run's dry run reads the wiring back too, now that every contract is there.
+    const again = await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "Wiring read-back (views, no transaction)\n  ✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
+    assertStringIncludes(again.out, "A real deploy would go ahead.");
+    // The failing stack's own wiring: its executor, mis-wired, is refused like the main one.
+    const k2 = await kit();
+    try {
+      miswire(k2.ledger, "qa-exec-fail", "callers", (r) => [(r as string[])[0]]);
+      const bad = await deployDefault(k2, ["--deployment", "testnet-qa"]);
+      assertEquals(bad.code, 1, bad.out);
+      assertStringIncludes(bad.out, "qa-exec-fail callers() is [");
+      assertStringIncludes(bad.out, "the plan has exactly launchpad-v2 C");
+      assertFalse(await Deno.stat(`${k2.deployments}/testnet-qa-v2.json`).then(() => true, () => false));
+    } finally {
+      await cleanup(k2);
+    }
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: a view that can't be read (twice) stops the run as unreadable, not as a mis-wiring; a re-run goes on", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // exec-soroswap's factory() is rate-limited from its second read on: the re-run check reads it once, the
+    // read-back's read and its one retry both fail.
+    let reads = 0;
+    const restore = miswire(k.ledger, "exec-soroswap", "factory", () => {
+      reads++;
+      throw new Error("rate limited (HTTP 429)");
+    });
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertEquals(reads, 2, "the read-back tried the view twice");
+    assertStringIncludes(r.out, "exec-soroswap factory(): can't read it (rate limited (HTTP 429))");
+    assertStringIncludes(r.out, "A view couldn't be read; nothing differs so far: run the same command again.");
+    assertFalse(r.out.includes("new --generation"), "an unreadable view isn't a mis-wiring");
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("invoke")), [], "no admin call");
+    restore();
+    const again = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "✓ exec-soroswap factory() is the Soroswap factory");
+    // A read that fails once and then answers passes on its retry.
+    const k2 = await kit();
+    try {
+      await readyOwner(k2);
+      let n = 0;
+      miswire(k2.ledger, "lp-locker", "owners", (right) => {
+        if (++n === 1) throw new Error("timeout");
+        return right;
+      });
+      const once = await deployDefault(k2, ["--deployment", "testnet"]);
+      assertEquals(once.code, 0, once.out);
+      assertStringIncludes(once.out, "✓ lp-locker owners() is exactly launchpad-v2 and moments-v2");
+    } finally {
+      await cleanup(k2);
+    }
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: an extra caller or owner is a mis-wiring (exact sets)", async () => {
+  for (const [kind, fn, label] of [["exec-soroswap", "callers", "exec-soroswap callers()"], ["lp-locker", "owners", "lp-locker owners()"]]) {
+    const k = await kit();
+    try {
+      await readyOwner(k);
+      miswire(k.ledger, kind, fn, (right) => [...(right as string[]), ATTACKER]);
+      const r = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(r.code, 1, r.out);
+      assertStringIncludes(r.out, `${label} is [`);
+      assertStringIncludes(r.out, `"${ATTACKER}"] on chain; the plan has exactly launchpad-v2 C`);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("the Soroswap router's get_factory() must be networks.ts's factory: refused before anything is sent; --offline skips it", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => XLM_SAC;
+    const dry = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    assertStringIncludes(dry.out, `✗ the Soroswap router ${TESTNET.contracts.soroswapRouter} get_factory() is ${XLM_SAC}; networks.ts has ${SOROSWAP_FACTORY}`);
+    assertStringIncludes(dry.out, "A real deploy would stop at: the Soroswap router's factory.");
+    const offline = await deployDefault(k, ["--deployment", "testnet", "--dry-run", "--offline"]);
+    assertEquals(offline.code, 0, offline.out);
+    assertFalse(offline.out.includes("get_factory() is"), "not read offline");
+    const mark = k.ledger.log.length;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertStringIncludes(r.out, "networks.ts must name the router's factory; nothing was sent");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => SOROSWAP_FACTORY;
+    const ok = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertStringIncludes(ok.out, `✓ the Soroswap router's get_factory() is networks.ts's Soroswap factory ${SOROSWAP_FACTORY}`);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: a planned contract not at its id after the constructors stops the run before any admin call", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // moments-v2 is created, but the chain doesn't show it afterwards (as a lagging RPC node would).
+    const hash = k.ledger.contractWasmHash.bind(k.ledger);
+    k.ledger.contractWasmHash = (id: string) => (k.ledger.contracts.get(id)?.kind === "moments-v2" ? Promise.resolve(null) : hash(id));
+    keptAlive.length = 0;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertMatch(r.out, /moments-v2 C[A-Z2-7]{55} not at the planned id after the constructors; the run stopped after the constructors/);
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("invoke")), [], "no admin call");
+    assertEquals(keptAlive.length, 0, "no TTL step");
+    assertFalse(await Deno.stat(`${k.deployments}/testnet-v2.json`).then(() => true, () => false), "no deployment file");
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("TTL: 75 days (past the 2026-12-16 testnet reset), under testnet's maximum entry TTL; the Soroswap entries are passed only when live", async () => {
+  assertEquals([TTL_EXTEND_DAYS, TTL_THRESHOLD_DAYS, TTL_EXTEND_LEDGERS], [75, 75, 1_296_000]);
+  // 2026-10-15 + 75 days is past 2026-12-16.
+  assert(new Date(Date.UTC(2026, 9, 15) + TTL_EXTEND_DAYS * 86_400_000) > new Date(Date.UTC(2026, 11, 16)));
+  // An extension must stay at or below max_entry_ttl − 1 (3,110,399 on testnet, 2026-10-15).
+  assert(TTL_EXTEND_LEDGERS <= TESTNET_MAX_ENTRY_TTL - 1 - 17_279, "at least a day under the maximum");
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // The pair's code archived: the factory and its code are still extended, and the run says what it left out.
+    k.ledger.ttl.delete(SOROSWAP_PAIR_CODE);
+    keptAlive.length = 0;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 0, r.out);
+    assertStringIncludes(r.out, "note: Soroswap pair code isn't live on chain (archived?): its TTL isn't extended");
+    assert(keptAlive[0].contracts.includes(SOROSWAP_FACTORY) && keptAlive[0].hashes.includes(SOROSWAP_FACTORY_CODE));
+    assertFalse(keptAlive[0].hashes.includes(SOROSWAP_PAIR_CODE));
+  } finally {
+    await cleanup(k);
+  }
+});
+
+// ------------------------------------------------------------------------------------------------ the testnet-qa smoke
+
+const ROUTER = "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD";
+const LAUNCH_PARAMS = ["creator_fee_bps", "creator_fee_recipient", "holder_sharing", "initial_buy", "min_tokens_out", "name", "nonce", "quote", "snipe_exempt", "symbol", "uri", "venue"];
+const PUBLISH_PARAMS = ["creator_alloc_bps", "date", "media_hash", "metadata_uri", "name", "nonce", "place", "price", "symbol", "window_secs"];
+const SYMBOL_RULE = /^[A-Za-z0-9]{2,10}$/;
+const cid = (label: string) => StrKey.encodeContract(hash(Buffer.from(label)));
+const sameNative = (a: unknown, b: unknown) => JSON.stringify(normalize(a)) === JSON.stringify(normalize(b));
+const outcome = (pool: string) => xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Graduated"), new Address(pool).toScVal()]);
+const failed = (origin: number, code: number) => xdr.ScVal.scvVec([xdr.ScVal.scvSymbol("Failed"), sv({ code, origin })]);
+
+/** What the smoke drives, on top of the deployed fakes: the curve, launch tokens, Soroswap's router and pairs, the
+ *  locker's harvest and a Moment's life. Each call checks its caller's auth (the transaction's source), its argument
+ *  names and the state it needs, as the contracts do; a contract error is thrown as the RPC reports one. */
+function smokeWorld(l: Ledger, file: any, opts: { graduation?: "ok" | "failed"; usdc?: "deep" | "thin" } = {}) {
+  const auth = (who: unknown, source: string | null) => {
+    if (who !== source) throw new Error("Error(Auth, InvalidAction)");
+  };
+  const fail = (code: number): never => {
+    throw new Error(`Error(Contract, #${code})`);
+  };
+  const balanceOf = (asset: string, who: string) => BigInt(l.call(asset, "balance", [who], null) as bigint);
+  const move = (asset: string, from: string, to: string, amount: bigint) => void l.call(asset, "transfer", [from, to, amount], from);
+  const credit = (asset: string, holder: string, amount: bigint) => {
+    const m = l.held.get(asset) ?? new Map<string, bigint>();
+    m.set(holder, (m.get(holder) ?? 0n) + amount);
+    l.held.set(asset, m);
+  };
+  const lpId: string = file.contracts.launchpadV2;
+  const lp = l.contracts.get(lpId)!;
+  const cfg = lp.fns.config([], null) as Record<string, any>;
+  const table = lp.fns.venues([], null) as any[];
+  const growth = new Map<string, number>();
+
+  // A token whose holder rewards are queued from the next ledger on (launch-token-v2), or a plain one (moment-coin).
+  const token = (id: string, kind: string) => {
+    const balances = new Map<string, bigint>();
+    const rewards = new Map<string, { quote: bigint; token: bigint; from: number }>();
+    const get = (w: string) => balances.get(w) ?? 0n;
+    const send = (from: string, to: string, amount: bigint) => {
+      if (get(from) < amount) fail(10);
+      balances.set(from, get(from) - amount);
+      balances.set(to, get(to) + amount);
+    };
+    const mint = (to: string, amount: bigint) => void balances.set(to, get(to) + amount);
+    l.addContract(id, {
+      kind,
+      wasm: `${kind}-instance`,
+      fns: {
+        balance: (a) => get(a[0] as string),
+        transfer: (a, s) => {
+          auth(a[0], s);
+          send(a[0] as string, a[1] as string, BigInt(a[2] as bigint));
+        },
+        pending_rewards: (a) => {
+          const r = rewards.get(a[0] as string);
+          return r && l.ledger >= r.from ? [r.quote, r.token] : [0n, 0n];
+        },
+        claim: (a, s) => {
+          auth(a[0], s);
+          const holder = a[0] as string;
+          const r = rewards.get(holder);
+          if (!r || l.ledger < r.from) return [0n, 0n];
+          rewards.delete(holder);
+          move(XLM_SAC, id, holder, r.quote);
+          send(id, holder, r.token);
+          return [r.quote, r.token];
+        },
+      },
+    });
+    /** Queues `quote` and `tok` for the holders outside `excluded`, pro rata. */
+    const notify = (quote: bigint, tok: bigint, excluded: string[]) => {
+      const holders = [...balances.entries()].filter(([w, b]) => b > 0n && w !== id && !excluded.includes(w));
+      const total = holders.reduce((s, [, b]) => s + b, 0n);
+      for (const [w, b] of holders) {
+        const r = rewards.get(w) ?? { quote: 0n, token: 0n, from: 0 };
+        rewards.set(w, { quote: r.quote + (quote * b) / total, token: r.token + (tok * b) / total, from: l.ledger + 1 });
+      }
+    };
+    return { send, mint, notify, balances };
+  };
+
+  // ---- launchpad-v2: the curve.
+  const launches = new Map<string, any>();
+  const tokenAddress = (creator: string, nonce: bigint) => cid(`launch/${lpId}/${creator}/${nonce}`);
+  const preview = (quote: string, venue: number) => {
+    const q = lp.fns.quote_economics([quote], null) as any;
+    if (!q?.enabled) fail(10103);
+    const v = table.find((x) => x.id === venue && x.enabled) ?? fail(10109);
+    return {
+      supply: cfg.supply,
+      fee_bps: cfg.fee_bps,
+      launch_fee: cfg.launch_fee,
+      fee_asset: cfg.xlm,
+      quote,
+      phantom: q.phantom,
+      threshold: q.threshold,
+      venue: v,
+      fallback: table[q.fallback_venue],
+      venue_locked: false,
+      locker: cfg.locker,
+      token_wasm_hash: cfg.token_wasm_hash,
+      durations: cfg.durations,
+    };
+  };
+  const quoteBuy = (tok: string, quoteIn: bigint) => {
+    const L = launches.get(tok) ?? fail(10111);
+    if (L.phase !== 0) fail(10112);
+    const snipe = l.time - L.created < 20 ? 2_500n : 0n;
+    const total = 100n + BigInt(L.creatorFeeBps) + snipe;
+    const remaining = BigInt(L.threshold) - BigInt(L.real);
+    let used = quoteIn;
+    let net = used - (used * total) / 10_000n;
+    if (net > remaining) {
+      used = (remaining * 10_000n + 10_000n - total - 1n) / (10_000n - total);
+      net = remaining;
+    }
+    const base_fee = used / 100n;
+    const creator_fee = (used * BigInt(L.creatorFeeBps)) / 10_000n;
+    return { used, net, base_fee, creator_fee, snipe_fee: snipe ? used - net - base_fee - creator_fee : 0n, tokens_out: net * 200n };
+  };
+  Object.assign(lp.fns, {
+    preview_launch_terms: (a: unknown[]) => preview(a[0] as string, Number(a[1])),
+    token_address: (a: unknown[]) => tokenAddress(a[0] as string, BigInt(a[1] as bigint)),
+    launch: (a: unknown[], s: string | null) => {
+      const [creator, p, expected] = a as [string, Record<string, any>, unknown];
+      auth(creator, s);
+      assertEquals(Object.keys(p).sort(), LAUNCH_PARAMS);
+      if (!SYMBOL_RULE.test(p.symbol)) fail(10105);
+      if (!sameNative(expected, preview(p.quote, Number(p.venue)))) fail(10108);
+      const id = tokenAddress(creator, BigInt(p.nonce));
+      if (launches.has(id)) fail(10133);
+      move(XLM_SAC, creator, lpId, BigInt(cfg.launch_fee));
+      const t = token(id, "launch-token-v2");
+      t.mint(lpId, BigInt(cfg.supply));
+      const q = lp.fns.quote_economics([p.quote], null) as any;
+      launches.set(id, { creator, quote: p.quote, creatorFeeBps: Number(p.creator_fee_bps), created: l.time, threshold: BigInt(q.threshold), real: 0n, protocol: 0n, launchFee: BigInt(cfg.launch_fee), phase: 0, t });
+      return id;
+    },
+    quote_buy: (a: unknown[]) => quoteBuy(a[0] as string, BigInt(a[2] as bigint)),
+    buy: (a: unknown[], s: string | null) => {
+      const [buyer, tok, quoteIn, minOut] = a as [string, string, bigint, bigint];
+      auth(buyer, s);
+      const q = quoteBuy(tok, BigInt(quoteIn));
+      if (q.tokens_out < BigInt(minOut)) fail(10114);
+      const L = launches.get(tok);
+      move(L.quote, buyer, lpId, q.used);
+      L.real += q.net;
+      L.protocol += (q.base_fee + q.snipe_fee) / 2n;
+      if (L.real === L.threshold) L.phase = 1;
+      L.t.send(lpId, buyer, q.tokens_out);
+      return q.tokens_out;
+    },
+    status: (a: unknown[]) => ({ phase: (launches.get(a[0] as string) ?? fail(10111)).phase }),
+    graduate: (a: unknown[]) => {
+      const tok = a[0] as string;
+      const L = launches.get(tok) ?? fail(10111);
+      if (L.phase === 0) fail(10116);
+      if (L.phase === 2) fail(10117);
+      if (opts.graduation === "failed") return failed(3, 10_302);
+      L.phase = 2;
+      const pool = cid(`pair/${tok}`);
+      pairs.set(`${tok}|${L.quote}`, pool);
+      pairs.set(`${L.quote}|${tok}`, pool);
+      move(L.quote, lpId, pool, L.real);
+      L.t.send(lpId, pool, 200_000_000n * XLM);
+      positions.set(pool, { tok, last: l.time });
+      return outcome(pool);
+    },
+    claim_protocol_fees: (a: unknown[]) => {
+      let total = 0n;
+      for (const tok of a[0] as string[]) {
+        const L = launches.get(tok) ?? fail(10111);
+        total += L.protocol + L.launchFee;
+        [L.protocol, L.launchFee] = [0n, 0n];
+      }
+      if (total === 0n) fail(10123);
+      move(XLM_SAC, lpId, cfg.treasury, total);
+      return [[XLM_SAC, total]];
+    },
+  });
+
+  // ---- Soroswap: the router and its pairs (XLM–USDC already there, a launch's pair from its graduation).
+  const pairs = new Map<string, string>();
+  const usdcPair = cid("pair/XLM/USDC");
+  const [rx, ru] = opts.usdc === "thin" ? [1_000n * XLM, 20n * XLM] : [1_000_000n * XLM, 106_000n * XLM];
+  credit(XLM_SAC, usdcPair, rx);
+  credit(USDC_SAC, usdcPair, ru);
+  pairs.set(`${XLM_SAC}|${USDC_SAC}`, usdcPair);
+  pairs.set(`${USDC_SAC}|${XLM_SAC}`, usdcPair);
+  const pairOf = (path: string[]) => {
+    if (path.length !== 2) throw new Error("Error(Contract, #LibraryInvalidPath)");
+    return pairs.get(`${path[0]}|${path[1]}`) ?? (() => {
+      throw new Error("SoroswapRouter: pair does not exist");
+    })();
+  };
+  const out = (amountIn: bigint, rIn: bigint, rOut: bigint) => (amountIn * 997n * rOut) / (rIn * 1000n + amountIn * 997n);
+  const inFor = (amountOut: bigint, rIn: bigint, rOut: bigint) => {
+    if (amountOut >= rOut) throw new Error("SoroswapLibrary: insufficient liquidity");
+    return (rIn * amountOut * 1000n) / ((rOut - amountOut) * 997n) + 1n;
+  };
+  const swap = (path: string[], to: string, amountIn: bigint, amountOut: bigint, deadline: bigint) => {
+    if (deadline < BigInt(l.time)) throw new Error("SoroswapRouter: deadline expired");
+    const pair = pairOf(path);
+    move(path[0], to, pair, amountIn);
+    move(path[1], pair, to, amountOut);
+    growth.set(pair, (growth.get(pair) ?? 0) + 1);
+    return [amountIn, amountOut];
+  };
+  l.addContract(ROUTER, {
+    kind: "soroswap-router",
+    wasm: "router",
+    fns: {
+      router_get_amounts_out: (a) => {
+        const [amount, path] = a as [bigint, string[]];
+        const pair = pairOf(path);
+        return [BigInt(amount), out(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair))];
+      },
+      router_get_amounts_in: (a) => {
+        const [amount, path] = a as [bigint, string[]];
+        const pair = pairOf(path);
+        return [inFor(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair)), BigInt(amount)];
+      },
+      swap_exact_tokens_for_tokens: (a, s) => {
+        const [amount, min, path, to, deadline] = a as [bigint, bigint, string[], string, bigint];
+        auth(to, s);
+        const pair = pairOf(path);
+        const o = out(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair));
+        if (o < BigInt(min)) throw new Error("SoroswapRouter: insufficient output amount");
+        return swap(path, to, BigInt(amount), o, BigInt(deadline));
+      },
+      swap_tokens_for_exact_tokens: (a, s) => {
+        const [amount, max, path, to, deadline] = a as [bigint, bigint, string[], string, bigint];
+        auth(to, s);
+        const pair = pairOf(path);
+        const i = inFor(BigInt(amount), balanceOf(path[0], pair), balanceOf(path[1], pair));
+        if (i > BigInt(max)) throw new Error("SoroswapRouter: excessive input amount");
+        return swap(path, to, i, BigInt(amount), BigInt(deadline));
+      },
+    },
+  });
+
+  // ---- lp-locker: one harvest per interval, half to the treasury, half to the holders (sharing on).
+  const lockerId: string = file.contracts.lpLocker;
+  const locker = l.contracts.get(lockerId)!;
+  const interval = Number(locker.fns.harvest_interval([], null));
+  const positions = new Map<string, { tok: string; last: number }>();
+  Object.assign(locker.fns, {
+    harvestable: (a: unknown[]) => {
+      const p = positions.get(a[0] as string) ?? fail(10601);
+      const g = BigInt(growth.get(a[0] as string) ?? 0);
+      return [g, g * 1_000n, g * 1_000n * XLM, g * XLM, BigInt(p.last + interval)];
+    },
+    harvest: (a: unknown[], s: string | null) => {
+      const pool = a[0] as string;
+      const p = positions.get(pool) ?? fail(10601);
+      if (l.time < p.last + interval) fail(10603);
+      const g = BigInt(growth.get(pool) ?? 0);
+      if (g === 0n) fail(10604);
+      // A simulation (a view has no source) commits nothing.
+      if (s === null) return [g * 1_000n * XLM, g * XLM];
+      growth.set(pool, 0);
+      p.last = l.time;
+      const [base, quote] = [g * 1_000n * XLM, g * XLM];
+      const t = launches.get(p.tok).t;
+      t.send(pool, cfg.treasury, base / 2n);
+      move(XLM_SAC, pool, cfg.treasury, quote / 2n);
+      t.send(pool, p.tok, base / 2n);
+      move(XLM_SAC, pool, p.tok, quote / 2n);
+      t.notify(quote / 2n, base / 2n, [pool, lpId, lockerId, cfg.treasury]);
+      return [base, quote];
+    },
+  });
+
+  // ---- moments-v2: publish, collect, graduate, vest.
+  const moId: string = file.contracts.momentsV2;
+  const mo = l.contracts.get(moId)!;
+  const policy = mo.fns.policy([], null) as Record<string, any>;
+  const terms = () => ({ policy, durations: (mo.fns.config([], null) as any).durations, usdc: USDC_SAC });
+  const nftAddress = (creator: string, nonce: bigint) => cid(`nft/${moId}/${creator}/${nonce}`);
+  const moments = new Map<string, any>();
+  const quoteCollect = (nft: string, qty: number) => {
+    const M = moments.get(nft) ?? fail(10708);
+    if (M.state !== 0) fail(10709);
+    const r = BigInt(policy.reserve_bps);
+    const requested = M.price * BigInt(qty);
+    const remaining = BigInt(policy.threshold) - M.reserve;
+    let [gross, reserve_in, editions] = [requested, (requested * r) / 10_000n, qty];
+    const terminal = reserve_in >= remaining;
+    if (terminal) {
+      gross = (remaining * 10_000n + r - 1n) / r;
+      reserve_in = (gross * r) / 10_000n;
+      editions = Number((gross + M.price - 1n) / M.price);
+    }
+    return { gross, editions, entitlement: gross * 50_000n, reserve_in, creator_in: 0n, platform_in: 0n, excess: requested - gross, terminal };
+  };
+  const due = (M: any, account: string): [bigint, bigint] => [
+    ((M.entitlements.get(account) ?? 0n) * 6_000n) / 10_000n - (M.claimed.get(account) ?? 0n),
+    account === M.creator ? (1_000_000_000_000_000n * BigInt(M.alloc) / 10_000n) * 2_000n / 10_000n - M.creatorClaimed : 0n,
+  ];
+  Object.assign(mo.fns, {
+    terms: () => terms(),
+    nft_address: (a: unknown[]) => nftAddress(a[0] as string, BigInt(a[1] as bigint)),
+    publish: (a: unknown[], s: string | null) => {
+      const [creator, p, expected] = a as [string, Record<string, any>, unknown];
+      auth(creator, s);
+      assertEquals(Object.keys(p).sort(), PUBLISH_PARAMS);
+      if (!SYMBOL_RULE.test(p.symbol) || (p.media_hash as Uint8Array).length !== 32) fail(10707);
+      if (!sameNative(expected, terms())) fail(10702);
+      if (BigInt(p.price) < BigInt(policy.min_price)) fail(10703);
+      if (Number(p.creator_alloc_bps) > Number(policy.max_creator_alloc_bps)) fail(10705);
+      const nft = nftAddress(creator, BigInt(p.nonce));
+      if (moments.has(nft)) fail(10730);
+      moments.set(nft, { creator, price: BigInt(p.price), alloc: Number(p.creator_alloc_bps), state: 0, reserve: 0n, entitlements: new Map(), claimed: new Map(), creatorClaimed: 0n });
+      l.addContract(nft, { kind: "moment-nft", wasm: "moment-nft-instance", fns: {} });
+      return nft;
+    },
+    quote: (a: unknown[]) => quoteCollect(a[0] as string, Number(a[1])),
+    collect: (a: unknown[], s: string | null) => {
+      const [collector, nft, qty, max] = a as [string, string, number, bigint];
+      auth(collector, s);
+      const q = quoteCollect(nft, Number(qty));
+      if (q.gross > BigInt(max)) fail(10712);
+      move(USDC_SAC, collector, moId, q.gross);
+      const M = moments.get(nft);
+      M.reserve += q.reserve_in;
+      M.entitlements.set(collector, (M.entitlements.get(collector) ?? 0n) + q.entitlement);
+      if (q.terminal) M.state = 1;
+      return { first_rank: 1, editions: q.editions, gross: q.gross, entitlement: q.entitlement };
+    },
+    ledger: (a: unknown[]) => ({ state: (moments.get(a[0] as string) ?? fail(10708)).state }),
+    get_moment: (a: unknown[]) => ({ coin: cid(`coin/${a[0]}`), creator: (moments.get(a[0] as string) ?? fail(10708)).creator }),
+    graduate: (a: unknown[]) => {
+      const nft = a[0] as string;
+      const M = moments.get(nft) ?? fail(10708);
+      if (M.state !== 1) fail(10714);
+      if (opts.graduation === "failed") return failed(10, 11_003);
+      M.state = 2;
+      M.coin = token(cid(`coin/${nft}`), "moment-coin");
+      return outcome(cid(`pair/coin/${nft}`));
+    },
+    claimable: (a: unknown[]) => {
+      const M = moments.get(a[0] as string) ?? fail(10708);
+      return M.state === 2 ? due(M, a[1] as string) : [0n, 0n];
+    },
+    claim: (a: unknown[], s: string | null) => {
+      const [account, nft] = a as [string, string];
+      auth(account, s);
+      const M = moments.get(nft) ?? fail(10708);
+      if (M.state !== 2) fail(10714);
+      const [c, cr] = due(M, account);
+      if (c === 0n && cr === 0n) fail(10715);
+      M.claimed.set(account, (M.claimed.get(account) ?? 0n) + c);
+      M.creatorClaimed += cr;
+      M.coin.mint(account, c + cr);
+      return [c, cr];
+    },
+  });
+  return { launches, moments, growth };
+}
+
+/** A testnet-qa deployment on the in-memory ledger (Aquarius off), with the smoke's world on top. */
+async function qaDeployed(opts: Parameters<typeof smokeWorld>[2] = {}) {
+  const k = await kit();
+  const r = await deploy(k, ["--deployment", "testnet-qa", "--aquarius", "off"]);
+  assertEquals(r.code, 0, r.out);
+  const file = JSON.parse(await Deno.readTextFile(`${k.deployments}/testnet-qa-v2.json`));
+  const world = smokeWorld(k.ledger, file, opts);
+  return { k, file, world };
+}
+
+const TX_LINE = /^ {2}(.+): ([0-9a-f]{64}) \(fee 0\.0001 XLM\)$/;
+
+Deno.test("--smoke on testnet-qa: a launch through graduation, a harvest and both claims, a Moment through its first vest claims; each hash and fee printed", async () => {
+  const { k, file } = await qaDeployed();
+  try {
+    const deployer = file.deployer;
+    const treasury = file.roles.treasury;
+    const treasuryBefore = k.ledger.accounts.get(treasury)!.xlm;
+    // The dry run checks the deployment and the USDC route and sends nothing.
+    const mark = k.ledger.log.length;
+    const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    for (const s of ["DRY RUN: nothing is sent", "✓ the deployment file is testnet-qa's", "✓ XLM → USDC depth check", "Dry run: nothing was sent."]) assertStringIncludes(dry.out, s);
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "a dry run sends nothing");
+
+    const calls = k.ledger.calls.length;
+    const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+    assertEquals(r.code, 0, r.out);
+    // Every transaction: its label, hash and fee.
+    const txs = r.out.split("\n").filter((l) => TX_LINE.test(l)).map((l) => l.match(TX_LINE)![1]);
+    const expected = [
+      /^launch SMK\d{5}$/,
+      /^buy \(completes the curve\)$/,
+      /^keeper graduate \(Soroswap\)$/,
+      /^swap: sell 5% of the tokens on the pool$/,
+      /^swap: buy with 100 XLM on the pool$/,
+      /^keeper harvest$/,
+      /^holder claim \(quote and token rewards\)$/,
+      /^claim_protocol_fees \(to the treasury\)$/,
+      /^collector trusts USDC$/,
+      /^swap: 14\.3333334 USDC for at most [\d,.]+ XLM$/,
+      /^publish SMM\d{5}$/,
+      /^collect 14 \(terminal\)$/,
+      /^keeper graduate \(Moment\)$/,
+      /^collector's first vest claim$/,
+      /^creator's first vest claim$/,
+    ];
+    assertEquals(txs.length, expected.length, txs.join("\n"));
+    txs.forEach((t, i) => assertMatch(t, expected[i]));
+    assertStringIncludes(r.out, `Smoke passed: 15 transactions, 0.0015 XLM in fees.`);
+    // Who signed what: the creator launches and publishes, the buyer buys, swaps and claims, the QA deployer keeps.
+    const by = k.ledger.calls.slice(calls).map((c) => `${c.kind}.${c.fn} ${c.source === deployer ? "keeper" : c.source}`);
+    const [creator, buyer, collector] = ["creator", "buyer", "collector"].map((n) => r.out.match(new RegExp(`  ${n} +(G[A-Z2-7]{55})`))![1]);
+    const who = (s: string) => s.replace(creator, "creator").replace(buyer, "buyer").replace(collector, "collector");
+    assertEquals(by.map(who), [
+      "launchpad-v2.launch creator",
+      "launchpad-v2.buy buyer",
+      "launchpad-v2.graduate keeper",
+      "soroswap-router.swap_exact_tokens_for_tokens buyer",
+      "soroswap-router.swap_exact_tokens_for_tokens buyer",
+      "lp-locker.harvest keeper",
+      "launch-token-v2.claim buyer",
+      "launchpad-v2.claim_protocol_fees keeper",
+      "soroswap-router.swap_tokens_for_exact_tokens collector",
+      "moments-v2.publish creator",
+      "moments-v2.collect collector",
+      "moments-v2.graduate keeper",
+      "moments-v2.claim collector",
+      "moments-v2.claim creator",
+    ]);
+    for (const s of ["✓ completed", "✓ graduated: pool", "✓ harvested", "✓ the holder claimed", "✓ collected 14 editions for 13.3333334 USDC", "✓ the collector claimed"]) assertStringIncludes(r.out, s);
+    // The treasury got the launch fee and the protocol fees, and half of the harvest's XLM.
+    assert(k.ledger.accounts.get(treasury)!.xlm - treasuryBefore > 10n * XLM);
+    // The throwaway accounts were funded by Friendbot; their keys were never printed.
+    for (const a of [creator, buyer, collector]) assert(k.ledger.log.includes(`friendbot ${a}`));
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("--smoke stops at the step that fails, naming it: a recorded graduation failure; a thin USDC route stops it before the Moment", async () => {
+  {
+    const { k } = await qaDeployed({ graduation: "failed" });
+    try {
+      const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+      assertEquals(r.code, 1);
+      assertStringIncludes(r.out, "the smoke stopped: the launch's graduation recorded a failure: origin 3, code 10302");
+      assertStringIncludes(r.out, "keeper graduate (Soroswap): ");
+      assertFalse(r.out.includes("keeper harvest"));
+      await assertNoSecrets(k);
+    } finally {
+      await cleanup(k);
+    }
+  }
+  {
+    // F10: the launch part runs; the Moment part stops before the collector's trustline or any USDC swap.
+    const { k } = await qaDeployed({ usdc: "thin" });
+    try {
+      const dry = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"]);
+      assertEquals(dry.code, 0);
+      assertStringIncludes(dry.out, "✗ XLM → USDC depth check");
+      const r = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+      assertEquals(r.code, 1);
+      assertStringIncludes(r.out, "✗ XLM → USDC depth check");
+      assertStringIncludes(r.out, "✓ the treasury");
+      assertStringIncludes(r.out, "the smoke stopped: testnet XLM→USDC liquidity too thin");
+      assertFalse(r.out.includes("collector trusts USDC"));
+      assertFalse(k.ledger.calls.some((c) => c.kind === "moments-v2"));
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("--smoke is testnet-qa's only, and only against its own deployment and keys", async () => {
+  const { k, file } = await qaDeployed();
+  try {
+    for (const d of ["testnet", "mainnet"]) assertEquals((await deployDefault(k, ["--deployment", d, "--smoke"])).code, 1);
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet", "--smoke"])).out, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--generation", "2"])).out, "--smoke runs against the deployment file");
+    // SMOKE=1 alone doesn't turn a deploy into a smoke.
+    k.env.SMOKE = "1";
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"])).out, "SMOKE=1 is set: run the smoke with --smoke");
+    delete k.env.SMOKE;
+    // A deployment file whose deployer isn't the QA keys' is refused before anything is sent.
+    const path = `${k.deployments}/testnet-qa-v2.json`;
+    await Deno.writeTextFile(path, JSON.stringify({ ...file, deployer: Keypair.random().publicKey() }));
+    const mark = k.ledger.log.length;
+    const other = await deployDefault(k, ["--deployment", "testnet-qa", "--smoke"]);
+    assertEquals(other.code, 1);
+    assertStringIncludes(other.out, "isn't the QA keys' deployer");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), []);
+    // A contract that runs another WASM than the file records is refused too.
+    await Deno.writeTextFile(path, JSON.stringify({ ...file, wasmHashes: { ...file.wasmHashes, lpLocker: "ab".repeat(32) } }));
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"])).out, `lpLocker ${file.contracts.lpLocker} runs WASM`);
+    await Deno.remove(path);
+    assertStringIncludes((await deployDefault(k, ["--deployment", "testnet-qa", "--smoke", "--dry-run"])).out, "run deploy-contracts-v2.ts --deployment testnet-qa first");
+    await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ as processes, without network
 
-async function run(script: string, args: string[], env: Record<string, string>, write: string[]) {
+/** A temporary repository holding only what the scripts read: backend/scripts, the functions' _shared modules and
+ *  contracts/testdata/fixtures.json. It has no contracts/dist and no reviewed list, whatever the real checkout has
+ *  (build.sh writes a git-ignored dist into it), so what the processes print doesn't depend on the checkout. */
+async function scriptsRepo(): Promise<string> {
+  const root = await Deno.makeTempDir({ prefix: "ct11-scripts-" });
+  const copy = async (from: string, to: string) => {
+    for await (const e of Deno.readDir(from)) {
+      if (e.isDirectory) {
+        await Deno.mkdir(`${to}/${e.name}`, { recursive: true });
+        await copy(`${from}/${e.name}`, `${to}/${e.name}`);
+      } else if (e.isFile) await Deno.copyFile(`${from}/${e.name}`, `${to}/${e.name}`);
+    }
+  };
+  for (const d of ["backend/scripts", "backend/supabase/functions/_shared", "contracts/testdata"]) {
+    await Deno.mkdir(`${root}/${d}`, { recursive: true });
+    if (d === "contracts/testdata") await Deno.copyFile(`${repo}${d}/fixtures.json`, `${root}/${d}/fixtures.json`);
+    else await copy(`${repo}${d}`, `${root}/${d}`);
+  }
+  return `${root}/`;
+}
+
+async function run(script: string, args: string[], env: Record<string, string>, write: string[], root = repo) {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--allow-read", "--allow-env", `--allow-write=${write.join(",")}`, "--config", `${repo}backend/supabase/functions/deno.json`, `${repo}backend/scripts/${script}`, ...args],
+    args: ["run", "--allow-read", "--allow-env", `--allow-write=${write.join(",")}`, "--config", `${repo}backend/supabase/functions/deno.json`, `${root}backend/scripts/${script}`, ...args],
     env: { ...env, NO_COLOR: "1" },
     clearEnv: true,
     stdout: "piped",
@@ -1685,6 +2588,7 @@ async function run(script: string, args: string[], env: Record<string, string>, 
 
 Deno.test("as processes without network permission: the offline dry run, decode-only and the refusals print no secret", async () => {
   const k = await kit();
+  const scripts = await scriptsRepo();
   try {
     await readyOwner(k);
     await copyV1(k);
@@ -1695,15 +2599,20 @@ Deno.test("as processes without network permission: the offline dry run, decode-
     if (!env.DENO_DIR) delete (env as Record<string, string>).DENO_DIR;
     const secrets = await secretsOf(k);
     const runs = [
-      // The real repository: no contracts/dist and no reviewed list yet.
-      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--dry-run", "--offline"], env, [k.secrets]),
-      await run("owner-v2.ts", ["sign", `${out}/2-v1-moments-set_policy.json`, "--as", "v1-admin", "--decode-only"], env, [k.secrets]),
-      await run("owner-v2.ts", ["keys"], { ...env, ADMIN_PUBLIC: (await rolesOf(k)).ADMIN_PUBLIC }, [k.secrets]),
-      await run("deploy-contracts-v2.ts", ["--deployment", "mainnet"], env, [k.secrets]),
-      await run("owner-v2.ts", ["keys", "--deployment", "testnet-qa"], env, [k.secrets]),
-      await run("admin-v2.ts", [], env, [k.secrets]),
+      // A copy of the scripts without contracts/dist and without the reviewed list: the state before a build.
+      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--dry-run", "--offline"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["sign", `${out}/2-v1-moments-set_policy.json`, "--as", "v1-admin", "--decode-only"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["keys"], { ...env, ADMIN_PUBLIC: (await rolesOf(k)).ADMIN_PUBLIC }, [k.secrets], scripts),
+      await run("deploy-contracts-v2.ts", ["--deployment", "mainnet"], env, [k.secrets], scripts),
+      await run("owner-v2.ts", ["keys", "--deployment", "testnet-qa"], env, [k.secrets], scripts),
+      await run("admin-v2.ts", [], env, [k.secrets], scripts),
+      await run("deploy-contracts-v2.ts", ["--deployment", "testnet", "--smoke", "--dry-run", "--offline"], env, [k.secrets], scripts),
     ];
-    const [dry, decode, roleEnv, mainnet, qa, usage] = runs;
+    const [dry, decode, roleEnv, mainnet, qa, usage, smoke] = runs;
+    assertEquals(smoke.code, 1);
+    assertStringIncludes(smoke.stderr, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
+    assertStringIncludes(dry.stdout, "Aquarius: disabled (--aquarius off)");
+    assertFalse(dry.stdout.includes("exec-aquarius"), "with Aquarius off by default, exec-aquarius is never planned");
     assertEquals(dry.code, 0, dry.stderr);
     for (
       const s of [
@@ -1737,5 +2646,6 @@ Deno.test("as processes without network permission: the offline dry run, decode-
     }
   } finally {
     await cleanup(k);
+    await Deno.remove(scripts, { recursive: true });
   }
 });
