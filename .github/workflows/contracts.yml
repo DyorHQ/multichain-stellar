@@ -14,6 +14,13 @@ jobs:
         with: { targets: wasm32v1-none }
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "contracts -> target\ncontracts/tools/spec-shake -> target" }
+      - name: binaryen 133 (build.sh runs its wasm-opt on the v2 contracts)
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -sSfLO https://github.com/WebAssembly/binaryen/releases/download/version_133/binaryen-version_133-x86_64-linux.tar.gz
+          echo "2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489  binaryen-version_133-x86_64-linux.tar.gz" | sha256sum -c -
+          tar -xzf binaryen-version_133-x86_64-linux.tar.gz
+          echo "$PWD/binaryen-version_133/bin" >> "$GITHUB_PATH"
       - name: Build WASM (spec-shaken, what we deploy)
         run: ./build.sh
       - name: Unit + integration tests (real Soroswap WASM from testnet)

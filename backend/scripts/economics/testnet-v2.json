@@ -1,0 +1,59 @@
+{
+  "deployment": "testnet",
+  "launchpad": {
+    "supply": "10000000000000000",
+    "launchFee": "100000000",
+    "feeBps": 100,
+    "protocolShareBps": 5000,
+    "maxCreatorFeeBps": 1000,
+    "snipeSchedule": [9800, 2500, 300, 30],
+    "snipeStepSecs": 5,
+    "maxExemptions": 32,
+    "venues": [
+      { "key": "soroswap", "kind": "Soroswap", "feeFraction": 0, "enabled": true },
+      { "key": "aquarius", "kind": "Aquarius", "feeFraction": 30, "enabled": true }
+    ],
+    "quotes": [
+      {
+        "asset": "XLM",
+        "phantom": "20000000000",
+        "threshold": "43245553200",
+        "enabled": true,
+        "venuesAllowed": [],
+        "fallback": "soroswap"
+      },
+      {
+        "asset": "USDC",
+        "phantom": "200000000",
+        "threshold": "432455532",
+        "enabled": true,
+        "venuesAllowed": [],
+        "fallback": "soroswap"
+      }
+    ],
+    "aquarius": {
+      "maxPoolPayment": "100000000",
+      "floatTargetMultiple": 50,
+      "alertBelowMultiple": 5,
+      "maxSwapXlm": "20000000000"
+    }
+  },
+  "moments": {
+    "quote": "USDC",
+    "supply": "1000000000000000",
+    "externalBase": "https://dyorhq.fun/moments/",
+    "policy": {
+      "threshold": "100000000",
+      "minPrice": "1000000",
+      "creatorBps": 2000,
+      "platformBps": 500,
+      "reserveBps": 7500,
+      "maxCreatorAllocBps": 1000,
+      "expiryCreatorBps": 7000,
+      "royaltyBps": 500
+    },
+    "harvestBps": 6667,
+    "harvestCreatorBps": 4000,
+    "batch": 20
+  }
+}
