@@ -4,12 +4,22 @@
 // run, each quote's settings in the launchpad and Moments, and the launchpad's entries of every live launch and the
 // Moments still collecting. A launch with no trade in `idleDays` and no holders is left to archive, which bounds what
 // spam launches can cost. Each run checks the entries checked longest ago first, at most `perRun`, and extends those
-// under the threshold while it has time.
-import { Address, Keypair, Operation, rpc, SorobanDataBuilder, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
-import { sql } from "./db.ts";
+// under the threshold while it has time, in transactions whose fee stays under the cap: each WASM alone, a few weeks at
+// a time (extensionPlan).
+//
+// Contracts v2 (docs/DESIGN-stellar-contracts-v2.md §13) adds its singletons, every WASM its deployment uploaded, the
+// quotes' settings, and per launch, Moment, locked position, unvested collector and owed balance the entries their
+// calls read, up to 12 months after their last activity (v2UpkeepEntries). The graduation and harvest paths come
+// first (v2PathEntries): the v2 singletons and code, and the Soroswap factory and pair code that DyorHQ doesn't own but
+// every graduation runs. A graduation fits the per-transaction memory limit only while all of that code is live: an
+// archived WASM misses the module cache and compiles inside the call, which goes over the limit, and that abort can't
+// be recorded or retried. So the path is checked every run, not in its turn, and an archived entry of it is restored
+// in a transaction of its own (lite-indexer/v2_keeper.ts also does it before it graduates or harvests anything).
+import { Address, Keypair, Operation, rpc, SorobanDataBuilder, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { sql, tableExists } from "./db.ts";
 import { env } from "./env.ts";
 import { inclusionFee } from "./fees.ts";
-import { TtlPolicy } from "./networks.ts";
+import { NetworkConfig, TtlPolicy } from "./networks.ts";
 import { keeper, keeperSend, prepare, rpcServer, sendSigned, waitForTx, withInclusionBid } from "./stellar.ts";
 
 /** Ledgers in a day, at 5 s each. */
@@ -72,25 +82,26 @@ export interface TtlReport {
   hashes: string[];
 }
 
-/** Extends every entry below `thresholdDays` to `extendToDays`, in batches: `contracts`' instances and WASMs and the
- *  WASMs in `extraCodeHashes`. For a deploy (deploy-contracts.ts), from the account it names. */
+/** Extends every entry below `thresholdDays` to `extendToDays`, in fee-sized transactions (extensionPlan):
+ *  `contracts`' instances and WASMs and the WASMs in `extraCodeHashes`. For a deploy, from the account it names. */
 export async function keepAlive(contracts: string[], extraCodeHashes: string[] = [], thresholdDays = 10, extendToDays = 30, payer: Keypair = keeper()): Promise<TtlReport> {
   if (contracts.length === 0 && extraCodeHashes.length === 0) return { checked: 0, extended: 0, fee: "0", hashes: [] };
   const latest = (await rpcServer().getLatestLedger()).sequence;
   const hashes = new Set([...extraCodeHashes, ...(contracts.length ? await codeHashes(contracts) : [])]);
   const keys = [...contracts.map(instanceKey), ...[...hashes].map(codeKey)];
-  const low: xdr.LedgerKey[] = [];
+  const low: { key: xdr.LedgerKey; left: number }[] = [];
   for (let i = 0; i < keys.length; i += 50) {
     const batch = keys.slice(i, i + 50);
     const r = await rpcServer().getLedgerEntries(...batch);
     for (const e of r.entries) {
-      if ((e.liveUntilLedgerSeq ?? 0) - latest < thresholdDays * DAY) low.push(e.key);
+      const left = (e.liveUntilLedgerSeq ?? 0) - latest;
+      if (left < thresholdDays * DAY) low.push({ key: e.key, left });
     }
   }
   let fee = 0n;
   const sent: string[] = [];
-  for (let i = 0; i < low.length; i += 20) {
-    const prepared = await prepare(await extendTx(payer.publicKey(), low.slice(i, i + 20), extendToDays));
+  for (const step of extensionPlan(low, (e) => e.left, extendToDays)) {
+    const prepared = await prepare(await extendTx(payer.publicKey(), step.entries.map((e) => e.key), step.extendTo));
     prepared.sign(payer);
     const hash = await sendSigned(prepared, "keeper");
     const s = await waitForTx(hash, 40_000);
@@ -102,14 +113,64 @@ export async function keepAlive(contracts: string[], extraCodeHashes: string[] =
   return { checked: keys.length, extended: low.length, fee: fee.toString(), hashes: sent };
 }
 
-/** An ExtendFootprintTTL of `keys` to `extendToDays` from `source`, before simulation. */
-async function extendTx(source: string, keys: xdr.LedgerKey[], extendToDays: number) {
+/** An ExtendFootprintTTL of `keys` to `extendTo` ledgers from now, from `source`, before simulation. */
+async function extendTx(source: string, keys: xdr.LedgerKey[], extendTo: number) {
   const acct = await rpcServer().getAccount(source);
   return new TransactionBuilder(acct, { fee: "100", networkPassphrase: env.network.passphrase })
-    .addOperation(Operation.extendFootprintTtl({ extendTo: extendToDays * DAY }))
+    .addOperation(Operation.extendFootprintTtl({ extendTo }))
     .setSorobanData(new SorobanDataBuilder().setReadOnly(keys).build())
     .setTimeout(120)
     .build();
+}
+
+// ------------------------------------------------------------------------------------------------ fee-sized transactions
+
+/** Days one transaction adds to one WASM, as in the deploy's backend/scripts/lib/ttl-extend.ts. A transaction's fee is a
+ *  uint32, at most 429.4967295 XLM. Testnet's rent on 2026-10-15 is about 0.08 XLM per KB of WASM a day, so a 128 KB
+ *  WASM (the largest the network takes) costs about 10.4 XLM a day: 25 days is about 260 XLM, 340 XLM with prepare's
+ *  headroom. v2's WASMs together (about 26 XLM a day) can't gain even 30 days in one transaction: each goes alone. */
+export const CODE_STEP_DAYS = 25;
+/** Data entries (instances, a launch's or a Moment's entries, each a few hundred bytes) to a transaction. */
+export const DATA_PER_TX = 20;
+
+const isCode = (key: xdr.LedgerKey) => key.switch().name === "contractCode";
+
+/** The relative TTLs (ledgers) a WASM with `left` ledgers to live is extended to, one transaction each: CODE_STEP_DAYS
+ *  more each time, the last one exactly `full`. */
+export function codeSteps(left: number, full: number, stepDays = CODE_STEP_DAYS): number[] {
+  const step = stepDays * DAY;
+  const out: number[] = [];
+  for (let s = Math.max(0, left) + step; s < full; s += step) out.push(s);
+  out.push(full);
+  return out;
+}
+
+/** One ExtendFootprintTTL: `entries` to `extendTo` ledgers from now. */
+export interface Extension<T> {
+  entries: T[];
+  extendTo: number;
+}
+
+/** The transactions that extend `low` to `extendToDays`, in order: each WASM alone, in steps from the ledgers it has
+ *  `left` (codeSteps), then the data entries DATA_PER_TX to a transaction. Each pays only the rent of the days it adds,
+ *  so no fee goes over the cap, however many entries ran low together. */
+export function extensionPlan<T extends { key: xdr.LedgerKey }>(low: T[], left: (e: T) => number, extendToDays: number): Extension<T>[] {
+  const full = extendToDays * DAY;
+  const plan: Extension<T>[] = [];
+  for (const e of low.filter((x) => isCode(x.key))) for (const extendTo of codeSteps(left(e), full)) plan.push({ entries: [e], extendTo });
+  const data = low.filter((x) => !isCode(x.key));
+  for (let i = 0; i < data.length; i += DATA_PER_TX) plan.push({ entries: data.slice(i, i + DATA_PER_TX), extendTo: full });
+  return plan;
+}
+
+/** The transactions that restore `archived`: each WASM alone (a restore writes the whole entry, and one WASM can take
+ *  most of a transaction's write limit), the data entries DATA_PER_TX to a transaction. A restore can't be split in
+ *  days: it always pays the network's minimum TTL. */
+export function restorePlan<T extends { key: xdr.LedgerKey }>(archived: T[]): T[][] {
+  const groups = archived.filter((x) => isCode(x.key)).map((e) => [e]);
+  const data = archived.filter((x) => !isCode(x.key));
+  for (let i = 0; i < data.length; i += DATA_PER_TX) groups.push(data.slice(i, i + DATA_PER_TX));
+  return groups;
 }
 
 // ------------------------------------------------------------------------------------------------ the keeper's rotation
@@ -118,12 +179,15 @@ async function extendTx(source: string, keys: xdr.LedgerKey[], extendToDays: num
 export interface TtlEntry {
   key: xdr.LedgerKey;
   label: string;
+  /** On the graduation or harvest path (v2PathEntries): checked every run, and restored when archived. */
+  critical?: boolean;
 }
 
 /** Everything the keeper keeps alive now (§4.8b): the deployment's instances and WASMs; each quote's settings in the
  *  launchpad and Moments, and its protocol fees in the launchpad; each live launch's token instance, its pool's after
  *  graduation, and its Launch and Curve entries; each Moment still collecting. A launch is live with a trade in the
- *  last `idleDays`, or with holders (traders whose indexed trades leave them tokens). */
+ *  last `idleDays`, or with holders (traders whose indexed trades leave them tokens). Then contracts v2's
+ *  (v2UpkeepEntries). v1's rows are those with a launch index or a Moment number: v2's have neither. */
 export async function upkeepEntries(policy: TtlPolicy = env.network.ttlPolicy): Promise<TtlEntry[]> {
   const { contracts: c, deployment: d } = env.network;
   const entries: TtlEntry[] = [];
@@ -142,9 +206,10 @@ export async function upkeepEntries(policy: TtlPolicy = env.network.ttlPolicy): 
   }
   const launches = await sql()`
     select l.token, l.pair from lite.launches l
-     where greatest(l.created_at, (select max(t.ts) from lite.launch_trades t where t.token = l.token)) > now() - make_interval(days => ${policy.idleDays})
+     where l.launch_index is not null
+       and (greatest(l.created_at, (select max(t.ts) from lite.launch_trades t where t.token = l.token)) > now() - make_interval(days => ${policy.idleDays})
         or exists (select 1 from lite.launch_trades h where h.token = l.token group by h.trader
-                    having sum(case when h.side = 'buy' then h.token_amount else -h.token_amount end) > 0)`;
+                    having sum(case when h.side = 'buy' then h.token_amount else -h.token_amount end) > 0))`;
   for (const l of launches) {
     const token = String(l.token);
     entries.push({ key: instanceKey(token), label: `instance ${token}` });
@@ -155,8 +220,182 @@ export async function upkeepEntries(policy: TtlPolicy = env.network.ttlPolicy): 
     if (l.pair) entries.push({ key: instanceKey(String(l.pair)), label: `instance pool ${l.pair}` });
   }
   if (c.moments) {
-    const moments = await sql()`select id from lite.moments where deadline > now() and (max_editions = 0 or minted < max_editions)`;
+    const moments = await sql()`select id from lite.moments where deadline > now() and (max_editions = 0 or minted < max_editions) and id is not null`;
     for (const m of moments) entries.push({ key: momentKey(c.moments, Number(m.id)), label: `moment ${m.id}` });
+  }
+  entries.push(...await v2UpkeepEntries(env.network));
+  return entries;
+}
+
+// ------------------------------------------------------------------------------------------------ contracts v2
+
+const addr = (a: string) => new Address(a).toScVal();
+
+/** A `#[contracttype]` DataKey of `contract` in persistent storage: Launch(token), Position(nft, account), Sharing, … */
+export function v2DataKey(contract: string, name: string, ...values: xdr.ScVal[]): xdr.LedgerKey {
+  return persistentKey(contract, variant(name, ...values));
+}
+
+/** Soroswap's code that every graduation runs and DyorHQ doesn't own: the factory's, and the pair code its create_pair
+ *  deploys, which the factory keeps in its persistent PairWasmHash entry. */
+export interface SoroswapCode {
+  factory: string;
+  pair: string;
+}
+
+/** The Soroswap factory's persistent DataKey::PairWasmHash, which create_pair reads. */
+export function pairWasmHashKey(factory: string): xdr.LedgerKey {
+  return v2DataKey(factory, "PairWasmHash");
+}
+
+/** Soroswap's code is read again after an hour: an upgraded factory or a new pair code shows up within it. */
+const SOROSWAP_CODE_MS = 3_600_000;
+let soroswapRead: { factory: string; at: number; code: SoroswapCode } | null = null;
+
+/** The Soroswap factory's code and the pair code it deploys, from its instance and its PairWasmHash entry. Null when
+ *  RPC doesn't have both and they were never read. */
+export async function soroswapCode(factory: string, now = Date.now()): Promise<SoroswapCode | null> {
+  if (soroswapRead?.factory === factory && now - soroswapRead.at < SOROSWAP_CODE_MS) return soroswapRead.code;
+  const r = await rpcServer().getLedgerEntries(instanceKey(factory), pairWasmHashKey(factory));
+  let factoryCode: string | null = null;
+  let pairCode: string | null = null;
+  for (const e of r.entries) {
+    const data = e.val.contractData();
+    if (data.key().switch().name === "scvLedgerKeyContractInstance") factoryCode = data.val().instance().executable().wasmHash().toString("hex");
+    else pairCode = Buffer.from(data.val().bytes()).toString("hex");
+  }
+  if (!factoryCode || !pairCode) return soroswapRead?.factory === factory ? soroswapRead.code : null;
+  soroswapRead = { factory, at: now, code: { factory: factoryCode, pair: pairCode } };
+  return soroswapRead.code;
+}
+
+/** v2's singletons: the deployment file's role and the contract's name. */
+const V2_SINGLETONS = [
+  ["launchpadV2", "launchpad-v2"],
+  ["momentsV2", "moments-v2"],
+  ["lpLocker", "lp-locker"],
+  ["execSoroswap", "exec-soroswap"],
+  ["execAquarius", "exec-aquarius"],
+  ["momentsGraduator", "moments-graduator"],
+] as const;
+
+/** The graduation and harvest paths (lead note on CT-15): the instance of every v2 singleton (testnet-qa's failing
+ *  venue and Moments stack too), every WASM the deployment uploaded (the launch tokens', Moment NFTs' and coins' that
+ *  the singletons deploy among them), and Soroswap's factory: its instance, its PairWasmHash, its code and the pair
+ *  code, where `soroswap` could be read. Every entry is critical. */
+export function v2PathEntries(net: Pick<NetworkConfig, "deploymentV2" | "contracts">, soroswap: SoroswapCode | null): TtlEntry[] {
+  const d = net.deploymentV2;
+  if (!d) return [];
+  const entries: TtlEntry[] = [];
+  const push = (key: xdr.LedgerKey, label: string) => entries.push({ key, label, critical: true });
+  for (const [role, name] of V2_SINGLETONS) {
+    const contract = d.contracts[role];
+    if (contract) push(instanceKey(contract), `instance ${name}`);
+  }
+  if (d.qa) {
+    push(instanceKey(d.qa.qaExecFail), "instance qa-exec-fail");
+    push(instanceKey(d.qa.momentsV2QaFail), "instance moments-v2 (failing stack)");
+    push(instanceKey(d.qa.momentsGraduatorQaFail), "instance moments-graduator (failing stack)");
+  }
+  for (const [name, hash] of Object.entries(d.wasmHashes)) push(codeKey(hash), `code ${name}`);
+  const factory = net.contracts.soroswapFactory;
+  push(instanceKey(factory), "instance soroswap factory");
+  push(pairWasmHashKey(factory), "soroswap PairWasmHash");
+  if (soroswap) {
+    push(codeKey(soroswap.factory), "code soroswap factory");
+    push(codeKey(soroswap.pair), "code soroswap pair");
+  }
+  return entries;
+}
+
+/** The asset contract of each quote the v2 deployment has ("XLM", "USDC", testnet-qa's "QA"), by id. */
+function v2Quotes(net: Pick<NetworkConfig, "deploymentV2" | "assets">): [string, string][] {
+  const d = net.deploymentV2!;
+  return Object.keys(d.quotes).flatMap((id): [string, string][] => {
+    const contract = id === "QA" ? d.qaAsset?.sac : net.assets.find((a) => a.id === id)?.contract;
+    return contract ? [[id, contract]] : [];
+  });
+}
+
+/** How long after its last activity a v2 launch's, Moment's or position's entries are kept alive (§13). */
+const ACTIVE_DAYS = 365;
+
+/** What contracts v2 adds to the rotation (§13): the paths (v2PathEntries, `soroswap` read when not given); each quote's
+ *  settings in launchpad-v2 and its asset contract; per launch its token instance, Launch, Curve and Recipient (a
+ *  graduated launch's Curve is read by every harvest and never written again, CT-05 N2), its token's Sharing state, and
+ *  after graduation its pool's instance and the locker's Position and Tracked entries; per Moment (both stacks on
+ *  testnet-qa) its NFT instance, Moment and Ledger, and after graduation its coin's and pool's instances and the
+ *  locker's entries; each collector's Position while unvested coins remain; and every owed balance, CreatorOwed in
+ *  launchpad-v2 and Owed in the locker. A launch or a Moment counts while it waits for graduation, while a rescued
+ *  launch still has refunds, with holders before graduation, and up to 12 months after its last activity: the last
+ *  event the indexer recorded for it, or its position's last harvest. */
+export async function v2UpkeepEntries(net: NetworkConfig = env.network, soroswap?: SoroswapCode | null): Promise<TtlEntry[]> {
+  const d = net.deploymentV2;
+  if (!d) return [];
+  let code = soroswap ?? null;
+  if (soroswap === undefined) {
+    code = await soroswapCode(net.contracts.soroswapFactory).catch((err) => {
+      console.warn("ttl: the Soroswap factory's code wasn't read", String((err as Error).message ?? err).slice(0, 160));
+      return null;
+    });
+  }
+  const entries = v2PathEntries(net, code);
+  const { launchpadV2: pad, lpLocker: locker } = d.contracts;
+  const stacks = [d.contracts.momentsV2, ...(d.qa ? [d.qa.momentsV2QaFail] : [])];
+  for (const [id, contract] of v2Quotes(net)) {
+    entries.push({ key: v2DataKey(pad, "Quote", addr(contract)), label: `quote launchpad-v2 ${id}` });
+    entries.push({ key: instanceKey(contract), label: `instance asset ${id}` });
+  }
+  // Hosted applies migrations by hand: the rows below come with 20261015000012.
+  if (!(await tableExists("lite.locker_positions"))) return entries;
+
+  const position = (pool: string, lpToken: unknown) => {
+    entries.push({ key: instanceKey(pool), label: `instance pool ${pool}` });
+    if (lpToken) {
+      entries.push({ key: v2DataKey(locker, "Position", addr(pool)), label: `locker position ${pool}` });
+      entries.push({ key: v2DataKey(locker, "Tracked", addr(String(lpToken))), label: `locker tracked ${lpToken}` });
+    }
+  };
+  const launches = await sql()`
+    select l.token, l.holder_sharing, l.pair, p.lp_token from lite.launches l left join lite.locker_positions p on p.pool = l.pair
+     where l.generation = 2 and l.contract = ${pad}
+       and (l.phase = 'completed'
+         or (l.phase = 'rescued' and l.refunded < l.refund_quote)
+         or greatest(l.updated_at, p.last_harvest_at) > now() - make_interval(days => ${ACTIVE_DAYS})
+         or (l.phase = 'curve' and exists (select 1 from lite.launch_trades h where h.token = l.token group by h.trader
+                                            having sum(case when h.side = 'buy' then h.token_amount else -h.token_amount end) > 0)))`;
+  for (const l of launches) {
+    const token = String(l.token);
+    entries.push({ key: instanceKey(token), label: `instance ${token}` });
+    for (const name of ["Launch", "Curve", "Recipient"]) entries.push({ key: v2DataKey(pad, name, addr(token)), label: `${name.toLowerCase()} ${token}` });
+    if (l.holder_sharing) entries.push({ key: v2DataKey(token, "Sharing"), label: `sharing ${token}` });
+    if (l.pair) position(String(l.pair), l.lp_token);
+  }
+  const moments = await sql()`
+    select m.nft, m.contract, m.coin, m.pool, m.state, p.lp_token from lite.moments m left join lite.locker_positions p on p.pool = m.pool
+     where m.generation = 2 and m.contract = any(${stacks}::text[])
+       and (m.state in ('collecting', 'graduation_pending')
+         or greatest(m.updated_at, p.last_harvest_at) > now() - make_interval(days => ${ACTIVE_DAYS}))`;
+  for (const m of moments) {
+    const [nft, contract] = [String(m.nft), String(m.contract)];
+    entries.push({ key: instanceKey(nft), label: `instance ${nft}` });
+    entries.push({ key: v2DataKey(contract, "Moment", addr(nft)), label: `moment ${nft}` });
+    entries.push({ key: v2DataKey(contract, "Ledger", addr(nft)), label: `ledger ${nft}` });
+    if (m.state === "graduated" && m.coin) entries.push({ key: instanceKey(String(m.coin)), label: `instance coin ${m.coin}` });
+    if (m.pool) position(String(m.pool), m.lp_token);
+  }
+  // A collector's coins vest over two periods after graduation; each claim extends its Position, but one that isn't
+  // claimed would archive before the rest vests.
+  const vesting = await sql()`
+    select p.nft, p.account, m.contract from lite.moment_positions p join lite.moments m on m.nft = p.nft
+     where m.generation = 2 and m.contract = any(${stacks}::text[]) and m.state <> 'expired' and p.entitlement > p.collector_claimed`;
+  for (const p of vesting) {
+    entries.push({ key: v2DataKey(String(p.contract), "Position", addr(String(p.nft)), addr(String(p.account))), label: `vesting ${p.nft} ${p.account}` });
+  }
+  const owed = await sql()`select contract, account, asset from lite.creator_owed where owed > 0 and contract = any(${[pad, locker]}::text[])`;
+  for (const o of owed) {
+    const name = o.contract === pad ? "CreatorOwed" : "Owed";
+    entries.push({ key: v2DataKey(String(o.contract), name, addr(String(o.account)), addr(String(o.asset))), label: `${name} ${o.account} ${o.asset}` });
   }
   return entries;
 }
@@ -184,66 +423,157 @@ export interface UpkeepReport {
   /** Under the threshold. */
   low: number;
   extended: number;
-  /** Not live: not on the ledger (not created yet) or archived (a user's restore brings it back). */
+  /** Not live: not on the ledger (not created yet) or archived (a user's restore brings it back). A critical entry
+   *  found archived is restored instead, and counts here only when its restore didn't apply. */
   missing: number;
+  /** Critical entries found archived and restored this run. */
+  restored: number;
   fee: string;
   hashes: string[];
 }
 
-/** Keys per extension: well inside a transaction's footprint limit. */
-const EXTEND_BATCH = 25;
+/** A run stops sending after this many of its transactions in a row didn't apply (a keeper out of XLM fails them all);
+ *  one that fails alone doesn't stop the ones after it. */
+const FAILURES_IN_A_ROW = 3;
 
-/** One run of the rotation: checks `entries` as rotation() orders them, extends the low ones by batch from the keeper's
- *  account, one transaction at a time, until `deadline` (ms since the epoch), and records each check in
- *  lite.ttl_checks. A low entry it had no time for keeps its old check time, so it comes first next run. */
-export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: number): Promise<UpkeepReport> {
-  const all = entries.map((e) => ({ ...e, id: e.key.toXDR("base64") }));
-  const ids = [...new Set(all.map((e) => e.id))];
-  const rows = ids.length ? await sql()`select key, checked_at from lite.ttl_checks where key = any(${ids})` : [];
-  const last = new Map(rows.map((r) => [String(r.key), new Date(r.checked_at as Date).getTime()]));
-  const batch = rotation(all, last, policy.perRun);
-  const report: UpkeepReport = { entries: ids.length, checked: batch.length, low: 0, extended: 0, missing: 0, fee: "0", hashes: [] };
-  if (batch.length === 0) return report;
-
-  // Each entry's TTL against the ledger RPC read it at.
+/** Each entry's TTL against the ledger RPC read it at: `live` says whether an entry is live. An entry past its TTL is
+ *  archived, even while RPC still returns it: no extension reaches it, and one in a batch would fail that batch's
+ *  extension on every run. */
+async function readTtl(entries: { key: xdr.LedgerKey; id: string }[]) {
   let latest = 0;
   const liveUntil = new Map<string, number>();
   const readAt = new Map<string, number>();
-  for (let i = 0; i < batch.length; i += 200) {
-    const r = await rpcServer().getLedgerEntries(...batch.slice(i, i + 200).map((e) => e.key));
+  for (let i = 0; i < entries.length; i += 200) {
+    const r = await rpcServer().getLedgerEntries(...entries.slice(i, i + 200).map((e) => e.key));
     latest = Math.max(latest, r.latestLedger);
     for (const e of r.entries as rpc.Api.LedgerEntryResult[]) {
       liveUntil.set(e.key.toXDR("base64"), e.liveUntilLedgerSeq ?? 0);
       readAt.set(e.key.toXDR("base64"), r.latestLedger);
     }
   }
-  // An entry past its TTL is archived, even while RPC still returns it: no extension reaches it, and one in a batch
-  // would fail that batch's extension on every run.
   const live = (e: { id: string }) => liveUntil.has(e.id) && liveUntil.get(e.id)! >= readAt.get(e.id)!;
-  const low = batch.filter((e) => live(e) && needsExtending(liveUntil.get(e.id)!, readAt.get(e.id)!, policy));
-  report.low = low.length;
-  report.missing = batch.filter((e) => !live(e)).length;
+  return { latest, liveUntil, readAt, live };
+}
 
-  const extended = new Set<string>();
-  let fee = 0n;
-  for (let i = 0; i < low.length && Date.now() < deadline; i += EXTEND_BATCH) {
-    const part = low.slice(i, i + EXTEND_BATCH);
+/** Sends `tx`, prepared from the keeper's account, with the inclusion bid of the moment, logs it as the ttl job's and
+ *  waits for it until `deadline`: its hash and fee when it applied, null when it didn't. */
+async function sendUpkeep(tx: Transaction, detail: Record<string, unknown>, deadline: number): Promise<{ hash: string; fee: bigint } | null> {
+  const prepared = withInclusionBid(tx, await inclusionFee("soroban"));
+  const hash = await keeperSend("ttl", prepared, detail);
+  const s = await waitForTx(hash, Math.max(5_000, deadline - Date.now()));
+  if (s.status !== "SUCCESS") return null;
+  return { hash, fee: BigInt(s.feeCharged ?? prepared.fee) };
+}
+
+/** Extends `entries` to `extendTo` ledgers from now, from the keeper's account, in one transaction. */
+async function extendEntries(entries: TtlEntry[], extendTo: number, deadline: number) {
+  const extend = await prepare(await extendTx(keeper().publicKey(), entries.map((e) => e.key), extendTo));
+  return await sendUpkeep(extend, { entries: entries.map((e) => e.label) }, deadline);
+}
+
+/** Restores archived `entries` (one group of restorePlan) from the keeper's account, in a transaction of their own:
+ *  whatever needs them runs in a later one. A restored entry lives only the network's minimum TTL, so it is extended
+ *  next. */
+export async function restoreEntries(entries: TtlEntry[], deadline: number) {
+  const acct = await rpcServer().getAccount(keeper().publicKey());
+  const tx = new TransactionBuilder(acct, { fee: "100", networkPassphrase: env.network.passphrase })
+    .addOperation(Operation.restoreFootprint({}))
+    .setSorobanData(new SorobanDataBuilder().setReadWrite(entries.map((e) => e.key)).build())
+    .setTimeout(120)
+    .build();
+  return await sendUpkeep(await prepare(tx), { restored: entries.map((e) => e.label) }, deadline);
+}
+
+type Keyed = TtlEntry & { id: string };
+
+/** Sends `groups` in order, one transaction each, until `deadline`: a transaction that doesn't apply is logged and the
+ *  next one goes on, but after FAILURES_IN_A_ROW in a row the run stops. An entry whose transaction failed sends none
+ *  of its later steps this run (each step adds only CODE_STEP_DAYS). Answers the entries all of whose transactions
+ *  applied, and what they cost. */
+async function sendEach<G extends { entries: Keyed[] }>(
+  groups: G[],
+  deadline: number,
+  what: string,
+  send: (group: G, entries: Keyed[]) => Promise<{ hash: string; fee: bigint } | null>,
+): Promise<{ done: Set<string>; fee: bigint; hashes: string[] }> {
+  const planned = new Map<string, number>();
+  for (const g of groups) for (const e of g.entries) planned.set(e.id, (planned.get(e.id) ?? 0) + 1);
+  const applied = new Map<string, number>();
+  const failed = new Set<string>();
+  const out = { done: new Set<string>(), fee: 0n, hashes: [] as string[] };
+  let inARow = 0;
+  for (const g of groups) {
+    if (Date.now() >= deadline || inARow >= FAILURES_IN_A_ROW) break;
+    const entries = g.entries.filter((e) => !failed.has(e.id));
+    if (!entries.length) continue;
+    let sent: { hash: string; fee: bigint } | null = null;
     try {
-      const extend = await prepare(await extendTx(keeper().publicKey(), part.map((e) => e.key), policy.extendToDays));
-      const prepared = withInclusionBid(extend, await inclusionFee("soroban"));
-      const hash = await keeperSend("ttl", prepared, { entries: part.map((e) => e.label) });
-      const s = await waitForTx(hash, Math.max(5_000, deadline - Date.now()));
-      if (s.status !== "SUCCESS") break;
-      for (const e of part) extended.add(e.id);
-      fee += BigInt(s.feeCharged ?? prepared.fee);
-      report.hashes.push(hash);
+      sent = await send(g, entries);
+      if (!sent) console.warn(`ttl: ${what} didn't apply`, entries.map((e) => e.label).join(", "));
     } catch (err) {
-      console.warn("ttl: extension failed", String((err as Error).message ?? err).slice(0, 200));
-      break;
+      console.warn(`ttl: ${what} failed`, entries.map((e) => e.label).join(", "), String((err as Error).message ?? err).slice(0, 200));
     }
+    if (!sent) {
+      inARow++;
+      for (const e of entries) failed.add(e.id);
+      continue;
+    }
+    inARow = 0;
+    out.fee += sent.fee;
+    out.hashes.push(sent.hash);
+    for (const e of entries) applied.set(e.id, (applied.get(e.id) ?? 0) + 1);
   }
+  for (const [id, n] of applied) if (n === planned.get(id)) out.done.add(id);
+  return out;
+}
+
+/** Restores `archived` (restorePlan), then extends the restored ones (from the network's minimum TTL, counted as none
+ *  left) and the live ones under `policy`'s threshold (extensionPlan), `first` before the others, until `deadline`. */
+async function restoreAndExtend(first: Keyed[], others: Keyed[], archived: Keyed[], ttl: Awaited<ReturnType<typeof readTtl>>, policy: TtlPolicy, deadline: number) {
+  const restores = await sendEach(restorePlan(archived).map((entries) => ({ entries })), deadline, "restore", (_g, part) => restoreEntries(part, deadline));
+  const restored = restores.done;
+  const low = (e: Keyed) => ttl.live(e) && needsExtending(ttl.liveUntil.get(e.id)!, ttl.readAt.get(e.id)!, policy);
+  const left = (e: Keyed) => (restored.has(e.id) ? 0 : ttl.liveUntil.get(e.id)! - ttl.readAt.get(e.id)!);
+  const lowFirst = [...archived.filter((e) => restored.has(e.id)), ...first.filter(low)];
+  const lowOthers = others.filter(low);
+  const plan = [...extensionPlan(lowFirst, left, policy.extendToDays), ...extensionPlan(lowOthers, left, policy.extendToDays)];
+  const extensions = await sendEach(plan, deadline, "extension", (step, part) => extendEntries(part, step.extendTo, deadline));
+  return {
+    restored,
+    /** The entries to extend, the restored ones first. */
+    low: [...lowFirst, ...lowOthers],
+    extended: extensions.done,
+    fee: restores.fee + extensions.fee,
+    hashes: [...restores.hashes, ...extensions.hashes],
+  };
+}
+
+/** One run of the rotation: checks the critical entries (the graduation and harvest paths) every run and the others as
+ *  rotation() orders them, within `perRun`; restores the critical ones found archived, in transactions of their own;
+ *  extends the low ones (and those restored), the critical first, in fee-sized transactions (extensionPlan) from the
+ *  keeper's account, one at a time, until `deadline` (ms since the epoch); and records each check in lite.ttl_checks.
+ *  A low entry it had no time for, or whose extension failed, keeps its old check time, so it comes first next run. */
+export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: number): Promise<UpkeepReport> {
+  const all = entries.map((e) => ({ ...e, id: e.key.toXDR("base64") }));
+  const ids = [...new Set(all.map((e) => e.id))];
+  const rows = ids.length ? await sql()`select key, checked_at from lite.ttl_checks where key = any(${ids})` : [];
+  const last = new Map(rows.map((r) => [String(r.key), new Date(r.checked_at as Date).getTime()]));
+  const critical = rotation(all.filter((e) => e.critical), new Map(), Infinity);
+  const criticalIds = new Set(critical.map((e) => e.id));
+  const batch = [...critical, ...rotation(all.filter((e) => !criticalIds.has(e.id)), last, Math.max(0, policy.perRun - critical.length))];
+  const report: UpkeepReport = { entries: ids.length, checked: batch.length, low: 0, extended: 0, missing: 0, restored: 0, fee: "0", hashes: [] };
+  if (batch.length === 0) return report;
+
+  const ttl = await readTtl(batch);
+  const { latest, liveUntil, live } = ttl;
+  const archived = critical.filter((e) => !live(e));
+  const { restored, low, extended, fee, hashes } = await restoreAndExtend(critical, batch.filter((e) => !criticalIds.has(e.id)), archived, ttl, policy, deadline);
+  report.restored = restored.size;
+  report.low = low.length - restored.size;
+  report.missing = batch.filter((e) => !live(e) && !restored.has(e.id)).length;
   report.extended = extended.size;
   report.fee = fee.toString();
+  report.hashes = hashes;
 
   const lowIds = new Set(low.map((e) => e.id));
   const done = batch.filter((e) => !lowIds.has(e.id) || extended.has(e.id));
@@ -256,5 +586,32 @@ export async function upkeep(entries: TtlEntry[], policy: TtlPolicy, deadline: n
   }
   // Entries the keeper no longer keeps alive (a dead launch, a closed Moment, another deployment) leave the rotation.
   await sql()`delete from lite.ttl_checks where not (key = any(${ids}))`;
+  return report;
+}
+
+/** What the keeper found on the graduation and harvest paths before it graduated or harvested anything. */
+export interface PathReport {
+  entries: number;
+  /** Archived when read. While any was, nothing graduates or harvests in this run, restored or not: a restored WASM
+   *  is in the module cache from a later ledger. */
+  archived: string[];
+  /** Every archived entry was restored. */
+  restored: boolean;
+  /** Under the threshold (or just restored), extended now rather than in their turn. */
+  extended: string[];
+}
+
+/** Checks the paths' `entries` (v2PathEntries) now: restores the archived ones in transactions of their own, then
+ *  extends those under `policy`'s threshold, the restored ones included, in fee-sized transactions, until `deadline`. */
+export async function upkeepPath(entries: TtlEntry[], policy: TtlPolicy, deadline: number): Promise<PathReport> {
+  const all = rotation(entries.map((e) => ({ ...e, id: e.key.toXDR("base64") })), new Map(), Infinity);
+  const report: PathReport = { entries: all.length, archived: [], restored: false, extended: [] };
+  if (all.length === 0) return report;
+  const ttl = await readTtl(all);
+  const archived = all.filter((e) => !ttl.live(e));
+  report.archived = archived.map((e) => e.label);
+  const { restored, low, extended } = await restoreAndExtend(all, [], archived, ttl, policy, deadline);
+  report.restored = archived.length > 0 && restored.size === archived.length;
+  report.extended = low.filter((e) => extended.has(e.id)).map((e) => e.label);
   return report;
 }
