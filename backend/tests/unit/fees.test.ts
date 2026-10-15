@@ -635,6 +635,7 @@ Deno.test("a simulation that finds archived data puts a user-paid restore step b
 // ------------------------------------------------------------------------------------------------ protocol upkeep
 
 const ttl = await import("../../supabase/functions/_shared/ttl.ts");
+const { env } = await import("../../supabase/functions/_shared/env.ts");
 
 Deno.test("the rent rotation: each entry once, never-checked first, then the oldest check, at most perRun", () => {
   const e = (id: string) => ({ id });
@@ -672,10 +673,20 @@ Deno.test("what the keeper keeps alive: the deployment's instances and code, eac
       return [{ token: quiet, pair: null }, { token: graduated, pair: pool }];
     }
     if (q.startsWith("select id from lite.moments where deadline > now()")) return [{ id: 3 }];
+    // Contracts v2's rows (migration 20261015000012) aren't here: v2's own entries are its paths and quotes.
+    if (q === "select to_regclass(?) is not null as present") return [{ present: false }];
     throw new Error(`unexpected query: ${q}`);
   }));
+  // Soroswap's code isn't read here: v2's paths go without it.
+  rpc = (method) => {
+    throw new Error(`unexpected RPC ${method}`);
+  };
   const entries = await ttl.upkeepEntries();
-  assertEquals(entries.map((e) => e.label), [
+  // After v1's, testnet's v2 deployment adds its own (ttl.ts v2UpkeepEntries, tested in indexer_v2.test.ts).
+  const v2 = await ttl.v2UpkeepEntries(env.network);
+  assert(v2.length > 0, "testnet has a v2 deployment");
+  assertEquals(entries.slice(entries.length - v2.length).map((e) => e.label), v2.map((e) => e.label));
+  assertEquals(entries.slice(0, entries.length - v2.length).map((e) => e.label), [
     "instance launchpad",
     "instance moments",
     "code launchpad",

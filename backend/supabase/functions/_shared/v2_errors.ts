@@ -26,16 +26,16 @@ export type V2Contract = keyof typeof V2_CONTRACT_TAGS;
 
 /** The sha256 of the WASM each contract's errors were read from. */
 export const V2_ERRORS_FROM: Record<V2Contract, string> = {
-  "launchpad-v2": "c85dbd7282fc485702b3bc5f46e893e305e65031bd578f4ecef6da51e21a52fa",
-  "launch-token-v2": "14c0d9b620865553723fb09fe1bd3225c8b4130179e40c674fc31e161e30ba9c",
-  "exec-soroswap": "46cfcee90ab5c6eb8b2cddcfcc7660ad9fa0a8d1d35eda5d80cb4ee1694fcf1b",
-  "exec-aquarius": "b753deb55841fa4cdd4a8df854e40714928dd6b91848ce615b241888726be3b6",
-  "qa-exec-fail": "a4c377cd2a6351e2bb44596b89369b268ffd0e422961d0c30baa1f81a0f6b8a4",
-  "lp-locker": "426a0b9e96a40c1eb782a5812cb95267152543ad904dd204f37001be2341f3f3",
-  "moments-v2": "22815f2e7e0f073f92482cd2e790d98eb092ef8a18f6f91bae836019677d5903",
-  "moment-nft": "572d72f09947fa4b9e9e1d39946568a0b7a50ce627962be4814c35cc653aaad8",
-  "moment-coin": "1dce9221a790d7ca02dbb5e0b407a5b52f9bbdc121544f7fba026176a9d48543",
-  "moments-graduator": "e7a91f24d08d0d1343ea89c6c1c9d4984a34ceb71006eb440945407fbf6130ff",
+  "launchpad-v2": "31fb62a91c3d142963fdd98a9b7e4329d8d7b021a68cf4df0615514860678cb0",
+  "launch-token-v2": "f09bc5743aaf94626d04f5831759abf7ed9d03fa42f3ac791b7d9d747a256707",
+  "exec-soroswap": "294dac519c9509d688f7f7dfeecc679cd0fc84cca09073423b10cd9f998078b4",
+  "exec-aquarius": "05d325ceeaa81af19c0a962479b32ee6c7307fc36d8d429c9b2f9c56f1cf3b2d",
+  "qa-exec-fail": "bf8cd8cc96838d819359ab7ce2e6890c931f4a7481eee9c62eef794e0f07409c",
+  "lp-locker": "89a44176a4fada4d17f1259ce6b4418ff98a4fed46536aca131b59e414a5d71d",
+  "moments-v2": "a73d505c4ae14920c203befde41f6001139faf973702c01851dfcb43500c9b1d",
+  "moment-nft": "e14e1676a4071b6e5f3bdf7335250fb6439251e3ffd11d12db5815bd1207a2c9",
+  "moment-coin": "9106f6a8a0513bedec4ec33f6a200acadcf0f2f79b6158609b71c1cdf3dc6e2a",
+  "moments-graduator": "853f4547f17b63926779cd18060069363fa584078c377432943c7eb6a3da03ba",
 };
 
 export interface NamedError {
