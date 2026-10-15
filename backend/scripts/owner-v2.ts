@@ -13,12 +13,15 @@
 //   check   [--fund-aqua-float] [--aquarius off]: the read-only preflight, one ✓ or ✗ line each. Exit 0 only when
 //           everything the deploy needs passes.
 //   sign    <file> --as admin|governance|guardian|treasury|v1-admin [--decode-only]: shows an envelope written by
-//           admin-v2.ts, then asks "Sign and submit? [y/N]" in a terminal, signs, submits and waits.
+//           admin-v2.ts, then asks "Sign and submit? [y/N]" in a terminal, signs, submits and waits. It accepts only
+//           the calls admin-v2.ts writes (its ADMIN_FNS), shows the description it derives from the decoded call, and
+//           escapes every character from the file or the chain that isn't printable ASCII.
 //
 // No secret is ever printed: keys are read by the script and only addresses are shown.
 import { Buffer } from "node:buffer";
 import { Address, Asset, FeeBumpTransaction, type Keypair, Operation, scValToNative, type Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { TESTNET } from "../supabase/functions/_shared/networks.ts";
+import { ADMIN_FNS, type AdminFn, adminFn, type AdminTarget, type ArgValue, decodeAdminArgs, describeAdminCall, MAX_VALID_FOR } from "./admin-v2.ts";
 import { aquariusLiveCheck, loadAquariusFixtures } from "./lib/aqua-float.ts";
 import {
   completeRoles,
@@ -376,47 +379,91 @@ async function readJson(path: string): Promise<any | null> {
   return t === null ? null : JSON.parse(t);
 }
 
-/** The contracts `sign` accepts a call to: the ones admin-v2.ts targets, named in deployments/testnet.json (the v1
- *  launchpad and Moments) or testnet-v2.json (every v2 contract it lists). By id, with a label. */
-export async function signableContracts(deploymentsDir: string): Promise<Map<string, string>> {
-  const m = new Map<string, string>();
-  const v1 = (await readJson(`${deploymentsDir}/testnet.json`)) as V1Deployment | null;
-  if (v1?.launchpad) m.set(v1.launchpad, "v1 launchpad");
-  if (v1?.moments) m.set(v1.moments, "v1 Moments");
-  const v2 = await readJson(`${deploymentsDir}/testnet-v2.json`);
-  for (const [k, v] of Object.entries((v2?.contracts ?? {}) as Record<string, string>)) {
-    if (typeof v === "string" && /^C[A-Z2-7]{55}$/.test(v)) m.set(v, `v2 ${k}`);
-  }
-  return m;
+/** What `sign` knows: the contracts admin-v2.ts calls, by id with their target, and a label for every address a
+ *  summary may show (DyorHQ's contracts, the network's assets and routers). */
+export interface Known {
+  targets: Map<string, AdminTarget>;
+  labels: Map<string, string>;
 }
 
-/** Labels for every address a summary may show: the signable contracts plus the network's assets and routers. */
-function labelsFor(signable: Map<string, string>): Map<string, string> {
-  const m = new Map(signable);
-  for (const a of TESTNET.assets) m.set(a.contract, `${a.id} SAC`);
-  m.set(TESTNET.contracts.soroswapFactory, "Soroswap factory");
-  m.set(TESTNET.contracts.soroswapRouter, "Soroswap router");
-  if (TESTNET.contracts.aquariusRouter) m.set(TESTNET.contracts.aquariusRouter, "Aquarius router");
-  return m;
+const isContractId = (v: unknown): v is string => typeof v === "string" && /^C[A-Z2-7]{55}$/.test(v);
+
+/** The v1 launchpad and Moments from deployments/testnet.json; launchpad-v2 and moments-v2 from testnet-v2.json
+ *  (its other contracts are labelled, and never signable: admin-v2.ts doesn't call them). */
+export async function knownContracts(deploymentsDir: string): Promise<Known> {
+  const targets = new Map<string, AdminTarget>();
+  const labels = new Map<string, string>();
+  for (const a of TESTNET.assets) labels.set(a.contract, `${a.id} SAC`);
+  labels.set(TESTNET.contracts.soroswapFactory, "Soroswap factory");
+  labels.set(TESTNET.contracts.soroswapRouter, "Soroswap router");
+  if (TESTNET.contracts.aquariusRouter) labels.set(TESTNET.contracts.aquariusRouter, "Aquarius router");
+  const v1 = (await readJson(`${deploymentsDir}/testnet.json`)) as V1Deployment | null;
+  if (typeof v1?.admin === "string") labels.set(v1.admin, "v1 admin");
+  const v2 = await readJson(`${deploymentsDir}/testnet-v2.json`);
+  for (const [k, v] of Object.entries((v2?.contracts ?? {}) as Record<string, unknown>)) if (isContractId(v)) labels.set(v, `v2 ${k}`);
+  const target = (id: unknown, t: AdminTarget) => {
+    if (!isContractId(id)) return;
+    targets.set(id, t);
+    labels.set(id, t);
+  };
+  target(v1?.launchpad, "v1 launchpad");
+  target(v1?.moments, "v1 Moments");
+  target(v2?.contracts?.launchpadV2, "launchpad-v2");
+  target(v2?.contracts?.momentsV2, "moments-v2");
+  return { targets, labels };
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  ADMIN_PUBLIC: "admin",
+  GOVERNANCE_PUBLIC: "governance",
+  LAUNCHPAD_GUARDIAN_PUBLIC: "launchpad guardian",
+  MOMENTS_GUARDIAN_PUBLIC: "Moments guardian",
+  TREASURY_PUBLIC: "treasury",
+  PLATFORM_PUBLIC: "platform",
+};
+
+/** Adds the roles file's accounts to the labels ("admin", "governance, admin" when one account holds both). */
+function labelRoles(labels: Map<string, string>, roles: Record<string, string | undefined>) {
+  const byAddress = new Map<string, string[]>();
+  for (const [k, name] of Object.entries(ROLE_LABELS)) {
+    const a = roles[k];
+    if (a && /^G[A-Z2-7]{55}$/.test(a)) byAddress.set(a, [...(byAddress.get(a) ?? []), name]);
+  }
+  for (const [a, names] of byAddress) if (!labels.has(a)) labels.set(a, names.join(", "));
 }
 
 export interface Inspected {
   tx: Transaction;
+  /** The call, as ADMIN_FNS lists it. */
+  fn: AdminFn;
+  /** The description derived from the decoded call (the file's must be the same). */
+  description: string;
   /** The summary, every outside value escaped. */
   lines: string[];
   expired: boolean;
 }
 
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/** A Unix time in seconds as an ISO date, or as a number past the last date JavaScript can show. */
+function isoTime(seconds: number): string {
+  return seconds * 1000 <= 8.64e15 ? new Date(seconds * 1000).toISOString() : `${seconds} (past any date)`;
+}
+
 /** Checks an envelope file against exactly what admin-v2.ts writes, and returns the transaction and its summary.
- *  Refused (throws): another network; XDR that doesn't parse; a fee-bump; signatures already on it; a memo; any
- *  precondition but a time bound from 0 to a set expiry; anything but ONE invokeContract operation without an
- *  operation source; a call to a contract outside `signable`; metadata that doesn't match the transaction; an auth
- *  entry that isn't the source account's or whose root invocation isn't the call itself; no Soroban data; a fee above
- *  the network's cap. `now` is in milliseconds. */
-export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, string>, now: number): Inspected {
+ *  Refused (throws): another network; XDR that doesn't parse; a fee-bump or a v0 envelope; signatures already on it;
+ *  a memo; any precondition but a time bound from 0 to an expiry at most MAX_VALID_FOR (24 h) away; anything but ONE
+ *  invokeContract operation without an operation source; a call to a contract admin-v2.ts doesn't call; metadata that
+ *  doesn't match the transaction; a (contract, function) pair ADMIN_FNS doesn't list, or arguments it doesn't encode
+ *  that way; an auth entry that isn't the source account's, whose root invocation isn't the call itself, or that has
+ *  sub-invocations; no Soroban data; a fee above the network's cap; a role the call isn't signed by; a build time or a
+ *  description other than admin-v2.ts writes (the description is derived from the decoded call). `now` is in
+ *  milliseconds. */
+export function inspectEnvelope(env: UnsignedEnvelope, known: Known, now: number): Inspected {
   const refuse = (why: string): never => {
     throw new Error(`refused: ${why}`);
   };
+  const labels = known.labels;
   if (env.networkPassphrase !== TESTNET.passphrase) refuse(`the envelope is for the network "${safe(env.networkPassphrase)}", not testnet`);
   let parsed: Transaction | FeeBumpTransaction;
   try {
@@ -426,6 +473,14 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
   }
   if (parsed instanceof FeeBumpTransaction) refuse("a fee-bump envelope; admin-v2.ts writes plain transactions");
   const tx = parsed as Transaction;
+  const kind = tx.toEnvelope().switch().name;
+  if (kind !== "envelopeTypeTx") {
+    refuse(
+      kind === "envelopeTypeTxV0"
+        ? "a v0 transaction envelope (the format from before protocol 13); admin-v2.ts writes v1 envelopes only: build it again with admin-v2.ts"
+        : `a ${safe(kind)} envelope; admin-v2.ts writes v1 transaction envelopes only`,
+    );
+  }
   const body = tx.toEnvelope().v1().tx();
   if (tx.signatures.length) refuse(`the envelope already carries ${tx.signatures.length} signature(s); admin-v2.ts writes unsigned ones`);
   if (tx.memo.type !== "none") refuse("the transaction has a memo; admin-v2.ts never sets one");
@@ -437,6 +492,13 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
   const maxTime = Number(cond.timeBounds().maxTime().toString());
   if (minTime !== 0) refuse("the transaction has a start time; admin-v2.ts sets none");
   if (maxTime === 0) refuse("the transaction never expires; admin-v2.ts always sets an expiry");
+  const left = maxTime - Math.floor(now / 1000);
+  if (left > MAX_VALID_FOR) {
+    refuse(
+      `the transaction stays valid until ${isoTime(maxTime)}, ${left.toLocaleString("en-US")} s from now; admin-v2.ts writes envelopes valid for ` +
+        `at most ${MAX_VALID_FOR.toLocaleString("en-US")} s (24 h)`,
+    );
+  }
   if (tx.operations.length !== 1) refuse(`${tx.operations.length} operations; admin-v2.ts writes exactly one contract call`);
   const op = tx.operations[0] as any;
   if (op.type !== "invokeHostFunction") refuse(`the operation is ${safe(String(op.type))}, not a contract call`);
@@ -445,15 +507,33 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
   if (f.switch().name !== "hostFunctionTypeInvokeContract") refuse(`the operation is ${safe(f.switch().name)}, not a contract call`);
   const call = f.invokeContract();
   const contract = Address.fromScAddress(call.contractAddress()).toString();
-  const fn = call.functionName().toString();
+  const fnName = call.functionName().toString();
   const args = call.args();
-  if (!signable.has(contract)) {
-    refuse(`the call goes to ${contract}, which is none of DyorHQ's contracts (deployments/testnet.json, testnet-v2.json)`);
+  const target = known.targets.get(contract);
+  if (!target) {
+    refuse(
+      labels.has(contract)
+        ? `the call goes to ${label(contract, labels)}, which admin-v2.ts never calls`
+        : `the call goes to ${contract}, which is none of DyorHQ's contracts (deployments/testnet.json, testnet-v2.json)`,
+    );
   }
-  if (env.contract !== contract || env.function !== fn || env.source !== tx.source) {
+  if (env.contract !== contract || env.function !== fnName || env.source !== tx.source) {
     refuse(
       `the file says ${safe(String(env.function))} on ${safe(String(env.contract))} from ${safe(String(env.source))}, but its transaction calls ` +
-        `${safe(fn)} on ${contract} from ${tx.source}`,
+        `${safe(fnName)} on ${contract} from ${tx.source}`,
+    );
+  }
+  const fn = adminFn(target!, fnName);
+  if (!fn) {
+    const writes = ADMIN_FNS.filter((x) => x.target === target).map((x) => x.fn);
+    refuse(`${target} ${safe(fnName)} is a call admin-v2.ts never writes; on the ${target} it writes only ${writes.join(", ")}`);
+  }
+  const decoded = decodeAdminArgs(fn!, args, tx.source);
+  if ("bad" in decoded) {
+    refuse(
+      decoded.bad < 0
+        ? `${fnName} has ${args.length} argument(s); admin-v2.ts writes ${decoded.expected}`
+        : `argument ${decoded.bad + 1} of ${fnName} is ${renderScVal(args[decoded.bad])}; admin-v2.ts writes ${decoded.expected}`,
     );
   }
   const auth = (op.auth ?? []) as xdr.SorobanAuthorizationEntry[];
@@ -462,7 +542,7 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
     if (g.switch().name !== "sorobanAuthorizedFunctionTypeContractFn") return false;
     const c = g.contractFn();
     return c.contractAddress().toXDR("base64") === call.contractAddress().toXDR("base64") &&
-      c.functionName().toString() === fn &&
+      c.functionName().toString() === fnName &&
       c.args().length === args.length &&
       c.args().every((a, i) => a.toXDR("base64") === args[i].toXDR("base64"));
   };
@@ -471,7 +551,14 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
       refuse(`auth entry ${i + 1} needs another account's signature; admin-v2.ts uses the source account's only`);
     }
     if (!sameCall(a.rootInvocation())) {
-      refuse(`auth entry ${i + 1} authorizes ${invocationText(a.rootInvocation(), labelsFor(signable))}, not the call ${safe(fn)} itself`);
+      refuse(`auth entry ${i + 1} authorizes ${invocationText(a.rootInvocation(), labels)}, not the call ${fnName} itself`);
+    }
+    const subs = a.rootInvocation().subInvocations();
+    if (subs.length) {
+      refuse(
+        `auth entry ${i + 1} also authorizes ${subs.length} sub-invocation(s), the first ${invocationText(subs[0], labels)}; ` +
+          `admin-v2.ts's calls authorize nothing beyond themselves`,
+      );
     }
   });
   let soroban: xdr.SorobanTransactionData | null = null;
@@ -483,29 +570,40 @@ export function inspectEnvelope(env: UnsignedEnvelope, signable: Map<string, str
   if (!soroban) refuse("the transaction isn't prepared (no Soroban data); build it with admin-v2.ts");
   const fee = BigInt(tx.fee);
   if (fee > TESTNET.feePolicy.maxFee) refuse(`the max fee ${fmtXlm(fee)} is above the ${fmtXlm(TESTNET.feePolicy.maxFee)} cap`);
+  if (!fn!.roles.includes(env.role as SigningRole)) {
+    refuse(`the file says --as ${safe(String(env.role))}, but admin-v2.ts writes ${target} ${fnName} for --as ${fn!.roles.join(" or ")}`);
+  }
+  if (typeof env.builtAt !== "string" || !ISO_TIME.test(env.builtAt)) refuse(`the file's build time "${safe(String(env.builtAt))}" isn't a time admin-v2.ts writes`);
+  const description = describeAdminCall(fn!, (decoded as { values: ArgValue[] }).values, tx.source);
+  if (env.description !== description) refuse(`the file describes the call as "${safe(String(env.description))}", but its transaction is: ${safe(description)}`);
 
-  const labels = labelsFor(signable);
-  const expired = maxTime * 1000 < now;
+  const expired = left < 0;
+  const argLabel = (a: xdr.ScVal) => {
+    const shown = renderScVal(a);
+    return a.switch().name === "scvAddress" && labels.has(shown) ? `${shown} (${safe(labels.get(shown)!)})` : shown;
+  };
   const lines = [
     `  network      testnet ✓`,
-    `  built        ${safe(String(env.builtAt ?? "?"))}: ${safe(String(env.description ?? ""))}`,
+    `  description  ${safe(description)}`,
+    `  built        ${env.builtAt}`,
     `  max fee      ${fmtUnits(fee)} XLM (${fee.toLocaleString("en-US")} stroops; resource fee ${fmtUnits(BigInt(soroban!.resourceFee().toString()))} XLM)`,
     `  sequence     ${tx.sequence}`,
-    `  valid until  ${new Date(maxTime * 1000).toISOString()}${expired ? " (expired: build it again)" : ""}`,
+    `  valid until  ${isoTime(maxTime)}${expired ? " (expired: build it again)" : ""}`,
     `  memo         none; no signatures yet`,
     `  operation    one contract call, no operation source`,
     `      contract ${label(contract, labels)}`,
-    `      call     ${safe(fn)}(${args.map(renderScVal).join(", ")})`,
-    ...args.map((a, i) => `      arg ${i + 1}    ${a.switch().name.replace(/^scv/, "")} ${renderScVal(a)}`),
-    ...(auth.length === 0 ? ["      auth     none: the call needs no signature but the transaction's"] : []),
-    ...auth.flatMap((a, i) => [`      auth ${i + 1}   the source account authorizes:`, ...invocationLines(a.rootInvocation(), labels, 4)]),
+    `      call     ${fnName}(${args.map(renderScVal).join(", ")})`,
+    ...args.map((a, i) => `      arg ${i + 1}    ${a.switch().name.replace(/^scv/, "")} ${argLabel(a)}`),
+    ...(auth.length === 0
+      ? ["      auth     none: the call needs no signature but the transaction's"]
+      : auth.map((_a, i) => `      auth ${i + 1}   the source account authorizes this call only, no sub-invocations`)),
   ];
-  return { tx, lines, expired };
+  return { tx, fn: fn!, description, lines, expired };
 }
 
 const label = (a: string, labels: Map<string, string>) => (labels.has(a) ? `${a} (${safe(labels.get(a)!)})` : a);
 
-/** One invocation as text: `<contract> <fn>(<args>)`, or a contract creation with its arguments. */
+/** One invocation as text, for a refusal: `<contract> <fn>(<args>)`, or a contract creation with its arguments. */
 function invocationText(inv: xdr.SorobanAuthorizedInvocation, labels: Map<string, string>): string {
   const g = inv.function();
   switch (g.switch().name) {
@@ -530,14 +628,6 @@ function invocationText(inv: xdr.SorobanAuthorizedInvocation, labels: Map<string
   return safe(g.switch().name);
 }
 
-/** The full invocation tree, one line per node. */
-function invocationLines(inv: xdr.SorobanAuthorizedInvocation, labels: Map<string, string>, depth: number): string[] {
-  return [
-    `${" ".repeat(depth * 2 + 6)}${depth > 4 ? "↳ " : ""}${invocationText(inv, labels)}`,
-    ...inv.subInvocations().flatMap((s) => invocationLines(s, labels, depth + 1)),
-  ];
-}
-
 async function sign(ctx: OwnerCtx, args: string[]): Promise<number> {
   const say = (l = "") => ctx.io.out(l);
   let file = "";
@@ -553,7 +643,12 @@ async function sign(ctx: OwnerCtx, args: string[]): Promise<number> {
   refuseRoleEnv(ctx.env);
 
   const env = parseEnvelope(await Deno.readTextFile(file));
-  const { tx, lines, expired } = inspectEnvelope(env, await signableContracts(ctx.deploymentsDir), Date.now());
+  const known = await knownContracts(ctx.deploymentsDir);
+  labelRoles(known.labels, (await loadRolesFile(ctx.secretsDir).catch(() => null))?.roles ?? {});
+  const { tx, fn, lines, expired } = inspectEnvelope(env, known, Date.now());
+  if (!fn.roles.includes(role as SigningRole)) {
+    throw new Error(`refused: admin-v2.ts writes ${fn.target} ${fn.fn} for --as ${fn.roles.join(" or ")}, not --as ${role}`);
+  }
 
   const { key, addresses, from } = await roleKey(ctx, role as SigningRole);
   if (!addresses.includes(tx.source)) {

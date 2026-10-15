@@ -234,9 +234,21 @@ Deno.test("the test recorder keeps exactly what a script writes, so a leak can't
   assertEquals(io.stderr, ["\x1b[8m"]);
 });
 
-Deno.test("safe() escapes every control and format character, newlines included; terminalSafe() keeps the newlines", () => {
-  assertEquals(safe("a\nb\r\tc\x00\x1b[8m\x7f\x9b"), "a\\x0ab\\x0d\\x09c\\x00\\x1b[8m\\x7f\\x9b");
-  assertEquals(safe("evil‮dcba​"), "evil\\u{202e}dcba\\u{200b}");
-  assertEquals(safe("✓ G…ABC → 10 XLM"), "✓ G…ABC → 10 XLM");
+Deno.test("safe() keeps printable ASCII only: controls show as \\xNN, every other character as \\u{…}, a backslash as \\\\", () => {
+  assertEquals(safe("a\nb\r\tc\x00\x1b[8m\x7f\x9b"), "a\\x0ab\\x0d\\x09c\\x00\\x1b[8m\\x7f\\u{9b}");
+  // The review's look-alikes (craft3.ts n3): Cyrillic у, a right-to-left override, a line separator, the Hangul filler
+  // and a combining long stroke. None of them may pass for ASCII or move the text around.
+  assertEquals(safe("d\u0443orhq"), "d\\u{443}orhq");
+  assertEquals(safe("evil\u202edcba\u200b"), "evil\\u{202e}dcba\\u{200b}");
+  assertEquals(safe("a\u2028b\u3164c\u0336d"), "a\\u{2028}b\\u{3164}c\\u{336}d");
+  assertEquals(safe("\u{1f600}\ud800"), "\\u{1f600}\\u{d800}", "astral characters and lone surrogates too");
+  // A backslash in the text itself can't pass for an escape.
+  assertEquals(safe("x\\u{443}"), "x\\\\u{443}");
+  assertEquals(safe("set_launches_enabled(false) G…"), "set_launches_enabled(false) G\\u{2026}");
+});
+
+Deno.test("terminalSafe() escapes controls, format characters and separators for the console, keeps newlines and the scripts' own marks", () => {
   assertEquals(terminalSafe("one\ntwo\x1b[2J"), "one\ntwo\\x1b[2J");
+  assertEquals(terminalSafe("✓ G…ABC → 10 XLM ✗"), "✓ G…ABC → 10 XLM ✗");
+  assertEquals(terminalSafe("a\u202eb\u2028c\u2029d\x9b"), "a\\u{202e}b\\u{2028}c\\u{2029}d\\x9b");
 });
