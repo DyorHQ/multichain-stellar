@@ -7,6 +7,7 @@
 // names on chain; the Moment's page counts them; My Moments needs a session and adds up the spending and the
 // earnings; a collect past the cap is refused before signing (moment.sold_out).
 import { Keypair, Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
+import { friendbotFund } from "../../../supabase/functions/_shared/account.ts";
 import { hex, SEP53_PREFIX, sha256 } from "../../../supabase/functions/_shared/auth.ts";
 import { sv, view } from "../../../supabase/functions/_shared/stellar.ts";
 import { verifyTransaction } from "../../../supabase/functions/_shared/verify.ts";
@@ -93,7 +94,8 @@ async function runAs(t: E2E, kp: Keypair, token: string, plan: any): Promise<{ s
     const { fee, cap } = feeOf(t, step);
     if (fee > cap) throw new Error(`${step.label}: the fee ${fee} is over the network's cap ${cap}`);
     tx.sign(kp);
-    const sent = await api(t, token, "POST", "/tx/submit", { planId: plan.planId, stepId: step.id, signedXdr: tx.toEnvelope().toXDR("base64") });
+    const sent = await api(t, token, "POST", "/tx/submit", { planId: plan.planId, stepId: step.id, signedXdr: tx.toEnvelope().toXDR("base64") })
+      .catch((err) => Promise.reject(new Error(`${step.label} (fee ${fee} stroops): ${err.message}`)));
     let status = sent;
     for (let k = 0; k < 40 && status.status === "pending"; k++) {
       await new Promise((r) => setTimeout(r, 1_500));
@@ -106,11 +108,11 @@ async function runAs(t: E2E, kp: Keypair, token: string, plan: any): Promise<{ s
   return outs;
 }
 
-/** A new account set up: signed in, activated (Friendbot on testnet). */
+/** A new account, signed in and given test XLM by Friendbot, as testnet's setup does. The Moments here are priced in
+ *  XLM, so it needs no other asset: the setup's USDC step is the auth phase's to check. */
 async function account(t: E2E, kp: Keypair): Promise<string> {
   const token = await signIn(t, kp);
-  const act = await api(t, token, "POST", "/account/activate");
-  if (act.planId) await runAs(t, kp, token, act);
+  await friendbotFund(kp.publicKey());
   return token;
 }
 
