@@ -1,14 +1,44 @@
-// Generates ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+<Name>.swift for one deployment, from
-// the network registry and deployments/<name>.json: the app refuses to sign calls to any contract that isn't listed
-// there, refuses any transaction above the fee caps listed there, and reads launch tokens' code only through the RPC
-// listed there (docs/DESIGN-stellar-parity.md §4.2, §5.5, §6.16).
+// Generates two files from the network registry, the deployment files and contracts/dist:
+// - ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+<Name>.swift for one deployment: the app refuses
+//   to sign calls to any contract that isn't listed there, refuses any transaction above the fee caps listed there, and
+//   reads launch tokens' code only through the RPC listed there (docs/DESIGN-stellar-parity.md §4.2, §5.5, §6.16).
+//   Once the deployment's v2 file exists it also pins v2's roles, the WASM hashes of the contracts v2 creates at
+//   runtime, both duration sets and the launch-fee bound (docs/DESIGN-stellar-contracts-v2.md §20.1). qa-exec-fail and
+//   testnet-qa's failing Moments stack are never pinned, in Release or Debug builds (finding F4).
+// - backend/supabase/functions/_shared/v2_errors.ts: the name of every namespaced v2 error code, read from the error
+//   enums in the contract specs of contracts/dist's v2 WASMs, with the known codes of origin 0 (OpenZeppelin, the
+//   Stellar Asset Contract, Soroswap's fixtures) and of the host (§4, finding V10).
+//
 //   SPONSOR_PUBLIC=G… deno run -A --config backend/supabase/functions/deno.json backend/scripts/gen-pinned.ts --deployment testnet
+//   deno run -A --config backend/supabase/functions/deno.json backend/scripts/gen-pinned.ts --errors
+//
 // testnet writes PinnedContracts+Testnet.swift (PinnedContracts.testnet); testnet-qa writes PinnedContracts+TestnetQA.swift
-// (PinnedContracts.testnetQA), which Debug builds select with LITE_PINNED=testnet-qa. The output depends only on its
-// inputs, so running it again changes nothing.
+// (PinnedContracts.testnetQA), which Debug builds select with LITE_PINNED=testnet-qa. A --deployment run also rewrites
+// v2_errors.ts when contracts/dist holds the v2 WASMs, and with a v2 deployment it requires them to be exactly the
+// deployed ones, so the table names the errors of the contracts the app is pinned to. It refuses a v2 file the
+// functions don't serve (testnet-v2.json not yet imported into deployments/index.ts). --errors rewrites v2_errors.ts
+// alone. The output depends only on its inputs, so running it again changes nothing.
 import { StrKey } from "@stellar/stellar-sdk";
-import { deploymentByName } from "../supabase/functions/_shared/deployments/index.ts";
-import { contractAllowlist, networkByName, withDeployment } from "../supabase/functions/_shared/networks.ts";
+import {
+  DEPLOYMENT_NETWORKS,
+  type DeploymentV2,
+  LAUNCH_DURATION_KEYS,
+  MOMENTS_DURATION_KEYS,
+  V2_FILES,
+} from "../supabase/functions/_shared/deployments/index.ts";
+import {
+  contractAllowlist,
+  networkByName,
+  type NetworkConfig,
+  withDeployment,
+} from "../supabase/functions/_shared/networks.ts";
+import { sha256Hex } from "./lib/reviewed-hashes.ts";
+import { type WasmKey, WASMS } from "./lib/v2-constructors.ts";
+import { readSpec } from "./lib/wasm-spec.ts";
+
+const ROOT = new URL("../../", import.meta.url).pathname;
+const ERRORS_FILE = "backend/supabase/functions/_shared/v2_errors.ts";
+const DEPLOYMENTS_DIR = "backend/supabase/functions/_shared/deployments";
 
 /** The Swift file and property each deployment is pinned as. */
 const SWIFT: Record<string, { file: string; property: string }> = {
@@ -16,49 +46,473 @@ const SWIFT: Record<string, { file: string; property: string }> = {
   "testnet-qa": { file: "TestnetQA", property: "testnetQA" },
 };
 
+const USAGE = "usage: gen-pinned.ts --deployment <testnet|testnet-qa> | --errors";
+
+// ------------------------------------------------------------------------------------------------ the pins
+
+const swiftArray = (xs: string[]) => `[${xs.map((x) => `"${x}"`).join(", ")}]`;
+/** A whole number as a Swift literal with digit groups: 30_000_000. */
+const grouped = (n: bigint | number) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "_");
+const camel = (snake: string) => snake.replace(/[_-]([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+/** PinnedContracts+<Name>.swift for `net`, which carries the deployment called `name` (withDeployment). Throws when
+ *  the deployment has no contracts yet, when the network has no phone RPC, and on any qa-exec-fail or failing-stack
+ *  contract in the roles (finding F4). */
+export function renderPins(net: NetworkConfig, name: string, sponsor: string): string {
+  const swift = SWIFT[name];
+  if (!swift) throw new Error(`no pins for deployment "${name}": ${Object.keys(SWIFT).join(" or ")}`);
+  const v1 = net.deployment;
+  const v2 = net.deploymentV2;
+  if (!v1 && !v2) throw new Error(`deployment "${name}" has no contracts yet`);
+  if (!net.phoneRpcUrl) throw new Error(`networks.ts: ${net.name}'s phoneRpcUrl is missing.`);
+  const allow = contractAllowlist(net);
+  const qa = new Set(Object.values(v2?.qa ?? {}));
+  const leaked = Object.entries(allow).filter(([, ids]) => ids.some((id) => qa.has(id))).map(([role]) => role);
+  if (leaked.length) throw new Error(`a testnet-qa test contract would be pinned as ${leaked.join(", ")} (finding F4)`);
+  const fees = net.feePolicy;
+  const roles = Object.entries(allow).map(([role, ids]) => `            "${role}": ${swiftArray(ids)},`).join("\n");
+  const files = [v1 ? `deployments/${name}.json` : null, v2 ? `deployments/${v2.id}.json` : null].filter((f) => f).join(
+    " and ",
+  );
+  const deployedAt = v1 && v2 ? `${v1.deployedAt} and v2 deployment ${v2.deployedAt}` : (v1 ?? v2)!.deployedAt;
+  const lines = [
+    `// Generated by backend/scripts/gen-pinned.ts --deployment ${name} from networks.ts and ${files} — do not edit.`,
+    `// Generated for deployment ${deployedAt}.`,
+    "import Foundation",
+    "",
+    "public extension PinnedContracts {",
+    `    static let ${swift.property} = PinnedContracts(`,
+    `        network: .${net.name},`,
+    `        sponsor: "${sponsor}",`,
+    `        launchTokenWasmHash: "${v1?.launchTokenWasmHash ?? ""}",`,
+    "        roles: [",
+    roles,
+    "        ],",
+    `        feePolicy: FeePolicy(maxFee: ${grouped(fees.maxFee)}, maxInclusionFeePerOp: ${
+      grouped(fees.maxInclusionPerOp)
+    }, starterInnerFeeMax: ${grouped(fees.starterInnerFeeMax)}),`,
+    `        rpcURL: URL(string: "${net.phoneRpcUrl}")!${v2 ? "," : ""}`,
+  ];
+  if (v2) {
+    const set = (type: string, values: object, keys: readonly string[], last: boolean) => [
+      `            ${type === "Launch" ? "launch" : "moments"}: PinnedDurations.${type}(`,
+      ...keys.map((k, i) =>
+        `                ${camel(k)}: ${grouped((values as Record<string, number>)[k])}${
+          i < keys.length - 1 ? "," : ""
+        }`
+      ),
+      `            )${last ? "" : ","}`,
+    ];
+    lines.push(
+      "        runtimeWasmHashes: [",
+      ...Object.entries(v2.runtimeWasmHashes).map(([role, hash]) => `            "${role}": "${hash}",`),
+      "        ],",
+      "        durations: PinnedDurations(",
+      ...set("Launch", v2.durations.launch, LAUNCH_DURATION_KEYS, false),
+      ...set("Moments", v2.durations.moments, MOMENTS_DURATION_KEYS, true),
+      "        ),",
+      `        maxLaunchFeeStroops: ${grouped(net.maxLaunchFeeStroops)}`,
+    );
+  }
+  lines.push("    )", "}", "");
+  return lines.join("\n");
+}
+
+/** Why the deployment called `name` can't be pinned as `net` carries it, or null: its v2 file is in deployments/ under
+ *  `root`, but `net` has none, because the file isn't imported into deployments/index.ts's BUNDLED_V2. Pinning then
+ *  would leave the app on v1 while the hosted functions answer not_deployed for v2. */
+export function unbundledV2(name: string, net: NetworkConfig, root = ROOT): string | null {
+  const file = V2_FILES[name];
+  if (!file || net.deploymentV2) return null;
+  try {
+    Deno.statSync(`${root}${DEPLOYMENTS_DIR}/${file}.json`);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return null;
+    throw e;
+  }
+  return `deployments/${file}.json is there but the functions don't serve it: import it in deployments/index.ts and add it to BUNDLED_V2`;
+}
+
+// ------------------------------------------------------------------------------------------------ the error table
+
+/** The v2 contracts' tags (contracts/common/src/lib.rs TAG_*): a contract's errors are ERR_BASE + tag·100 + n. */
+export const V2_TAGS: Record<WasmKey, number> = {
+  "launchpad-v2": 1,
+  "launch-token-v2": 2,
+  "exec-soroswap": 3,
+  "exec-aquarius": 4,
+  "qa-exec-fail": 5,
+  "lp-locker": 6,
+  "moments-v2": 7,
+  "moment-nft": 8,
+  "moment-coin": 9,
+  "moments-graduator": 10,
+};
+export const ERR_BASE = 10_000;
+export const ORIGIN_FOREIGN = 0;
+export const ORIGIN_HOST = 99;
+
+/** A named error: `origin` as GradFailure records it (a tag, 0 for a contract outside DyorHQ, 99 for the host). */
+export interface NamedError {
+  origin: number;
+  code: number;
+  /** The v2 contract, or where a foreign or host code comes from. */
+  source: string;
+  name: string;
+}
+
+export interface ErrorEnum {
+  name: string;
+  cases: { name: string; value: number }[];
+}
+
+/** OpenZeppelin stellar-tokens 0.7.2's errors, which launch-token-v2, moment-coin and moment-nft can raise
+ *  (src/fungible/mod.rs:278-310, src/non_fungible/mod.rs:351-384). */
+const OPENZEPPELIN: Record<string, { source: string; cases: [string, number][] }> = {
+  FungibleTokenError: {
+    source: "OpenZeppelin fungible",
+    cases: [
+      ["InsufficientBalance", 100],
+      ["InsufficientAllowance", 101],
+      ["InvalidLiveUntilLedger", 102],
+      ["LessThanZero", 103],
+      ["MathOverflow", 104],
+      ["UnsetMetadata", 105],
+      ["ExceededCap", 106],
+      ["InvalidCap", 107],
+      ["CapNotSet", 108],
+      ["SACNotSet", 109],
+      ["SACAddressMismatch", 110],
+      ["SACMissingFnParam", 111],
+      ["SACInvalidFnParam", 112],
+      ["UserNotAllowed", 113],
+      ["UserBlocked", 114],
+    ],
+  },
+  NonFungibleTokenError: {
+    source: "OpenZeppelin non-fungible",
+    cases: [
+      ["NonExistentToken", 200],
+      ["IncorrectOwner", 201],
+      ["InsufficientApproval", 202],
+      ["InvalidApprover", 203],
+      ["InvalidLiveUntilLedger", 204],
+      ["MathOverflow", 205],
+      ["TokenIDsAreDepleted", 206],
+      ["InvalidAmount", 207],
+      ["TokenNotFoundInOwnerList", 208],
+      ["TokenNotFoundInGlobalList", 209],
+      ["UnsetMetadata", 210],
+      ["BaseUriMaxLenExceeded", 211],
+      ["InvalidRoyaltyAmount", 212],
+      ["NameMaxLenExceeded", 213],
+      ["SymbolMaxLenExceeded", 214],
+    ],
+  },
+};
+
+/** The Stellar Asset Contract's errors (soroban-env-host 26.1.4, src/builtin_contracts/contract_error.rs:9-30; 1 is
+ *  reserved). */
+const SAC: [string, number][] = [
+  ["OperationNotSupportedError", 2],
+  ["AlreadyInitializedError", 3],
+  ["UnauthorizedError", 4],
+  ["AuthenticationError", 5],
+  ["AccountMissingError", 6],
+  ["AccountIsNotClassic", 7],
+  ["NegativeAmountError", 8],
+  ["AllowanceError", 9],
+  ["BalanceError", 10],
+  ["BalanceDeauthorizedError", 11],
+  ["OverflowError", 12],
+  ["TrustlineMissingError", 13],
+  ["InsufficientAccountReserve", 14],
+  ["TooManyAccountSubentries", 15],
+];
+
+/** The host's ScErrorCode, the code of origin 99 (stellar-xdr 26, Stellar-contract.x). */
+const HOST: [string, number][] = [
+  ["ArithDomain", 0],
+  ["IndexBounds", 1],
+  ["InvalidInput", 2],
+  ["MissingValue", 3],
+  ["ExistingValue", 4],
+  ["ExceededLimit", 5],
+  ["InvalidAction", 6],
+  ["InternalError", 7],
+  ["UnexpectedType", 8],
+  ["UnexpectedSize", 9],
+];
+
+/** Soroswap's contracts as deployed, whose errors reach a graduation through exec-soroswap (origin 0). */
+export const SOROSWAP_FIXTURES = ["soroswap_router.wasm", "soroswap_pair.wasm", "soroswap_factory.wasm"];
+
+/** Every `#[contracterror]` enum in a WASM's contract spec. */
+export function errorEnums(wasm: Uint8Array): ErrorEnum[] {
+  return readSpec(wasm)
+    .filter((e) => e.switch().name === "scSpecEntryUdtErrorEnumV0")
+    .map((e) => {
+      const u = e.udtErrorEnumV0();
+      return {
+        name: u.name().toString(),
+        cases: u.cases().map((c) => ({ name: c.name().toString(), value: c.value() })),
+      };
+    });
+}
+
+/** One v2 WASM of contracts/dist; bytes and sha256 are null when it is absent. */
+export interface DistWasm {
+  key: WasmKey;
+  file: string;
+  bytes: Uint8Array | null;
+  sha256: string | null;
+}
+
+/** The ten v2 WASMs of contracts/dist under `root`. */
+export async function readDist(root = ROOT): Promise<DistWasm[]> {
+  const out: DistWasm[] = [];
+  for (const key of Object.keys(V2_TAGS) as WasmKey[]) {
+    const file = `contracts/dist/${WASMS[key].file}`;
+    let bytes: Uint8Array | null = null;
+    try {
+      bytes = await Deno.readFile(`${root}${file}`);
+    } catch (e) {
+      if (!(e instanceof Deno.errors.NotFound)) throw e;
+    }
+    out.push({ key, file, bytes, sha256: bytes ? await sha256Hex(bytes) : null });
+  }
+  return out;
+}
+
+export interface ErrorTable {
+  /** Every namespaced error of every v2 contract, in code order. */
+  v2: NamedError[];
+  /** Origin 0, in code order: a code may have several names. */
+  foreign: NamedError[];
+  /** Origin 99. */
+  host: NamedError[];
+}
+
+/** The table from each v2 contract's error enums and Soroswap's. Throws on an error outside its contract's
+ *  namespace, a repeated code, a contract without errors and an enum outside the namespace that isn't one of
+ *  OpenZeppelin's as known here. */
+export function errorTable(contracts: { key: WasmKey; enums: ErrorEnum[] }[], soroswap: ErrorEnum[]): ErrorTable {
+  const v2: NamedError[] = [];
+  for (const { key, enums } of contracts) {
+    const tag = V2_TAGS[key];
+    const lo = ERR_BASE + tag * 100 + 1;
+    const hi = ERR_BASE + tag * 100 + 99;
+    const own: NamedError[] = [];
+    for (const en of enums) {
+      const namespaced = en.cases.filter((c) => c.value >= ERR_BASE + 100 && c.value <= ERR_BASE + 1_099);
+      if (namespaced.length === 0) {
+        const known = OPENZEPPELIN[en.name];
+        const same = known && JSON.stringify(en.cases.map((c) => [c.name, c.value])) === JSON.stringify(known.cases);
+        if (!same) {
+          throw new Error(
+            `${key}: error enum ${en.name} is outside the v2 namespace and isn't OpenZeppelin's as known to gen-pinned.ts`,
+          );
+        }
+        continue;
+      }
+      for (const c of en.cases) {
+        if (c.value < lo || c.value > hi) {
+          throw new Error(`${key}: ${en.name}::${c.name} = ${c.value} is outside its namespace ${lo}–${hi}`);
+        }
+        if (own.some((e) => e.code === c.value)) throw new Error(`${key}: code ${c.value} repeats`);
+        own.push({ origin: tag, code: c.value, source: key, name: c.name });
+      }
+    }
+    if (own.length === 0) throw new Error(`${key}: its contract spec has no error enum`);
+    v2.push(...own);
+  }
+  const missing = (Object.keys(V2_TAGS) as WasmKey[]).filter((k) => !contracts.some((c) => c.key === k));
+  if (missing.length) throw new Error(`no errors read for ${missing.join(", ")}`);
+  v2.sort((a, b) => a.code - b.code);
+
+  const foreign: NamedError[] = [];
+  const add = (source: string, name: string, code: number) => {
+    if (!foreign.some((e) => e.source === source && e.code === code && e.name === name)) {
+      foreign.push({ origin: ORIGIN_FOREIGN, code, source, name });
+    }
+  };
+  for (const { source, cases } of Object.values(OPENZEPPELIN)) {
+    for (const [name, code] of cases) add(source, name, code);
+  }
+  for (const [name, code] of SAC) add("Stellar Asset Contract", name, code);
+  for (const en of soroswap) for (const c of en.cases) add("Soroswap", c.name, c.value);
+  const inNamespace = foreign.filter((e) => e.code >= ERR_BASE + 100 && e.code <= ERR_BASE + 1_099);
+  if (inNamespace.length) {
+    throw new Error(
+      `a foreign code is inside the v2 namespace: ${inNamespace.map((e) => `${e.source} ${e.name}`).join(", ")}`,
+    );
+  }
+  foreign.sort((a, b) => a.code - b.code || cmp(a.source, b.source) || cmp(a.name, b.name));
+  const host = HOST.map(([name, code]) => ({ origin: ORIGIN_HOST, code, source: "host", name }));
+  return { v2, foreign, host };
+}
+
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** v2_errors.ts for `table`, read from the WASMs whose sha256 `from` lists by contract. */
+export function renderErrors(table: ErrorTable, from: Record<WasmKey, string>): string {
+  const row = (e: NamedError) =>
+    `  { origin: ${e.origin}, code: ${grouped(e.code)}, source: ${JSON.stringify(e.source)}, name: ${
+      JSON.stringify(e.name)
+    } },`;
+  const keys = Object.keys(V2_TAGS) as WasmKey[];
+  return `// Generated by backend/scripts/gen-pinned.ts from the error enums in the contract specs of contracts/dist's v2 WASMs,
+// OpenZeppelin's and the Stellar Asset Contract's known codes, Soroswap's (contracts/testdata) and the host's — do not
+// edit. A failed graduation is recorded as GradFailure {origin, code} (docs/DESIGN-stellar-contracts-v2.md §4, finding
+// V10): origin is the raising v2 contract's tag, 0 a contract outside DyorHQ, 99 the host. The indexer, the keeper,
+// the plan builders and the API name failures from this table; nothing else hardcodes an error code.
+
+export const ERR_BASE = ${grouped(ERR_BASE)};
+export const ORIGIN_FOREIGN = ${ORIGIN_FOREIGN};
+export const ORIGIN_HOST = ${ORIGIN_HOST};
+
+/** Each v2 contract's tag: its errors are ERR_BASE + tag·100 + n, n from 1 to 99 (dyor-common TAG_*). */
+export const V2_CONTRACT_TAGS = {
+${keys.map((k) => `  ${JSON.stringify(k)}: ${V2_TAGS[k]},`).join("\n")}
+} as const;
+
+export type V2Contract = keyof typeof V2_CONTRACT_TAGS;
+
+/** The sha256 of the WASM each contract's errors were read from. */
+export const V2_ERRORS_FROM: Record<V2Contract, string> = {
+${keys.map((k) => `  ${JSON.stringify(k)}: ${JSON.stringify(from[k])},`).join("\n")}
+};
+
+export interface NamedError {
+  /** As GradFailure records it: a v2 contract's tag, ORIGIN_FOREIGN or ORIGIN_HOST. */
+  origin: number;
+  code: number;
+  /** The v2 contract, or where a foreign or host code comes from. */
+  source: string;
+  name: string;
+}
+
+/** Every error of every v2 contract, in code order: one entry each. */
+export const V2_ERRORS: readonly NamedError[] = [
+${table.v2.map(row).join("\n")}
+];
+
+/** Origin 0: the codes of contracts outside DyorHQ that a graduation can meet. Sources reuse codes (Soroswap's pair
+ *  and OpenZeppelin's fungible token both number from 100), so a code may have several names. */
+export const FOREIGN_ERRORS: readonly NamedError[] = [
+${table.foreign.map(row).join("\n")}
+];
+
+/** Origin 99: the host's error codes (ScErrorCode). */
+export const HOST_ERRORS: readonly NamedError[] = [
+${table.host.map(row).join("\n")}
+];
+
+const BY_PAIR = new Map<string, NamedError[]>();
+for (const e of [...V2_ERRORS, ...FOREIGN_ERRORS, ...HOST_ERRORS]) {
+  const key = \`\${e.origin}:\${e.code}\`;
+  BY_PAIR.set(key, [...(BY_PAIR.get(key) ?? []), e]);
+}
+
+/** Every error the pair can stand for: one for a v2 contract's code or the host's, one or more for origin 0; none
+ *  when the pair is unknown, or a v2 origin with a code outside its namespace. */
+export function errorsFor(origin: number, code: number): readonly NamedError[] {
+  return BY_PAIR.get(\`\${origin}:\${code}\`) ?? [];
+}
+
+/** The pair's name, such as PaymentUnavailable for (4, 10404); an origin-0 code that several sources use gets every
+ *  name, joined with " or ". Null when the pair is unknown. */
+export function errorName(origin: number, code: number): string | null {
+  const names = [...new Set(errorsFor(origin, code).map((e) => e.name))];
+  return names.length ? names.join(" or ") : null;
+}
+
+/** The pair for a log line or an alert: "exec-aquarius PaymentUnavailable (4, 10404)". */
+export function describeError(origin: number, code: number): string {
+  const all = errorsFor(origin, code);
+  return \`\${all.length ? all.map((e) => \`\${e.source} \${e.name}\`).join(" or ") : "unknown error"} (\${origin}, \${code})\`;
+}
+`;
+}
+
+/** v2_errors.ts from contracts/dist and Soroswap's fixtures under `root`. Throws when a v2 WASM is absent. */
+export async function generateErrors(root = ROOT): Promise<{ text: string; dist: DistWasm[] }> {
+  const dist = await readDist(root);
+  const absent = dist.filter((w) => !w.bytes).map((w) => w.file);
+  if (absent.length) throw new Error(`absent: ${absent.join(", ")} (build them with contracts/build.sh)`);
+  const soroswap = SOROSWAP_FIXTURES.flatMap((f) => errorEnums(Deno.readFileSync(`${root}contracts/testdata/${f}`)));
+  const table = errorTable(dist.map((w) => ({ key: w.key, enums: errorEnums(w.bytes!) })), soroswap);
+  const from = Object.fromEntries(dist.map((w) => [w.key, w.sha256])) as Record<WasmKey, string>;
+  return { text: renderErrors(table, from), dist };
+}
+
+/** Why `dist` can't give v2_errors.ts the errors of `v2`'s contracts, or null. With v2 pinned, every v2 WASM must be
+ *  there and each one the deployment uploaded must be exactly that WASM, so the table names the errors of the
+ *  contracts the app is pinned to. Without a v2 deployment anything goes. */
+export function distMismatch(v2: DeploymentV2 | null, dist: DistWasm[]): string | null {
+  if (!v2) return null;
+  const absent = dist.filter((w) => !w.bytes);
+  if (absent.length) {
+    return `contracts/dist lacks ${
+      absent.map((w) => w.file).join(", ")
+    }: build the deployed WASMs so v2_errors.ts names their errors`;
+  }
+  const differ = dist.filter((w) =>
+    v2.wasmHashes[camel(w.key)] !== undefined && v2.wasmHashes[camel(w.key)] !== w.sha256
+  );
+  if (differ.length) {
+    return `contracts/dist isn't what deployments/${v2.id}.json deployed (${
+      differ.map((w) => w.key).join(", ")
+    }): build the reviewed commit's dist (contracts/review/reviewed-wasm.sha256)`;
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------------------------------------ main
+
 function refuse(message: string, status = 1): never {
   console.error(`gen-pinned: ${message}`);
   Deno.exit(status);
 }
 
-const [flag, name] = Deno.args;
-if (flag !== "--deployment" || !name || Deno.args.length !== 2) refuse("usage: gen-pinned.ts --deployment <testnet|testnet-qa>", 2);
-const swift = SWIFT[name] ?? refuse(`no pins for deployment "${name}": ${Object.keys(SWIFT).join(" or ")}`, 2);
-const sponsor = Deno.env.get("SPONSOR_PUBLIC") ?? "";
-if (!StrKey.isValidEd25519PublicKey(sponsor)) refuse("Set SPONSOR_PUBLIC (the sponsor account's G-address).");
-const deployment = (() => {
+async function write(file: string, text: string) {
+  const path = `${ROOT}${file}`;
+  await Deno.mkdir(path.substring(0, path.lastIndexOf("/")), { recursive: true });
+  await Deno.writeTextFile(path, text);
+  console.log("wrote", path);
+}
+
+async function writeErrors() {
   try {
-    return deploymentByName(name);
+    await write(ERRORS_FILE, (await generateErrors()).text);
+  } catch (e) {
+    refuse(`v2_errors.ts: ${(e as Error).message}`);
+  }
+}
+
+async function main(args: string[]) {
+  if (args.length === 1 && args[0] === "--errors") return await writeErrors();
+  const [flag, name] = args;
+  if (flag !== "--deployment" || !name || args.length !== 2) refuse(USAGE, 2);
+  if (!SWIFT[name]) refuse(`no pins for deployment "${name}": ${Object.keys(SWIFT).join(" or ")}`, 2);
+  const sponsor = Deno.env.get("SPONSOR_PUBLIC") ?? "";
+  if (!StrKey.isValidEd25519PublicKey(sponsor)) refuse("Set SPONSOR_PUBLIC (the sponsor account's G-address).");
+  let net: NetworkConfig;
+  let pins: string;
+  try {
+    net = withDeployment(networkByName(DEPLOYMENT_NETWORKS[name]), name);
+    const unbundled = unbundledV2(name, net);
+    if (unbundled) return refuse(unbundled);
+    pins = renderPins(net, name, sponsor);
   } catch (e) {
     return refuse((e as Error).message);
   }
-})() ?? refuse(`deployment "${name}" has no contracts yet`);
-const net = withDeployment(networkByName(deployment.network), name);
-if (!net.phoneRpcUrl) refuse(`networks.ts: ${net.name}'s phoneRpcUrl is missing.`);
-const allow = contractAllowlist(net);
-const fees = net.feePolicy;
-const swiftArray = (xs: string[]) => `[${xs.map((x) => `"${x}"`).join(", ")}]`;
-// Stroops as a Swift literal with digit groups: 30_000_000.
-const stroops = (n: bigint) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, "_");
-const roles = Object.entries(allow).map(([role, ids]) => `            "${role}": ${swiftArray(ids)},`).join("\n");
-const out = `// Generated by backend/scripts/gen-pinned.ts --deployment ${name} from networks.ts and deployments/${name}.json — do not edit.
-// Generated for deployment ${deployment.deployedAt}.
-import Foundation
-
-public extension PinnedContracts {
-    static let ${swift.property} = PinnedContracts(
-        network: .${net.name},
-        sponsor: "${sponsor}",
-        launchTokenWasmHash: "${deployment.launchTokenWasmHash}",
-        roles: [
-${roles}
-        ],
-        feePolicy: FeePolicy(maxFee: ${stroops(fees.maxFee)}, maxInclusionFeePerOp: ${stroops(fees.maxInclusionPerOp)}, starterInnerFeeMax: ${stroops(fees.starterInnerFeeMax)}),
-        rpcURL: URL(string: "${net.phoneRpcUrl}")!
-    )
+  const dist = await readDist();
+  const mismatch = distMismatch(net.deploymentV2, dist);
+  if (mismatch) refuse(mismatch);
+  await write(`ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+${SWIFT[name].file}.swift`, pins);
+  if (dist.every((w) => w.bytes)) await writeErrors();
+  else console.log(`${ERRORS_FILE} unchanged: contracts/dist has no v2 WASMs`);
 }
-`;
-const path = new URL(`../../ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+${swift.file}.swift`, import.meta.url).pathname;
-await Deno.mkdir(path.substring(0, path.lastIndexOf("/")), { recursive: true });
-await Deno.writeTextFile(path, out);
-console.log("wrote", path);
+
+if (import.meta.main) await main(Deno.args);

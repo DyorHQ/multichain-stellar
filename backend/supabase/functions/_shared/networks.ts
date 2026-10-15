@@ -2,7 +2,7 @@
 // reads it through GET /v1/config and pins the contract allowlist, the fee caps and its RPC at build time
 // (ios/Packages/StellarKit/.../PinnedContracts+*.swift is generated from this file and deployments/*.json by
 // backend/scripts/gen-pinned.ts). docs/DESIGN-stellar-parity.md §4.2 and §6.2.
-import { Deployment, DEPLOYMENTS, deploymentByName } from "./deployments/index.ts";
+import { Deployment, DEPLOYMENTS, DeploymentV2, deploymentsByName } from "./deployments/index.ts";
 
 export type NetworkName = "testnet" | "mainnet";
 
@@ -96,11 +96,29 @@ export interface NetworkConfig {
   /** Tickers a launch may not imitate (§6.9), besides the registry's own codes. */
   reservedSymbols: string[];
   assets: AssetInfo[];
-  /** The contracts' deployment (deployments/index.ts); null where nothing is deployed. */
+  /** The contracts' v1 deployment (deployments/index.ts), the retired generation; null where nothing is deployed. */
   deployment: Deployment | null;
+  /** The v2 deployment, the live generation (DESIGN-stellar-contracts-v2 §20.1): its venues, the runtime contracts'
+   *  WASM hashes and both duration sets. Null until its file exists, and then the v2 routes answer not_deployed. The
+   *  registry constants carry none: withDeployment (env.network, gen-pinned.ts) adds the selected deployment's. */
+  deploymentV2: DeploymentV2 | null;
+  /** The most a v2 launch's fee may be, in stroops: 10 XLM on testnet and mainnet (decision O6). The verifiers refuse
+   *  a launch whose terms state more, so a server can't make the phone sign a larger fee than the owner set (finding
+   *  F18); the app pins the same bound (PinnedContracts.maxLaunchFeeStroops). */
+  maxLaunchFeeStroops: bigint;
   contracts: {
+    /** v1 (retired). */
     launchpad: string | null;
     moments: string | null;
+    /** v2's singletons (§20.1), null until the v2 deployment exists. The contracts they create (launch tokens, Moment
+     *  NFTs and coins) have no fixed address: deploymentV2.runtimeWasmHashes recognises them. */
+    launchpadV2: string | null;
+    momentsV2: string | null;
+    lpLocker: string | null;
+    execSoroswap: string | null;
+    /** Only where the deployment has the Aquarius venue (decision O7: not on testnet today). */
+    execAquarius: string | null;
+    momentsGraduator: string | null;
     soroswapRouter: string;
     soroswapFactory: string;
     aquariusRouter: string | null;
@@ -131,6 +149,12 @@ const LIMITS: Limits = {
 };
 
 const REFERENCE: NetworkConfig["reference"] = { provider: "Kraken", markets: { XLM: "XLMUSD", USDC: "USDCUSD" } };
+
+/** 10 XLM (decision O6). */
+const MAX_LAUNCH_FEE_STROOPS = 100_000_000n;
+
+/** v2's contracts before its deployment exists. */
+const NO_V2 = { launchpadV2: null, momentsV2: null, lpLocker: null, execSoroswap: null, execAquarius: null, momentsGraduator: null } as const;
 
 const RESERVED_SYMBOLS = ["XLM", "USDC", "EURC", "USDT", "PYUSD", "AQUA", "BLND", "YXLM", "BTC", "WBTC", "ETH", "WETH", "SOL", "MON", "DYOR", "DYORHQ"];
 
@@ -194,9 +218,12 @@ export const TESTNET: NetworkConfig = {
     },
   ],
   deployment: TESTNET_DEPLOYMENT,
+  deploymentV2: null,
+  maxLaunchFeeStroops: MAX_LAUNCH_FEE_STROOPS,
   contracts: {
     launchpad: TESTNET_DEPLOYMENT?.launchpad ?? null,
     moments: TESTNET_DEPLOYMENT?.moments ?? null,
+    ...NO_V2,
     soroswapRouter: "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD",
     soroswapFactory: "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY",
     aquariusRouter: "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD",
@@ -271,9 +298,12 @@ export const MAINNET: NetworkConfig = {
     },
   ],
   deployment: null,
+  deploymentV2: null,
+  maxLaunchFeeStroops: MAX_LAUNCH_FEE_STROOPS,
   contracts: {
     launchpad: null,
     moments: null,
+    ...NO_V2,
     soroswapRouter: "CAG5LRYQ5JVEUI5TEID72EYOVX44TTUJT5BQR2J6J77FH65PCCFAJDDH",
     soroswapFactory: "CA4HEQTL2WPEUYKYKCDOHCDNIV4QHNJ7EL4J4NQ6VADP7SYHVRYZ7AW2",
     aquariusRouter: "CBQDHNBFBZYE4MKPWBSJOPIYLW4SFSXAXUTSXJN76GNKYVYPCKWC6QUK",
@@ -291,24 +321,42 @@ export function networkByName(name: string): NetworkConfig {
   throw new Error(`Unknown network "${name}" (LITE_NETWORK): testnet or mainnet.`);
 }
 
-/** `net` with the contracts of the deployment called `name` (LITE_DEPLOYMENT), which must be on that network. */
+/** `net` with the contracts of the deployment called `name` (LITE_DEPLOYMENT), both generations, which must be on that
+ *  network. */
 export function withDeployment(net: NetworkConfig, name: string): NetworkConfig {
-  const deployment = deploymentByName(name);
-  if (deployment && deployment.network !== net.name) throw new Error(`Deployment "${name}" is on ${deployment.network}, not ${net.name} (LITE_DEPLOYMENT).`);
-  return { ...net, deployment, contracts: { ...net.contracts, launchpad: deployment?.launchpad ?? null, moments: deployment?.moments ?? null } };
+  const { v1: deployment, v2 } = deploymentsByName(name);
+  for (const d of [deployment, v2]) {
+    if (d && d.network !== net.name) throw new Error(`Deployment "${name}" is on ${d.network}, not ${net.name} (LITE_DEPLOYMENT).`);
+  }
+  const v1 = { ...net, deployment, contracts: { ...net.contracts, launchpad: deployment?.launchpad ?? null, moments: deployment?.moments ?? null } };
+  return withDeploymentV2(v1, v2);
+}
+
+/** `net` with `v2` as its v2 deployment (null: none), its singletons in `contracts`. withDeployment uses it; tests
+ *  attach a parsed deployment file with it. */
+export function withDeploymentV2(net: NetworkConfig, v2: DeploymentV2 | null): NetworkConfig {
+  return { ...net, deploymentV2: v2, contracts: { ...net.contracts, ...(v2 ? v2.contracts : NO_V2) } };
 }
 
 export function assetById(net: NetworkConfig, id: string): AssetInfo | undefined {
   return net.assets.find((a) => a.id === id || a.contract === id);
 }
 
-/** Every contract the app may be asked to call on this network, by role. The phone refuses anything else. */
+/** v2's roles, in the order the allowlist and the pins list them. */
+export const V2_ROLES = ["launchpadV2", "momentsV2", "lpLocker", "execSoroswap", "execAquarius", "momentsGraduator"] as const;
+
+/** Every contract the app may be asked to call on this network, by role. The phone refuses anything else. v2's roles
+ *  are there once its deployment exists (§20.1): its singletons, execAquarius only where the deployment has it. The
+ *  contracts v2 creates at runtime are proven by WASM hash instead. qa-exec-fail and testnet-qa's failing Moments stack
+ *  are never here, and neither is the treasury: no user transaction pays it (findings F4, A15e; decision O6). */
 export function contractAllowlist(net: NetworkConfig): Record<string, string[]> {
   const c = net.contracts;
   const tokens = net.assets.map((a) => a.contract);
+  const v2 = V2_ROLES.filter((role) => c[role]).map((role) => [role, [c[role]!]]);
   return {
     launchpad: c.launchpad ? [c.launchpad] : [],
     moments: c.moments ? [c.moments] : [],
+    ...Object.fromEntries(v2),
     soroswapRouter: [c.soroswapRouter],
     aquariusRouter: c.aquariusRouter ? [c.aquariusRouter] : [],
     blendPool: c.blendPools.map((p) => p.id),
