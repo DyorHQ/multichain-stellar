@@ -48,7 +48,7 @@ export const TOKEN_DECIMALS = 7;
  *  fee, so the indexer records this at graduation. */
 export const SOROSWAP_POOL_FEE_BPS = 30;
 
-/** A launch's curve, read live, is kept this long. */
+/** A launch's curve, read live, is kept this long for the public view and My Launchpad. */
 const CURVE_TTL_MS = 30_000;
 
 /** The most rows a page of the board takes. */
@@ -419,12 +419,14 @@ const POINT_BUCKETS_S = [60, 300, 900, 3_600, 14_400, 86_400, 604_800];
 
 const curves = new Map<string, { at: number; curve: Row }>();
 
-/** The launchpad's get_curve(token), kept 30 s per isolate; null when it can't be read. */
-async function liveCurve(token: string, now: number = Date.now()): Promise<Row | null> {
+/** The launchpad's get_curve(token); null when it can't be read. A read younger than `maxAgeMs` is answered from the
+ *  isolate: 30 s for the public view and My Launchpad, none (a fresh read) for an owner's page, quotes and plans, which
+ *  must see a trade the user just made. */
+async function liveCurve(token: string, now: number = Date.now(), maxAgeMs: number = CURVE_TTL_MS): Promise<Row | null> {
   const pad = env.network.contracts.launchpad;
   if (!pad) return null;
   const hit = curves.get(token);
-  if (hit && now - hit.at < CURVE_TTL_MS && now >= hit.at) return hit.curve;
+  if (hit && now - hit.at < maxAgeMs && now >= hit.at) return hit.curve;
   try {
     const curve = await view(pad, "get_curve", [sv.addr(token)]);
     if (curves.size > 1_000) curves.clear();
@@ -591,7 +593,7 @@ export async function launchDetail(token: string, viewer: LaunchViewer, candles?
   const interval = candles ? CANDLES[candles] : undefined;
   const [p, curve, trades, candleRows, points, you] = await Promise.all([
     priceContext(rows, net, now),
-    liveCurve(token, now),
+    liveCurve(token, now, viewer.scope === "owner" ? 0 : CURVE_TTL_MS),
     recentTrades(token),
     interval ? sql()`select bucket, open, high, low, close, volume from lite.token_candles(${token}, ${interval}::interval, 300)` : Promise.resolve([] as Row[]),
     pricePoints(r, now),
@@ -674,7 +676,7 @@ export async function quoteTrade(user: string, token: string, side: "buy" | "sel
       refund: (amount - used).toString(),
     };
   }
-  const curve = await liveCurve(token);
+  const curve = await liveCurve(token, Date.now(), 0);
   if (curve && (curve.completed === true || curve.graduated === true)) throw refusal("launch.closed");
   const q = await refusing(pad, () => view(pad, "quote_sell", [sv.addr(token), sv.i128(amount)]));
   const [baseFee, creatorFee] = [BigInt(q.base_fee), BigInt(q.creator_fee)];
@@ -768,7 +770,7 @@ export async function buildLaunch(user: string, input: Partial<LaunchBuildInput>
         return await createPlan(user, "launch_claim", [{ label: `Claim ${launch.symbol} fees`, spec: { kind: "launch_claim", token } }]);
       }
       const created = await sql()`select token, symbol from lite.launches where creator = ${user} order by created_at`;
-      const live = await Promise.all(created.map((c) => liveCurve(String(c.token))));
+      const live = await Promise.all(created.map((c) => liveCurve(String(c.token), Date.now(), 0)));
       const waiting = created.filter((_, i) => live[i] !== null && BigInt(live[i]!.creator_fees) > 0n);
       if (waiting.length === 0) {
         if (live.some((c) => c === null)) throw new ApiError(502, "rpc_unavailable", "Your creator fees couldn't be read just now. Try again.");
@@ -874,7 +876,7 @@ export const launchClaimStep: Builder = async (user, spec) => {
   const { quote, symbol } = await launchOf(token);
   const acct = await requireAccount(user);
   const tx = await refusing(pad, () => invoke(acct, pad, "claim_creator_fees", [sv.addr(token)]));
-  const curve = await liveCurve(token);
+  const curve = await liveCurve(token, Date.now(), 0);
   const q = assetById(env.network, quote);
   return {
     tx,

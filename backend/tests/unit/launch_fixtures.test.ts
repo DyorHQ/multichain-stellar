@@ -218,11 +218,14 @@ const struct = (fields: Record<string, xdr.ScVal>) =>
   xdr.ScVal.scvMap(Object.keys(fields).sort().map((k) => new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(k), val: fields[k] })));
 
 let quoteError: string | null = null;
+/** How many times a curve was read. */
+let curveReads = 0;
 
 function answer(contract: string, fn: string, args: xdr.ScVal[]): xdr.ScVal | { error: string } {
   const e = fixture("economics");
   const arg = (i: number) => (args[i] ? native(args[i]) : undefined);
   if (fn === "get_curve") {
+    curveReads++;
     const token = String(arg(0));
     return token === ECAT
       ? struct({ phantom: i128(250000000000n), threshold: i128(93000000000n), quote_reserve: i128(289000000000n), token_reserve: i128(6920415224913495n), real_quote: i128(39000000000n), creator_fees: i128(3900000n), completed: bool(false), graduated: bool(false), pair: xdr.ScVal.scvVoid() })
@@ -342,6 +345,26 @@ Deno.test("GET /v1/launches/:token equals launch.json (owner) and launch.public.
   // Without ?address=, no `you`.
   database();
   assertEquals((await lp.launchDetail(ECAT, { address: null, scope: "public" }, "1m", NOW)).you, null);
+});
+
+Deno.test("a launch's curve: the public view keeps a read 30 s, the owner's page and a sell quote read it fresh", async () => {
+  database();
+  curveReads = 0;
+  const anyone = { address: null, scope: "public" } as const;
+  await lp.launchDetail(ECAT, anyone, undefined, NOW);
+  await lp.launchDetail(ECAT, anyone, undefined, NOW + 29_000);
+  assertEquals(curveReads, 1, "the public view, read once in 30 s");
+  await lp.launchDetail(ECAT, anyone, undefined, NOW + 30_000);
+  assertEquals(curveReads, 2, "and again after them");
+  // The owner may have just traded: a page kept from before the trade would show the curve as it was.
+  await lp.launchDetail(ECAT, { address: ME, scope: "owner" }, undefined, NOW + 31_000);
+  await lp.launchDetail(ECAT, { address: ME, scope: "owner" }, undefined, NOW + 32_000);
+  assertEquals(curveReads, 4, "the owner's page, every time");
+  // A sell checks that the curve still trades, so it reads it even with a read just kept (quotes run on the clock).
+  await lp.launchDetail(ECAT, anyone, undefined, Date.now());
+  const kept = curveReads;
+  await lp.quoteTrade(ME, ECAT, "sell", 10n ** 12n);
+  assertEquals(curveReads, kept + 1, "a sell quote, every time");
 });
 
 // ------------------------------------------------------------------------------------------------ My Launchpad
