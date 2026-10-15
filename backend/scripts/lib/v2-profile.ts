@@ -138,7 +138,7 @@ export interface V2Profile {
   launchDurations: Readonly<LaunchDurations>;
   momentsDurations: Readonly<MomentsDurations>;
   ttl: Readonly<TtlPolicy>;
-  /** testnet-qa only (O3): the failing venue, the failing Moments stack, generated keys, SMOKE=1. */
+  /** testnet-qa only (O3): the failing venue, the failing Moments stack, generated keys, the smoke run (--smoke). */
   qaExecFail: boolean;
   failingMomentsStack: boolean;
   keyGeneration: boolean;
@@ -211,7 +211,7 @@ export interface V2Request {
   qaExecFail?: boolean;
   failingMomentsStack?: boolean;
   keyGeneration?: boolean;
-  /** SMOKE=1 in the environment, or a smoke flag. */
+  /** --smoke, or SMOKE=1 in the environment. */
   smoke?: boolean;
 }
 
@@ -227,7 +227,7 @@ export function guard(profile: V2Profile, req: V2Request): V2Profile {
   if (req.qaExecFail && !profile.qaExecFail) refuse("qa-exec-fail");
   if (req.failingMomentsStack && !profile.failingMomentsStack) refuse("the failing Moments stack");
   if (req.keyGeneration && !profile.keyGeneration) refuse("key generation");
-  if (req.smoke && !profile.smoke) refuse("SMOKE=1");
+  if (req.smoke && !profile.smoke) refuse("the smoke run (--smoke, SMOKE=1)");
   return profile;
 }
 

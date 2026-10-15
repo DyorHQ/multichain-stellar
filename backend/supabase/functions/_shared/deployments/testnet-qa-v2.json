@@ -1,0 +1,123 @@
+{
+  "network": "testnet",
+  "deployment": "testnet-qa",
+  "name": "testnet-qa-v2",
+  "generation": 1,
+  "salts": "sha256(\"dyorhq/v2/testnet-qa/g1/<contract>\")",
+  "deployer": "GB4IHDFPN43I3Y3IOEGVXZXNVNYUMPCN23C2OCJDJEEBN37ZFACHNWNI",
+  "contracts": {
+    "execSoroswap": "CAFQKTOFGNWLCDLA2IRKAZUSKH5XGRURIGBX7CWMSIUOBCB3YY6OWPPL",
+    "qaExecFail": "CA6MZLI5TPI4RDGWFUIK7HRXZWOBNR736GD5QC4HK2USVIGMSABCKXNQ",
+    "lpLocker": "CDXYV25Q2LCRZW2GU5K4QJECVPN6547LNHRRZRQDLCYTLMAZXP4ZTEK5",
+    "momentsGraduator": "CB6UJLVOBVKEWM7CMLK2N4ZCPPK6TMVO4XWN4QWCM3WRGG4CVROWPZZH",
+    "launchpadV2": "CDNRUQTMFMSM3EMP6TVWJPPC6ZTR2INPLYI3SWLM6UOTXELQLCUIHHVZ",
+    "momentsV2": "CAOEDNYJQP42PNXXSG4R32M5AOCIHPYLSHG45G4MBRINX3U5ANOYKY6H",
+    "momentsGraduatorQaFail": "CA5JDDMQNN7HHH6HT6VQK3PWBGGFZIC2ARL4IMCGW4HKJW3NZ2WU4SO3",
+    "momentsV2QaFail": "CCCRVOY4YFEXCSDWW4KYEPRKD4L6EKDIJOYFD7Q2Q6PAUA2JGKTFICQP"
+  },
+  "wasmHashes": {
+    "launchpadV2": "31fb62a91c3d142963fdd98a9b7e4329d8d7b021a68cf4df0615514860678cb0",
+    "launchTokenV2": "f09bc5743aaf94626d04f5831759abf7ed9d03fa42f3ac791b7d9d747a256707",
+    "execSoroswap": "294dac519c9509d688f7f7dfeecc679cd0fc84cca09073423b10cd9f998078b4",
+    "qaExecFail": "bf8cd8cc96838d819359ab7ce2e6890c931f4a7481eee9c62eef794e0f07409c",
+    "lpLocker": "89a44176a4fada4d17f1259ce6b4418ff98a4fed46536aca131b59e414a5d71d",
+    "momentsV2": "a73d505c4ae14920c203befde41f6001139faf973702c01851dfcb43500c9b1d",
+    "momentNft": "e14e1676a4071b6e5f3bdf7335250fb6439251e3ffd11d12db5815bd1207a2c9",
+    "momentCoin": "9106f6a8a0513bedec4ec33f6a200acadcf0f2f79b6158609b71c1cdf3dc6e2a",
+    "momentsGraduator": "853f4547f17b63926779cd18060069363fa584078c377432943c7eb6a3da03ba"
+  },
+  "venues": [
+    {
+      "id": 0,
+      "kind": "Soroswap",
+      "executor": "CAFQKTOFGNWLCDLA2IRKAZUSKH5XGRURIGBX7CWMSIUOBCB3YY6OWPPL",
+      "feeFraction": 0,
+      "enabled": true
+    },
+    {
+      "id": 1,
+      "kind": "QaFail",
+      "executor": "CA6MZLI5TPI4RDGWFUIK7HRXZWOBNR736GD5QC4HK2USVIGMSABCKXNQ",
+      "feeFraction": 0,
+      "enabled": true
+    }
+  ],
+  "quotes": {
+    "XLM": {
+      "enabled": true,
+      "fallback_venue": 0,
+      "phantom": "20000000000",
+      "threshold": "43245553200",
+      "venues_allowed": []
+    },
+    "USDC": {
+      "enabled": true,
+      "fallback_venue": 0,
+      "phantom": "200000000",
+      "threshold": "432455532",
+      "venues_allowed": []
+    },
+    "QA": {
+      "enabled": true,
+      "fallback_venue": 0,
+      "phantom": "20000000000",
+      "threshold": "43245553200",
+      "venues_allowed": [
+        1
+      ]
+    }
+  },
+  "aquarius": {
+    "enabled": false,
+    "reason": "--aquarius off",
+    "router": "CBCFTQSPDBAIZ6R6PJQKSQWKNKWH2QIV3I4J72SHWBIK3ADRRAM5A6GD",
+    "target": null
+  },
+  "roles": {
+    "admin": "GBCZRN334UYX6UVNIBFHKQUBP375TVVY6PSPJCJK2Z42JRQMLNFFHTAF",
+    "governance": "GDR6VSYMUMN3LR3WA5YUFZ2BRAX7MRQ6ZIGXIMJAL352XHKE37TT6COB",
+    "launchpadGuardian": "GBTQQXI3EVQQ2KM77XMXBM3DPO76A4AL5DECQMOJ7IN4A3IFQOGTQFDA",
+    "momentsGuardian": "GBQIYE36ZCCA72R37K7TV6TMOORTMODDH4XZQKXDIRDVXWD77CVEP2AL",
+    "treasury": "GBJDUSFYBI7WAJVCY2WK2Q5GN4BSE5VKPJUQ5P3VOAXYQV2XH44GSH7Q",
+    "platform": "GBJDUSFYBI7WAJVCY2WK2Q5GN4BSE5VKPJUQ5P3VOAXYQV2XH44GSH7Q",
+    "qaAdmin": "GDQHFLJB37OOXOSQJFXPHBRXRFX3CM2WAHJN4APSNASQKVU3FRHDCMEO",
+    "qaIssuer": "GCINAHEVAOGJLZ25TTGM5YUDMOWZHOBLKUTLWECCLNYTARNNR4UPVQWU"
+  },
+  "qaAsset": {
+    "code": "DYORQA",
+    "issuer": "GCINAHEVAOGJLZ25TTGM5YUDMOWZHOBLKUTLWECCLNYTARNNR4UPVQWU",
+    "sac": "CCTH2RTJ6GKJ6WVRUPVMR4C57ZU5B5SJKOOOGQK4JTIAYT4IYB2MGKRU"
+  },
+  "durations": {
+    "set": "testnet-qa",
+    "launch": {
+      "grace": 60,
+      "fallback_delay": 60,
+      "rescue_admin": 300,
+      "rescue_public": 900,
+      "locked_fallback": 120,
+      "takeover_delay": 120,
+      "takeover_window": 300,
+      "timelock": 120,
+      "timelock_window": 600,
+      "harvest_interval": 60
+    },
+    "moments": {
+      "vest_period": 600,
+      "stuck_expiry": 300,
+      "pending_backstop": 1800,
+      "timelock": 120,
+      "timelock_window": 600,
+      "min_window": 120,
+      "max_window": 2592000,
+      "harvest_interval": 60
+    }
+  },
+  "ttl": {
+    "threshold": 120960,
+    "extend_to": 518400
+  },
+  "economics": "backend/scripts/economics/testnet-qa-v2.json",
+  "deployLedger": 5210439,
+  "deployedAt": "2026-10-15T14:54:19.449Z"
+}
