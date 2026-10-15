@@ -7,7 +7,8 @@
 // - Transaction helpers: build, simulate (`prepare`), sign and submit one operation at a time.
 // - `preflight`: every role account exists; the treasury trusts every enabled classic quote asset (claim_protocol_fees
 //   is all-or-nothing per call, F9); the Moments platform trusts USDC (withdraw_platform pays USDC); the deployer
-//   holds at least 1,000 XLM (2,500 with --fund-aqua-float).
+//   holds at least MIN_DEPLOYER_XLM (6,000 XLM; 7,500 with --fund-aqua-float): the uploads and the TTL step's 179 days
+//   of rent cost about 4,300 XLM at testnet's 2026-10-15 rates.
 import { Buffer } from "node:buffer";
 import {
   Account,
@@ -481,11 +482,18 @@ export interface PreflightInput {
   treasuryAssets: string[];
   /** Classic assets the Moments platform must trust: USDC. */
   platformAssets: string[];
-  /** Stroops: 1,000 XLM, or 2,500 with --fund-aqua-float. */
+  /** Stroops: MIN_DEPLOYER_XLM, or MIN_DEPLOYER_XLM_FLOAT with --fund-aqua-float. */
   minDeployerXlm: bigint;
   /** Names for asset strings in messages ("USDC"). */
   assetNames?: Map<string, string>;
 }
+
+/** XLM the deployer must hold before a deploy: the uploads (about 170 XLM) and the TTL step's 179 days of rent for
+ *  every v2 WASM and instance and the Soroswap factory (about 4,150 XLM), measured by simulation on testnet on
+ *  2026-10-15, with room to spare. Friendbot funds a new account with 10,000. */
+export const MIN_DEPLOYER_XLM = 6_000n;
+/** With --fund-aqua-float: up to 1,500 XLM more for the XLM → AQUA swap. */
+export const MIN_DEPLOYER_XLM_FLOAT = 7_500n;
 
 const ROLE_LABELS: [keyof V2Roles, string][] = [
   ["ADMIN_PUBLIC", "admin"],
