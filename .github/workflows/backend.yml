@@ -29,6 +29,8 @@ jobs:
           backend/tests/vectors/gen-vectors.ts
       - name: Unit tests (routes, environment and indexer, verifier, auth and HTTP, CCTP encoders)
         run: deno test -A --config backend/supabase/functions/deno.json backend/tests/unit/
+      - name: Scripts' tests (the contracts-v2 deploy kit; no network)
+        run: deno test -A --config backend/supabase/functions/deno.json backend/scripts/
       - name: API contract (every fixture type-checks as its contract type; the phone's copies match)
         run: |
           deno test --allow-read --allow-run --config backend/supabase/functions/deno.json backend/tests/fixtures/
