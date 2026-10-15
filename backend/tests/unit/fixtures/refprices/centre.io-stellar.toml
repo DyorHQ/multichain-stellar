@@ -1,0 +1,30 @@
+ACCOUNTS=[
+"GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN", "GDEWOLMOPAVRTGNJVWOE6U6LHZVAWIJZVWM6PDLCFTUTJJEKSU32TO5W"
+]
+
+[DOCUMENTATION]
+ORG_NAME="Centre Consortium LLC"
+ORG_DBA="Centre Consortium"
+ORG_URL="https://www.centre.io"
+ORG_LOGO="https://www.centre.io/images/logo-icon.png"
+ORG_PHYSICAL_ADDRESS="San Francisco, CA"
+ORG_OFFICIAL_EMAIL="usdc@centre.io"
+ORG_GITHUB="centrehq"
+ORG_TWITTER="centre_io"
+ORG_DESCRIPTION="Centre Consortium is a joint venture aimed at establishing a standard for fiat on the internet and providing a governance framework and network for the global, mainstream adoption of fiat stablecoins founded by Circle and Coinbase. USD Coin (USDC) is the first fiat stablecoin implementation from Centre."
+
+[[PRINCIPALS]]
+name="David Puth"
+email="usdc@centre.io"
+
+[[CURRENCIES]]
+code="USDC"
+issuer="GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+is_asset_anchored=true
+anchor_asset_type="fiat"
+anchor_asset="USD"
+attestation_of_reserve="https://www.centre.io/usdc-transparency"
+redemption_instructions="Redeemable through a Circle account at https://circle.com"
+name="USD Coin"
+desc="USDC is a fully collateralized US Dollar stablecoin, based on the open source fiat stablecoin framework developed by Centre."
+image="https://www.centre.io/images/usdc/usdc-icon-86074d9d49.png"

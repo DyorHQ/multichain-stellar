@@ -4,8 +4,11 @@
 // - synthetic ones built here, one per rule, judged by the TS verifier: its verdict, reason and outflow, and for a step
 //   with a fee payer, who pays (verifyFeePayer);
 // - key derivation, SEP-53, StrKey and SAC id vectors.
-// Every vector carries the fee caps it was judged with, and what stellar-sdk decoded (source, fee, memo, …), so the
-// Swift decoder is checked too.
+// Every vector carries the pins it was judged with (the contracts, v2's roles, runtime WASM hashes, durations and
+// launch-fee bound, the fee caps), the runtime contracts the phone read with their WASM hashes, and what stellar-sdk
+// decoded (source, fee, memo, …), so the Swift decoder is checked too. The synthetic v2 vectors are judged against a
+// fixture deployment (V2_FIXTURE, the shape of deploy-contracts-v2.ts's deploymentRecord()), never the owner's file,
+// so a redeploy changes none of them; the real ones against LITE_DEPLOYMENT's.
 //   LITE_DB_URL=… SPONSOR_PUBLIC=G… deno run -A --config backend/supabase/functions/deno.json backend/tests/vectors/gen-vectors.ts
 //   deno run -A --config backend/supabase/functions/deno.json backend/tests/vectors/gen-vectors.ts --synthetic-only
 // The synthetic vectors are deterministic: running it again writes the same files.
@@ -26,8 +29,9 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import postgres from "postgres";
-import { contractAllowlist, TESTNET } from "../../supabase/functions/_shared/networks.ts";
-import { FeeCaps, Intent, verifyFeePayer, verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
+import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
+import { contractAllowlist, NetworkConfig, TESTNET, withDeployment, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
+import { FeeCaps, Intent, V2PinSource, v2Pins, verifyFeePayer, verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
 import { SEP53_PREFIX, sha256 } from "../../supabase/functions/_shared/auth.ts";
 
 const PASS = TESTNET.passphrase;
@@ -48,19 +52,28 @@ interface Step {
   sponsorReason: string | null;
 }
 
+/** v2's pins as a vector carries them: what the app pins (PinnedContracts), so never testnet-qa's test contracts. */
+interface VectorV2 extends V2PinSource {
+  maxLaunchFeeStroops: string;
+}
+
 interface Vector {
   name: string;
   envelope: string;
   intent: Intent;
   user: string;
   sponsor: string;
-  /** Pinned contracts. */
+  /** Pinned contracts, v2's singletons included. */
   allowed: string[];
   /** Launch tokens the phone verified on chain (their WASM is the pinned one). */
   launchTokens: string[];
   launchTokenWasmHash: string;
   monadDomain: number;
   feePolicy: { maxFee: string; maxInclusionPerOp: string; starterInnerFeeMax: string };
+  /** v2's pins; null where v2 isn't deployed. */
+  v2: VectorV2 | null;
+  /** Contracts v2 created at runtime, with the WASM hash the phone read for each from the chain. */
+  runtime: Record<string, string>;
   now: number;
   /** The step's fee-payer flags, when the vector is about who pays. */
   step?: Step;
@@ -133,29 +146,57 @@ function decodedOf(tx: Transaction): Vector["decoded"] {
   };
 }
 
+/** What a vector is judged against: the contracts the app pins, and v2's pins. */
+interface Pins {
+  allowed: string[];
+  v2: VectorV2 | null;
+}
+
+/** `net`'s pins as the app has them: contractAllowlist's roles (never testnet-qa's test contracts, finding F4) and v2's
+ *  roles, runtime WASM hashes, durations and launch-fee bound. */
+function pinsOf(net: NetworkConfig): Pins {
+  const d = net.deploymentV2;
+  return {
+    allowed: Object.values(contractAllowlist(net)).flat(),
+    v2: d
+      ? {
+        contracts: d.contracts,
+        runtimeWasmHashes: d.runtimeWasmHashes,
+        durations: { launch: d.durations.launch, moments: d.durations.moments },
+        maxLaunchFeeStroops: net.maxLaunchFeeStroops.toString(),
+      }
+      : null,
+  };
+}
+
 interface Judged {
   name: string;
   tx: Transaction;
   intent: Intent;
   user: string;
   sponsor: string;
-  allowed: string[];
+  pins: Pins;
   launchTokens?: string[];
+  runtime?: Record<string, string>;
   now: number;
   step?: Step;
 }
 
 function judge(j: Judged): Vector {
   const launchTokens = j.launchTokens ?? [];
+  const runtime = j.runtime ?? {};
+  const v2 = j.pins.v2;
   const ctx = {
     user: j.user,
     sponsor: j.sponsor,
     passphrase: PASS,
-    allowedContracts: new Set([...j.allowed, ...launchTokens]),
+    allowedContracts: new Set([...j.pins.allowed, ...launchTokens]),
     now: j.now,
     feePolicy: FEES,
     launchTokenWasmHash: WASM,
     monadDomain: MONAD_DOMAIN,
+    v2: v2 ? v2Pins(v2, BigInt(v2.maxLaunchFeeStroops)) : null,
+    runtimeContracts: runtime,
   };
   let expect: Vector["expect"];
   try {
@@ -177,11 +218,13 @@ function judge(j: Judged): Vector {
     intent: j.intent,
     user: j.user,
     sponsor: j.sponsor,
-    allowed: j.allowed,
+    allowed: j.pins.allowed,
     launchTokens,
     launchTokenWasmHash: WASM,
     monadDomain: MONAD_DOMAIN,
     feePolicy: { maxFee: FEES.maxFee.toString(), maxInclusionPerOp: FEES.maxInclusionPerOp.toString(), starterInnerFeeMax: FEES.starterInnerFeeMax.toString() },
+    v2,
+    runtime,
     now: j.now,
     ...(j.step ? { step: j.step } : {}),
     expect,
@@ -190,13 +233,13 @@ function judge(j: Judged): Vector {
 }
 
 const vectors: Vector[] = [];
-const pinned = Object.values(contractAllowlist(TESTNET)).flat();
 
 // ------------------------------------------------------------------------------------------------ real transactions
 const dbUrl = Deno.env.get("LITE_DB_URL");
 if (dbUrl && !syntheticOnly) {
   const db = postgres(dbUrl, { onnotice: () => {} });
   const sponsor = Deno.env.get("SPONSOR_PUBLIC")!;
+  const live = pinsOf(withDeployment(TESTNET, Deno.env.get("LITE_DEPLOYMENT") ?? "testnet"));
   const launches = (await db`select token from lite.launches`).map((r) => r.token as string);
   const plans = await db`select address, kind, steps from lite.plans order by created_at`;
   const seen = new Set<string>();
@@ -209,7 +252,7 @@ if (dbUrl && !syntheticOnly) {
       const tx = TransactionBuilder.fromXDR(s.xdr, PASS) as Transaction;
       const now = Number(tx.timeBounds!.maxTime) - 300;
       const step = s.feePayer ? { feePayer: s.feePayer as string, sponsorReason: (s.sponsorReason ?? null) as string | null } : undefined;
-      vectors.push(judge({ name: `real ${key}`, tx, intent: s.intent, user: p.address as string, sponsor, allowed: pinned, launchTokens: launches, now, step }));
+      vectors.push(judge({ name: `real ${key}`, tx, intent: s.intent, user: p.address as string, sponsor, pins: live, launchTokens: launches, now, step }));
     }
   }
   await db.end();
@@ -552,8 +595,283 @@ const syn: Synthetic[] = [
   syn.push(["approve counts in full", tx([invoke(ic)]), callIntent("approve", USDC, "approve", { [USDC]: "499" })]);
   syn.push(["approve within cap", tx([invoke(ic)]), callIntent("approve", USDC, "approve", { [USDC]: "500" })]);
 }
+
+// ------------------------------------------------------------------------------------------------ v2 (§20.4)
+// Judged against V2_FIXTURE's pins: launchpad-v2, moments-v2, the lp-locker, exec-soroswap and the graduator, and the
+// runtime WASM hashes of launch-token-v2, moment-nft and moment-coin. Aquarius is off (decision O7), and qa-exec-fail
+// exists only on testnet-qa, so the testnet pins name neither.
+const fixed = (n: number) => StrKey.encodeContract(Buffer.alloc(32, n));
+const V2_FIXTURE = parseDeploymentV2("testnet-v2", {
+  network: "testnet",
+  deployment: "testnet",
+  name: "testnet-v2",
+  generation: 1,
+  deployer: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11)).publicKey(),
+  contracts: { launchpadV2: fixed(0x41), momentsV2: fixed(0x42), lpLocker: fixed(0x43), execSoroswap: fixed(0x44), momentsGraduator: fixed(0x45) },
+  wasmHashes: {
+    launchpadV2: "b1".repeat(32),
+    launchTokenV2: "a1".repeat(32),
+    execSoroswap: "b2".repeat(32),
+    lpLocker: "b3".repeat(32),
+    momentsV2: "b4".repeat(32),
+    momentNft: "a2".repeat(32),
+    momentCoin: "a3".repeat(32),
+    momentsGraduator: "b5".repeat(32),
+  },
+  venues: [{ id: 0, kind: "Soroswap", executor: fixed(0x44), feeFraction: 0, enabled: true }],
+  quotes: {},
+  aquarius: { enabled: false, reason: "--aquarius off" },
+  durations: { set: "production", launch: DURATION_SETS_V2.production.launch, moments: DURATION_SETS_V2.production.moments },
+  ttl: { threshold: 120_960, extend_to: 518_400 },
+  deployLedger: 1_000,
+  deployedAt: "2026-10-15T00:00:00.000Z",
+});
+const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
+{
+  const { launchpadV2: PAD2, momentsV2: MOMENTS2, lpLocker: LOCKER2, execSoroswap: EXEC2, momentsGraduator: GRADUATOR } = V2_FIXTURE.contracts;
+  const HASHES = V2_FIXTURE.runtimeWasmHashes;
+  const LAUNCH_DURATIONS = V2_FIXTURE.durations.launch;
+  const MOMENTS_DURATIONS = V2_FIXTURE.durations.moments;
+  /** A VenueInfo: its id, its kind (dyor_common::VenueKind: Soroswap 0, QaFail 3) and its executor. */
+  type Venue = { id: number; kind: number; executor: string };
+  const soroswap = (executor: string): Venue => ({ id: 0, kind: 0, executor });
+  /** testnet-qa's failing venue as its deployment lists it (id 1, after Soroswap's; Aquarius is off): a real executor
+   *  there, unknown to the testnet pins. */
+  const QA_VENUE: Venue = { id: 1, kind: 3, executor: fixed(0x46) };
+  /** A v2 launch token, a Moment's NFT and coin (runtime contracts), a graduated launch's pool. */
+  const TOKEN2 = fixed(0x47);
+  const NFT = fixed(0x48);
+  const COIN = fixed(0x49);
+  const POOL2 = fixed(0x4a);
+  /** A contract whose WASM is no pinned one. */
+  const STRANGER = fixed(0x4b);
+  const UNKNOWN_WASM = "ee".repeat(32);
+  const TREASURY = Keypair.fromRawEd25519Seed(Buffer.alloc(32, 10)).publicKey();
+  const FEE = TESTNET.maxLaunchFeeStroops; // 10 XLM (decision O6)
+
+  const bool = (b: boolean) => xdr.ScVal.scvBool(b);
+  const bytes = (hex: string) => xdr.ScVal.scvBytes(Buffer.from(hex, "hex"));
+  const vec = (items: xdr.ScVal[]) => xdr.ScVal.scvVec(items);
+  /** A contract struct: a map with its fields' names as symbols, in order. */
+  const struct = (fields: Record<string, xdr.ScVal>) =>
+    xdr.ScVal.scvMap(Object.keys(fields).sort().map((k) => new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(k), val: fields[k] })));
+  const durations = (d: object) => struct(Object.fromEntries(Object.entries(d).map(([k, v]) => [k, u64(BigInt(v))])));
+  const venue = (v: Venue) => struct({ id: u32(v.id), kind: u32(v.kind), executor: addr(v.executor), params: struct({ fee_fraction: u32(0) }), enabled: bool(true) });
+  /** A call no one's authorization covers: one anyone may make. */
+  const bare = (ic: xdr.InvokeContractArgs) => Operation.invokeHostFunction({ func: xdr.HostFunction.hostFunctionTypeInvokeContract(ic), auth: [] });
+  const runtime = (contract: string, hash: string) => ({ runtime: { [contract]: hash } });
+
+  // launch(creator, p: LaunchParams, expected: LaunchTerms) on launchpad-v2, quoted in XLM.
+  type TermsChange = { fee?: bigint; venue?: Venue; fallback?: Venue; locker?: string; wasm?: string; durations?: object; feeAsset?: string };
+  const terms = (o: TermsChange = {}) =>
+    struct({
+      supply: i128(10_000_000_000_000_000n),
+      fee_bps: u32(100),
+      protocol_share_bps: u32(5_000),
+      max_creator_fee_bps: u32(1_000),
+      snipe_schedule: vec([9_800, 2_500, 300, 30].map(u32)),
+      snipe_step_secs: u32(5),
+      launch_fee: i128(o.fee ?? FEE),
+      fee_asset: addr(o.feeAsset ?? XLM),
+      quote: addr(XLM),
+      phantom: i128(20_000_000_000n),
+      threshold: i128(43_245_553_200n),
+      venue: venue(o.venue ?? soroswap(EXEC2)),
+      fallback: venue(o.fallback ?? soroswap(EXEC2)),
+      venue_locked: bool(false),
+      locker: addr(o.locker ?? LOCKER2),
+      token_wasm_hash: bytes(o.wasm ?? HASHES.launchTokenV2),
+      durations: durations(o.durations ?? LAUNCH_DURATIONS),
+    });
+  const params = (o: { initialBuy?: bigint; minOut?: bigint; symbol?: string; venue?: number } = {}) =>
+    struct({
+      quote: addr(XLM),
+      name: str("Deploy"),
+      symbol: str(o.symbol ?? "DPLY"),
+      uri: str("https://x.test/m.json"),
+      creator_fee_bps: u32(100),
+      venue: u32(o.venue ?? 0),
+      holder_sharing: bool(true),
+      creator_fee_recipient: xdr.ScVal.scvVoid(),
+      snipe_exempt: vec([]),
+      initial_buy: i128(o.initialBuy ?? 0n),
+      min_tokens_out: i128(o.minOut ?? 0n),
+      nonce: u64(7n),
+    });
+  /** A launch whose authorization pays `fee` of XLM to `feeTo` and then an initial buy of `buy` XLM to `buyTo`. */
+  const launch = (o: { who?: string; terms?: TermsChange; params?: Parameters<typeof params>[0]; fee?: bigint; feeTo?: string; buy?: bigint; buyTo?: string } = {}) =>
+    tx([
+      invoke(call(PAD2, "launch", [addr(o.who ?? user), params(o.params), terms(o.terms)]), [
+        ...((o.fee ?? FEE) > 0n ? [pull(XLM, o.feeTo ?? PAD2, o.fee ?? FEE)] : []),
+        ...(o.buy ? [pull(XLM, o.buyTo ?? PAD2, o.buy)] : []),
+      ]),
+    ]);
+  const launchIntent = (spend: bigint, receive?: Record<string, string>) =>
+    callIntent("launch_create", PAD2, "launch", { [XLM]: spend.toString() }, receive ? { receive } : {});
+  const BUY = 50_000_000n;
+  const withBuy = { params: { initialBuy: BUY, minOut: 4_000n }, buy: BUY };
+
+  // publish(creator, p: PublishParams, expected: MomentsTerms) on moments-v2.
+  type MomentTermsChange = { graduator?: string; executor?: string; locker?: string; nft?: string; coin?: string; durations?: object };
+  const momentTerms = (o: MomentTermsChange = {}) =>
+    struct({
+      policy: struct({
+        threshold: i128(100_000_000n),
+        min_price: i128(1_000_000n),
+        creator_bps: u32(2_000),
+        platform_bps: u32(500),
+        reserve_bps: u32(7_500),
+        max_creator_alloc_bps: u32(1_000),
+        expiry_creator_bps: u32(7_000),
+        royalty_bps: u32(500),
+        platform: addr(third),
+        treasury: addr(TREASURY),
+      }),
+      external_base: str("https://x.test/moments/"),
+      nft_wasm_hash: bytes(o.nft ?? HASHES.momentNft),
+      coin_wasm_hash: bytes(o.coin ?? HASHES.momentCoin),
+      graduator: addr(o.graduator ?? GRADUATOR),
+      executor: addr(o.executor ?? EXEC2),
+      locker: addr(o.locker ?? LOCKER2),
+      durations: durations(o.durations ?? MOMENTS_DURATIONS),
+      harvest_bps: u32(6_667),
+      harvest_creator_bps: u32(4_000),
+    });
+  const publishParams = (symbol = "DUSK") =>
+    struct({
+      name: str("Dusk"),
+      symbol: str(symbol),
+      metadata_uri: str("https://x.test/m.json"),
+      media_hash: bytes("5a".repeat(32)),
+      place: str("Lisbon"),
+      date: str("2026-10-15"),
+      price: i128(10_000_000n),
+      creator_alloc_bps: u32(500),
+      window_secs: u64(86_400n),
+      nonce: u64(9n),
+    });
+  const publish = (o: { who?: string; terms?: MomentTermsChange; symbol?: string } = {}) =>
+    tx([invoke(call(MOMENTS2, "publish", [addr(o.who ?? user), publishParams(o.symbol), momentTerms(o.terms)]))]);
+  const collect = (who: string, max: bigint, pulled = 20_000n) =>
+    tx([invoke(call(MOMENTS2, "collect", [addr(who), addr(NFT), u32(2), i128(max)]), [pull(USDC, MOMENTS2, pulled)])]);
+  const collectIntent = callIntent("moment_collect", MOMENTS2, "collect", { [USDC]: "20000" });
+
+  const refund = (who: string) => tx([invoke(call(PAD2, "refund", [addr(who), addr(TOKEN2), i128(500n)]), [inv(call(TOKEN2, "burn", [addr(who), i128(500n)]))])]);
+  const claimOwed = (who: string, signed = false) => {
+    const ic = call(PAD2, "claim_owed", [addr(who), addr(XLM)]);
+    return tx([signed ? invoke(ic) : bare(ic)]);
+  };
+  const rewards = (who: string, token = TOKEN2) => tx([invoke(call(token, "claim", [addr(who)]))]);
+
+  syn.push(
+    // launch: the terms are the pins, and the creator pays exactly their fee, at most 10 XLM, to the launchpad.
+    ["v2 launch create ok", launch(), launchIntent(FEE)],
+    ["v2 launch create with an initial buy ok", launch(withBuy), launchIntent(FEE + BUY, { [TOKEN2]: "4000" })],
+    ["v2 launch fee to the treasury", launch({ feeTo: TREASURY }), launchIntent(FEE)],
+    ["v2 launch fee to another address than the launchpad", launch({ feeTo: LOCKER2 }), launchIntent(FEE)],
+    ["v2 launch fee other than the terms", launch({ fee: FEE - 1n }), launchIntent(FEE)],
+    ["v2 launch without its fee", launch({ fee: 0n }), launchIntent(FEE)],
+    ["v2 launch fee above the pinned bound", launch({ terms: { fee: FEE + 1n }, fee: FEE + 1n }), launchIntent(FEE + 1n)],
+    ["v2 launch terms with an unpinned executor", launch({ terms: { venue: soroswap(EVIL) } }), launchIntent(FEE)],
+    ["v2 launch terms with an unpinned fallback executor", launch({ terms: { fallback: soroswap(EVIL) } }), launchIntent(FEE)],
+    // A launch on testnet-qa's failing venue, as testnet-qa's API builds it (CT-18's e2e).
+    ["v2 launch terms with the qa-exec-fail venue on the testnet pins", launch({ params: { venue: QA_VENUE.id }, terms: { venue: QA_VENUE } }), launchIntent(FEE)],
+    ["v2 launch terms with durations other than the pins", launch({ terms: { durations: { ...LAUNCH_DURATIONS, fallback_delay: 60 } } }), launchIntent(FEE)],
+    ["v2 launch terms with another locker", launch({ terms: { locker: EVIL } }), launchIntent(FEE)],
+    ["v2 launch terms with another token WASM", launch({ terms: { wasm: UNKNOWN_WASM } }), launchIntent(FEE)],
+    ["v2 launch terms with the fee in another asset", launch({ terms: { feeAsset: USDC } }), launchIntent(FEE)],
+    ["v2 launch for another creator", launch({ who: third }), launchIntent(FEE)],
+    ["v2 launch with a ticker that is not letters or digits", launch({ params: { symbol: "DP-LY" } }), launchIntent(FEE)],
+    ["v2 launch initial buy min below the quote", launch({ ...withBuy, params: { initialBuy: BUY, minOut: 3_999n } }), launchIntent(FEE + BUY, { [TOKEN2]: "4000" })],
+    ["v2 launch initial buy paid to another address", launch({ ...withBuy, buyTo: TREASURY }), launchIntent(FEE + BUY, { [TOKEN2]: "4000" })],
+    [
+      "v1 launch arguments on the v2 launchpad",
+      tx([invoke(call(PAD2, "launch", [addr(user), addr(XLM), str("Deploy"), str("DPLY"), str("https://x.test/m.json"), u32(100), i128(0n), i128(0n)]))]),
+      callIntent("launch_create", PAD2, "launch"),
+    ],
+    ["v2 curve buy ok", tx([invoke(call(PAD2, "buy", [addr(user), addr(TOKEN2), i128(1_000n), i128(4_000n)]), [pull(XLM, PAD2, 1_000n)])]), callIntent("launch_buy", PAD2, "buy", { [XLM]: "1000" }, { receive: { [TOKEN2]: "4000" } })],
+
+    // refund: the holder's own tokens are burned, and the intent declares the burn.
+    ["v2 refund ok", refund(user), callIntent("launch_refund", PAD2, "refund", { [TOKEN2]: "500" })],
+    ["v2 refund for another holder", refund(third), callIntent("launch_refund", PAD2, "refund", { [TOKEN2]: "500" })],
+    ["v2 refund above the spend", refund(user), callIntent("launch_refund", PAD2, "refund", { [TOKEN2]: "499" })],
+
+    // Anyone's calls carry none of the user's authorization.
+    ...(["graduate", "graduate_fallback", "mark_stuck", "rescue", "claim_creator_fees", "execute_recipient_change"].map((fn) =>
+      [`v2 ${fn.replaceAll("_", " ")} ok`, tx([bare(call(PAD2, fn, [addr(TOKEN2)]))]), callIntent(`launch_${fn}`, PAD2, fn)] as Synthetic
+    )),
+    ["v2 graduate with your authorization", tx([invoke(call(PAD2, "graduate", [addr(TOKEN2)]))]), callIntent("launch_graduate", PAD2, "graduate")],
+    ["v2 harvest ok", tx([bare(call(LOCKER2, "harvest", [addr(POOL2)]))]), callIntent("launch_harvest", LOCKER2, "harvest")],
+    ["v2 harvest with your authorization", tx([invoke(call(LOCKER2, "harvest", [addr(POOL2)]))]), callIntent("launch_harvest", LOCKER2, "harvest")],
+
+    // Claims act for the user and spend nothing.
+    ["v2 claim owed ok", claimOwed(user), callIntent("launch_claim_owed", PAD2, "claim_owed")],
+    ["v2 claim owed for another account", claimOwed(third), callIntent("launch_claim_owed", PAD2, "claim_owed")],
+    ["v2 claim owed with a spend", claimOwed(user), callIntent("launch_claim_owed", PAD2, "claim_owed", { [XLM]: "1" })],
+    ["v2 claim owed with your authorization", claimOwed(user, true), callIntent("launch_claim_owed", PAD2, "claim_owed")],
+    ["v2 claim rewards ok", rewards(user), callIntent("launch_claim_rewards", TOKEN2, "claim"), runtime(TOKEN2, HASHES.launchTokenV2)],
+    ["v2 claim rewards for another account", rewards(third), callIntent("launch_claim_rewards", TOKEN2, "claim"), runtime(TOKEN2, HASHES.launchTokenV2)],
+    ["v2 claim rewards with a spend", rewards(user), callIntent("launch_claim_rewards", TOKEN2, "claim", { [TOKEN2]: "1" }), runtime(TOKEN2, HASHES.launchTokenV2)],
+    ["v2 claim rewards from an unknown runtime WASM", rewards(user, STRANGER), callIntent("launch_claim_rewards", STRANGER, "claim"), runtime(STRANGER, UNKNOWN_WASM)],
+    ["v2 claim rewards from a runtime contract the phone didn't read", rewards(user), callIntent("launch_claim_rewards", TOKEN2, "claim")],
+
+    // Recipient changes.
+    ["v2 recipient transfer ok", tx([invoke(call(PAD2, "transfer_creator_fee_recipient", [addr(TOKEN2), addr(friend)]))]), callIntent("launch_recipient_transfer", PAD2, "transfer_creator_fee_recipient", {}, { to: friend })],
+    [
+      "v2 recipient transfer to another address than the one confirmed",
+      tx([invoke(call(PAD2, "transfer_creator_fee_recipient", [addr(TOKEN2), addr(third)]))]),
+      callIntent("launch_recipient_transfer", PAD2, "transfer_creator_fee_recipient", {}, { to: friend }),
+    ],
+    ["v2 recipient cancel ok", tx([invoke(call(PAD2, "cancel_recipient_change", [addr(TOKEN2), addr(user)]))]), callIntent("launch_recipient_cancel", PAD2, "cancel_recipient_change")],
+    ["v2 recipient cancel for another account", tx([invoke(call(PAD2, "cancel_recipient_change", [addr(TOKEN2), addr(third)]))]), callIntent("launch_recipient_cancel", PAD2, "cancel_recipient_change")],
+
+    // A Moment coin is a SEP-41 token, recognised by its pinned WASM.
+    ["v2 moment coin transfer ok", tx([invoke(call(COIN, "transfer", [addr(user), addr(friend), i128(100n)]))]), callIntent("payment", COIN, "transfer", { [COIN]: "100" }, { to: friend }), runtime(COIN, HASHES.momentCoin)],
+    ["v2 moment coin transfer to another to", tx([invoke(call(COIN, "transfer", [addr(user), addr(third), i128(100n)]))]), callIntent("payment", COIN, "transfer", { [COIN]: "100" }, { to: friend }), runtime(COIN, HASHES.momentCoin)],
+
+    // moments-v2.
+    ["v2 moments publish ok", publish(), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish for another creator", publish({ who: third }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with another graduator", publish({ terms: { graduator: EVIL } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with another executor", publish({ terms: { executor: QA_VENUE.executor } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with another locker", publish({ terms: { locker: EVIL } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with another NFT WASM", publish({ terms: { nft: UNKNOWN_WASM } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with another coin WASM", publish({ terms: { coin: UNKNOWN_WASM } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with durations other than the pins", publish({ terms: { durations: { ...MOMENTS_DURATIONS, pending_backstop: 86_400 } } }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with a ticker that is too long", publish({ symbol: "ABCDEFGHIJK" }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments collect ok", collect(user, 20_000n), collectIntent],
+    ["v2 moments collect from another account", collect(third, 20_000n), collectIntent],
+    ["v2 moments collect with max_total above the spend", collect(user, 20_001n), collectIntent],
+    ["v2 moments claim ok", tx([invoke(call(MOMENTS2, "claim", [addr(user), addr(NFT)]))]), callIntent("moment_claim", MOMENTS2, "claim")],
+    ["v2 moments claim for another account", tx([invoke(call(MOMENTS2, "claim", [addr(third), addr(NFT)]))]), callIntent("moment_claim", MOMENTS2, "claim")],
+    ["v2 moments claim with a spend", tx([invoke(call(MOMENTS2, "claim", [addr(user), addr(NFT)]))]), callIntent("moment_claim", MOMENTS2, "claim", { [USDC]: "1" })],
+    ["v2 moments claim all ok", tx([invoke(call(MOMENTS2, "claim_all", [addr(user), vec([addr(NFT)])]))]), callIntent("moment_claim_all", MOMENTS2, "claim_all")],
+    ["v2 moments claim all for another account", tx([invoke(call(MOMENTS2, "claim_all", [addr(third), vec([addr(NFT)])]))]), callIntent("moment_claim_all", MOMENTS2, "claim_all")],
+    [
+      "v2 moments claim all with a spend",
+      tx([invoke(call(MOMENTS2, "claim_all", [addr(user), vec([addr(NFT)])]))]),
+      callIntent("moment_claim_all", MOMENTS2, "claim_all", { [USDC]: "1" }),
+    ],
+    ...(["withdraw_creator", "graduate", "expire"].map((fn) =>
+      [`v2 moments ${fn.replaceAll("_", " ")} ok`, tx([bare(call(MOMENTS2, fn, [addr(NFT)]))]), callIntent(`moment_${fn}`, MOMENTS2, fn)] as Synthetic
+    )),
+    ["v2 moments expire with your authorization", tx([invoke(call(MOMENTS2, "expire", [addr(NFT)]))]), callIntent("moment_expire", MOMENTS2, "expire")],
+
+    // Restores: a v2 runtime contract's data and its pinned WASM, never an unknown one's.
+    [
+      "v2 restore of a launch token's data and code ok",
+      tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [instanceKey(PAD2), balanceKey(TOKEN2), codeKey(HASHES.launchTokenV2), codeKey(HASHES.momentNft)]) }),
+      restoreIntent(),
+      runtime(TOKEN2, HASHES.launchTokenV2),
+    ],
+    ["v2 restore of an unknown runtime WASM's data", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [balanceKey(STRANGER)]) }), restoreIntent(), runtime(STRANGER, UNKNOWN_WASM)],
+    // The phone read the stranger's WASM hash, which allows nothing: only a pinned WASM's code comes back.
+    ["v2 restore of an unknown runtime WASM's code", tx([Operation.restoreFootprint({})], { soroban: resources(50_000, [codeKey(UNKNOWN_WASM)]) }), restoreIntent(), runtime(STRANGER, UNKNOWN_WASM)],
+  );
+}
+
 for (const [name, t, intent, extra] of syn) {
-  vectors.push(judge({ name, tx: t, intent, user, sponsor, allowed: pinned, now: NOW, ...extra }));
+  vectors.push(judge({ name, tx: t, intent, user, sponsor, pins: SYNTHETIC, now: NOW, ...extra }));
 }
 
 await Deno.mkdir(out, { recursive: true });

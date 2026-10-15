@@ -1,0 +1,233 @@
+{
+  "_links": {
+    "self": {
+      "href": "https://horizon.stellar.org/trade_aggregations?base_asset_type=native\u0026counter_asset_type=credit_alphanum4\u0026counter_asset_code=USDC\u0026counter_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN\u0026resolution=900000\u0026order=desc\u0026limit=8"
+    },
+    "next": {
+      "href": "https://horizon.stellar.org/trade_aggregations?base_asset_type=native\u0026counter_asset_code=USDC\u0026counter_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN\u0026counter_asset_type=credit_alphanum4\u0026end_time=1792001700000\u0026limit=8\u0026order=desc\u0026resolution=900000"
+    },
+    "prev": {
+      "href": ""
+    }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "timestamp": "1792008000000",
+        "trade_count": "345",
+        "base_volume": "12237.2279138",
+        "counter_volume": "2252.2856158",
+        "avg": "0.1840519",
+        "high": "0.1842190",
+        "high_r": {
+          "n": "184219",
+          "d": "1000000"
+        },
+        "low": "0.1836769",
+        "low_r": {
+          "n": "314856097",
+          "d": "1714184846"
+        },
+        "open": "0.1841180",
+        "open_r": {
+          "n": "184118",
+          "d": "1000000"
+        },
+        "close": "0.1840280",
+        "close_r": {
+          "n": "184028",
+          "d": "1000000"
+        }
+      },
+      {
+        "timestamp": "1792007100000",
+        "trade_count": "275",
+        "base_volume": "17796.9091091",
+        "counter_volume": "3270.1405362",
+        "avg": "0.1837477",
+        "high": "0.1840034",
+        "high_r": {
+          "n": "920017",
+          "d": "5000000"
+        },
+        "low": "0.1835838",
+        "low_r": {
+          "n": "10199",
+          "d": "55555"
+        },
+        "open": "0.1837610",
+        "open_r": {
+          "n": "183761",
+          "d": "1000000"
+        },
+        "close": "0.1838289",
+        "close_r": {
+          "n": "10000000",
+          "d": "54398411"
+        }
+      },
+      {
+        "timestamp": "1792006200000",
+        "trade_count": "602",
+        "base_volume": "36236.1727379",
+        "counter_volume": "6663.7534842",
+        "avg": "0.1838978",
+        "high": "0.1843712",
+        "high_r": {
+          "n": "115232000",
+          "d": "625000000"
+        },
+        "low": "0.1835148",
+        "low_r": {
+          "n": "61171",
+          "d": "333330"
+        },
+        "open": "0.1843493",
+        "open_r": {
+          "n": "1843493",
+          "d": "10000000"
+        },
+        "close": "0.1842103",
+        "close_r": {
+          "n": "99999000",
+          "d": "542852396"
+        }
+      },
+      {
+        "timestamp": "1792005300000",
+        "trade_count": "594",
+        "base_volume": "48650.6621656",
+        "counter_volume": "8963.5345966",
+        "avg": "0.1842428",
+        "high": "0.1846219",
+        "high_r": {
+          "n": "1846219",
+          "d": "10000000"
+        },
+        "low": "0.1835820",
+        "low_r": {
+          "n": "344622661",
+          "d": "1877213309"
+        },
+        "open": "0.1838200",
+        "open_r": {
+          "n": "183820",
+          "d": "1000000"
+        },
+        "close": "0.1842826",
+        "close_r": {
+          "n": "319407275",
+          "d": "1733247174"
+        }
+      },
+      {
+        "timestamp": "1792004400000",
+        "trade_count": "533",
+        "base_volume": "32560.9635794",
+        "counter_volume": "5971.8414595",
+        "avg": "0.1834049",
+        "high": "0.1839615",
+        "high_r": {
+          "n": "367923",
+          "d": "2000000"
+        },
+        "low": "0.1831004",
+        "low_r": {
+          "n": "10152",
+          "d": "55445"
+        },
+        "open": "0.1835470",
+        "open_r": {
+          "n": "183547",
+          "d": "1000000"
+        },
+        "close": "0.1837251",
+        "close_r": {
+          "n": "1837251",
+          "d": "10000000"
+        }
+      },
+      {
+        "timestamp": "1792003500000",
+        "trade_count": "282",
+        "base_volume": "28449.1576888",
+        "counter_volume": "5231.3261154",
+        "avg": "0.1838833",
+        "high": "0.1841703",
+        "high_r": {
+          "n": "167339329",
+          "d": "908612121"
+        },
+        "low": "0.1831961",
+        "low_r": {
+          "n": "979",
+          "d": "5344"
+        },
+        "open": "0.1835766",
+        "open_r": {
+          "n": "917883",
+          "d": "5000000"
+        },
+        "close": "0.1833748",
+        "close_r": {
+          "n": "183373",
+          "d": "999990"
+        }
+      },
+      {
+        "timestamp": "1792002600000",
+        "trade_count": "268",
+        "base_volume": "6608.1502112",
+        "counter_volume": "1214.1380495",
+        "avg": "0.1837334",
+        "high": "0.1839400",
+        "high_r": {
+          "n": "10000000",
+          "d": "54365550"
+        },
+        "low": "0.1832788",
+        "low_r": {
+          "n": "170792762",
+          "d": "931873909"
+        },
+        "open": "0.1839096",
+        "open_r": {
+          "n": "229887",
+          "d": "1250000"
+        },
+        "close": "0.1837436",
+        "close_r": {
+          "n": "90529996",
+          "d": "492697333"
+        }
+      },
+      {
+        "timestamp": "1792001700000",
+        "trade_count": "265",
+        "base_volume": "8592.4254509",
+        "counter_volume": "1577.8284959",
+        "avg": "0.1836302",
+        "high": "0.1840273",
+        "high_r": {
+          "n": "1840273",
+          "d": "10000000"
+        },
+        "low": "0.1833494",
+        "low_r": {
+          "n": "10000000",
+          "d": "54540664"
+        },
+        "open": "0.1836320",
+        "open_r": {
+          "n": "183632",
+          "d": "1000000"
+        },
+        "close": "0.1834548",
+        "close_r": {
+          "n": "61151",
+          "d": "333330"
+        }
+      }
+    ]
+  }
+}
