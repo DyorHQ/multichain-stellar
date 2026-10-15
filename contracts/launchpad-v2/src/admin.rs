@@ -323,13 +323,17 @@ pub(crate) fn launch_fee_ok(amount: i128) -> bool {
     (0..=MAX_LAUNCH_FEE).contains(&amount)
 }
 
-/// An Aquarius venue's fee tier is one the router offers (10, 30 or 100).
+/// An Aquarius venue's fee tier is one the router offers (10, 30 or 100); every other kind has none (0).
 fn venue_params_ok(kind: VenueKind, params: &VenueParams) -> bool {
-    kind != VenueKind::Aquarius || AQUARIUS_FEE_TIERS.contains(&params.fee_fraction)
+    if kind == VenueKind::Aquarius {
+        AQUARIUS_FEE_TIERS.contains(&params.fee_fraction)
+    } else {
+        params.fee_fraction == 0
+    }
 }
 
 /// The constructor's table (§3.4): 1 to 8 venues, at least one Soroswap venue (every quote's fallback is one), and
-/// valid Aquarius tiers. Ids follow the table's order and every venue starts enabled.
+/// valid fee tiers. Ids follow the table's order and every venue starts enabled.
 pub(crate) fn initial_venues(e: &Env, init: &Vec<VenueInit>) -> Vec<VenueInfo> {
     let ok = !init.is_empty()
         && init.len() <= MAX_VENUES

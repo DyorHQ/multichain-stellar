@@ -10,8 +10,9 @@ extern crate std;
 use super::*;
 use crate::curve::{amount_out, fee_of, gross_for_net};
 use dyor_common::{
-    err_code, mul_div, tag_of, GradFailure, GraduateArgs, GraduateResult, SoroswapFactoryClient, SoroswapPairClient,
-    ORIGIN_FOREIGN, PRODUCTION_LAUNCH_DURATIONS, SOROSWAP_MIN_LIQ, TESTNET_QA_LAUNCH_DURATIONS, TESTNET_TTL_POLICY,
+    err_code, isqrt_u128, mul_div, tag_of, GradFailure, GraduateArgs, GraduateResult, SoroswapFactoryClient,
+    SoroswapPairClient, ORIGIN_FOREIGN, PRODUCTION_LAUNCH_DURATIONS, SOROSWAP_MIN_LIQ, TESTNET_QA_LAUNCH_DURATIONS,
+    TESTNET_TTL_POLICY,
 };
 use soroban_sdk::testutils::{Address as _, EnvTestConfig, Events as _, Ledger as _, MockAuth, MockAuthInvoke};
 use soroban_sdk::token::{StellarAssetClient, TokenClient};
@@ -127,6 +128,20 @@ pub enum Script {
     BogusLpToken = 8,
     /// Pulls one token more than the launchpad pre-authorized: the host's auth check fails inside the executor.
     PullsTooMuch = 9,
+    // The lies below each pass every result check but one, so each check is needed on its own.
+    /// Seeds honestly, reports one token less than it used: within the dust bound, off the balance delta.
+    TokenDeltaLie = 10,
+    /// Seeds honestly, then sends more than 1 bp of the quote back from its own pocket and reports it unused: the
+    /// balance delta agrees, the dust bound doesn't.
+    QuoteRebate = 11,
+    /// Seeds honestly, reports one LP unit below the floor a fresh Soroswap pair's mint sets (§5.5).
+    LowLiquidity = 12,
+    /// Seeds honestly, reports the quote SAC as the LP token (which the locker holds plenty of in that test).
+    LpTokenIsQuote = 13,
+    /// Seeds honestly, reports the quote SAC as both the pool and the LP token.
+    PoolAndLpAreQuote = 14,
+    /// Leaves one unit of the quote unused, returns it and reports that truthfully: within the dust bound.
+    QuoteDust = 15,
 }
 
 /// A contract error outside DyorHQ's namespace: recorded with origin 0 and code 7.
@@ -186,28 +201,59 @@ impl ScriptedExecutor {
             Script::ShortUse => a.token_amount - a.token_amount / 10_000 - 1,
             _ => a.token_amount,
         };
+        let quote_in = if script == Script::QuoteDust { a.quote_amount - 1 } else { a.quote_amount };
         token.transfer(&this, &pool, &tokens_in);
-        quote.transfer(&this, &pool, &a.quote_amount);
+        quote.transfer(&this, &pool, &quote_in);
         let lp_to = if script == Script::LpElsewhere { this.clone() } else { a.lp_to.clone() };
         let liquidity = SoroswapPairClient::new(&e, &pool).deposit(&lp_to);
+        // What it didn't use goes back to the launchpad.
         if tokens_in < a.token_amount {
             token.transfer(&this, &a.source, &(a.token_amount - tokens_in));
+        }
+        if quote_in < a.quote_amount {
+            quote.transfer(&this, &a.source, &(a.quote_amount - quote_in));
         }
         let mut r = GraduateResult {
             pool: pool.clone(),
             lp_token: pool,
             liquidity,
             token_used: tokens_in,
-            quote_used: a.quote_amount,
+            quote_used: quote_in,
         };
         match script {
             Script::OverReport => r.token_used += 1,
             Script::UnderReport => r.quote_used -= 1,
             Script::WrongPool => r.pool = this,
             Script::BogusLpToken => r.lp_token = this,
+            Script::TokenDeltaLie => r.token_used -= 1,
+            Script::QuoteRebate => {
+                let rebate = a.quote_amount / 10_000 + 1;
+                quote.transfer(&this, &a.source, &rebate);
+                r.quote_used -= rebate;
+            }
+            Script::LowLiquidity => {
+                let fresh = isqrt_u128(a.token_amount as u128 * a.quote_amount as u128) as i128 - SOROSWAP_MIN_LIQ;
+                r.liquidity = fresh - 2;
+            }
+            Script::LpTokenIsQuote => r.lp_token = a.quote.clone(),
+            Script::PoolAndLpAreQuote => {
+                r.pool = a.quote.clone();
+                r.lp_token = a.quote.clone();
+            }
             _ => {}
         }
         Ok(r)
+    }
+}
+
+/// An executor whose success isn't a `GraduateResult`.
+#[contract]
+pub struct GarbledExecutor;
+
+#[contractimpl]
+impl GarbledExecutor {
+    pub fn graduate(_e: Env, _a: GraduateArgs) -> u32 {
+        7
     }
 }
 
@@ -436,6 +482,15 @@ impl T {
         quote
     }
 
+    /// A venue added through the timelock and enabled for launches; returns its id.
+    fn add_venue(&self, kind: VenueKind, executor: &Address, fee_fraction: u32) -> u32 {
+        let id = self.pad.propose_venue(&kind, executor, &VenueParams { fee_fraction });
+        self.advance(PRODUCTION_LAUNCH_DURATIONS.timelock);
+        self.pad.apply_venue(&id);
+        self.pad.set_venue_enabled(&id, &true);
+        id
+    }
+
     /// `secs` later, in a later ledger.
     fn advance(&self, secs: u64) {
         self.e.ledger().with_mut(|l| {
@@ -564,16 +619,22 @@ impl T {
         self.pad_events().contains(&self.xdr_of(event))
     }
 
-    /// I-L1 for one quote asset and the launch fee asset: the launchpad holds exactly what it owes.
+    /// I-L1 for `tokens`: per asset (each launch's quote, and XLM for the launch fees, which may be one asset), the
+    /// launchpad holds exactly what they owe, plus `owed` of the default quote (`CreatorOwed`).
     fn assert_solvent(&self, tokens: &[Address], owed: i128) {
-        let (mut quote_owed, mut fees_owed) = (owed, 0);
+        let mut totals = std::vec![(self.quote.clone(), owed), (self.xlm.clone(), 0)];
+        let mut add = |asset: Address, amount: i128| match totals.iter_mut().find(|(a, _)| *a == asset) {
+            Some((_, sum)) => *sum += amount,
+            None => totals.push((asset, amount)),
+        };
         for token in tokens {
             let c = self.curve(token);
-            quote_owed += c.real_quote + c.refund_quote - c.refunded + c.creator_fees + c.protocol_fees;
-            fees_owed += c.launch_fee_due;
+            add(self.quote_of(token), c.real_quote + c.refund_quote - c.refunded + c.creator_fees + c.protocol_fees);
+            add(self.xlm.clone(), c.launch_fee_due);
         }
-        assert_eq!(self.balance(&self.quote, &self.pad.address), quote_owed, "quote solvency (I-L1)");
-        assert_eq!(self.balance(&self.xlm, &self.pad.address), fees_owed, "launch fee solvency (I-L1)");
+        for (asset, owed) in totals {
+            assert_eq!(self.balance(&asset, &self.pad.address), owed, "solvency in {asset:?} (I-L1)");
+        }
     }
 }
 
@@ -771,7 +832,9 @@ fn construction_refuses_an_invalid_config() {
     };
     let nine = Vec::from_array(e, [(); 9].map(|_| venue_init(VenueKind::Soroswap, &t.exec)));
 
-    let cases: [(&str, Ctor); 15] = [
+    let tiered = |kind| VenueInit { kind, executor: t.exec.clone(), params: VenueParams { fee_fraction: 30 } };
+
+    let cases: [(&str, Ctor); 17] = [
         ("xlm is a Wasm token", Ctor { xlm: wasm_token, ..base.clone() }),
         ("xlm is an account", Ctor { xlm: account, ..base.clone() }),
         ("xlm is nothing", Ctor { xlm: Address::generate(e), ..base.clone() }),
@@ -798,6 +861,14 @@ fn construction_refuses_an_invalid_config() {
         (
             "an Aquarius tier of 0",
             Ctor { venues: vec![e, venue_init(VenueKind::Soroswap, &t.exec), aquarius(0)], ..base.clone() },
+        ),
+        ("a tier on a Soroswap venue", Ctor { venues: vec![e, tiered(VenueKind::Soroswap)], ..base.clone() }),
+        (
+            "a tier on a qa-exec-fail venue",
+            Ctor {
+                venues: vec![e, venue_init(VenueKind::Soroswap, &t.exec), tiered(VenueKind::QaFail)],
+                ..base.clone()
+            },
         ),
     ];
     for (name, c) in cases {
@@ -1338,9 +1409,15 @@ fn buy_and_sell_move_the_curve_and_accrue_fees() {
     assert_eq!(t.pad.sell(&t.bob, &token, &(q.tokens_out / 2), &s.quote_out), s.quote_out);
     assert_eq!(t.pad.try_buy(&t.bob, &token, &0, &0).unwrap_err().unwrap(), err(Error::ZeroAmount));
     assert_eq!(t.pad.try_sell(&t.bob, &token, &0, &0).unwrap_err().unwrap(), err(Error::ZeroAmount));
+    assert_eq!(t.pad.try_quote_buy(&token, &t.bob, &0).unwrap_err().unwrap(), err(Error::ZeroAmount));
+    assert_eq!(t.pad.try_quote_sell(&token, &-1).unwrap_err().unwrap(), err(Error::ZeroAmount));
     // A sell can't take more than the curve's real quote: tokens from outside the curve don't count.
     assert_eq!(
         t.pad.try_sell(&t.alice, &token, &(DEFAULT_SUPPLY / 2), &0).unwrap_err().unwrap(),
+        err(Error::InsufficientLiquidity)
+    );
+    assert_eq!(
+        t.pad.try_quote_sell(&token, &(DEFAULT_SUPPLY / 2)).unwrap_err().unwrap(),
         err(Error::InsufficientLiquidity)
     );
     assert_eq!(
@@ -1385,8 +1462,34 @@ fn last_buy_is_clamped_and_completes_the_curve() {
     assert_eq!(t.pad.try_buy(&t.bob, &token, &ONE, &0).unwrap_err().unwrap(), err(Error::CurveClosed));
     assert_eq!(t.pad.try_sell(&t.alice, &token, &ONE, &0).unwrap_err().unwrap(), err(Error::CurveClosed));
     assert_eq!(t.pad.try_quote_buy(&token, &t.bob, &ONE).unwrap_err().unwrap(), err(Error::CurveClosed));
+    assert_eq!(t.pad.try_quote_sell(&token, &ONE).unwrap_err().unwrap(), err(Error::CurveClosed));
     assert!(t.pair_of(&token).is_none());
     t.assert_solvent(&[token], 0);
+}
+
+/// The quote views refuse wherever the trades do. A graduated or rescued curve has no token reserve left, so a sell
+/// quote would price one token at the whole virtual quote reserve.
+#[test]
+fn quotes_refuse_every_closed_curve_as_the_trades_do() {
+    let t = setup();
+    let graduated = t.launch();
+    let rescued = stuck_launch(&t);
+    t.buy(&t.alice, &graduated, WHALE);
+    let refused = |token: &Address, phase: Phase| {
+        assert_eq!(t.curve(token).phase, phase);
+        let closed = err(Error::CurveClosed);
+        assert_eq!(t.pad.try_quote_sell(token, &ONE).unwrap_err().unwrap(), closed, "{phase:?}");
+        assert_eq!(t.pad.try_quote_buy(token, &t.bob, &ONE).unwrap_err().unwrap(), closed, "{phase:?}");
+        assert_eq!(t.pad.try_sell(&t.alice, token, &ONE, &0).unwrap_err().unwrap(), closed, "{phase:?}");
+        assert_eq!(t.pad.try_buy(&t.bob, token, &ONE, &0).unwrap_err().unwrap(), closed, "{phase:?}");
+    };
+    refused(&graduated, Phase::Completed);
+    t.graduate(&graduated);
+    refused(&graduated, Phase::Graduated);
+    assert_eq!(t.curve(&graduated).token_reserve, 0);
+    t.advance(PRODUCTION_LAUNCH_DURATIONS.rescue_public);
+    t.pad.rescue(&rescued);
+    refused(&rescued, Phase::Rescued);
 }
 
 #[test]
@@ -1918,8 +2021,10 @@ fn graduate_fallback_attempts_only_the_fallback_venue() {
 #[test]
 fn mark_stuck_opens_after_the_grace_and_starts_the_clocks() {
     let t = setup();
-    let token = t.launch_on(QA_FAIL, false);
+    let (token, late) = (t.launch_on(QA_FAIL, false), t.launch_on(QA_FAIL, false));
     assert_eq!(t.pad.try_mark_stuck(&token).unwrap_err().unwrap(), err(Error::NotCompleted));
+    t.complete(&late);
+    let late_completed_at = t.curve(&late).completed_at;
     t.complete(&token);
     let completed_at = t.curve(&token).completed_at;
     assert_eq!(t.pad.status(&token).mark_stuck_at, completed_at + HOUR);
@@ -1947,6 +2052,9 @@ fn mark_stuck_opens_after_the_grace_and_starts_the_clocks() {
     t.advance(1);
     assert!(matches!(t.graduate_fallback(&token), GraduationOutcome::Graduated(_)));
     assert_eq!(t.curve(&token).graduated_venue, Some(SOROSWAP));
+    // Marked an hour late, a launch is still stuck from completed_at + grace, not from the call.
+    t.pad.mark_stuck(&late);
+    assert_eq!(t.curve(&late).stuck_since, late_completed_at + HOUR);
 }
 
 #[test]
@@ -2027,6 +2135,9 @@ fn a_venue_locked_launch_falls_back_after_locked_fallback_or_allow_fallback() {
 #[test]
 fn executors_that_lie_about_their_result_abort_with_graduation_invalid_and_change_nothing() {
     let t = setup();
+    // So that a quote SAC passed off as the LP token passes the locker's balance check, and the rebate has a source.
+    StellarAssetClient::new(&t.e, &t.quote).mint(&t.locker, &(1_000_000_000 * ONE));
+    StellarAssetClient::new(&t.e, &t.quote).mint(&t.scripted, &(1_000 * ONE));
     let lies = [
         Script::OverReport,
         Script::UnderReport,
@@ -2034,6 +2145,11 @@ fn executors_that_lie_about_their_result_abort_with_graduation_invalid_and_chang
         Script::WrongPool,
         Script::LpElsewhere,
         Script::BogusLpToken,
+        Script::TokenDeltaLie,
+        Script::QuoteRebate,
+        Script::LowLiquidity,
+        Script::LpTokenIsQuote,
+        Script::PoolAndLpAreQuote,
     ];
     for script in lies {
         let token = t.launch_on(SCRIPTED, false);
@@ -2067,6 +2183,37 @@ fn an_executor_that_pulls_more_than_was_authorized_is_a_recorded_host_auth_failu
     let mut expected = before;
     expected.curve.stuck_since = t.now();
     assert_eq!(t.state(&token), expected);
+}
+
+/// A venue without Soroswap's LP floor (`min_liquidity` 1): the dust bound alone catches a token amount used more than
+/// 1 bp short, and quote left unused within it is booked as protocol fees.
+#[test]
+fn without_a_liquidity_floor_the_dust_bounds_still_hold() {
+    let t = setup();
+    let hold = t.add_venue(VenueKind::HoldOnly, &t.scripted, 0);
+    let (short, dusty) = (t.launch_on(hold, false), t.launch_on(hold, false));
+    t.complete(&short);
+    t.complete(&dusty);
+    t.script(Script::ShortUse);
+    let before = t.state(&short);
+    assert_eq!(t.unsigned(|| t.pad.try_graduate(&short)).unwrap_err().unwrap(), err(Error::GraduationInvalid));
+    assert_eq!(t.state(&short), before);
+    t.script(Script::QuoteDust);
+    let fees = t.curve(&dusty).protocol_fees;
+    assert!(matches!(t.graduate(&dusty), GraduationOutcome::Graduated(_)));
+    assert_eq!(t.curve(&dusty).protocol_fees, fees + 1);
+    t.assert_solvent(&[short, dusty], 0);
+}
+
+#[test]
+fn a_success_that_does_not_decode_aborts_with_graduation_invalid() {
+    let t = setup();
+    let garbled = t.add_venue(VenueKind::HoldOnly, &t.e.register(GarbledExecutor, ()), 0);
+    let token = t.launch_on(garbled, false);
+    t.complete(&token);
+    let before = t.state(&token);
+    assert_eq!(t.unsigned(|| t.pad.try_graduate(&token)).unwrap_err().unwrap(), err(Error::GraduationInvalid));
+    assert_eq!(t.state(&token), before);
 }
 
 // ------------------------------------------------------------------------------------------------ rescue and refunds (O2)
@@ -2185,9 +2332,26 @@ fn refunds_are_pro_rata_without_fees_and_burn_the_tokens() {
     assert_eq!(t.balance(&token, &t.bob), bob_tokens - bob_tokens / 3);
     assert_eq!(t.token(&token).total_supply(), rs - bob_tokens / 3);
     assert_eq!(t.curve(&token).refunded, expected);
-    // The holder signs, and can't refund what it doesn't hold.
+    // The holder signs, and can't refund what it doesn't hold. Alice's signature doesn't burn bob's tokens; bob's alone
+    // (the refund and the burn under it) does.
     t.e.set_auths(&[]);
     assert!(t.pad.try_refund(&t.bob, &token, &ONE).is_err());
+    let args = (t.bob.clone(), token.clone(), ONE).into_val(&t.e);
+    assert!(!signed_by(&t, &t.alice, "refund", args, || t.pad.try_refund(&t.bob, &token, &ONE).is_ok()));
+    let burn = MockAuthInvoke {
+        contract: &token,
+        fn_name: "burn",
+        args: (t.bob.clone(), ONE).into_val(&t.e),
+        sub_invokes: &[],
+    };
+    let refund = MockAuthInvoke {
+        contract: &t.pad.address,
+        fn_name: "refund",
+        args: (t.bob.clone(), token.clone(), ONE).into_val(&t.e),
+        sub_invokes: std::slice::from_ref(&burn),
+    };
+    t.e.mock_auths(&[MockAuth { address: &t.bob, invoke: &refund }]);
+    assert!(t.pad.try_refund(&t.bob, &token, &ONE).is_ok());
     t.e.mock_all_auths();
     assert!(t.pad.try_refund(&t.bob, &token, &(bob_tokens * 2)).is_err());
     assert_eq!(t.pad.try_refund(&t.bob, &token, &0).unwrap_err().unwrap(), err(Error::ZeroAmount));
@@ -2198,6 +2362,31 @@ fn refunds_are_pro_rata_without_fees_and_burn_the_tokens() {
     assert_eq!(t.pad.try_refund(&t.bob, &live, &ONE).unwrap_err().unwrap(), err(Error::WrongPhase));
     assert_eq!(t.pad.try_quote_refund(&live, &ONE).unwrap_err().unwrap(), err(Error::WrongPhase));
     t.assert_solvent(&[token, live], 0);
+}
+
+/// Sharing on: after a rescue, holders still claim the quote rewards the token holds for them and refund every token,
+/// the launchpad keeps exactly what it owes, and the token still covers every reward it hasn't paid (I-L1, I-L8).
+#[test]
+fn with_sharing_on_holders_claim_their_rewards_and_refund_everything_after_a_rescue() {
+    let t = setup();
+    let token = t.launch_on(QA_FAIL, true);
+    t.after_snipe();
+    t.buy(&t.bob, &token, 300 * ONE);
+    t.buy(&t.alice, &token, WHALE);
+    assert!(matches!(t.graduate(&token), GraduationOutcome::Failed(_)));
+    t.advance(PRODUCTION_LAUNCH_DURATIONS.rescue_public);
+    t.pad.rescue(&token);
+    let tok = t.token(&token);
+    let (quote_rewards, _) = tok.claim(&t.bob);
+    assert!(quote_rewards > 0);
+    for holder in [&t.bob, &t.alice] {
+        let held = t.balance(&token, holder);
+        t.pad.refund(holder, &token, &held);
+    }
+    assert_eq!(tok.total_supply(), 0);
+    t.assert_solvent(std::slice::from_ref(&token), 0);
+    let s = tok.sharing().unwrap();
+    assert!(t.balance(&t.quote, &token) >= s.q.funded - s.q.paid);
 }
 
 /// I-L8 as a property: whatever the holders and the order, each refund pays floor(tokens·refund_quote/refund_supply),
@@ -2312,12 +2501,39 @@ fn claim_protocol_fees_sweeps_up_to_20_launches_in_one_transfer_per_asset() {
         t.pad.try_claim_protocol_fees(&vec![&t.e, Address::generate(&t.e)]).unwrap_err().unwrap(),
         err(Error::UnknownLaunch)
     );
-    // One launch at a time works too.
+    // One launch at a time works too, and a launch named twice is swept once.
     t.buy(&t.bob, &tokens[0], 10 * ONE);
     let fees = t.curve(&tokens[0]).protocol_fees;
-    assert_eq!(t.pad.claim_protocol_fees(&vec![&t.e, tokens[0].clone()]), vec![&t.e, (t.quote.clone(), fees)]);
+    let twice = vec![&t.e, tokens[0].clone(), tokens[0].clone()];
+    assert_eq!(t.pad.claim_protocol_fees(&twice), vec![&t.e, (t.quote.clone(), fees)]);
     let even: std::vec::Vec<Address> = tokens.iter().step_by(2).cloned().collect();
     t.assert_solvent(&even, 0);
+}
+
+/// An XLM-quoted launch books its quote in the same SAC balance as every launch fee, and that balance stays exactly
+/// what is owed through trades and both claims (I-L1).
+#[test]
+fn an_xlm_quoted_launch_shares_the_launch_fee_balance_and_stays_solvent() {
+    let t = setup();
+    t.pad.set_quote(&t.xlm, &PHANTOM, &threshold(), &true, &vec![&t.e], &SOROSWAP);
+    let mut p = t.params_on(&t.xlm, SOROSWAP, false);
+    p.creator_fee_bps = 500;
+    p.initial_buy = 50 * ONE;
+    let launches = [t.launch_p(&t.creator, &p), t.launch()];
+    let in_xlm = &launches[0];
+    t.assert_solvent(&launches, 0);
+    t.after_snipe();
+    let got = t.buy(&t.alice, in_xlm, 300 * ONE);
+    t.assert_solvent(&launches, 0);
+    t.pad.sell(&t.alice, in_xlm, &(got / 3), &0);
+    t.assert_solvent(&launches, 0);
+    t.pad.claim_creator_fees(in_xlm);
+    t.assert_solvent(&launches, 0);
+    // One XLM transfer carries the XLM launch's protocol fees and both launch fees.
+    let fees = t.curve(in_xlm).protocol_fees;
+    let totals = t.pad.claim_protocol_fees(&Vec::from_slice(&t.e, &launches));
+    assert_eq!(totals, vec![&t.e, (t.xlm.clone(), fees + 2 * LAUNCH_FEE)]);
+    t.assert_solvent(&launches, 0);
 }
 
 #[test]
@@ -2512,8 +2728,12 @@ fn the_treasury_and_venue_timelocks() {
     let token = t.launch();
     t.pad.claim_protocol_fees(&vec![&t.e, token]);
     assert_eq!(t.balance(&t.xlm, &new), LAUNCH_FEE);
-    // A proposal lapses after its window.
+    // A proposal applies up to the last second of its window, and lapses after it.
     t.pad.propose_treasury(&t.treasury);
+    t.advance(d.timelock + d.timelock_window);
+    t.pad.apply_treasury();
+    assert_eq!(t.pad.treasury(), t.treasury);
+    t.pad.propose_treasury(&new);
     t.advance(d.timelock + d.timelock_window + 1);
     assert_eq!(t.pad.try_apply_treasury().unwrap_err().unwrap(), err(Error::TimelockExpired));
 
@@ -2539,11 +2759,18 @@ fn the_treasury_and_venue_timelocks() {
     t.pad.set_venue_enabled(&id, &true);
     assert!(t.emitted(&VenueEnabled { id, enabled: true }));
     t.launch_on(id, false);
-    // Proposals are refused past 8 venues, and Aquarius needs one of its tiers.
+    // Proposals are refused past 8 venues; Aquarius needs one of its tiers, and every other kind none.
     assert_eq!(
         t.pad.try_propose_venue(&VenueKind::Aquarius, &t.exec, &VenueParams { fee_fraction: 25 }).unwrap_err().unwrap(),
         err(Error::InvalidConfig)
     );
+    for kind in [VenueKind::Soroswap, VenueKind::HoldOnly, VenueKind::QaFail] {
+        assert_eq!(
+            t.pad.try_propose_venue(&kind, &t.exec, &VenueParams { fee_fraction: 30 }).unwrap_err().unwrap(),
+            err(Error::InvalidConfig),
+            "{kind:?}"
+        );
+    }
     let ids: std::vec::Vec<u32> =
         (0..3).map(|_| t.pad.propose_venue(&VenueKind::Aquarius, &t.exec, &VenueParams { fee_fraction: 30 })).collect();
     assert_eq!(ids, [5, 6, 7]);
@@ -2670,10 +2897,13 @@ fn the_admin_replaces_the_guardian_through_the_timelock_which_the_guardian_canno
     let (eta, expires) = (t.now() + d.timelock, t.now() + d.timelock + d.timelock_window);
     assert!(t.emitted(&GuardianProposed { new: Some(g2.clone()), eta, expires }));
     assert_eq!(t.pad.pending_guardian(), Some(PendingGuardian { new: Some(g2.clone()), eta, expires }));
-    // The guardian can't cancel its replacement, and a handoff doesn't clear it.
+    // The guardian can't cancel its replacement, and a handoff, started or accepted, doesn't clear it.
     assert!(!signed_by(&t, &g, "cancel_guardian", ().into_val(e), || t.pad.try_cancel_guardian().is_ok()));
     t.pad.transfer_guardian(&g3);
     assert!(t.pad.pending_guardian().is_some());
+    t.pad.accept_guardian();
+    assert_eq!((t.pad.guardian(), t.pad.pending_guardian().is_some()), (Some(g3.clone()), true));
+    t.pad.transfer_guardian(&g);
     t.advance(d.timelock - 1);
     assert_eq!(t.pad.try_apply_guardian().unwrap_err().unwrap(), err(Error::TimelockNotElapsed));
     t.advance(1);
@@ -2928,6 +3158,10 @@ fn admin_changes_never_touch_a_live_launch() {
     assert_eq!(t.pad.try_set_launch_fee(&(MAX_LAUNCH_FEE + 1)).unwrap_err().unwrap(), err(Error::InvalidConfig));
     t.pad.set_fees(&100, &5_000, &9_799, &Vec::from_array(&t.e, [10_000u32; 10]), &60);
     assert_eq!(t.pad.get_launch(&token), launch);
+    // Its venue, disabled for future launches, still graduates it: the launch pinned it.
+    t.buy(&t.alice, &token, WHALE);
+    assert!(matches!(t.graduate(&token), GraduationOutcome::Graduated(_)));
+    assert_eq!(t.curve(&token).graduated_venue, Some(SOROSWAP));
 }
 
 // ------------------------------------------------------------------------------------------------ errors and size
@@ -3057,10 +3291,7 @@ fn a_launch_graduates_on_aquarius_and_the_locker_holds_the_share_token() {
         e.register(exec_aquarius::WASM, (router.clone(), aqua.clone(), 10 * ONE, vec![e, t.pad.address.clone()]));
     StellarAssetClient::new(e, &aqua).mint(&exec, &(50 * ONE));
     // The venue joins through the timelock, on the 0.3% tier (L2).
-    let id = t.pad.propose_venue(&VenueKind::Aquarius, &exec, &VenueParams { fee_fraction: 30 });
-    t.advance(PRODUCTION_LAUNCH_DURATIONS.timelock);
-    t.pad.apply_venue(&id);
-    t.pad.set_venue_enabled(&id, &true);
+    let id = t.add_venue(VenueKind::Aquarius, &exec, 30);
     let token = t.launch_on(id, false);
     assert_eq!(t.token(&token).lock_from(), vec![e, exec.clone(), t.exec.clone()]);
     t.complete(&token);

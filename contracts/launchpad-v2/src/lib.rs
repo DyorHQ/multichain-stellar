@@ -197,7 +197,8 @@ impl LaunchpadV2 {
     //
     // Refuses (`InvalidConfig`): `xlm` that isn't a Stellar Asset Contract; invalid durations or TTL policy; a locker
     // whose `harvest_interval()` differs from `durations.harvest_interval` (F6); an empty table, more than 8 venues,
-    // no Soroswap venue or an Aquarius tier outside {10, 30, 100}; a launch fee below 0 or above `MAX_LAUNCH_FEE`.
+    // no Soroswap venue, an Aquarius tier outside {10, 30, 100} or a tier on another kind; a launch fee below 0 or
+    // above `MAX_LAUNCH_FEE`.
     #[allow(clippy::too_many_arguments)]
     pub fn __constructor(
         e: Env,
@@ -353,7 +354,8 @@ impl LaunchpadV2 {
         admin::set_whitelisted(&e, account, whitelisted);
     }
 
-    // Proposes a venue; returns the id it will have once applied.
+    // Proposes a venue; returns the id it will have once applied. Only Aquarius has a fee tier (10, 30 or 100);
+    // every other kind takes 0.
     pub fn propose_venue(e: Env, kind: VenueKind, executor: Address, params: VenueParams) -> u32 {
         admin::propose_venue(&e, kind, executor, params)
     }
@@ -548,22 +550,7 @@ impl LaunchpadV2 {
         seller.require_auth();
         let launch = load_launch(&e, &token);
         let mut curve = load_curve(&e, &token);
-        if curve.phase != Phase::Curve {
-            panic_with_error!(&e, Error::CurveClosed);
-        }
-        if tokens_in <= 0 {
-            panic_with_error!(&e, Error::ZeroAmount);
-        }
-        let q = curve::quote_sell(
-            tokens_in,
-            curve.quote_reserve,
-            curve.token_reserve,
-            launch.fee_bps,
-            launch.creator_fee_bps,
-        );
-        if q.gross > curve.real_quote {
-            panic_with_error!(&e, Error::InsufficientLiquidity);
-        }
+        let q = price_sell(&e, &launch, &curve, tokens_in);
         if q.quote_out <= 0 || q.quote_out < min_quote_out {
             panic_with_error!(&e, Error::SlippageExceeded);
         }
@@ -764,23 +751,17 @@ impl LaunchpadV2 {
         storage::creator_owed(&e, &account, &asset)
     }
 
-    // What `buy` would do now for `buyer`: the snipe tax depends on the buyer and the time since the launch.
+    // What `buy` would do now for `buyer`: the snipe tax depends on the buyer and the time since the launch. Refused
+    // wherever `buy` is.
     pub fn quote_buy(e: Env, token: Address, buyer: Address, quote_in: i128) -> BuyQuote {
         let launch = load_launch(&e, &token);
-        let curve = load_curve(&e, &token);
-        if curve.phase != Phase::Curve {
-            panic_with_error!(&e, Error::CurveClosed);
-        }
-        if quote_in <= 0 {
-            panic_with_error!(&e, Error::ZeroAmount);
-        }
-        price_buy(&e, &launch, &curve, &buyer, quote_in)
+        price_buy(&e, &launch, &load_curve(&e, &token), &buyer, quote_in)
     }
 
+    // What `sell` would do now. Refused wherever `sell` is: a closed curve has no price.
     pub fn quote_sell(e: Env, token: Address, tokens_in: i128) -> SellQuote {
         let launch = load_launch(&e, &token);
-        let curve = load_curve(&e, &token);
-        curve::quote_sell(tokens_in, curve.quote_reserve, curve.token_reserve, launch.fee_bps, launch.creator_fee_bps)
+        price_sell(&e, &launch, &load_curve(&e, &token), tokens_in)
     }
 
     // What `refund` pays for `tokens_in` (Rescued only).
@@ -876,12 +857,6 @@ fn launch_salt(e: &Env, creator: &Address, nonce: u64) -> BytesN<32> {
 fn do_buy(e: &Env, buyer: &Address, token: &Address, quote_in: i128, min_tokens_out: i128) -> i128 {
     let launch = load_launch(e, token);
     let mut curve = load_curve(e, token);
-    if curve.phase != Phase::Curve {
-        panic_with_error!(e, Error::CurveClosed);
-    }
-    if quote_in <= 0 {
-        panic_with_error!(e, Error::ZeroAmount);
-    }
     let q = price_buy(e, &launch, &curve, buyer, quote_in);
     if q.tokens_out <= 0 || q.tokens_out < min_tokens_out {
         panic_with_error!(e, Error::SlippageExceeded);
@@ -929,6 +904,7 @@ fn do_buy(e: &Env, buyer: &Address, token: &Address, quote_in: i128, min_tokens_
 /// Prices a buy with the launch's pinned fees and snipe schedule (V1). The snipe step is the time since the launch
 /// in `snipe_step_secs` steps (L11); exempt buyers, the creator and the initial recipient pay none.
 fn price_buy(e: &Env, launch: &Launch, curve: &Curve, buyer: &Address, quote_in: i128) -> BuyQuote {
+    require_open(e, curve, quote_in);
     let step = e.ledger().timestamp().saturating_sub(launch.created_at) / launch.snipe_step_secs as u64;
     let snipe_bps = if step >= launch.snipe_schedule.len() as u64 || exempt(e, &launch.token).contains(buyer) {
         0
@@ -944,6 +920,29 @@ fn price_buy(e: &Env, launch: &Launch, curve: &Curve, buyer: &Address, quote_in:
         launch.creator_fee_bps,
         snipe_bps,
     )
+}
+
+/// Prices a sell with the launch's pinned fees. A sell can't take more than the curve's real quote: tokens that
+/// never came from the curve don't count.
+fn price_sell(e: &Env, launch: &Launch, curve: &Curve, tokens_in: i128) -> SellQuote {
+    require_open(e, curve, tokens_in);
+    let q =
+        curve::quote_sell(tokens_in, curve.quote_reserve, curve.token_reserve, launch.fee_bps, launch.creator_fee_bps);
+    if q.gross > curve.real_quote {
+        panic_with_error!(e, Error::InsufficientLiquidity);
+    }
+    q
+}
+
+/// Trades and their quotes need a curve still trading (once it completes, graduates or is rescued its reserves price
+/// nothing) and a positive amount.
+fn require_open(e: &Env, curve: &Curve, amount: i128) {
+    if curve.phase != Phase::Curve {
+        panic_with_error!(e, Error::CurveClosed);
+    }
+    if amount <= 0 {
+        panic_with_error!(e, Error::ZeroAmount);
+    }
 }
 
 /// One trade's fees, split by the launch's pinned `protocol_share_bps` (V1), as Monad's curve splits them
