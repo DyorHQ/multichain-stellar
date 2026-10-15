@@ -27,6 +27,22 @@ private struct VerifierVector: Decodable {
     }
     struct Fees: Decodable { let maxFee: String; let maxInclusionPerOp: String; let starterInnerFeeMax: String }
     struct Step: Decodable { let feePayer: String?; let sponsorReason: String? }
+    /// v2's pins as the vector carries them (gen-vectors.ts VectorV2).
+    struct V2: Decodable {
+        struct Contracts: Decodable {
+            let launchpadV2: String
+            let momentsV2: String
+            let lpLocker: String
+            let execSoroswap: String
+            let execAquarius: String?
+            let momentsGraduator: String
+        }
+        struct Durations: Decodable { let launch: [String: UInt64]; let moments: [String: UInt64] }
+        let contracts: Contracts
+        let runtimeWasmHashes: [String: String]
+        let durations: Durations
+        let maxLaunchFeeStroops: String
+    }
     let name: String
     let envelope: String
     let intent: Intent
@@ -37,14 +53,51 @@ private struct VerifierVector: Decodable {
     let launchTokenWasmHash: String
     let monadDomain: UInt32
     let feePolicy: Fees
+    let v2: V2?
+    let runtime: [String: String]?
     let now: Double
     let step: Step?
     let expect: Expect
     let decoded: Decoded
 
-    var pinned: PinnedContracts {
+    /// The pins the vector was judged with: its contracts, and v2's roles, runtime WASM hashes, durations and launch-fee
+    /// bound as gen-pinned.ts writes them into PinnedContracts. `withV2: false` leaves v2 unpinned.
+    func pinned(withV2: Bool = true) throws -> PinnedContracts {
         let fees = FeePolicy(maxFee: Int64(feePolicy.maxFee)!, maxInclusionFeePerOp: Int64(feePolicy.maxInclusionPerOp)!, starterInnerFeeMax: Int64(feePolicy.starterInnerFeeMax)!)
-        return PinnedContracts(network: .testnet, sponsor: sponsor, launchTokenWasmHash: launchTokenWasmHash, roles: ["all": allowed], feePolicy: fees, monadDomain: monadDomain)
+        var roles = ["all": allowed]
+        guard withV2, let v2 else {
+            return PinnedContracts(network: .testnet, sponsor: sponsor, launchTokenWasmHash: launchTokenWasmHash, roles: roles, feePolicy: fees, monadDomain: monadDomain)
+        }
+        let c = v2.contracts
+        roles["launchpadV2"] = [c.launchpadV2]
+        roles["momentsV2"] = [c.momentsV2]
+        roles["lpLocker"] = [c.lpLocker]
+        roles["execSoroswap"] = [c.execSoroswap]
+        roles["momentsGraduator"] = [c.momentsGraduator]
+        if let aquarius = c.execAquarius { roles["execAquarius"] = [aquarius] }
+        func secs(_ set: [String: UInt64], _ name: String) throws -> UInt64 { try XCTUnwrap(set[name], "\(self.name): durations.\(name)") }
+        let l = v2.durations.launch, m = v2.durations.moments
+        let durations = PinnedDurations(
+            launch: .init(
+                grace: try secs(l, "grace"), fallbackDelay: try secs(l, "fallback_delay"), rescueAdmin: try secs(l, "rescue_admin"),
+                rescuePublic: try secs(l, "rescue_public"), lockedFallback: try secs(l, "locked_fallback"),
+                takeoverDelay: try secs(l, "takeover_delay"), takeoverWindow: try secs(l, "takeover_window"), timelock: try secs(l, "timelock"),
+                timelockWindow: try secs(l, "timelock_window"), harvestInterval: try secs(l, "harvest_interval")
+            ),
+            moments: .init(
+                vestPeriod: try secs(m, "vest_period"), stuckExpiry: try secs(m, "stuck_expiry"), pendingBackstop: try secs(m, "pending_backstop"),
+                timelock: try secs(m, "timelock"), timelockWindow: try secs(m, "timelock_window"), minWindow: try secs(m, "min_window"),
+                maxWindow: try secs(m, "max_window"), harvestInterval: try secs(m, "harvest_interval")
+            )
+        )
+        return PinnedContracts(
+            network: .testnet, sponsor: sponsor, launchTokenWasmHash: launchTokenWasmHash, roles: roles, feePolicy: fees, monadDomain: monadDomain,
+            runtimeWasmHashes: v2.runtimeWasmHashes, durations: durations, maxLaunchFeeStroops: try XCTUnwrap(Int64(v2.maxLaunchFeeStroops))
+        )
+    }
+
+    func verifier(withV2: Bool = true) throws -> TxVerifier {
+        TxVerifier(user: user, pinned: try pinned(withV2: withV2), verifiedLaunchTokens: Set(launchTokens), runtimeContracts: runtime ?? [:], now: { Date(timeIntervalSince1970: now) })
     }
 }
 
@@ -217,7 +270,7 @@ final class VerifierVectorTests: XCTestCase {
             // Re-encoding is byte-exact.
             XCTAssertEqual(envelope.base64(), v.envelope, v.name)
 
-            let verifier = TxVerifier(user: v.user, pinned: v.pinned, verifiedLaunchTokens: Set(v.launchTokens), now: { Date(timeIntervalSince1970: v.now) })
+            let verifier = try v.verifier()
             do {
                 let outflow = try verifier.verify(envelope, intent: v.intent)
                 XCTAssertTrue(v.expect.ok, "\(v.name): Swift accepted, server refused: \(v.expect.reason ?? "")")
@@ -256,6 +309,49 @@ final class VerifierVectorTests: XCTestCase {
         ] {
             XCTAssertTrue(names.contains(name), name)
         }
+    }
+
+    /// So are v2's bindings (DESIGN-stellar-contracts-v2 §20.4; verify.test.ts keeps the same list, with their verdicts).
+    func testCoversTheV2Cases() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let byName = Dictionary(vectors.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        for name in [
+            "v2 launch fee to the treasury", "v2 launch fee to another address than the launchpad", "v2 launch fee other than the terms",
+            "v2 launch fee above the pinned bound", "v2 launch terms with an unpinned executor", "v2 launch terms with durations other than the pins",
+            "v2 launch terms with the qa-exec-fail venue on the testnet pins", "v2 refund for another holder", "v2 moments collect from another account",
+            "v2 claim rewards for another account", "v2 claim owed for another account", "v2 claim rewards from an unknown runtime WASM",
+            "v2 graduate with your authorization", "v2 launch with a ticker that is not letters or digits",
+        ] {
+            XCTAssertEqual(byName[name]?.expect.ok, false, name)
+        }
+        for name in ["v2 launch create ok", "v2 launch create with an initial buy ok", "v2 refund ok", "v2 moments collect ok", "v2 claim rewards ok", "v2 moments publish ok"] {
+            XCTAssertEqual(byName[name]?.expect.ok, true, name)
+        }
+        // Every v2 vector decodes, so the Swift verifier judges each one by its rules, not by a decoding error.
+        for v in vectors where v.name.hasPrefix("v2 ") {
+            XCTAssertNoThrow(try TransactionEnvelope(base64: v.envelope), v.name)
+        }
+        // The testnet pins: 10 XLM, and the launchpad's own pinned executor only.
+        let pinned = try XCTUnwrap(byName["v2 launch create ok"]).pinned()
+        XCTAssertEqual(pinned.maxLaunchFeeStroops, 100_000_000)
+        XCTAssertEqual(TxVerifier.V2Pins(pinned)?.executors.count, 1)
+    }
+
+    /// Without v2's pins, a call is judged by v1's rules and a runtime contract's hash allows nothing (verify.test.ts
+    /// checks the same two).
+    func testWithoutV2PinsTheV1RulesApply() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let launch = try XCTUnwrap(vectors.first { $0.name == "v2 launch create ok" })
+        XCTAssertThrowsError(try launch.verifier(withV2: false).verify(try TransactionEnvelope(base64: launch.envelope), intent: launch.intent)) {
+            XCTAssertEqual(($0 as? VerificationFailure)?.reason, "The call's arguments are not as expected.")
+        }
+        let rewards = try XCTUnwrap(vectors.first { $0.name == "v2 claim rewards ok" })
+        let token = try XCTUnwrap(rewards.runtime?.keys.first)
+        XCTAssertThrowsError(try rewards.verifier(withV2: false).verify(try TransactionEnvelope(base64: rewards.envelope), intent: rewards.intent)) {
+            XCTAssertEqual(($0 as? VerificationFailure)?.reason, "Contract \(token) is not on the allowlist.")
+        }
+        // Today's testnet pins have no v2 yet.
+        XCTAssertNil(TxVerifier.V2Pins(.testnet))
     }
 
     /// So are the cases where a decoder or a comparison could tell the two verifiers apart (verify.test.ts keeps the

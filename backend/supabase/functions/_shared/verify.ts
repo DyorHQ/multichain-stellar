@@ -8,10 +8,26 @@
 // their own intent, of allowlisted data; and the user's total outflow per asset (classic payments + every token
 // transfer/burn/approve in the authorized invocation tree) never above what the intent declares.
 //
+// Contracts v2 (docs/DESIGN-stellar-contracts-v2.md §20.4): the live generation's contracts are pinned by role, and
+// the ones it creates at runtime (launch tokens, Moment NFTs and coins) are allowed only by their pinned WASM hash. A
+// call to launchpad-v2, moments-v2 or the lp-locker is judged by that contract's own rules, since v1's launchpad and
+// Moments use some of the same function names with other arguments: a launch binds its terms to the pins (the
+// executors, the locker, the token's WASM and the durations) and pays exactly its terms' fee, at most the pinned bound,
+// to the launchpad; refunds, collects and claims act for the user; a call anyone may make carries none of the user's
+// authorization.
+//
 // Both verifiers judge the same vectors (backend/tests/vectors/gen-vectors.ts) and give the same reasons: the Swift
 // one's are these with a capital letter and a full stop.
 import { Address, Asset, scValToNative, Transaction, xdr } from "@stellar/stellar-sdk";
+import {
+  DeploymentV2,
+  LAUNCH_DURATION_KEYS,
+  LaunchDurationsV2,
+  MOMENTS_DURATION_KEYS,
+  MomentsDurationsV2,
+} from "./deployments/index.ts";
 import { env } from "./env.ts";
+import type { NetworkConfig } from "./networks.ts";
 
 export interface Intent {
   kind: string;
@@ -43,6 +59,50 @@ export interface FeeCaps {
   starterInnerFeeMax: bigint;
 }
 
+/** v2's pins (DESIGN-stellar-contracts-v2 §20.1): the live generation's singletons, the WASM hashes of the contracts
+ *  it creates at runtime, its durations and the launch-fee bound, as the app pins them (PinnedContracts). */
+export interface V2Pins {
+  launchpad: string;
+  moments: string;
+  locker: string;
+  graduator: string;
+  /** exec-soroswap: every Moment's venue. */
+  soroswapExecutor: string;
+  /** The executors a launch's terms may name: the deployment's own. testnet-qa's qa-exec-fail is one only on
+   *  testnet-qa, whose test contracts the app never pins (finding F4). */
+  executors: string[];
+  runtimeWasmHashes: { launchTokenV2: string; momentNft: string; momentCoin: string };
+  durations: { launch: LaunchDurationsV2; moments: MomentsDurationsV2 };
+  /** The most a launch's fee may be, in stroops (decision O6, finding F18). */
+  maxLaunchFeeStroops: bigint;
+}
+
+/** What v2's pins are made from: a v2 deployment (deployments/index.ts), or the copy a vector carries. */
+export type V2PinSource = Pick<DeploymentV2, "contracts" | "runtimeWasmHashes"> & {
+  qa?: DeploymentV2["qa"];
+  durations: { launch: LaunchDurationsV2; moments: MomentsDurationsV2 };
+};
+
+export function v2Pins(d: V2PinSource, maxLaunchFeeStroops: bigint): V2Pins {
+  const c = d.contracts;
+  return {
+    launchpad: c.launchpadV2,
+    moments: c.momentsV2,
+    locker: c.lpLocker,
+    graduator: c.momentsGraduator,
+    soroswapExecutor: c.execSoroswap,
+    executors: [c.execSoroswap, c.execAquarius, d.qa?.qaExecFail].filter((e): e is string => Boolean(e)),
+    runtimeWasmHashes: { ...d.runtimeWasmHashes },
+    durations: { launch: d.durations.launch, moments: d.durations.moments },
+    maxLaunchFeeStroops,
+  };
+}
+
+/** `net`'s v2 pins; null where v2 isn't deployed, and then every call is judged by v1's rules. */
+export function v2PinsOf(net: NetworkConfig): V2Pins | null {
+  return net.deploymentV2 ? v2Pins(net.deploymentV2, net.maxLaunchFeeStroops) : null;
+}
+
 export interface VerifyContext {
   user: string;
   sponsor: string;
@@ -56,6 +116,11 @@ export interface VerifyContext {
   launchTokenWasmHash?: string;
   /** Circle's CCTP domain the bridge burns to (Monad); the network's when absent. */
   monadDomain?: number | null;
+  /** v2's pins; the network's (v2PinsOf(env.network)) when absent. */
+  v2?: V2Pins | null;
+  /** Contracts v2 created at runtime, each with the WASM hash (hex) the chain says it runs. One counts as allowlisted
+   *  only when that hash is one of v2's pinned runtime hashes. */
+  runtimeContracts?: Record<string, string>;
 }
 
 const TOKEN_SPEND_FNS = new Set(["transfer", "transfer_from", "burn", "burn_from", "approve"]);
@@ -68,6 +133,26 @@ const FOR_ANOTHER = "the call acts for another account";
 const ARGUMENTS = "the call's arguments are not as expected";
 const MINIMUM = "the minimum received is lower than quoted";
 const AMOUNT = "amount out of range";
+const ANYONE = "a call anyone may make carries your authorization";
+const CLAIM_SPENDS = "a claim must not spend anything";
+const TICKER = "the ticker is not 2 to 10 letters or digits";
+const LAUNCH_VENUE = "the launch terms name a venue this app doesn't pin";
+const LAUNCH_TERMS = "the launch terms are not the ones this app pins";
+const LAUNCH_FEE_LIMIT = "the launch fee is above the limit";
+const LAUNCH_FEE_TO = "the launch fee goes to another address than the launchpad";
+const LAUNCH_FEE_AMOUNT = "the launch fee is not the one in the terms";
+const MOMENT_TERMS = "the Moment's terms are not the ones this app pins";
+
+// Contract structs as their ScVal maps name their fields (contracts/launchpad-v2/src/storage.rs, contracts/moments-v2,
+// contracts/common/src/types.rs). A struct is read only when it has exactly these fields.
+const LAUNCH_PARAMS = ["quote", "name", "symbol", "uri", "creator_fee_bps", "venue", "holder_sharing", "creator_fee_recipient", "snipe_exempt", "initial_buy", "min_tokens_out", "nonce"];
+const LAUNCH_TERMS_FIELDS = [
+  "supply", "fee_bps", "protocol_share_bps", "max_creator_fee_bps", "snipe_schedule", "snipe_step_secs", "launch_fee", "fee_asset", "quote", "phantom",
+  "threshold", "venue", "fallback", "venue_locked", "locker", "token_wasm_hash", "durations",
+];
+const VENUE_INFO = ["id", "kind", "executor", "params", "enabled"];
+const PUBLISH_PARAMS = ["name", "symbol", "metadata_uri", "media_hash", "place", "date", "price", "creator_alloc_bps", "window_secs", "nonce"];
+const MOMENTS_TERMS_FIELDS = ["policy", "external_base", "nft_wasm_hash", "coin_wasm_hash", "graduator", "executor", "locker", "durations", "harvest_bps", "harvest_creator_bps"];
 
 export class VerifyError extends Error {}
 
@@ -156,15 +241,61 @@ function evmBytes32(address: string | undefined): Buffer | null {
   return Buffer.concat([Buffer.alloc(12), Buffer.from(address.slice(2), "hex")]);
 }
 
+/** A contract struct (a map with symbol keys) that has exactly the fields `keys`, by name; null for anything else. */
+function structOf(v: xdr.ScVal | undefined, keys: readonly string[]): Map<string, xdr.ScVal> | null {
+  if (!v || v.switch() !== xdr.ScValType.scvMap()) return null;
+  const fields = new Map<string, xdr.ScVal>();
+  for (const field of v.map() ?? []) {
+    const key = field.key();
+    if (key.switch() !== xdr.ScValType.scvSymbol()) return null;
+    // A symbol built here is text, one decoded from XDR bytes.
+    const name = Buffer.from(key.sym() as string | Buffer).toString();
+    if (fields.has(name)) return null;
+    fields.set(name, field.val());
+  }
+  return fields.size === keys.length && keys.every((k) => fields.has(k)) ? fields : null;
+}
+
+/** A durations struct (u64 seconds, the fields `keys`) equal, field by field, to `pinned`. */
+function sameDurations<K extends string>(v: xdr.ScVal | undefined, keys: readonly K[], pinned: Record<K, number>): boolean {
+  const got = structOf(v, keys);
+  return got !== null && keys.every((k) => {
+    const d = got.get(k)!;
+    return d.switch() === xdr.ScValType.scvU64() && BigInt(d.u64().toString()) === BigInt(pinned[k]);
+  });
+}
+
+/** 32 bytes as lowercase hex (a WASM hash); null for any other value. */
+function hash32(v: xdr.ScVal | undefined): string | null {
+  if (!v || v.switch() !== xdr.ScValType.scvBytes() || v.bytes().length !== 32) return null;
+  return Buffer.from(v.bytes()).toString("hex");
+}
+
+/** A launch or Moment ticker: 2 to 10 ASCII letters or digits, as the contracts take it (Soroswap reads a pair's
+ *  symbols as UTF-8). */
+function isTicker(v: xdr.ScVal | undefined): boolean {
+  if (!v || v.switch() !== xdr.ScValType.scvString()) return false;
+  const bytes = Buffer.from(v.str() as string | Buffer);
+  return bytes.length >= 2 && bytes.length <= 10 && bytes.every((b) => (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122));
+}
+
 interface RuleContext {
   user: string;
   intent: Intent;
   allowedContracts: Set<string>;
   monadDomain: number | null;
+  /** The XLM Stellar Asset Contract: a v2 launch pays its fee in it. */
+  xlm: string;
+  v2: V2Pins | null;
+  /** The call being judged, its contract and the operation's authorizations. */
+  contract: string;
+  call: xdr.InvokeContractArgs;
+  auth: xdr.SorobanAuthorizationEntry[];
 }
 
 /** A call rule: what the call's arguments must say for this action (§5.2). Each was written from the contract's own
- *  signature: contracts/launchpad and contracts/moments (the deployed v1 WASMs), the Soroswap and Aquarius routers'
+ *  signature: contracts/launchpad and contracts/moments (the deployed v1 WASMs), contracts/launchpad-v2,
+ *  contracts/launch-token-v2, contracts/moments-v2 and contracts/lp-locker (v2), the Soroswap and Aquarius routers'
  *  published ABIs, Blend's pool, Circle's TokenMessengerMinter and SEP-41. A function without a rule is not signed. */
 type CallRule = (args: xdr.ScVal[], rc: RuleContext) => void;
 
@@ -174,6 +305,53 @@ function arity(args: xdr.ScVal[], n: number) {
 
 function actsFor(rc: RuleContext, ...accounts: (xdr.ScVal | undefined)[]) {
   for (const a of accounts) if (addrOf(a) !== rc.user) fail(FOR_ANOTHER);
+}
+
+function anAddress(v: xdr.ScVal | undefined): string {
+  const a = addrOf(v);
+  if (a === null) fail(ARGUMENTS);
+  return a;
+}
+
+/** A call anyone may make needs nobody's authorization: it must carry none of the user's (§20.4). */
+function anyone(rc: RuleContext) {
+  if (rc.auth.length) fail(ANYONE);
+}
+
+/** A claim pays the user and takes nothing: its intent declares no spend (§20.4). */
+function spendsNothing(rc: RuleContext) {
+  if (Object.keys(rc.intent.spend).length) fail(CLAIM_SPENDS);
+}
+
+/** The intent declares at least `amount` of `asset`, with the reasons the outflow check gives. */
+function declares(rc: RuleContext, asset: string, amount: bigint) {
+  if (!Object.hasOwn(rc.intent.spend, asset)) fail(`the transaction spends an asset this action doesn't declare (${asset})`);
+  const cap = units(rc.intent.spend[asset]);
+  if (cap === null || amount > cap) fail(`the transaction spends more than this action declares (${asset})`);
+}
+
+/** The token transfers from the user inside the authorization of the call itself, in the order the call makes them. */
+function ownTransfers(rc: RuleContext): { token: string | null; to: string | null; amount: bigint | null }[] {
+  const call = rc.call.toXDR("base64");
+  const out: { token: string | null; to: string | null; amount: bigint | null }[] = [];
+  const walk = (inv: xdr.SorobanAuthorizedInvocation) => {
+    const f = inv.function();
+    if (f.switch() === xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) {
+      const c = f.contractFn();
+      const args = c.args();
+      if (c.functionName().toString() === "transfer" && args.length === 3 && addrOf(args[0]) === rc.user) {
+        out.push({ token: scAddressString(c.contractAddress()), to: addrOf(args[1]), amount: intOf(args[2]) });
+      }
+    }
+    for (const sub of inv.subInvocations()) walk(sub);
+  };
+  for (const entry of rc.auth) {
+    const root = entry.rootInvocation().function();
+    const own = root.switch() === xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn() &&
+      root.contractFn().toXDR("base64") === call;
+    if (own) walk(entry.rootInvocation());
+  }
+  return out;
 }
 
 const CALL_RULES: Record<string, CallRule> = {
@@ -268,7 +446,161 @@ const CALL_RULES: Record<string, CallRule> = {
     const recipient = evmBytes32(rc.intent.to);
     if (recipient === null || !recipient.equals(args[3].bytes())) fail(DESTINATION);
   },
+  // Launch token v2 claim(holder): the holder's rewards in the quote and the token, paid to the holder.
+  claim: (args, rc) => {
+    arity(args, 1);
+    actsFor(rc, args[0]);
+    spendsNothing(rc);
+  },
 };
+
+/** A call anyone may make, of one address: a launch token, a Moment NFT or a pool. */
+const byAnyone: CallRule = (args, rc) => {
+  arity(args, 1);
+  anAddress(args[0]);
+  anyone(rc);
+};
+
+/** launchpad-v2's functions (contracts/launchpad-v2/src/lib.rs). buy and sell keep v1's arguments and rules. */
+const LAUNCHPAD_V2_RULES: Record<string, CallRule> = {
+  // launch(creator, p: LaunchParams, expected: LaunchTerms): the terms are this app's pins, and the creator pays
+  // exactly their fee, at most the pinned bound, to the launchpad (§20.4, decision O6, finding F18).
+  launch: (args, rc) => {
+    arity(args, 3);
+    actsFor(rc, args[0]);
+    const v2 = rc.v2!;
+    const p = structOf(args[1], LAUNCH_PARAMS);
+    const t = structOf(args[2], LAUNCH_TERMS_FIELDS);
+    const venue = structOf(t?.get("venue"), VENUE_INFO);
+    const fallback = structOf(t?.get("fallback"), VENUE_INFO);
+    const fee = intOf(t?.get("launch_fee"));
+    const initialBuy = intOf(p?.get("initial_buy"));
+    const minOut = intOf(p?.get("min_tokens_out"));
+    if (!p || !t || !venue || !fallback || fee === null || fee < 0n || initialBuy === null || minOut === null) fail(ARGUMENTS);
+    if (!isTicker(p.get("symbol"))) fail(TICKER);
+    for (const v of [venue, fallback]) {
+      const executor = addrOf(v.get("executor"));
+      if (executor === null || !v2.executors.includes(executor)) fail(LAUNCH_VENUE);
+    }
+    const pinned = addrOf(t.get("locker")) === v2.locker &&
+      hash32(t.get("token_wasm_hash")) === v2.runtimeWasmHashes.launchTokenV2 &&
+      sameDurations(t.get("durations"), LAUNCH_DURATION_KEYS, v2.durations.launch) &&
+      addrOf(t.get("fee_asset")) === rc.xlm;
+    if (!pinned) fail(LAUNCH_TERMS);
+    if (fee > v2.maxLaunchFeeStroops) fail(LAUNCH_FEE_LIMIT);
+    // The fee is the first XLM the launch takes; anything else it takes (the initial buy) goes to the launchpad too.
+    const transfers = ownTransfers(rc);
+    const feeAt = fee > 0n ? transfers.findIndex((x) => x.token === rc.xlm) : -1;
+    if (fee > 0n) {
+      if (feeAt < 0) fail(LAUNCH_FEE_AMOUNT);
+      if (transfers[feeAt].to !== rc.contract) fail(LAUNCH_FEE_TO);
+      if (transfers[feeAt].amount !== fee) fail(LAUNCH_FEE_AMOUNT);
+    }
+    if (transfers.some((x, i) => i !== feeAt && x.to !== rc.contract)) fail(DESTINATION);
+    if (initialBuy > 0n) atLeast(minOut, soleMinimum(rc.intent));
+  },
+  buy: CALL_RULES.buy,
+  sell: CALL_RULES.sell,
+  // refund(holder, token, tokens_in): the holder's own tokens are burned, and the intent declares the burn.
+  refund: (args, rc) => {
+    arity(args, 3);
+    actsFor(rc, args[0]);
+    const token = anAddress(args[1]);
+    const tokens = intOf(args[2]);
+    if (tokens === null || tokens <= 0n) fail(ARGUMENTS);
+    declares(rc, token, tokens);
+  },
+  graduate: byAnyone,
+  graduate_fallback: byAnyone,
+  mark_stuck: byAnyone,
+  rescue: byAnyone,
+  claim_creator_fees: byAnyone,
+  execute_recipient_change: byAnyone,
+  // claim_owed(account, asset): anyone may pay an account what recipient changes left it; the app asks for the user's.
+  claim_owed: (args, rc) => {
+    arity(args, 2);
+    actsFor(rc, args[0]);
+    anAddress(args[1]);
+    spendsNothing(rc);
+    anyone(rc);
+  },
+  // transfer_creator_fee_recipient(token, new): the current recipient hands the fees to the address the user confirmed.
+  transfer_creator_fee_recipient: (args, rc) => {
+    arity(args, 2);
+    anAddress(args[0]);
+    if (!isConfirmed(args[1], rc.intent)) fail(DESTINATION);
+  },
+  // cancel_recipient_change(token, caller): the current recipient's veto, as the user.
+  cancel_recipient_change: (args, rc) => {
+    arity(args, 2);
+    actsFor(rc, args[1]);
+    anAddress(args[0]);
+  },
+};
+
+/** moments-v2's functions (contracts/moments-v2/src). */
+const MOMENTS_V2_RULES: Record<string, CallRule> = {
+  // publish(creator, p: PublishParams, expected: MomentsTerms): the graduator, its executor, the locker, the NFT and
+  // coin WASM hashes and the durations are this app's pins.
+  publish: (args, rc) => {
+    arity(args, 3);
+    actsFor(rc, args[0]);
+    const v2 = rc.v2!;
+    const p = structOf(args[1], PUBLISH_PARAMS);
+    const t = structOf(args[2], MOMENTS_TERMS_FIELDS);
+    if (!p || !t) fail(ARGUMENTS);
+    if (!isTicker(p.get("symbol"))) fail(TICKER);
+    const pinned = addrOf(t.get("graduator")) === v2.graduator &&
+      addrOf(t.get("executor")) === v2.soroswapExecutor &&
+      addrOf(t.get("locker")) === v2.locker &&
+      hash32(t.get("nft_wasm_hash")) === v2.runtimeWasmHashes.momentNft &&
+      hash32(t.get("coin_wasm_hash")) === v2.runtimeWasmHashes.momentCoin &&
+      sameDurations(t.get("durations"), MOMENTS_DURATION_KEYS, v2.durations.moments);
+    if (!pinned) fail(MOMENT_TERMS);
+  },
+  // collect(collector, nft, qty, max_total): the collector pays at most max_total, in the one asset the intent spends.
+  collect: (args, rc) => {
+    arity(args, 4);
+    actsFor(rc, args[0]);
+    anAddress(args[1]);
+    const qty = intOf(args[2]);
+    const max = intOf(args[3]);
+    const assets = Object.keys(rc.intent.spend);
+    if (qty === null || max === null || assets.length !== 1) fail(ARGUMENTS);
+    declares(rc, assets[0], max);
+  },
+  // claim(account, nft) and claim_all(account, nfts): the account's vested coins, minted to it.
+  claim: (args, rc) => {
+    arity(args, 2);
+    actsFor(rc, args[0]);
+    anAddress(args[1]);
+    spendsNothing(rc);
+  },
+  claim_all: (args, rc) => {
+    arity(args, 2);
+    actsFor(rc, args[0]);
+    const nfts = vecOf(args[1]);
+    if (!nfts || nfts.length === 0 || nfts.some((n) => addrOf(n) === null)) fail(ARGUMENTS);
+    spendsNothing(rc);
+  },
+  // withdraw_creator(nft), graduate(nft), expire(nft): anyone may call them; they pay only the Moment's beneficiaries.
+  withdraw_creator: byAnyone,
+  graduate: byAnyone,
+  expire: byAnyone,
+};
+
+/** lp-locker's functions (contracts/lp-locker/src/lib.rs): harvest(pool), once per interval, by anyone. */
+const LOCKER_RULES: Record<string, CallRule> = {
+  harvest: byAnyone,
+};
+
+/** The rules a call to `contract` is judged by: v2's singletons have their own, every other contract v1's. */
+function rulesFor(contract: string, v2: V2Pins | null): Record<string, CallRule> {
+  if (v2 && contract === v2.launchpad) return LAUNCHPAD_V2_RULES;
+  if (v2 && contract === v2.moments) return MOMENTS_V2_RULES;
+  if (v2 && contract === v2.locker) return LOCKER_RULES;
+  return CALL_RULES;
+}
 
 /** The fee caps (§4.4): the whole fee, then the resource fee's range and the inclusion bid per operation. */
 function checkFees(tx: Transaction, soroban: xdr.SorobanTransactionData | null, policy: FeeCaps) {
@@ -309,17 +641,17 @@ function memoMatches(tx: Transaction, want: Intent["memo"]): boolean {
   }
 }
 
-/** A footprint entry a restore may bring back: an allowlisted contract's or a launch token's data, or the pinned
- *  launch-token WASM. */
-function restorable(key: xdr.LedgerKey, allowed: Set<string>, launchTokenWasmHash: string): boolean {
+/** A footprint entry a restore may bring back: the data of an allowlisted contract (a launch token or a v2 runtime
+ *  contract included), or a pinned WASM (the launch token's, or one v2 creates contracts from). */
+function restorable(key: xdr.LedgerKey, allowed: (contract: string) => boolean, code: Set<string>): boolean {
   switch (key.switch()) {
     case xdr.LedgerEntryType.contractData(): {
       const contract = key.contractData().contract();
       if (contract.switch() !== xdr.ScAddressType.scAddressTypeContract()) return false;
-      return allowed.has(Address.fromScAddress(contract).toString());
+      return allowed(Address.fromScAddress(contract).toString());
     }
     case xdr.LedgerEntryType.contractCode():
-      return launchTokenWasmHash !== "" && key.contractCode().hash().toString("hex") === launchTokenWasmHash;
+      return code.has(Buffer.from(key.contractCode().hash()).toString("hex"));
     default:
       return false;
   }
@@ -328,7 +660,7 @@ function restorable(key: xdr.LedgerKey, allowed: Set<string>, launchTokenWasmHas
 /** Adds every token outflow the user authorizes in an invocation tree. Every movement of the user's tokens needs the
  *  user's authorization, so the authorized tree is the complete list of what the transaction can take. A transfer
  *  outside a call that has its own rule (`covered`) must go to the address the user confirmed. */
-function walkAuth(inv: xdr.SorobanAuthorizedInvocation, rc: RuleContext, covered: boolean, add: (id: string, n: bigint) => void) {
+function walkAuth(inv: xdr.SorobanAuthorizedInvocation, rc: Pick<RuleContext, "user" | "intent">, covered: boolean, add: (id: string, n: bigint) => void) {
   const f = inv.function();
   if (f.switch() !== xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) {
     fail("the transaction asks to authorize contract creation");
@@ -378,11 +710,19 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
   };
   const allowedOps = new Set(intent.ops ?? []);
   const allowedCalls = intent.calls ?? [];
-  const rc: RuleContext = {
+  const v2 = ctx.v2 !== undefined ? ctx.v2 : v2PinsOf(env.network);
+  // A contract v2 created at runtime counts only when the WASM it runs is one of the pinned runtime hashes.
+  const runtimeHashes = new Set(v2 ? Object.values(v2.runtimeWasmHashes).filter(Boolean) : []);
+  const runtime = ctx.runtimeContracts ?? {};
+  const allowed = (contract: string) =>
+    ctx.allowedContracts.has(contract) || (Object.hasOwn(runtime, contract) && runtimeHashes.has(runtime[contract]));
+  const base = {
     user: ctx.user,
     intent,
     allowedContracts: ctx.allowedContracts,
     monadDomain: ctx.monadDomain !== undefined ? ctx.monadDomain : env.network.bridge.monad?.domain ?? null,
+    xlm: Asset.native().contractId(ctx.passphrase),
+    v2,
   };
 
   for (const op of tx.operations as any[]) {
@@ -438,12 +778,15 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
         if (ic.contractAddress().switch() !== xdr.ScAddressType.scAddressTypeContract()) fail("only contract calls are allowed");
         const contract = Address.fromScAddress(ic.contractAddress()).toString();
         const name = ic.functionName().toString();
-        if (!ctx.allowedContracts.has(contract)) fail(`contract ${contract} is not on the allowlist`);
+        if (!allowed(contract)) fail(`contract ${contract} is not on the allowlist`);
         if (!allowedCalls.some((c) => c.contract === contract && c.fn === name)) fail(`call ${name} is not part of this action`);
-        if (!Object.hasOwn(CALL_RULES, name)) fail(`function ${name} is not on the allowlist`);
-        CALL_RULES[name](ic.args(), rc);
+        const rules = rulesFor(contract, v2);
+        if (!Object.hasOwn(rules, name)) fail(`function ${name} is not on the allowlist`);
+        const auth = (op.auth ?? []) as xdr.SorobanAuthorizationEntry[];
+        const rc: RuleContext = { ...base, contract, call: ic, auth };
+        rules[name](ic.args(), rc);
         const call = ic.toXDR("base64");
-        for (const entry of (op.auth ?? []) as xdr.SorobanAuthorizationEntry[]) {
+        for (const entry of auth) {
           if (entry.credentials().switch() !== xdr.SorobanCredentialsType.sorobanCredentialsSourceAccount()) {
             fail("the transaction needs a signature from another address");
           }
@@ -461,8 +804,9 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
         const footprint = soroban?.resources().footprint();
         const keys = footprint ? [...footprint.readOnly(), ...footprint.readWrite()] : [];
         const wasm = ctx.launchTokenWasmHash ?? env.network.deployment?.launchTokenWasmHash ?? "";
+        const code = new Set([...(wasm ? [wasm] : []), ...runtimeHashes]);
         for (const key of keys) {
-          if (!restorable(key, ctx.allowedContracts, wasm)) fail("the restore touches data outside the allowlist");
+          if (!restorable(key, allowed, code)) fail("the restore touches data outside the allowlist");
         }
         break;
       }

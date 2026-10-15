@@ -1,10 +1,24 @@
 // The verifier is the line between "the server built it" and "the user signs it". The shared vectors
 // (ios/Packages/StellarKit/Tests/StellarCoreTests/Vectors/verifier.json, from backend/tests/vectors/gen-vectors.ts) are
 // judged again here and by the Swift verifier, which must agree on each; the tests below build transactions offline
-// for the rules the vectors don't reach.
-import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+// for the rules the vectors don't reach. Contracts v2 (DESIGN-stellar-contracts-v2 §20.4): the vectors cover every
+// binding of a launch, a refund, a collect and the claims, calls anyone may make, and runtime contracts by WASM hash;
+// the tests below cover where v2's pins come from.
+import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertGreater, assertThrows } from "jsr:@std/assert@1";
-import { FeeCaps, Intent, verifyFeePayer, verifyTransaction, VerifyError } from "../../supabase/functions/_shared/verify.ts";
+import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
+import { TESTNET, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
+import {
+  FeeCaps,
+  Intent,
+  V2PinSource,
+  v2Pins,
+  v2PinsOf,
+  verifyFeePayer,
+  VerifyContext,
+  verifyTransaction,
+  VerifyError,
+} from "../../supabase/functions/_shared/verify.ts";
 
 const PASS = "Test SDF Network ; September 2015";
 const user = Keypair.random().publicKey();
@@ -32,6 +46,8 @@ interface Vector {
   launchTokenWasmHash: string;
   monadDomain: number;
   feePolicy: { maxFee: string; maxInclusionPerOp: string; starterInnerFeeMax: string };
+  v2: (V2PinSource & { maxLaunchFeeStroops: string }) | null;
+  runtime: Record<string, string>;
   now: number;
   step?: { feePayer: string | null; sponsorReason: string | null };
   expect: { ok: boolean; reason?: string; outflow?: Record<string, string>; step?: { ok: boolean; payer?: string; reason?: string } };
@@ -41,7 +57,8 @@ const vectors: Vector[] = JSON.parse(
   await Deno.readTextFile(new URL("../../../ios/Packages/StellarKit/Tests/StellarCoreTests/Vectors/verifier.json", import.meta.url)),
 );
 
-function judge(v: Vector) {
+/** `v`'s verdict, judged with its own pins and context, or with `change` made to that context. */
+function judge(v: Vector, change: Partial<VerifyContext> = {}) {
   const tx = TransactionBuilder.fromXDR(v.envelope, PASS) as Transaction;
   const vctx = {
     user: v.user,
@@ -52,6 +69,9 @@ function judge(v: Vector) {
     feePolicy: { maxFee: BigInt(v.feePolicy.maxFee), maxInclusionPerOp: BigInt(v.feePolicy.maxInclusionPerOp), starterInnerFeeMax: BigInt(v.feePolicy.starterInnerFeeMax) },
     launchTokenWasmHash: v.launchTokenWasmHash,
     monadDomain: v.monadDomain,
+    v2: v.v2 ? v2Pins(v.v2, BigInt(v.v2.maxLaunchFeeStroops)) : null,
+    runtimeContracts: v.runtime,
+    ...change,
   };
   let verdict: Vector["expect"];
   try {
@@ -97,6 +117,76 @@ Deno.test("the vectors cover every case of the design's list, with the verdict i
   for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
   for (const name of ["classic fee at the cap ok", "activate ok", "user-paid trust ok", "restore ok"]) assertEquals(byName.get(name)?.ok, true, name);
   assertEquals(byName.get("starter step with an inner fee above the cap")?.step, { ok: false, reason: "the sponsored step's network fee is above the limit" });
+});
+
+Deno.test("the vectors cover v2's bindings (§20.4), with the verdict each gives", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  const fails: [string, string][] = [
+    // The launch fee: to the launchpad, exactly the terms', at most the pinned 10 XLM.
+    ["v2 launch fee to the treasury", "the launch fee goes to another address than the launchpad"],
+    ["v2 launch fee to another address than the launchpad", "the launch fee goes to another address than the launchpad"],
+    ["v2 launch fee other than the terms", "the launch fee is not the one in the terms"],
+    ["v2 launch without its fee", "the launch fee is not the one in the terms"],
+    ["v2 launch fee above the pinned bound", "the launch fee is above the limit"],
+    // The terms: pinned executors, locker, token WASM and durations; never testnet-qa's failing venue.
+    ["v2 launch terms with an unpinned executor", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with an unpinned fallback executor", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with the qa-exec-fail venue on the testnet pins", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with durations other than the pins", "the launch terms are not the ones this app pins"],
+    ["v2 launch terms with another locker", "the launch terms are not the ones this app pins"],
+    ["v2 launch terms with another token WASM", "the launch terms are not the ones this app pins"],
+    ["v2 launch for another creator", "the call acts for another account"],
+    ["v2 launch with a ticker that is not letters or digits", "the ticker is not 2 to 10 letters or digits"],
+    ["v1 launch arguments on the v2 launchpad", "the call's arguments are not as expected"],
+    // Refunds, collects and claims act for the user; claims spend nothing.
+    ["v2 refund for another holder", "the call acts for another account"],
+    ["v2 moments collect from another account", "the call acts for another account"],
+    ["v2 claim rewards for another account", "the call acts for another account"],
+    ["v2 claim owed for another account", "the call acts for another account"],
+    ["v2 moments claim for another account", "the call acts for another account"],
+    ["v2 moments claim all for another account", "the call acts for another account"],
+    ["v2 claim owed with a spend", "a claim must not spend anything"],
+    // Calls anyone may make carry none of the user's authorization.
+    ["v2 graduate with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 claim owed with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 harvest with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 moments expire with your authorization", "a call anyone may make carries your authorization"],
+    // Runtime contracts only by a pinned WASM hash.
+    ["v2 restore of an unknown runtime WASM's data", "the restore touches data outside the allowlist"],
+  ];
+  for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
+  const stranger = vectors.find((v) => v.name === "v2 claim rewards from an unknown runtime WASM")!;
+  assertEquals(stranger.expect, { ok: false, reason: `contract ${Object.keys(stranger.runtime)[0]} is not on the allowlist` });
+  const collect = byName.get("v2 moments collect with max_total above the spend")!;
+  assert(!collect.ok && collect.reason!.startsWith("the transaction spends more than this action declares"));
+  for (
+    const name of [
+      "v2 launch create ok",
+      "v2 launch create with an initial buy ok",
+      "v2 refund ok",
+      "v2 moments collect ok",
+      "v2 claim rewards ok",
+      "v2 claim owed ok",
+      "v2 moments claim ok",
+      "v2 moments claim all ok",
+      "v2 graduate ok",
+      "v2 harvest ok",
+      "v2 recipient transfer ok",
+      "v2 moments publish ok",
+      "v2 moment coin transfer ok",
+      "v2 restore of a launch token's data and code ok",
+    ]
+  ) assertEquals(byName.get(name)?.ok, true, name);
+  // The fee and the initial buy are what the launch takes; the refund's outflow is its burn.
+  const XLM_SAC = Asset.native().contractId(PASS);
+  assertEquals(byName.get("v2 launch create ok")?.outflow, { [XLM_SAC]: "100000000" });
+  assertEquals(byName.get("v2 launch create with an initial buy ok")?.outflow, { [XLM_SAC]: "150000000" });
+  assertEquals(Object.values(byName.get("v2 refund ok")!.outflow!), ["500"]);
+  // Every v2 vector is judged against the testnet pins: 10 XLM, and no qa-exec-fail.
+  for (const v of vectors.filter((v) => v.name.startsWith("v2 "))) {
+    assertEquals(v.v2?.maxLaunchFeeStroops, "100000000", v.name);
+    assertEquals(Object.keys(v.v2!.contracts).includes("qaExecFail"), false, v.name);
+  }
 });
 
 Deno.test("the vectors keep the cases where a decoder or a comparison could tell the two verifiers apart", () => {
@@ -280,4 +370,78 @@ Deno.test("who pays: setup only from the sponsor in an activation, a starter swa
   assertEquals(verifyFeePayer(tx([pay]), { ...intent, kind: "activate" }, { feePayer: "sponsor", sponsorReason: "setup" }, ctx), "user");
   assertEquals(verifyFeePayer(tx([pay], sponsor), { ...intent, kind: "activate" }, {}, ctx), "setup");
   assert(vectors.some((v) => v.step));
+});
+
+// ------------------------------------------------------------------------------------------------ v2's pins
+
+const fixed = (n: number) => StrKey.encodeContract(Buffer.alloc(32, n));
+
+/** A v2 deployment file as deploy-contracts-v2.ts's deploymentRecord() writes it. */
+function v2File(deployment: "testnet" | "testnet-qa"): Record<string, unknown> {
+  const qa = deployment === "testnet-qa";
+  const set = qa ? "testnet-qa" : "production";
+  const hash = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
+  return {
+    network: "testnet",
+    deployment,
+    name: `${deployment}-v2`,
+    generation: 1,
+    deployer: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11)).publicKey(),
+    contracts: {
+      launchpadV2: fixed(0x41),
+      momentsV2: fixed(0x42),
+      lpLocker: fixed(0x43),
+      execSoroswap: fixed(0x44),
+      momentsGraduator: fixed(0x45),
+      ...(qa ? { qaExecFail: fixed(0x46), momentsV2QaFail: fixed(0x4c), momentsGraduatorQaFail: fixed(0x4d) } : {}),
+    },
+    wasmHashes: {
+      launchpadV2: hash(1),
+      launchTokenV2: hash(2),
+      execSoroswap: hash(3),
+      lpLocker: hash(4),
+      momentsV2: hash(5),
+      momentNft: hash(6),
+      momentCoin: hash(7),
+      momentsGraduator: hash(8),
+      ...(qa ? { qaExecFail: hash(9) } : {}),
+    },
+    venues: [{ id: 0, kind: "Soroswap", executor: fixed(0x44), feeFraction: 0, enabled: true }, ...(qa ? [{ id: 1, kind: "QaFail", executor: fixed(0x46), feeFraction: 0, enabled: true }] : [])],
+    quotes: {},
+    aquarius: { enabled: false, reason: "--aquarius off" },
+    durations: { set, ...DURATION_SETS_V2[set] },
+    ttl: { threshold: 120_960, extend_to: 518_400 },
+    deployLedger: 1_000,
+    deployedAt: "2026-10-15T00:00:00.000Z",
+  };
+}
+
+Deno.test("v2's pins come from the deployment: its own executors (qa-exec-fail on testnet-qa only), its durations and the 10 XLM bound", () => {
+  const testnet = v2PinsOf(withDeploymentV2(TESTNET, parseDeploymentV2("testnet-v2", v2File("testnet"))))!;
+  assertEquals([testnet.launchpad, testnet.moments, testnet.locker, testnet.graduator, testnet.soroswapExecutor], [fixed(0x41), fixed(0x42), fixed(0x43), fixed(0x45), fixed(0x44)]);
+  assertEquals(testnet.executors, [fixed(0x44)]);
+  assertEquals(testnet.durations, { launch: DURATION_SETS_V2.production.launch, moments: DURATION_SETS_V2.production.moments });
+  assertEquals(testnet.maxLaunchFeeStroops, 100_000_000n);
+  // testnet-qa's API builds launches on its failing venue (CT-18's e2e); the app's pins never name it (finding F4).
+  const qa = v2PinsOf(withDeploymentV2(TESTNET, parseDeploymentV2("testnet-qa-v2", v2File("testnet-qa"))))!;
+  assertEquals(qa.executors, [fixed(0x44), fixed(0x46)]);
+  assertEquals(qa.durations.launch, DURATION_SETS_V2["testnet-qa"].launch);
+  // Before the owner's file is bundled, testnet has no v2.
+  assertEquals(v2PinsOf(TESTNET), null);
+});
+
+Deno.test("without v2's pins a call is judged by v1's rules, and a runtime contract's hash allows nothing", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v]));
+  // launchpad-v2's launch has three arguments, v1's eight.
+  assertEquals(judge(byName.get("v2 launch create ok")!, { v2: null }), { ok: false, reason: "the call's arguments are not as expected" });
+  const rewards = byName.get("v2 claim rewards ok")!;
+  assertEquals(judge(rewards, { v2: null }), { ok: false, reason: `contract ${Object.keys(rewards.runtime)[0]} is not on the allowlist` });
+});
+
+Deno.test("the server's launch tokens (plans.ts allowlists the ones the indexer saw the launchpads create) take the same rules", () => {
+  const rewards = vectors.find((v) => v.name === "v2 claim rewards ok")!;
+  const token = Object.keys(rewards.runtime)[0];
+  assertEquals(judge(rewards, { runtimeContracts: {}, allowedContracts: new Set([...rewards.allowed, token]) }), { ok: true, outflow: {} });
+  const other = vectors.find((v) => v.name === "v2 claim rewards for another account")!;
+  assertEquals(judge(other, { runtimeContracts: {}, allowedContracts: new Set([...other.allowed, token]) }), { ok: false, reason: "the call acts for another account" });
 });
