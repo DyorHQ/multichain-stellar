@@ -16,6 +16,7 @@
 //   Every builder checks its transaction against its intent with the v2 call rules below (momentsV2CallRules), which
 //   the verifiers (verify.ts, TxVerifier.swift) take over in CT-16.
 // - Metadata is written as for v1 (moments.ts writeMetadata): the same checks, storage paths and lite.moment_metadata.
+import type { ContractErrorCode } from "./contract.ts";
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { amountArg, ApiError, bad, notFound } from "./http.ts";
@@ -26,7 +27,7 @@ import { createPlan, PlanView, registerBuilder, StepSpec } from "./plans.ts";
 import type { BuiltTx } from "./plans.ts";
 import { referencePrices, usdOf } from "./refprices.ts";
 import { Address, classicBalances, fromStroops, invoke, isAccountId, isContractId, native, requireAccount, sv, Transaction, view, xdr } from "./stellar.ts";
-import { errorName, errorsFor, V2_CONTRACT_TAGS } from "./v2_errors.ts";
+import { errorName, errorsFor, V2_CONTRACT_TAGS, V2_ERRORS } from "./v2_errors.ts";
 import { Intent, VerifyError } from "./verify.ts";
 
 export { writeMetadata as writeMomentMetadata } from "./moments.ts";
@@ -191,7 +192,7 @@ export interface MomentV2Status {
   threshold: string;
   reserve: string;
   totalGross: string;
-  /** reserve / threshold, at most 1. */
+  /** How far the Moment got to its threshold, 0 to 1 (progressOf): 1 once it completed, graduated or expired since. */
   progress: number;
   collects: number;
   editions: number;
@@ -596,22 +597,35 @@ export function ledgerOf(n: Native): MomentV2Ledger {
 
 // ------------------------------------------------------------------------------------------------ refusals
 
-/** moments-v2's refusals the phone words itself, by error name: v1's codes where the meaning is the same, and v2's
- *  own. Every other error keeps the simulation's message. */
-const REFUSALS = {
-  PublishingPaused: { code: "moment.paused", text: "Publishing new Moments is paused." },
-  TermsChanged: { code: "moment.terms_changed", text: "The Moments terms changed since you started. Review them again." },
-  PriceTooLow: { code: "moment.price_too_low", text: "The price is below the minimum." },
-  PriceTooHigh: { code: "moment.price_too_high", text: "The price is above the most a Moment can ask." },
-  WindowClosed: { code: "moment.closed", text: "This Moment's collect window has closed." },
-  NotCollecting: { code: "moment.completed", text: "This Moment reached its goal and isn't collecting any more." },
-  NothingToClaim: { code: "moment.nothing_to_claim", text: "Nothing to claim yet." },
-  NothingToWithdraw: { code: "moment.nothing_to_withdraw", text: "Nothing to withdraw yet." },
-  NotExpirable: { code: "moment.not_expirable", text: "This Moment can't expire yet." },
-  WrongState: { code: "moment.wrong_state", text: "This Moment's state doesn't allow this." },
-} as const satisfies Record<string, { code: string; text: string }>;
+type RefusalName =
+  | "PublishingPaused"
+  | "TermsChanged"
+  | "PriceTooLow"
+  | "PriceTooHigh"
+  | "WindowClosed"
+  | "NotCollecting"
+  | "NothingToClaim"
+  | "NothingToWithdraw"
+  | "NotExpirable"
+  | "WrongState";
 
-type RefusalName = keyof typeof REFUSALS;
+/** moments-v2's refusals the API words itself, by error name. `code` is the stable contract code of §6.13 where the
+ *  API contract (contract.ts ContractErrorCode) has one that means the same; the others carry their name in
+ *  `contractError` and their text, which the phone shows for a refusal without a code. Every other error keeps the
+ *  simulation's message. */
+const REFUSALS: Record<RefusalName, { code?: ContractErrorCode; text: string }> = {
+  PublishingPaused: { text: "Publishing new Moments is paused." },
+  TermsChanged: { text: "The Moments terms changed since you started. Review them again." },
+  PriceTooLow: { code: "moment.price_too_low", text: "The price is below the minimum." },
+  PriceTooHigh: { text: "The price is above the most a Moment can ask." },
+  WindowClosed: { code: "moment.closed", text: "This Moment's collect window has closed." },
+  // quote_collect's refusal in every state but Collecting: collectSteps words it by state where it can read it.
+  NotCollecting: { text: "This Moment isn't collecting any more." },
+  NothingToClaim: { text: "Nothing to claim yet." },
+  NothingToWithdraw: { text: "Nothing to withdraw yet." },
+  NotExpirable: { text: "This Moment can't expire yet." },
+  WrongState: { text: "This Moment's state doesn't allow this." },
+};
 
 /** The name of the error moments-v2 itself failed with, from a simulation's error text. Its codes are namespaced
  *  (10_701…10_799), so a code in that range is moments-v2's whichever event logged it; another contract's failure
@@ -623,10 +637,21 @@ export function momentsV2ErrorName(raw: string): string | null {
   return null;
 }
 
-/** A refusal as the API answers it (§6.13): simulation_failed with its stable code; `detail` adds what the copy shows. */
-export function refusalV2(name: RefusalName, detail: Record<string, string> = {}, text?: string): ApiError {
+/** A refusal as the API answers it (§6.13): simulation_failed with its stable code where it has one, and the error
+ *  named (finding V10); `detail` adds what the copy shows. */
+export function refusalV2(name: RefusalName, detail: Record<string, unknown> = {}, text?: string): ApiError {
   const r = REFUSALS[name];
-  return new ApiError(422, "simulation_failed", text ?? r.text, { contractCode: r.code, ...detail });
+  const e = V2_ERRORS.find((x) => x.origin === TAG && x.name === name)!;
+  return new ApiError(422, "simulation_failed", text ?? r.text, {
+    ...(r.code ? { contractCode: r.code } : {}),
+    contractError: { origin: e.origin, code: e.code, name: e.name, contract: e.source },
+    ...detail,
+  });
+}
+
+/** Whether `err` is moments-v2's refusal `name`. */
+function isRefusal(err: unknown, name: RefusalName): err is ApiError {
+  return err instanceof ApiError && err.code === "simulation_failed" && (err.detail as { contractError?: { name?: unknown } } | undefined)?.contractError?.name === name;
 }
 
 /** Runs a simulation against moments-v2; its own refusals get their stable codes, and an unknown Moment is 404. */
@@ -679,9 +704,10 @@ interface ChainEconomics {
 
 let cachedEconomics: { key: string; at: number; value: ChainEconomics } | null = null;
 
-/** Drops the isolate's copy (tests). */
-export function forgetMomentsEconomicsV2(): void {
+/** Drops the isolate's copies: the economics and the simulated graduation failures (tests). */
+export function forgetMomentsV2(): void {
   cachedEconomics = null;
+  simulatedFailures.clear();
 }
 
 async function chainEconomics(contract: string, net: NetworkConfig, now: number): Promise<ChainEconomics> {
@@ -755,7 +781,8 @@ export function pinnedDurations(net: NetworkConfig): MomentsV2Durations {
 
 /** When `expire` will take a Moment (moments-v2 collect.rs expire, finding V11), in seconds: a Collecting Moment at its
  *  deadline; one pending graduation at max(deadline, min(stuck_since + stuck_expiry, completed_at + pending_backstop)),
- *  the first clock only after a recorded failure (stuck_since ≠ 0). Null once Graduated or Expired. */
+ *  the first clock only after a recorded failure (stuck_since ≠ 0). Null once Graduated or Expired. When both clocks
+ *  run out together it is the failure's, as the contract checks that branch first (its `expired` says backstop=false). */
 export function expiryOf(
   m: Pick<MomentV2Snapshot, "deadline">,
   l: Pick<MomentV2Ledger, "state" | "completedAt" | "stuckSince">,
@@ -765,7 +792,7 @@ export function expiryOf(
   if (l.state !== "graduation_pending") return { at: null, by: null, backstopAt: null, failureAt: null };
   const backstopAt = l.completedAt + d.pendingBackstop;
   const failureAt = l.stuckSince !== 0 ? l.stuckSince + d.stuckExpiry : null;
-  const clock = failureAt !== null && failureAt < backstopAt ? { at: failureAt, by: "failure" as const } : { at: backstopAt, by: "backstop" as const };
+  const clock = failureAt !== null && failureAt <= backstopAt ? { at: failureAt, by: "failure" as const } : { at: backstopAt, by: "backstop" as const };
   if (m.deadline > clock.at) return { at: m.deadline, by: "deadline", backstopAt, failureAt };
   return { ...clock, backstopAt, failureAt };
 }
@@ -792,9 +819,9 @@ export async function graduationOutcome(contract: string, nft: string): Promise<
   try {
     out = await refusing(() => view(contract, "graduate", [sv.addr(nft)]));
   } catch (err) {
-    // A refusal with a stable code (a Moment that isn't pending, 404 for an unknown one) stands; any other failed
+    // A refusal refusing() names (a Moment that isn't pending; 404 for an unknown one) stands; any other failed
     // simulation is an abort, GraduationInvalid's included.
-    if (err instanceof ApiError && err.code === "simulation_failed" && !(err.detail as { contractCode?: unknown } | undefined)?.contractCode) {
+    if (err instanceof ApiError && err.code === "simulation_failed" && !(err.detail as { contractError?: unknown } | undefined)?.contractError) {
       return { kind: "aborted" };
     }
     throw err;
@@ -804,11 +831,23 @@ export async function graduationOutcome(contract: string, nft: string): Promise<
   throw new Error(`unexpected graduation outcome ${JSON.stringify(out, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`);
 }
 
+/** How far a Moment got to its threshold, from 0 to 1. The contract zeroes the reserve when the Moment graduates or
+ *  expires, so the ledger's reserve tells it only while the Moment is live: a Moment that completed (completed_at set,
+ *  graduated or not) reached it exactly (I-M1); one that expired while Collecting got its reserve share of the gross,
+ *  which per-collect rounding puts at most one unit a collect above the reserve it had, and below the threshold. */
+export function progressOf(m: Pick<MomentV2Snapshot, "threshold" | "reserveBps">, l: Pick<MomentV2Ledger, "state" | "completedAt" | "reserve" | "totalGross">): number {
+  if (m.threshold <= 0n) return 0;
+  if (l.completedAt !== 0 || l.state === "graduated") return 1;
+  const reached = l.state === "expired" ? (l.totalGross * BigInt(m.reserveBps)) / BPS : l.reserve;
+  const below = reached < m.threshold ? reached : m.threshold - 1n;
+  return Number((below * 1_000_000n) / m.threshold) / 1_000_000;
+}
+
 /** A Moment's status from its snapshot and ledger, at `now` (ms). */
 export function statusOf(nft: string, m: MomentV2Snapshot, l: MomentV2Ledger, d: MomentsV2Durations, now: number, failure: MomentV2Failure | null): MomentV2Status {
   const e = expiryOf(m, l, d);
   const nowSecs = Math.floor(now / 1000);
-  const progress = m.threshold > 0n ? Math.min(1, Number((l.reserve * 1_000_000n) / m.threshold) / 1_000_000) : 0;
+  const progress = progressOf(m, l);
   return {
     generation: 2,
     nft,
@@ -862,7 +901,7 @@ async function readMoment(contract: string, nft: string): Promise<{ m: MomentV2S
 
 /** A Moment's status, read live (moments-v2 get_moment and ledger). With a recorded failure (stuck_since set), the
  *  failure is `recorded` when the caller has the indexed grad_fail's origin and code; otherwise it is the failure a
- *  graduation attempt records now (`simulated`), and null when that attempt would graduate or abort. */
+ *  graduation attempt records now (`simulated`, kept a minute), and null when that attempt would graduate or abort. */
 export async function momentStatusV2(
   nft: string,
   opts: { net?: NetworkConfig; now?: number; recorded?: { origin: number; code: number } | null } = {},
@@ -872,19 +911,40 @@ export async function momentStatusV2(
   const contract = momentsV2Id(net);
   const id = nftArg(nft);
   const { m, l } = await readMoment(contract, id);
-  return statusOf(id, m, l, pinnedDurations(net), now, await failureOf(contract, id, l, opts.recorded));
+  return statusOf(id, m, l, pinnedDurations(net), now, await failureOf(net, contract, id, l, opts.recorded, now));
 }
 
-async function failureOf(contract: string, nft: string, l: MomentV2Ledger, recorded: { origin: number; code: number } | null | undefined): Promise<MomentV2Failure | null> {
+/** How long a simulated graduation's failure is served: the keeper simulates graduate as often (§20.6). */
+export const MOMENT_FAILURE_TTL_MS = 60_000;
+
+/** Simulated failures (null: the attempt would graduate or abort), by stack, Moment and stuck_since. */
+const simulatedFailures = new Map<string, { at: number; failure: MomentV2Failure | null }>();
+
+async function failureOf(
+  net: NetworkConfig,
+  contract: string,
+  nft: string,
+  l: MomentV2Ledger,
+  recorded: { origin: number; code: number } | null | undefined,
+  now: number,
+): Promise<MomentV2Failure | null> {
   if (l.state !== "graduation_pending" || l.stuckSince === 0) return null;
   if (recorded) return namedFailure(recorded.origin, recorded.code, "recorded");
+  // A status read is public and frequent, and simulating graduate deploys a coin and a pool: one simulation a minute.
+  const key = `${net.passphrase}|${contract}|${nft}|${l.stuckSince}`;
+  const hit = simulatedFailures.get(key);
+  if (hit && now - hit.at < MOMENT_FAILURE_TTL_MS && now >= hit.at) return hit.failure;
+  let failure: MomentV2Failure | null;
   try {
     const outcome = await graduationOutcome(contract, nft);
-    return outcome.kind === "failed" ? namedFailure(outcome.origin, outcome.code, "simulated") : null;
+    failure = outcome.kind === "failed" ? namedFailure(outcome.origin, outcome.code, "simulated") : null;
   } catch {
-    // RPC unavailable: the status stands without the reason.
-    return null;
+    // RPC unavailable: the status stands without the reason, and the next read tries again.
+    return hit ? hit.failure : null;
   }
+  if (simulatedFailures.size >= 1_000) simulatedFailures.clear();
+  simulatedFailures.set(key, { at: now, failure });
+  return failure;
 }
 
 // ------------------------------------------------------------------------------------------------ vesting
@@ -1336,12 +1396,29 @@ async function collectSteps(input: MomentV2BuildRequest, net: NetworkConfig): Pr
   const qty = wholeArg(input.quantity ?? 1, "bad_quantity", `Collect 1–${MAX_BATCH} at a time.`, 1, Math.min(MAX_BATCH, net.limits.collectMax));
   const contract = momentsV2Id(net);
   // Priced exactly as it would settle now: the collect that completes the Moment pulls only what the reserve needs.
-  const q = await refusing(() => view(contract, "quote", [sv.addr(nft), sv.u32(qty)]));
+  const q = await refusing(() => view(contract, "quote", [sv.addr(nft), sv.u32(qty)])).catch(async (err) => {
+    if (!isRefusal(err, "NotCollecting")) throw err;
+    throw new ApiError(err.status, err.code, (await notCollectingText(contract, nft)) ?? err.message, err.detail);
+  });
   const editions = whole(q.editions);
   return [{
     label: `Collect ${editions}`,
     spec: { kind: SPEC_KINDS.collect, nft, quantity: qty, maxTotal: units(q.gross), editions, entitlement: units(q.entitlement), terminal: q.terminal === true },
   }];
+}
+
+/** Why a Moment that isn't Collecting takes no collect, by its state: it completed (and graduated or waits to), or it
+ *  ended without graduating. The generic text when the state can't be read. */
+async function notCollectingText(contract: string, nft: string): Promise<string | undefined> {
+  try {
+    const { l } = await readMoment(contract, nft);
+    if (l.state === "graduation_pending") return "This Moment reached its goal and isn't collecting any more.";
+    if (l.state === "graduated") return "This Moment reached its goal and has graduated. It isn't collecting any more.";
+    if (l.state === "expired") return "This Moment has ended. It isn't collecting any more.";
+  } catch {
+    // The generic text below.
+  }
+  return undefined;
 }
 
 async function claimSteps(user: string, input: MomentV2BuildRequest, net: NetworkConfig): Promise<Steps> {
@@ -1354,6 +1431,17 @@ async function claimSteps(user: string, input: MomentV2BuildRequest, net: Networ
   return [{ label: "Claim coins", spec: { kind: SPEC_KINDS.claim, nft, coin: m.coin, collector: collector.toString(), creator: creator.toString() } }];
 }
 
+/** The coins `user` can claim of `nft` now; none of a Moment the stack doesn't have, as claim_all counts it. */
+async function dueOf(contract: string, nft: string, user: string): Promise<bigint> {
+  try {
+    const d = await refusing(() => view(contract, "claimable", [sv.addr(nft), sv.addr(user)]));
+    return big(d[0]) + big(d[1]);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return 0n;
+    throw err;
+  }
+}
+
 async function claimAllSteps(user: string, input: MomentV2BuildRequest, net: NetworkConfig): Promise<Steps> {
   const list = input.nfts;
   if (!Array.isArray(list) || list.length === 0 || list.length > MAX_CLAIM_IDS) {
@@ -1361,9 +1449,9 @@ async function claimAllSteps(user: string, input: MomentV2BuildRequest, net: Net
   }
   const nfts = [...new Set(list.map(nftArg))];
   const contract = momentsV2Id(net);
-  // claim_all skips the Moments with nothing due; leaving them out keeps the transaction small.
-  const dues = await Promise.all(nfts.map((nft) => refusing(() => view(contract, "claimable", [sv.addr(nft), sv.addr(user)]))));
-  const totals = dues.map((d) => big(d[0]) + big(d[1]));
+  // claim_all skips the Moments with nothing due, unknown ones included (another stack's, a v1 id); leaving them out
+  // keeps the transaction small.
+  const totals = await Promise.all(nfts.map((nft) => dueOf(contract, nft, user)));
   const due = nfts.filter((_, i) => totals[i] > 0n);
   if (due.length === 0) throw refusalV2("NothingToClaim");
   const total = totals.reduce((a, b) => a + b, 0n);
@@ -1381,20 +1469,28 @@ async function withdrawSteps(user: string, input: MomentV2BuildRequest, net: Net
   ];
 }
 
-async function graduateSteps(input: MomentV2BuildRequest, net: NetworkConfig): Promise<Steps> {
-  const nft = nftArg(input.nft);
-  const contract = momentsV2Id(net);
+/** A graduation attempt worth its fee, as a simulation finds it now: one that graduates, or one that records the first
+ *  failure, which starts the stuck clock (finding F15). One that aborts records nothing, and one that fails after a
+ *  recorded failure changes nothing on chain (stuck_since stays): neither is offered, as the keeper submits neither
+ *  (§20.6), and the refusal says when the Moment can expire. */
+async function worthwhileGraduation(contract: string, nft: string, net: NetworkConfig): Promise<Exclude<MomentV2GraduationOutcome, { kind: "aborted" }>> {
   const { m, l } = await readMoment(contract, nft);
   if (l.state !== "graduation_pending") throw refusalV2("WrongState", {}, "This Moment isn't waiting to graduate.");
   const outcome = await graduationOutcome(contract, nft);
+  if (outcome.kind === "graduated" || (outcome.kind === "failed" && l.stuckSince === 0)) return outcome;
+  const at = isoAt(expiryOf(m, l, pinnedDurations(net)).at!);
   if (outcome.kind === "aborted") {
-    // Nothing would be recorded, so nothing is offered: the Moment can expire at the time its status gives.
-    const at = expiryOf(m, l, pinnedDurations(net)).at!;
-    throw new ApiError(422, "simulation_failed", `This Moment's graduation can't run, and the attempt can't be recorded. It can expire from ${isoAt(at)}.`, {
-      contractCode: "moment.graduation_aborted",
-      expiresAt: isoAt(at),
-    });
+    throw new ApiError(422, "simulation_failed", `This Moment's graduation can't run, and the attempt can't be recorded. It can expire from ${at}.`, { expiresAt: at });
   }
+  throw new ApiError(422, "simulation_failed", `This Moment's graduation still fails, and its failure is already recorded: another attempt changes nothing. It can expire from ${at}.`, {
+    expiresAt: at,
+    failure: namedFailure(outcome.origin, outcome.code, "simulated"),
+  });
+}
+
+async function graduateSteps(input: MomentV2BuildRequest, net: NetworkConfig): Promise<Steps> {
+  const nft = nftArg(input.nft);
+  const outcome = await worthwhileGraduation(momentsV2Id(net), nft, net);
   return [{
     label: "Graduate Moment",
     spec: {
@@ -1595,15 +1691,18 @@ export async function momentWithdrawStep(user: string, spec: StepSpec, net: Netw
   return checked({ tx, intent }, user, contract, net);
 }
 
-/** Graduate: one attempt, anyone's to make. The intent says what the simulation found: the Moment graduates, or the
- *  attempt records a failure (named, finding V10), which starts its stuck clock. */
+/** Graduate: one attempt, anyone's to make, while it is worth its fee (worthwhileGraduation, simulated again as the step
+ *  is built: the keeper may have graduated the Moment or recorded its failure since the plan). The intent says what the
+ *  simulation found: the Moment graduates, or the attempt records its first failure (named, finding V10), which starts
+ *  its stuck clock. */
 export async function momentGraduateStep(user: string, spec: StepSpec, net: NetworkConfig = env.network): Promise<BuiltTx> {
   const contract = momentsV2Id(net);
   const nft = nftArg(spec.nft);
+  const outcome = await worthwhileGraduation(contract, nft, net);
   const acct = await requireAccount(user);
   const tx = await refusing(() => invoke(acct, contract, "graduate", [sv.addr(nft)]));
-  const failed = spec.outcome === "failed";
-  const failure = failed ? namedFailure(Number(spec.origin), Number(spec.code), "simulated") : null;
+  const failure = outcome.kind === "failed" ? namedFailure(outcome.origin, outcome.code, "simulated") : null;
+  const failed = failure !== null;
   const intent: Intent = {
     kind: PLAN_KINDS.graduate,
     summary: failed ? "Record a failed graduation attempt" : "Graduate the Moment",

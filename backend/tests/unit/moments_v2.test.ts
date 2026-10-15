@@ -5,12 +5,15 @@
 //   keys; the main stack only, never testnet-qa's failing one (finding F5);
 // - the terms go back to publish by value;
 // - status: when a Moment may expire, the later of its deadline and the earlier of the recorded-failure clock and the
-//   backstop (finding V11), and its failure named from v2_errors.ts (finding V10);
+//   backstop (finding V11), its failure named from v2_errors.ts (finding V10) and simulated at most once a minute, and
+//   its progress to the threshold, which the contract's zeroed reserve doesn't tell once it graduates or expires;
 // - vesting: the tranches from graduation and the contract's claimable;
 // - the builders, keyed by the NFT address: publish (random nonce, the derived NFT and coin, the media's hash, the
-//   terms by value and on display), collect (max_total spent in USDC only), claim, claim all (≤ 20), withdraw,
-//   graduate and expire; their refusals, before anyone signs; and the call rules each transaction is checked with.
-import { Address, nativeToScVal, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+//   terms by value and on display), collect (max_total spent in USDC only), claim, claim all (≤ 20, unknown Moments
+//   skipped), withdraw, graduate (only an attempt worth its fee) and expire; their refusals, before anyone signs, with
+//   §6.13's stable codes only where the API contract has one; and the call rules each transaction is checked with:
+//   the account each call acts for, collect's USDC pull, and every builder's transaction against its intent.
+import { Account, Address, nativeToScVal, Operation, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { assert, assertEquals, assertNotEquals, assertThrows } from "jsr:@std/assert@1";
@@ -185,7 +188,8 @@ const LEDGER0: Ledger = {
   liquidity: 0n,
 };
 
-type GradAnswer = ["Graduated", string] | ["Failed", number, number] | { error: string };
+/** What simulating graduate answers: the outcome, a failed simulation, or no answer at all (RPC unreachable). */
+type GradAnswer = ["Graduated", string] | ["Failed", number, number] | { error: string } | "unreachable";
 
 /** What the fake chain holds. `reset()` puts it back before each test. */
 const chain = {
@@ -227,7 +231,7 @@ function reset() {
   chain.rpcDown = false;
   trustlines = [];
   metadata.clear();
-  mv.forgetMomentsEconomicsV2();
+  mv.forgetMomentsV2();
   forgetReferencePrices();
 }
 
@@ -337,7 +341,7 @@ function sha256(data: Uint8Array): Uint8Array {
 
 const UNKNOWN = { error: errorLog(10_708) };
 
-function answer(contract: string, fn: string, args: xdr.ScVal[]): xdr.ScVal | { error: string } {
+function answer(contract: string, fn: string, args: xdr.ScVal[]): xdr.ScVal | { error: string } | "unreachable" {
   chain.calls.push(`${fn}@${contract === MOMENTS ? "moments" : contract === GRADUATOR ? "graduator" : contract.slice(0, 6)}`);
   if (contract === GRADUATOR && fn === "coin_address") return addr(coinAddress(String(native(args[0]))));
   if (contract !== MOMENTS) return { error: "HostError: Error(Storage, MissingValue)" };
@@ -404,7 +408,7 @@ function answer(contract: string, fn: string, args: xdr.ScVal[]): xdr.ScVal | { 
       if (!known) return UNKNOWN;
       if (known.l.state !== 1) return { error: errorLog(10_714) };
       const g = chain.graduate.get(nft) ?? (["Graduated", C(30)] as GradAnswer);
-      if (!Array.isArray(g)) return g;
+      if (g === "unreachable" || !Array.isArray(g)) return g;
       return g[0] === "Graduated" ? xdr.ScVal.scvVec([sym("Graduated"), addr(g[1])]) : xdr.ScVal.scvVec([sym("Failed"), struct({ origin: u32(g[1]), code: u32(g[2]) })]);
     }
     case "expire":
@@ -436,6 +440,7 @@ function simulate(transaction: string) {
   const contract = Address.fromScAddress(call.contractAddress()).toString();
   const fn = call.functionName().toString();
   const a = answer(contract, fn, call.args());
+  if (a === "unreachable") return null;
   if (!(a instanceof xdr.ScVal)) return { latestLedger: 1, error: a.error };
   return {
     latestLedger: 1,
@@ -481,6 +486,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
       : body.method === "getLedgerEntries"
       ? accountEntry(body.params.keys[0])
       : null;
+    if (body.method === "simulateTransaction" && result === null) return new Response("unavailable", { status: 503 });
     return Response.json({ jsonrpc: "2.0", id: body.id, result });
   }
   if (url.host === "horizon-testnet.stellar.org" && url.pathname.startsWith("/accounts/")) {
@@ -523,13 +529,14 @@ function writeMetadata(title = "Accra at dusk") {
   metadata.set(`${URI}|${ME}`, { title, place: "Accra", taken_on: "2026-10-14", media_type: "image", media_url: PHOTO });
 }
 
-/** The error `run` threw: status, code and contract code. */
-async function refusedWith(run: () => unknown): Promise<[number, string, unknown]> {
+/** The error `run` threw: status, code, its stable contract code (§6.13) and the contract error it names (V10). */
+async function refusedWith(run: () => unknown): Promise<[number, string, unknown, unknown]> {
   try {
     await run();
   } catch (err) {
     assert(err instanceof ApiError, String(err));
-    return [err.status, err.code, (err.detail as Row | undefined)?.contractCode];
+    const detail = err.detail as { contractCode?: string; contractError?: { name: string } } | undefined;
+    return [err.status, err.code, detail?.contractCode, detail?.contractError?.name];
   }
   throw new Error("not refused");
 }
@@ -618,7 +625,7 @@ Deno.test("economics: kept 5 minutes; when RPC fails the last read is served, an
   assertEquals((await mv.momentsEconomicsV2(NET, NOW + mv.MOMENTS_ECONOMICS_TTL_MS)).policy.royaltyBps, 0);
   chain.rpcDown = true;
   assertEquals((await mv.momentsEconomicsV2(NET, NOW + 3 * mv.MOMENTS_ECONOMICS_TTL_MS)).policy.royaltyBps, 0);
-  mv.forgetMomentsEconomicsV2();
+  mv.forgetMomentsV2();
   assertEquals((await refusedWith(() => mv.momentsEconomicsV2(NET, NOW))).slice(0, 2), [502, "rpc_unavailable"]);
   chain.rpcDown = false;
   assertEquals((await refusedWith(() => mv.momentsEconomicsV2(TESTNET, NOW))).slice(0, 2), [503, "not_deployed"]);
@@ -658,6 +665,8 @@ Deno.test("expiry: Collecting at its deadline; pending without a recorded failur
   // A recorded failure: the earlier of 7 days after it and the backstop.
   assertEquals(at(T0 - DAY, "graduation_pending", T0, T0 + 3_600), [T0 + 3_600 + 7 * DAY, "failure", T0 + 30 * DAY, T0 + 3_600 + 7 * DAY]);
   assertEquals(at(T0 - DAY, "graduation_pending", T0, T0 + 29 * DAY), [T0 + 30 * DAY, "backstop", T0 + 30 * DAY, T0 + 36 * DAY]);
+  // Both clocks at once: the failure's, the branch the contract checks first (its expired event says backstop=false).
+  assertEquals(at(T0 - DAY, "graduation_pending", T0, T0 + 23 * DAY), [T0 + 30 * DAY, "failure", T0 + 30 * DAY, T0 + 30 * DAY]);
   // Never before the deadline, whichever clock runs.
   assertEquals(at(T0 + 40 * DAY, "graduation_pending", T0), [T0 + 40 * DAY, "deadline", T0 + 30 * DAY, null]);
   assertEquals(at(T0 + 20 * DAY, "graduation_pending", T0, T0 + 60), [T0 + 20 * DAY, "deadline", T0 + 30 * DAY, T0 + 60 + 7 * DAY]);
@@ -690,9 +699,10 @@ Deno.test("status: a pending Moment shows its expiry and, with a recorded failur
   // The indexer's recorded grad_fail wins: exec-soroswap's LiquidityTooLow (3, 10304).
   s = await mv.momentStatusV2(NFT_P, { net: NET, now: NOW, recorded: { origin: 3, code: 10_304 } });
   assertEquals(s.failure, { origin: 3, code: 10_304, name: "LiquidityTooLow", source: "exec-soroswap", seen: "recorded" });
-  // An attempt that would graduate now: no reason to show.
+  // An attempt that would graduate now: no reason to show, once the minute a simulation is kept has passed.
   chain.graduate.set(NFT_P, ["Graduated", C(30)]);
-  assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: NOW })).failure, null);
+  assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + 1_000 })).failure?.name, "GraduationInvalid");
+  assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + mv.MOMENT_FAILURE_TTL_MS })).failure, null);
   // Expirable once the clock has run.
   assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: (NOW_S - 3_600 + 7 * DAY) * 1000 })).expirable, true);
 
@@ -705,6 +715,50 @@ Deno.test("status: a pending Moment shows its expiry and, with a recorded failur
   // An unknown Moment is 404; something that isn't a contract address is 400.
   assertEquals((await refusedWith(() => mv.momentStatusV2(C(99), { net: NET, now: NOW }))).slice(0, 2), [404, "not_found"]);
   assertEquals((await refusedWith(() => mv.momentStatusV2("12", { net: NET, now: NOW }))).slice(0, 2), [400, "bad_moment"]);
+});
+
+Deno.test("status: a graduation is simulated at most once a minute per Moment for its failure, however often the status is read; a new recorded failure or the indexer's own needs none", async () => {
+  reset();
+  const graduations = () => chain.calls.filter((c) => c.startsWith("graduate@")).length;
+  chain.moments.get(NFT_P)!.l.stuck_since = NOW_S - 3_600;
+  for (let i = 0; i < 5; i++) await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + i * 1_000 });
+  assertEquals(graduations(), 1);
+  // The indexer's failure: nothing to simulate.
+  await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + mv.MOMENT_FAILURE_TTL_MS, recorded: { origin: 3, code: 10_304 } });
+  assertEquals(graduations(), 1);
+  // A minute later, or after another recorded failure (a later stuck_since), it is simulated again.
+  await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + mv.MOMENT_FAILURE_TTL_MS });
+  assertEquals(graduations(), 2);
+  chain.moments.get(NFT_P)!.l.stuck_since = NOW_S - 60;
+  await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + mv.MOMENT_FAILURE_TTL_MS + 1_000 });
+  assertEquals(graduations(), 3);
+  // The simulation unanswered: the status stands, with the last failure seen, and the next read tries again.
+  chain.graduate.set(NFT_P, "unreachable");
+  const s = await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + 3 * mv.MOMENT_FAILURE_TTL_MS });
+  assertEquals([s.state, s.failure?.name, graduations()], ["graduation_pending", "GraduationInvalid", 4]);
+  // One that would abort shows no reason (only the backstop ends it).
+  chain.graduate.set(NFT_P, { error: "HostError: Error(Budget, ExceededLimit)" });
+  assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: NOW + 3 * mv.MOMENT_FAILURE_TTL_MS + 1 })).failure, null);
+  assertEquals(graduations(), 5);
+});
+
+Deno.test("status: progress to the threshold is 1 for a Moment that completed, graduated or expired since, though the contract zeroes its reserve; an expired one that never completed shows how far it got", async () => {
+  reset();
+  const progress = async (nft: string) => (await mv.momentStatusV2(nft, { net: NET, now: NOW })).progress;
+  assertEquals(await progress(NFT_A), 0.075);
+  assertEquals(await progress(NFT_P), 1);
+  // Graduated: reserve 0 on chain, the threshold reached.
+  assertEquals([await progress(NFT_G), (await mv.momentStatusV2(NFT_G, { net: NET, now: NOW })).reserve], [1, "0"]);
+  // Expired while Collecting: the reserve share of what was collected (75% of 4 USDC of a 10 USDC threshold).
+  chain.moments.get(NFT_E)!.l.total_gross = 40_000_000n;
+  assertEquals(await progress(NFT_E), 0.3);
+  // Expired after completing (the backstop or a recorded failure): it had reached the threshold.
+  chain.moments.get(NFT_E)!.l.completed_at = NOW_S - 40 * DAY;
+  assertEquals(await progress(NFT_E), 1);
+  // Never 1 for one that didn't complete, whatever the rounding of its collects.
+  const m = { threshold: 100_000_000n, reserveBps: 7_500 };
+  assertEquals(mv.progressOf(m, { state: "expired", completedAt: 0, reserve: 0n, totalGross: 133_333_340n }), 0.999999);
+  assertEquals(mv.progressOf(m, { state: "collecting", completedAt: 0, reserve: 0n, totalGross: 0n }), 0);
 });
 
 // ------------------------------------------------------------------------------------------------ vesting
@@ -777,13 +831,18 @@ Deno.test("publish refuses a price outside the minimum and the ceiling, an alloc
   writeMetadata();
   const base = { action: "publish", uri: URI, symbol: "DUSK", price: "10000000", allocationBps: 500, windowSecs: 86_400 };
   const refused = (over: Record<string, unknown>) => refusedWith(() => mv.momentV2Steps(ME, { ...base, ...over }, NET, NOW));
-  assertEquals(await refused({ price: "999999" }), [422, "simulation_failed", "moment.price_too_low"]);
-  assertEquals(await refused({ price: "133333335" }), [422, "simulation_failed", "moment.price_too_high"]);
+  assertEquals(await refused({ price: "999999" }), [422, "simulation_failed", "moment.price_too_low", "PriceTooLow"]);
+  // No stable code in the API contract (§6.13): named, with its own text.
+  assertEquals(await refused({ price: "133333335" }), [422, "simulation_failed", undefined, "PriceTooHigh"]);
   assertEquals((await refused({ allocationBps: 1_001 })).slice(0, 2), [400, "bad_arg"]);
   assertEquals((await refused({ windowSecs: 3_599 })).slice(0, 2), [400, "bad_window"]);
   assertEquals((await refused({ windowSecs: 30 * DAY + 1 })).slice(0, 2), [400, "bad_window"]);
+  // Either pause: governance's on publishing, or the guardian's on everything.
+  chain.config.publishing_paused = true;
+  assertEquals(await refused({}), [422, "simulation_failed", undefined, "PublishingPaused"]);
+  chain.config.publishing_paused = false;
   chain.config.guardian_paused = true;
-  assertEquals(await refused({}), [422, "simulation_failed", "moment.paused"]);
+  assertEquals(await refused({}), [422, "simulation_failed", undefined, "PublishingPaused"]);
   // The ceiling itself and the minimum are fine.
   chain.config.guardian_paused = false;
   assertEquals((await mv.momentV2Steps(ME, { ...base, price: "133333334" }, NET, NOW)).kind, "moment_publish");
@@ -914,12 +973,18 @@ Deno.test("collect spends max_total in USDC only: the quote's gross, which a ter
   assertRuleRefuses(tx, { ...intent, display: { ...intent.display, quantity: 2 } }, "the call's arguments are not as expected");
 });
 
-Deno.test("collect's refusals: a closed window, a completed Moment, an unknown one (404) and a bad quantity, before anyone signs", async () => {
+Deno.test("collect's refusals: a closed window, a Moment no longer collecting (worded by its state), an unknown one (404) and a bad quantity, before anyone signs", async () => {
   reset();
   const collect = (nft: string, quantity: unknown = 1) => refusedWith(() => mv.momentV2Steps(ME, { action: "collect", nft, quantity }, NET, NOW));
-  assertEquals(await collect(NFT_P), [422, "simulation_failed", "moment.completed"]);
+  const message = (nft: string) => mv.momentV2Steps(ME, { action: "collect", nft }, NET, NOW).then(() => "", (e) => e.message);
+  // The contract refuses every state but Collecting alike (NotCollecting): the text says which, read from the ledger.
+  assertEquals(await collect(NFT_P), [422, "simulation_failed", undefined, "NotCollecting"]);
+  assertEquals(await message(NFT_P), "This Moment reached its goal and isn't collecting any more.");
+  assertEquals(await message(NFT_G), "This Moment reached its goal and has graduated. It isn't collecting any more.");
+  // An expired Moment may never have reached its goal.
+  assertEquals(await message(NFT_E), "This Moment has ended. It isn't collecting any more.");
   chain.moments.get(NFT_A)!.m.deadline = NOW_S;
-  assertEquals(await collect(NFT_A), [422, "simulation_failed", "moment.closed"]);
+  assertEquals(await collect(NFT_A), [422, "simulation_failed", "moment.closed", "WindowClosed"]);
   assertEquals((await collect(C(99))).slice(0, 2), [404, "not_found"]);
   assertEquals((await collect(NFT_A, 0)).slice(0, 2), [400, "bad_quantity"]);
   assertEquals((await collect(NFT_A, 21)).slice(0, 2), [400, "bad_quantity"]);
@@ -937,7 +1002,7 @@ Deno.test("claim and claim all act for the user and spend nothing; claim all tak
   assertEquals([fnOf(one.tx), argsOf(one.tx).map(native), one.intent.spend], ["claim", [ME, NFT_G], {}]);
   assertEquals(one.intent.display, { generation: 2, nft: NFT_G, coin: C(40), collectorAmount: "200000000", creatorAmount: "16000000000000", total: "16000200000000" });
   mv.verifyMomentsV2Call(one.tx, one.intent, v2Ctx());
-  assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim", nft: NFT_A }, NET, NOW))), [422, "simulation_failed", "moment.nothing_to_claim"]);
+  assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim", nft: NFT_A }, NET, NOW))), [422, "simulation_failed", undefined, "NothingToClaim"]);
 
   const all = await mv.momentV2Steps(ME, { action: "claim_all", nfts: [NFT_A, NFT_G, NFT_P, NFT_G] }, NET, NOW);
   assertEquals([all.kind, all.steps[0].label, all.steps[0].spec], ["moment_claim_all", "Claim coins from 1 Moment", { kind: "moment_v2_claim_all", nfts: [NFT_G], total: "16000200000000" }]);
@@ -947,7 +1012,11 @@ Deno.test("claim and claim all act for the user and spend nothing; claim all tak
   assertRuleRefuses(many.tx, { ...many.intent, display: { ...many.intent.display, nfts: `${NFT_G},${NFT_A}` } }, "the call is for another Moment than the one shown");
   const twentyOne = Array.from({ length: 21 }, (_, i) => C(100 + i));
   assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim_all", nfts: twentyOne }, NET, NOW))).slice(0, 2), [400, "bad_arg"]);
-  assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim_all", nfts: [NFT_A, NFT_P] }, NET, NOW))), [422, "simulation_failed", "moment.nothing_to_claim"]);
+  assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim_all", nfts: [NFT_A, NFT_P] }, NET, NOW))), [422, "simulation_failed", undefined, "NothingToClaim"]);
+  // A Moment the main stack doesn't have (another stack's, a v1 id) is skipped, as the contract's claim_all skips it.
+  const skipped = await mv.momentV2Steps(ME, { action: "claim_all", nfts: [C(99), NFT_G, NFT_QA] }, NET, NOW);
+  assertEquals(skipped.steps[0].spec, { kind: "moment_v2_claim_all", nfts: [NFT_G], total: "16000200000000" });
+  assertEquals((await refusedWith(() => mv.momentV2Steps(ME, { action: "claim_all", nfts: [C(99)] }, NET, NOW))), [422, "simulation_failed", undefined, "NothingToClaim"]);
   // A claim for another account is refused by the rules.
   assertRuleRefuses(one.tx, one.intent, "the transaction is not from your account", SOMEONE);
 });
@@ -964,7 +1033,7 @@ Deno.test("withdraw: the creator's proceeds only, after a USDC trust step when n
   assertEquals((await mv.momentV2Steps(ME, { action: "withdraw", nft: NFT_G }, NET, NOW)).steps.map((s) => s.label), ["Withdraw proceeds"]);
   assertEquals((await refusedWith(() => mv.momentV2Steps(SOMEONE, { action: "withdraw", nft: NFT_G }, NET, NOW))).slice(0, 2), [400, "bad_arg"]);
   chain.moments.get(NFT_G)!.l.creator_claimable = 0n;
-  assertEquals(await refusedWith(() => mv.momentV2Steps(ME, { action: "withdraw", nft: NFT_G }, NET, NOW)), [422, "simulation_failed", "moment.nothing_to_withdraw"]);
+  assertEquals(await refusedWith(() => mv.momentV2Steps(ME, { action: "withdraw", nft: NFT_G }, NET, NOW)), [422, "simulation_failed", undefined, "NothingToWithdraw"]);
 
   // A permissionless call that carries the user's authorization is refused.
   chain.authEverything = true;
@@ -990,9 +1059,40 @@ Deno.test("graduate is anyone's: the intent says whether it graduates or records
   // An attempt that aborts (moments-v2's own GraduationInvalid, 10_731) records nothing: refused, with when it can expire.
   chain.graduate.set(NFT_P, { error: errorLog(10_731) });
   const aborted = await mv.momentV2Steps(ME, { action: "graduate", nft: NFT_P }, NET, NOW).catch((e) => e);
-  assertEquals([aborted.status, aborted.detail.contractCode, aborted.detail.expiresAt], [422, "moment.graduation_aborted", iso(NOW_S - 7_200 + 30 * DAY)]);
-  assertEquals(await refusedWith(() => mv.momentV2Steps(ME, { action: "graduate", nft: NFT_A }, NET, NOW)), [422, "simulation_failed", "moment.wrong_state"]);
+  assertEquals([aborted.status, aborted.code, aborted.detail.contractCode, aborted.detail.expiresAt], [422, "simulation_failed", undefined, iso(NOW_S - 7_200 + 30 * DAY)]);
+  assertEquals(aborted.message, `This Moment's graduation can't run, and the attempt can't be recorded. It can expire from ${iso(NOW_S - 7_200 + 30 * DAY)}.`);
+  assertEquals(await refusedWith(() => mv.momentV2Steps(ME, { action: "graduate", nft: NFT_A }, NET, NOW)), [422, "simulation_failed", undefined, "WrongState"]);
   assertEquals(Object.keys(mv.PLAN_KINDS).includes("mark_stuck"), false);
+});
+
+Deno.test("graduate after a recorded failure: offered only when it would graduate; another failing attempt changes nothing on chain, so it is refused, at the plan and as the step is built (§20.6)", async () => {
+  reset();
+  const graduate = () => mv.momentV2Steps(ME, { action: "graduate", nft: NFT_P }, NET, NOW);
+  // The first failure is worth recording: it starts the stuck clock.
+  const first = await graduate();
+  assertEquals(first.steps[0].spec.outcome, "failed");
+
+  // Recorded: an attempt that fails again keeps stuck_since and the expiry time, so the user would pay for nothing.
+  chain.moments.get(NFT_P)!.l.stuck_since = NOW_S - 3_600;
+  const failureAt = iso(NOW_S - 3_600 + 7 * DAY);
+  const again = await graduate().catch((e) => e);
+  assertEquals([again.status, again.code, again.detail.expiresAt, again.detail.failure], [422, "simulation_failed", failureAt, {
+    origin: 10,
+    code: 11_003,
+    name: "GraduationInvalid",
+    source: "moments-graduator",
+    seen: "simulated",
+  }]);
+  assertEquals(again.message, `This Moment's graduation still fails, and its failure is already recorded: another attempt changes nothing. It can expire from ${failureAt}.`);
+  // A plan made before the failure was recorded isn't built either: the step simulates again.
+  const late = await mv.momentGraduateStep(ME, first.steps[0].spec, NET).catch((e) => e);
+  assertEquals([late.status, late.detail.expiresAt], [422, failureAt]);
+
+  // One that would graduate is offered, and its step says so whatever the plan found.
+  chain.graduate.set(NFT_P, ["Graduated", C(30)]);
+  assertEquals((await graduate()).steps[0].spec.outcome, "graduated");
+  const built = await mv.momentGraduateStep(ME, first.steps[0].spec, NET);
+  assertEquals([built.intent.display!.outcome, built.intent.display!.failureName, built.intent.summary], ["graduated", null, "Graduate the Moment"]);
 });
 
 Deno.test("expire: refused before the Moment's expiry time, with that time; then the backstop or the failure clock, 70/30; anyone's to call", async () => {
@@ -1001,7 +1101,7 @@ Deno.test("expire: refused before the Moment's expiry time, with that time; then
   // Pending without a recorded failure: the backstop, 30 days after completion.
   const backstopAt = NOW_S - 7_200 + 30 * DAY;
   const early = await expire(NFT_P, NOW).catch((e) => e);
-  assertEquals([early.status, early.detail.contractCode, early.detail.expiresAt], [422, "moment.not_expirable", iso(backstopAt)]);
+  assertEquals([early.status, early.detail.contractCode, early.detail.contractError.name, early.detail.expiresAt], [422, undefined, "NotExpirable", iso(backstopAt)]);
   const late = await expire(NFT_P, backstopAt * 1000);
   assertEquals([late.kind, late.steps[0].spec], ["moment_expire", { kind: "moment_v2_expire", nft: NFT_P, backstop: true, reserve: "100000000", creatorShare: "70000000", treasuryShare: "30000000" }]);
   const built = await mv.momentExpireStep(ME, late.steps[0].spec, NET);
@@ -1011,11 +1111,131 @@ Deno.test("expire: refused before the Moment's expiry time, with that time; then
   // A recorded failure: 7 days after it, not the backstop.
   chain.moments.get(NFT_P)!.l.stuck_since = NOW_S - 3_600;
   assertEquals((await expire(NFT_P, (NOW_S - 3_600 + 7 * DAY) * 1000)).steps[0].spec.backstop, false);
+  // Its clock running out with the backstop's: the failure branch, as the status labels it.
+  chain.moments.get(NFT_P)!.l.stuck_since = backstopAt - 7 * DAY;
+  assertEquals((await mv.momentStatusV2(NFT_P, { net: NET, now: NOW, recorded: { origin: 3, code: 10_304 } })).expiresBy, "failure");
+  assertEquals((await expire(NFT_P, backstopAt * 1000)).steps[0].spec.backstop, false);
   // Collecting: from its deadline. Graduated and Expired: never.
   assertEquals((await expire(NFT_A, NOW).catch((e) => e)).detail.expiresAt, iso(NOW_S + DAY));
   assertEquals((await expire(NFT_A, (NOW_S + DAY) * 1000)).steps[0].spec.backstop, false);
-  assertEquals(await refusedWith(() => expire(NFT_G, NOW)), [422, "simulation_failed", "moment.wrong_state"]);
-  assertEquals(await refusedWith(() => expire(NFT_E, NOW)), [422, "simulation_failed", "moment.wrong_state"]);
+  assertEquals(await refusedWith(() => expire(NFT_G, NOW)), [422, "simulation_failed", undefined, "WrongState"]);
+  assertEquals(await refusedWith(() => expire(NFT_E, NOW)), [422, "simulation_failed", undefined, "WrongState"]);
+});
+
+// ------------------------------------------------------------------------------------------------ the call rules
+
+/** `tx`'s call again from the user, with other arguments and authorization: what a builder bug or a tampered server
+ *  could hand the phone. */
+function recalled(tx: Transaction, args: xdr.ScVal[], auth: xdr.SorobanAuthorizationEntry[] = (tx.operations[0] as any).auth ?? []): Transaction {
+  return new TransactionBuilder(new Account(ME, "1"), { fee: "100", networkPassphrase: TESTNET.passphrase })
+    .addOperation(Operation.invokeContractFunction({ contract: MOMENTS, function: fnOf(tx), args, auth }))
+    .setTimeout(300)
+    .build();
+}
+
+/** The source account's authorization of moments-v2's `fn(args)`, with `subs` under it. */
+const sourceAuth = (fn: string, args: xdr.ScVal[], subs: xdr.SorobanAuthorizedInvocation[] = []) =>
+  new xdr.SorobanAuthorizationEntry({ credentials: xdr.SorobanCredentials.sorobanCredentialsSourceAccount(), rootInvocation: authorized(MOMENTS, fn, args, subs) });
+
+Deno.test("the call rules: publish, collect, claim and claim all refuse a call for another account, sent from the user's own", async () => {
+  reset();
+  writeMetadata();
+  trustlines = [USDC.classic!];
+  const forAnother = (tx: Transaction, intent: any) => {
+    const args = argsOf(tx);
+    assertRuleRefuses(recalled(tx, [addr(SOMEONE), ...args.slice(1)]), intent, "the call acts for another account");
+    // A contract address in its place too.
+    assertRuleRefuses(recalled(tx, [addr(MOMENTS), ...args.slice(1)]), intent, "the call acts for another account");
+  };
+  const { steps } = await mv.momentV2Steps(ME, { action: "publish", uri: URI, symbol: "DUSK", price: "10000000" }, NET, NOW);
+  const publish = await mv.momentPublishStep(ME, steps[0].spec, NET);
+  forAnother(publish.tx, publish.intent);
+  const collect = await mv.momentCollectStep(ME, (await mv.momentV2Steps(ME, { action: "collect", nft: NFT_A, quantity: 3 }, NET, NOW)).steps[0].spec, NET);
+  forAnother(collect.tx, collect.intent);
+  const claim = await mv.momentClaimStep(ME, (await mv.momentV2Steps(ME, { action: "claim", nft: NFT_G }, NET, NOW)).steps[0].spec, NET);
+  forAnother(claim.tx, claim.intent);
+  const all = await mv.momentClaimAllStep(ME, (await mv.momentV2Steps(ME, { action: "claim_all", nfts: [NFT_G] }, NET, NOW)).steps[0].spec, NET);
+  forAnother(all.tx, all.intent);
+  // Each as built passes.
+  for (const b of [publish, collect, claim, all]) mv.verifyMomentsV2Call(b.tx, b.intent, v2Ctx());
+});
+
+Deno.test("the call rules: collect's only sub-authorization is the USDC pull from the user to moments-v2, within the spend", async () => {
+  reset();
+  const { tx, intent } = await mv.momentCollectStep(ME, (await mv.momentV2Steps(ME, { action: "collect", nft: NFT_A, quantity: 3 }, NET, NOW)).steps[0].spec, NET);
+  const args = argsOf(tx);
+  const pull = (token = USDC.contract, from = ME, to = MOMENTS, amount = 30_000_000n, fn = "transfer", subs: xdr.SorobanAuthorizedInvocation[] = []) =>
+    authorized(token, fn, [addr(from), addr(to), i128(amount)], subs);
+  const withSubs = (...subs: xdr.SorobanAuthorizedInvocation[]) => recalled(tx, args, [sourceAuth("collect", args, subs)]);
+  // As the host records it: passes.
+  mv.verifyMomentsV2Call(withSubs(pull()), intent, v2Ctx());
+  mv.verifyMomentsV2Call(withSubs(pull(USDC.contract, ME, MOMENTS, 29_000_000n)), intent, v2Ctx());
+
+  const SPENDS_MORE = "the transaction spends more than this action declares";
+  // Another token, another recipient, another payer, more than the spend, another token function.
+  assertRuleRefuses(withSubs(pull(TESTNET.assets[0].contract)), intent, SPENDS_MORE);
+  assertRuleRefuses(withSubs(pull(USDC.contract, ME, SOMEONE)), intent, SPENDS_MORE);
+  assertRuleRefuses(withSubs(pull(USDC.contract, SOMEONE)), intent, SPENDS_MORE);
+  assertRuleRefuses(withSubs(pull(USDC.contract, ME, MOMENTS, 30_000_001n)), intent, SPENDS_MORE);
+  assertRuleRefuses(withSubs(pull(USDC.contract, ME, MOMENTS, 30_000_000n, "approve")), intent, SPENDS_MORE);
+  // More than the one pull: a second one, or anything under it.
+  const COVERS_MORE = "the authorization covers more than this call";
+  assertRuleRefuses(withSubs(pull(), pull()), intent, COVERS_MORE);
+  assertRuleRefuses(withSubs(pull(USDC.contract, ME, MOMENTS, 30_000_000n, "transfer", [pull()])), intent, COVERS_MORE);
+  assertRuleRefuses(withSubs(), intent, COVERS_MORE);
+  // A second authorization entry, a root that isn't the call, or another signer.
+  assertRuleRefuses(recalled(tx, args, [sourceAuth("collect", args, [pull()]), sourceAuth("claim", [addr(ME), addr(NFT_G)])]), intent, "the transaction asks for more authorization than this call");
+  assertRuleRefuses(recalled(tx, args, [sourceAuth("collect", [addr(ME), addr(NFT_A), u32(3), i128(40_000_000n)], [pull()])]), intent, "the authorization is not for this call");
+  const signer = new xdr.SorobanAuthorizationEntry({
+    credentials: xdr.SorobanCredentials.sorobanCredentialsAddress(
+      new xdr.SorobanAddressCredentials({ address: new Address(SOMEONE).toScAddress(), nonce: xdr.Int64.fromString("1"), signatureExpirationLedger: 1, signature: xdr.ScVal.scvVoid() }),
+    ),
+    rootInvocation: authorized(MOMENTS, "collect", args, [pull()]),
+  });
+  assertRuleRefuses(recalled(tx, args, [signer]), intent, "the transaction needs a signature from another address");
+});
+
+/** Every builder's transaction, as plans.ts builds the step. */
+async function everyBuilt() {
+  writeMetadata();
+  trustlines = [USDC.classic!];
+  const step = async (input: Record<string, unknown>, now = NOW) => (await mv.momentV2Steps(ME, input, NET, now)).steps[0].spec;
+  const backstopAt = NOW_S - 7_200 + 30 * DAY;
+  return {
+    publish: await mv.momentPublishStep(ME, await step({ action: "publish", uri: URI, symbol: "DUSK", price: "10000000" }), NET),
+    collect: await mv.momentCollectStep(ME, await step({ action: "collect", nft: NFT_A, quantity: 3 }), NET),
+    claim: await mv.momentClaimStep(ME, await step({ action: "claim", nft: NFT_G }), NET),
+    claim_all: await mv.momentClaimAllStep(ME, await step({ action: "claim_all", nfts: [NFT_G] }), NET),
+    withdraw: await mv.momentWithdrawStep(ME, await step({ action: "withdraw", nft: NFT_G }), NET),
+    graduate: await mv.momentGraduateStep(ME, await step({ action: "graduate", nft: NFT_P }), NET),
+    expire: await mv.momentExpireStep(ME, await step({ action: "expire", nft: NFT_P }, backstopAt * 1000), NET),
+  };
+}
+
+Deno.test("every builder's transaction verifies against its intent with the v2 call rules (moments_v2.ts, which the verifiers take over in CT-16)", async () => {
+  reset();
+  for (const [action, b] of Object.entries(await everyBuilt())) {
+    mv.verifyMomentsV2Call(b.tx, b.intent, v2Ctx());
+    assertEquals(b.intent.kind, mv.PLAN_KINDS[action as keyof typeof mv.PLAN_KINDS], action);
+  }
+});
+
+// plans.ts runs the server verifier on every step it builds. Until CT-16 gives verify.ts the v2 rules, chosen per
+// contract (v1's publish and collect share v2's names, §20.4), it refuses publish (v1's arity) and the functions it has
+// no rule for, and plans.ts answers 500 self_check_failed for them: CT-16 turns this test on.
+Deno.test({
+  name: "the server verifier (verify.ts) passes every builder's transaction against its intent, as plans.ts runs it",
+  ignore: true,
+  fn: async () => {
+    reset();
+    for (const [action, b] of Object.entries(await everyBuilt())) {
+      try {
+        verifyTransaction(b.tx, b.intent, verifyCtx);
+      } catch (err) {
+        throw new Error(`${action}: ${(err as Error).message}`);
+      }
+    }
+  },
 });
 
 // ------------------------------------------------------------------------------------------------ refusals
@@ -1029,5 +1249,16 @@ Deno.test("refusals: moments-v2's own errors by name, from their namespaced code
   assertEquals(mv.momentsV2ErrorName(errorLog(11_003, GRADUATOR)), null);
   // Nothing hardcodes a code: the names come from v2_errors.ts.
   const err = mv.refusalV2("NotExpirable", { expiresAt: "2026-11-14T12:00:00.000Z" });
-  assertEquals([err.status, err.code, (err.detail as Row).contractCode, (err.detail as Row).expiresAt], [422, "simulation_failed", "moment.not_expirable", "2026-11-14T12:00:00.000Z"]);
+  assertEquals([err.status, err.code, (err.detail as Row).contractError, (err.detail as Row).expiresAt], [
+    422,
+    "simulation_failed",
+    { origin: 7, code: 10_713, name: "NotExpirable", contract: "moments-v2" },
+    "2026-11-14T12:00:00.000Z",
+  ]);
+  // A stable code only where the API contract has one with the same meaning (contract.ts ContractErrorCode, §6.13).
+  assertEquals((mv.refusalV2("WindowClosed").detail as Row).contractCode, "moment.closed");
+  assertEquals((mv.refusalV2("PriceTooLow").detail as Row).contractCode, "moment.price_too_low");
+  for (const name of ["PublishingPaused", "TermsChanged", "PriceTooHigh", "NotCollecting", "NothingToClaim", "NothingToWithdraw", "NotExpirable", "WrongState"] as const) {
+    assertEquals((mv.refusalV2(name).detail as Row).contractCode, undefined, name);
+  }
 });
