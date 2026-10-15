@@ -1,14 +1,13 @@
-// Rent upkeep: extends the contracts' entries before they archive.
-import { sql } from "../../_shared/db.ts";
+// Rent upkeep (docs/DESIGN-stellar-parity.md §4.8b): the keeper keeps the app's contracts, live launches and the
+// Moments still collecting from archiving, the entries checked longest ago first (_shared/ttl.ts).
 import { env } from "../../_shared/env.ts";
-import { keepAlive } from "../../_shared/ttl.ts";
+import { upkeep, upkeepEntries } from "../../_shared/ttl.ts";
 
-/** Keeps the contracts, the launch-token WASM and every launch token's instance from archiving. */
+/** How long a run may keep sending extensions, from its start: the indexer's budget leaves the late jobs this much. */
+const RUN_MS = 20_000;
+
 export async function ttl() {
-  const c = env.network.contracts;
-  const mine = [c.launchpad, c.moments].filter((x): x is string => Boolean(x));
-  if (mine.length === 0) return { checked: 0, extended: 0 };
-  const tokens = await sql()`select token from lite.launches order by updated_at desc limit 200`;
-  const tokenHash = env.network.deployment?.launchTokenWasmHash;
-  return await keepAlive([...mine, ...tokens.map((t) => t.token as string)], tokenHash ? [tokenHash] : []);
+  const started = Date.now();
+  const policy = env.network.ttlPolicy;
+  return await upkeep(await upkeepEntries(policy), policy, started + RUN_MS);
 }

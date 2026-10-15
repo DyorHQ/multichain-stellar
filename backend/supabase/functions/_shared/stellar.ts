@@ -1,5 +1,7 @@
-// Stellar plumbing shared by every feature: RPC + Horizon clients, ScVal helpers, building, simulating, fee-bumping,
-// submitting and waiting. stellar-sdk 16 (LTS line) — the same major Blend's SDK uses.
+// Stellar plumbing shared by every feature: RPC + Horizon clients, ScVal helpers, building, simulating, submitting and
+// waiting. stellar-sdk 16 (LTS line) — the same major Blend's SDK uses. Users pay their own network fees
+// (docs/DESIGN-stellar-parity.md §4): their transactions are sent as they signed them. The sponsor fee-bumps only the
+// starter swap, and signs only an account's setup; the keeper sends protocol upkeep and logs each transaction.
 import {
   Account,
   Address,
@@ -10,13 +12,16 @@ import {
   Horizon,
   Keypair,
   nativeToScVal,
+  Operation,
   rpc,
   scValToNative,
+  SorobanDataBuilder,
   StrKey,
   Transaction,
   TransactionBuilder,
   xdr,
 } from "@stellar/stellar-sdk";
+import { sql, tableExists } from "./db.ts";
 import { env } from "./env.ts";
 import { ApiError } from "./http.ts";
 import { NetworkConfig } from "./networks.ts";
@@ -35,6 +40,7 @@ export function horizon(net: NetworkConfig = env.network): Horizon.Server {
 }
 
 let sponsorKp: Keypair | null = null;
+/** Pays an account's setup and, where activation is sponsored, the starter swap (§4.3); nothing else. */
 export function sponsor(): Keypair {
   if (!sponsorKp) sponsorKp = Keypair.fromSecret(env.sponsorSecret);
   return sponsorKp;
@@ -82,6 +88,10 @@ export function isContractId(a: string): boolean {
   return StrKey.isValidContract(a);
 }
 
+export function isMuxedId(a: string): boolean {
+  return StrKey.isValidMed25519PublicKey(a);
+}
+
 // ------------------------------------------------------------------------------------------------ accounts
 
 export async function loadAccount(address: string): Promise<Account | null> {
@@ -104,23 +114,51 @@ export interface ClassicBalance {
   balance: string; // base units
   limit: string | null;
   sponsored: boolean;
+  /** Who pays this trustline's reserve, when someone else does. */
+  sponsor: string | null;
+}
+
+/** An account as Horizon describes it: its classic balances and trustlines (liquidity-pool shares left out), its
+ *  entry counts, the XLM its open offers hold, and which of its reserves another account pays. */
+export interface ClassicAccount {
+  balances: ClassicBalance[];
+  subentries: number;
+  sponsoring: number;
+  sponsored: number;
+  /** The native balance's selling liabilities, in stroops. */
+  sellingLiabilities: string;
+  /** Who pays the account's own two base reserves, when someone else does. */
+  accountSponsor: string | null;
+  /** Who pays each extra signer's reserve, when someone else does. */
+  signerSponsors: string[];
 }
 
 /** Classic balances and trustlines from Horizon (RPC has no account-wide listing). Null if the account is missing. */
-export async function classicBalances(address: string): Promise<{ balances: ClassicBalance[]; subentries: number; sponsoring: number; sponsored: number } | null> {
+export async function classicBalances(address: string): Promise<ClassicAccount | null> {
+  let a: any;
   try {
-    const a = await horizon().loadAccount(address);
-    const balances = a.balances.map((b: any) => ({
-      asset: b.asset_type === "native" ? "native" : `${b.asset_code}:${b.asset_issuer}`,
-      balance: toStroops(b.balance),
-      limit: b.limit ? toStroops(b.limit) : null,
-      sponsored: Boolean(b.sponsor),
-    }));
-    return { balances, subentries: a.subentry_count, sponsoring: (a as any).num_sponsoring ?? 0, sponsored: (a as any).num_sponsored ?? 0 };
+    a = await horizon().loadAccount(address);
   } catch (err: any) {
     if (err?.response?.status === 404 || String(err).includes("Not Found")) return null;
     throw err;
   }
+  const lines = (a.balances as any[]).filter((b) => b.asset_type !== "liquidity_pool_shares");
+  const nativeLine = lines.find((b) => b.asset_type === "native");
+  return {
+    balances: lines.map((b) => ({
+      asset: b.asset_type === "native" ? "native" : `${b.asset_code}:${b.asset_issuer}`,
+      balance: toStroops(b.balance),
+      limit: b.limit ? toStroops(b.limit) : null,
+      sponsored: Boolean(b.sponsor),
+      sponsor: b.sponsor ?? null,
+    })),
+    subentries: a.subentry_count,
+    sponsoring: a.num_sponsoring ?? 0,
+    sponsored: a.num_sponsored ?? 0,
+    sellingLiabilities: toStroops(nativeLine?.selling_liabilities ?? "0"),
+    accountSponsor: a.sponsor ?? null,
+    signerSponsors: ((a.signers ?? []) as any[]).map((s) => s.sponsor).filter((s): s is string => typeof s === "string"),
+  };
 }
 
 /** "12.3400000" → "123400000". */
@@ -141,13 +179,39 @@ export function fromStroops(n: bigint | string, decimals = 7): string {
 
 // ------------------------------------------------------------------------------------------------ building
 
-export function newTx(source: Account, timeoutSec = 300): TransactionBuilder {
+/** A user's transaction is valid for 10 minutes: long enough to read the review before signing, well inside the
+ *  verifier's 30. Plans bid the network's going rate for inclusion when they build a step (plans.ts). */
+export const USER_TX_TIMEOUT_S = 600;
+
+export function newTx(source: Account, timeoutSec = USER_TX_TIMEOUT_S): TransactionBuilder {
   return new TransactionBuilder(source, { fee: BASE_FEE, networkPassphrase: env.network.passphrase }).setTimeout(timeoutSec);
+}
+
+/** The resource fee a Soroban transaction declares: the simulation's minimum × 1.15 + 50,000 stroops (§4.2), so the
+ *  headroom its resources get below still pays for itself. */
+export function withResourceMargin(minResourceFee: bigint): bigint {
+  return (minResourceFee * 115n + 99n) / 100n + 50_000n;
+}
+
+/** What a simulation found archived: the restore it needs first (§4.9). */
+export interface RestorePreamble {
+  minResourceFee: string;
+  /** SorobanTransactionData, base64. */
+  transactionData: string;
+}
+
+/** A simulation answered with a restore preamble. Plans insert a user-paid restore step for it (plans.ts); anywhere
+ *  else it answers 409 needs_restore. */
+export class NeedsRestore extends ApiError {
+  constructor(readonly preamble: RestorePreamble) {
+    super(409, "needs_restore", "Part of this contract's data is archived. It needs to be restored first.");
+  }
 }
 
 /** Simulates a Soroban transaction and assembles footprint, resources and auth, with headroom: state can move
  *  between simulation and execution (Blend accrues interest every ledger), and a transaction that runs out of
- *  budget fails on-chain (invokeHostFunctionResourceLimitExceeded). The sponsor pays the margin, never the user. */
+ *  budget fails on-chain (invokeHostFunctionResourceLimitExceeded). Instructions get +25% (+100k), bytes +20% (+1k)
+ *  and the resource fee withResourceMargin(); whoever pays the transaction pays the margin. */
 export async function prepare(tx: Transaction): Promise<Transaction> {
   let sim: rpc.Api.SimulateTransactionResponse;
   try {
@@ -160,7 +224,10 @@ export async function prepare(tx: Transaction): Promise<Transaction> {
     throw new ApiError(422, "simulation_failed", simulationMessage(sim.error), { raw: sim.error.slice(0, 600) });
   }
   if (rpc.Api.isSimulationRestore(sim)) {
-    throw new ApiError(409, "needs_restore", "Part of this contract's data is archived. It is being restored; try again in a minute.");
+    throw new NeedsRestore({
+      minResourceFee: sim.restorePreamble.minResourceFee,
+      transactionData: sim.restorePreamble.transactionData.build().toXDR("base64"),
+    });
   }
   const ok = sim as rpc.Api.SimulateTransactionSuccessResponse;
   const data = ok.transactionData;
@@ -171,9 +238,19 @@ export async function prepare(tx: Transaction): Promise<Transaction> {
     Math.ceil(r.diskReadBytes() * 1.2) + 1_000,
     Math.ceil(r.writeBytes() * 1.2) + 1_000,
   );
-  ok.minResourceFee = String(Math.ceil(Number(ok.minResourceFee) * 1.3) + 100_000);
+  const resourceFee = withResourceMargin(BigInt(ok.minResourceFee));
+  data.setResourceFee(resourceFee);
+  ok.minResourceFee = resourceFee.toString();
   ok.transactionData = data;
   return rpc.assembleTransaction(tx, ok).build();
+}
+
+/** A RestoreFootprint transaction from `source` bringing back what a simulation found archived, with prepare()'s
+ *  resource-fee margin. It needs no simulation of its own. */
+export function restoreTx(source: Account, preamble: RestorePreamble, timeoutSec = USER_TX_TIMEOUT_S): Transaction {
+  const data = new SorobanDataBuilder(preamble.transactionData);
+  data.setResourceFee(withResourceMargin(BigInt(preamble.minResourceFee)));
+  return newTx(source, timeoutSec).setSorobanData(data.build()).addOperation(Operation.restoreFootprint({})).build();
 }
 
 /** A read-only contract call (no state change). */
@@ -185,7 +262,7 @@ export async function view(contract: string, fn: string, args: xdr.ScVal[] = [])
   return r.result ? scValToNative(r.result.retval) : undefined;
 }
 
-export async function invoke(source: Account, contract: string, fn: string, args: xdr.ScVal[], timeoutSec = 300): Promise<Transaction> {
+export async function invoke(source: Account, contract: string, fn: string, args: xdr.ScVal[], timeoutSec = USER_TX_TIMEOUT_S): Promise<Transaction> {
   return await prepare(newTx(source, timeoutSec).addOperation(new Contract(contract).call(fn, ...args)).build());
 }
 
@@ -195,6 +272,23 @@ function simulationMessage(raw: string): string {
   if (/balance is not sufficient|insufficient balance|#10\b.*balance|resulting balance is not within/i.test(raw)) return "Not enough balance for this.";
   if (/Error\(Contract, #(\d+)\)/.test(raw)) return `The contract refused this (code ${raw.match(/Error\(Contract, #(\d+)\)/)![1]}).`;
   return "This transaction would fail on-chain right now.";
+}
+
+/** The Soroban resources a transaction declares, or null for a classic one. */
+export function sorobanDataOf(tx: Transaction): xdr.SorobanTransactionData | null {
+  const envelope = tx.toEnvelope();
+  if (envelope.switch() !== xdr.EnvelopeType.envelopeTypeTx()) return null;
+  const ext = envelope.v1().tx().ext();
+  return ext.switch() === 1 ? ext.sorobanData() : null;
+}
+
+/** `tx` bidding `bid` stroops per operation for inclusion, its resource fee unchanged: the same transaction (same
+ *  source, sequence, time bounds, memo and operations) with another fee. Built, never signed. */
+export function withInclusionBid(tx: Transaction, bid: bigint): Transaction {
+  const soroban = sorobanDataOf(tx);
+  const resourceFee = soroban ? BigInt(soroban.resourceFee().toString()) : 0n;
+  if (BigInt(tx.fee) - resourceFee === bid * BigInt(tx.operations.length)) return tx;
+  return TransactionBuilder.cloneFrom(tx, { fee: bid.toString(), ...(soroban ? { sorobanData: soroban } : {}) }).build();
 }
 
 // ------------------------------------------------------------------------------------------------ submitting
@@ -218,43 +312,90 @@ export function signedBy(tx: Transaction, address: string): boolean {
   return tx.signatures.some((s) => Buffer.from(s.hint()).equals(Buffer.from(hint)) && kp.verify(hash, s.signature()));
 }
 
-export interface Submitted {
-  hash: string;
-  innerHash: string;
-  fee: string;
+/** Who pays a transaction being sent (an account outside DyorHQ, such as the faucet's temporary one, is `external`): a
+ *  refusal for its fee means something else to each of them. */
+export type Payer = "user" | "sponsor" | "keeper" | "external";
+
+/** Sends a transaction its user signed and pays for, exactly as signed. Answers its hash. */
+export function sendUserTx(tx: Transaction): Promise<string> {
+  return send(tx, "user");
 }
 
-/** Wraps a user-signed transaction in a fee-bump paid by the sponsor and sends it. */
-export async function feeBumpAndSend(inner: Transaction, maxFee: bigint): Promise<Submitted> {
-  const ops = inner.operations.length;
-  // The fee-bump's per-op rate must be ≥ the inner's; for Soroban the inner fee includes the resource fee, which the
-  // outer fee must cover too. Paying the inner's own total rate (+ one base fee for the outer envelope) does both.
-  const innerFee = BigInt(inner.fee);
-  const rate = (innerFee + BigInt(BASE_FEE) + BigInt(ops)) / BigInt(ops + 1);
-  const baseFee = rate > BigInt(BASE_FEE) ? rate : BigInt(BASE_FEE);
-  const fb = TransactionBuilder.buildFeeBumpTransaction(sponsor(), baseFee.toString(), inner, env.network.passphrase);
+/** Sends a transaction already signed by every party: an activation, the sponsor's fee-bump of a starter swap, the
+ *  keeper's own transactions. */
+export function sendSigned(tx: Transaction | FeeBumpTransaction, payer: Payer = "sponsor"): Promise<string> {
+  return send(tx, payer);
+}
+
+/** The fee-bump in which the sponsor pays a user-signed transaction's fee (the starter swap, §4.3): at the inner
+ *  transaction's own rate per operation, and at most `maxFee` in all (422 fee_too_high otherwise). Signed by the
+ *  sponsor, not sent. */
+export function sponsorFeeBump(inner: Transaction, maxFee: bigint): FeeBumpTransaction {
+  const fb = TransactionBuilder.buildFeeBumpTransaction(sponsor(), feeBumpRate(inner).toString(), inner, env.network.passphrase);
   if (BigInt(fb.fee) > maxFee) {
-    throw new ApiError(422, "fee_too_high", "The network fee for this is above what DyorHQ sponsors right now.", { fee: fb.fee, max: maxFee.toString() });
+    throw new ApiError(422, "fee_too_high", "The network fee for this is above what DyorHQ pays right now.", { fee: fb.fee, max: maxFee.toString() });
   }
   fb.sign(sponsor());
-  const res = await rpcServer().sendTransaction(fb);
-  if (res.status === "ERROR") {
-    const code = res.errorResult?.result().switch().name ?? "unknown";
-    throw new ApiError(422, "tx_rejected", txErrorMessage(code), { code, detail: res.errorResult?.toXDR("base64") });
-  }
-  if (res.status === "TRY_AGAIN_LATER") throw new ApiError(503, "network_busy", "The network is busy. Try again in a few seconds.");
-  return { hash: res.hash, innerHash: inner.hash().toString("hex"), fee: fb.fee };
+  return fb;
 }
 
-/** Sends a transaction already signed by every party (the sponsor's own transactions: relays, keeper calls). */
-export async function sendSigned(tx: Transaction | FeeBumpTransaction): Promise<string> {
+/** The per-operation rate a fee-bump of `inner` pays: the inner transaction's own inclusion rate, at least the base
+ *  fee. The fee-bump then costs that rate × (operations + 1) plus the inner resource fee. */
+function feeBumpRate(inner: Transaction): bigint {
+  const soroban = sorobanDataOf(inner);
+  const resourceFee = soroban ? BigInt(soroban.resourceFee().toString()) : 0n;
+  const ops = BigInt(inner.operations.length);
+  const rate = (BigInt(inner.fee) - resourceFee + ops - 1n) / ops;
+  return rate > BigInt(BASE_FEE) ? rate : BigInt(BASE_FEE);
+}
+
+/** What the sponsor would pay to fee-bump `inner` (sponsorFeeBump), without building it. */
+export function feeBumpFee(inner: Transaction): bigint {
+  const soroban = sorobanDataOf(inner);
+  const resourceFee = soroban ? BigInt(soroban.resourceFee().toString()) : 0n;
+  return feeBumpRate(inner) * BigInt(inner.operations.length + 1) + resourceFee;
+}
+
+async function send(tx: Transaction | FeeBumpTransaction, payer: Payer): Promise<string> {
   const res = await rpcServer().sendTransaction(tx);
   if (res.status === "ERROR") {
-    const code = res.errorResult?.result().switch().name ?? "unknown";
-    throw new ApiError(422, "tx_rejected", txErrorMessage(code), { code });
+    const code = res.errorResult ? resultCode(res.errorResult) : "unknown";
+    throw sendError(code, payer, res.errorResult?.toXDR("base64"));
   }
   if (res.status === "TRY_AGAIN_LATER") throw new ApiError(503, "network_busy", "The network is busy. Try again in a few seconds.");
+  // DUPLICATE: already on its way, which is what was asked.
   return res.hash;
+}
+
+/** A transaction result's code: the inner transaction's for a fee-bump, the first failed operation's after txFailed. */
+export function resultCode(result: xdr.TransactionResult): string {
+  const r = result.result();
+  const name = r.switch().name;
+  if (name === "txFeeBumpInnerFailed" || name === "txFeeBumpInnerSuccess") {
+    return resultCode(r.innerResultPair().result() as unknown as xdr.TransactionResult);
+  }
+  if (name === "txFailed") {
+    for (const op of (r.results() ?? []) as xdr.OperationResult[]) {
+      if (op.switch().name !== "opInner") return op.switch().name;
+      const inner = op.tr().value() as any;
+      const opName = inner?.switch?.().name as string | undefined;
+      if (opName && !/Success$/.test(opName)) return opName;
+    }
+  }
+  return name;
+}
+
+/** The refusal a send error stands for (§6.13). RPC refuses a transaction for its fee before it runs: a fee the user can't
+ *  pay is theirs to fix (409 not_enough_xlm_for_fee), the sponsor running short is DyorHQ's (429 sponsor_limit), and a
+ *  bid the network has outgrown is worth another try. What fails when it runs (an operation's own code) is the
+ *  transaction's settled error instead. */
+function sendError(code: string, payer: Payer, detail?: string): ApiError {
+  if (code === "txInsufficientBalance" || code === "txInsufficientFee") {
+    if (payer === "user") return new ApiError(409, "not_enough_xlm_for_fee", "Not enough XLM for the network fee.", { code });
+    if (code === "txInsufficientFee") return new ApiError(503, "network_busy", "The network fee went up. Try again in a minute.", { code });
+    if (payer === "sponsor") return new ApiError(429, "sponsor_limit", "DyorHQ's free setup is busy today. Try again tomorrow.", { code });
+  }
+  return new ApiError(422, "tx_rejected", txErrorMessage(code), { code, ...(detail ? { detail } : {}) });
 }
 
 function txErrorMessage(code: string): string {
@@ -263,8 +404,6 @@ function txErrorMessage(code: string): string {
       return "This transaction is out of date. It will be rebuilt.";
     case "txTooLate":
       return "This transaction expired before it was sent. It will be rebuilt.";
-    case "txInsufficientFee":
-      return "The network fee went up. Try again.";
     case "txBadAuth":
     case "txFeeBumpInnerFailed":
       return "The signature didn't match. Nothing was sent.";
@@ -278,12 +417,16 @@ export interface Settled {
   ledger?: number;
   feeCharged?: string;
   returnValue?: unknown;
+  /** The TransactionResult, base64: what each operation did (an SDEX swap's amount out is only here). */
+  resultXdr?: string;
   error?: string;
 }
 
 export async function txStatus(hash: string): Promise<Settled> {
   const r = await rpcServer().getTransaction(hash);
   if (r.status === rpc.Api.GetTransactionStatus.NOT_FOUND) return { status: "PENDING" };
+  const result = (r as any).resultXdr as xdr.TransactionResult | undefined;
+  const settled = { ledger: r.ledger, feeCharged: result?.feeCharged().toString(), resultXdr: result?.toXDR("base64") };
   if (r.status === rpc.Api.GetTransactionStatus.SUCCESS) {
     let rv: unknown;
     try {
@@ -291,10 +434,9 @@ export async function txStatus(hash: string): Promise<Settled> {
     } catch {
       rv = undefined;
     }
-    return { status: "SUCCESS", ledger: r.ledger, feeCharged: (r as any).resultXdr?.feeCharged?.().toString(), returnValue: rv };
+    return { status: "SUCCESS", ...settled, returnValue: rv };
   }
-  const code = (r as any).resultXdr?.result?.().switch?.().name ?? "failed";
-  return { status: "FAILED", ledger: r.ledger, error: code };
+  return { status: "FAILED", ...settled, error: result ? resultCode(result) : "failed" };
 }
 
 export async function waitForTx(hash: string, timeoutMs = 45_000): Promise<Settled> {
@@ -307,4 +449,25 @@ export async function waitForTx(hash: string, timeoutMs = 45_000): Promise<Settl
   return { status: "PENDING" };
 }
 
-export { Account, Address, Asset, BASE_FEE, Contract, Keypair, Transaction, TransactionBuilder, xdr };
+// ------------------------------------------------------------------------------------------------ the keeper
+
+export type KeeperJob = "graduate" | "ttl" | "relay";
+
+/** Signs `tx` (built from the keeper's account) with the keeper key, sends it and records it in lite.keeper_log
+ *  (§4.7) with what it was for. Answers its hash. */
+export async function keeperSend(job: KeeperJob, tx: Transaction, detail: Record<string, unknown> = {}): Promise<string> {
+  const k = keeper();
+  tx.sign(k);
+  const hash = await sendSigned(tx, "keeper");
+  try {
+    if (await tableExists("lite.keeper_log")) {
+      await sql()`insert into lite.keeper_log (hash, job, keeper, max_fee, detail)
+                  values (${hash}, ${job}, ${k.publicKey()}, ${tx.fee}, ${sql().json(detail as any)}) on conflict (hash) do nothing`;
+    }
+  } catch (err) {
+    console.warn("keeper_log: not recorded", job, hash, String((err as Error).message ?? err).slice(0, 120));
+  }
+  return hash;
+}
+
+export { Account, Address, Asset, BASE_FEE, Contract, FeeBumpTransaction, Keypair, Operation, SorobanDataBuilder, Transaction, TransactionBuilder, xdr };
