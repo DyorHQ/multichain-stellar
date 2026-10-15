@@ -73,10 +73,13 @@ final class StellarSaved: @unchecked Sendable {
     }
 
     /// Saves `value` as `screen` for `owner`, read at `savedAt`, unless the account was forgotten or the figures erased
-    /// since `epoch`.
+    /// since `epoch`. The check holds the lock until `SavedScreens` has noted the save, so a `forget` on another thread
+    /// comes wholly before it (the save is dropped here) or wholly after it (`SavedScreens.remove` drops or removes it).
     func save<T: Encodable & Sendable>(_ value: T, _ screen: SavedScreens.Screen, owner: Address, savedAt: Date, epoch: Epoch) {
-        guard lock.withLock({ forgets[owner, default: 0] == epoch.forgets }) else { return }
-        screens.save(value, screen, wallet: owner, savedAt: savedAt, epoch: epoch.saved)
+        lock.withLock {
+            guard forgets[owner, default: 0] == epoch.forgets else { return }
+            screens.save(value, screen, wallet: owner, savedAt: savedAt, epoch: epoch.saved)
+        }
     }
 
     /// Removes every screen saved for `owner`; no read that began before this saves anything for it.

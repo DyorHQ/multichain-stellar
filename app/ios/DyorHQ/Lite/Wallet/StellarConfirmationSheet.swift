@@ -59,9 +59,16 @@ struct StellarConfirmationSheet<Details: View>: View {
     @State private var action: PreparedAction?
     @State private var buildError: String?
     @State private var preparing = true
+    /// Where the sheet's own read of the account stands: the preflight, and Confirm, wait for one that went through.
+    @State private var accountCheck = AccountCheck.reading
+    /// Counts the sheet's reads of the account: when two overlap, the later one decides.
+    @State private var accountReads = 0
     /// `onCompleted` fired / `onDone` ran: each once per sheet.
     @State private var completed = false
     @State private var cleanedUp = false
+
+    /// The sheet's read of the account's XLM (§4.6): on appear, and again on return to the app.
+    private enum AccountCheck { case reading, read, failed }
 
     private var store: LiteStore? { stellar?.store }
     private var isPasskey: Bool { session.isPasskeyAccount }
@@ -69,10 +76,12 @@ struct StellarConfirmationSheet<Details: View>: View {
     /// The caller's guard, on the plan built.
     private var checkFailure: LocalizedStringResource? { action.flatMap { check?($0) } }
 
-    /// What the account's XLM can't cover, from its last read (§4.6); nil when it covers the plan or isn't read yet.
+    /// What the account's XLM can't cover (§4.6), once the sheet's own read of the account went through; nil when it covers
+    /// the plan, and until then (Confirm stays off meanwhile).
     private var shortage: StellarXLMShortage? {
-        guard let action, let store, let position = store.account?.xlm.flatMap({ XLMReserve($0) }) else { return nil }
-        return StellarXLMShortage.of(action, position: position, estimates: store.fees, isXLM: { Self.isXLM($0, store: store) })
+        guard accountCheck == .read, let action, let store, let position = store.account?.xlm.flatMap({ XLMReserve($0) }) else { return nil }
+        return StellarXLMShortage.of(fees: action.fees, limits: action.limits, position: position, estimates: store.fees,
+                                     isXLM: { Self.isXLM($0, store: store) })
     }
 
     var body: some View {
@@ -95,6 +104,9 @@ struct StellarConfirmationSheet<Details: View>: View {
                 }
                 if let shortage, !run.isRunning, !run.isDone {
                     shortageSection(shortage)
+                }
+                if action != nil, !run.isRunning, !run.isDone {
+                    accountCheckSection
                 }
                 if let checkFailure, !run.isDone {
                     Section { InlineError(message: checkFailure) }.listRowBackground(Color.clear)
@@ -149,7 +161,8 @@ struct StellarConfirmationSheet<Details: View>: View {
                                 .multilineTextAlignment(.center)
                         }
                         PrimaryButton(title: Text(verbatim: tr(confirmTitle)), isBusy: run.isRunning,
-                                      isDisabled: preparing || action == nil || buildError != nil || checkFailure != nil || shortage != nil) {
+                                      isDisabled: preparing || action == nil || buildError != nil || checkFailure != nil
+                                          || accountCheck != .read || shortage != nil) {
                             Task { await confirm() }
                         }
                     }
@@ -174,21 +187,40 @@ struct StellarConfirmationSheet<Details: View>: View {
         .task {
             do { action = try await build() } catch { buildError = LiteErrorText.describe(error) }
             preparing = false
-            // A fresh read of the account's XLM for the preflight: the review never decides from a stale balance.
-            await store?.refreshAccount()
         }
+        // A fresh read of the account's XLM for the preflight, alongside the plan's build: the review never decides from a
+        // stale balance, or from none.
+        .task { await readAccount() }
         // Back from Deposit, or from anywhere else: the account is read again, and the preflight with it.
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, !run.isRunning, !run.isDone else { return }
-            Task { await store?.refreshAccount() }
+            Task { await readAccount() }
         }
+    }
+
+    /// Reads the account again for the preflight. The store keeps its last figures when a read fails, and says that one
+    /// went through only by moving `LiteStore.updatedAt` (which a holdings read landing meanwhile moves too): Confirm waits
+    /// for that, and a read that failed says so, with Try Again.
+    private func readAccount() async {
+        accountReads += 1
+        let read = accountReads
+        accountCheck = .reading
+        guard let store else {
+            accountCheck = .failed
+            return
+        }
+        let started = Date()
+        await store.refreshAccount()
+        guard read == accountReads else { return }
+        accountCheck = store.updatedAt.map { $0 >= started } == true ? .read : .failed
     }
 
     // MARK: Sections
 
-    /// Each asset the plan enables (a trustline), before the action, with what it holds of the account's XLM.
+    /// Each asset the plan enables (a trustline), before the action, with what it holds of the account's XLM, or, for the
+    /// account's setup as the phone checked it (§4.3), that DyorHQ pays it.
     @ViewBuilder private func enableSection(_ action: PreparedAction) -> some View {
-        let enables = action.plan.steps.filter { Self.kind(of: $0) == "trust" }
+        let enables = action.plan.steps.filter(Self.enables)
         if !enables.isEmpty {
             let reserve = baseReserve.map { StellarFormat.units($0) }
             Section {
@@ -203,11 +235,11 @@ struct StellarConfirmationSheet<Details: View>: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(enables) { step in
-                        if let reserve {
-                            Paragraph(LocalizedStringResource("Stellar holds \(reserve) XLM of your balance while \(Self.code(of: step)) is enabled. It's returned if you remove it.", table: "StellarReview", comment: "The Stellar review, under an asset this transaction enables: the minimum balance Stellar keeps for it. The first value is an amount of XLM (0.5), the second the asset's code (USDC)"))
-                        }
+                        // The setup's reserve is the sponsor's, never the account's balance.
                         if case .dyorHQ(.setup)? = action.fees.step(step.id)?.payer {
                             Paragraph(LocalizedStringResource("DyorHQ pays this reserve.", table: "StellarReview", comment: "The Stellar review on mainnet, under the asset the account's setup enables: DyorHQ pays the XLM Stellar holds for it. DyorHQ is never translated"))
+                        } else if let reserve {
+                            Paragraph(LocalizedStringResource("Stellar holds \(reserve) XLM of your balance while \(Self.code(of: step)) is enabled. It's returned if you remove it.", table: "StellarReview", comment: "The Stellar review, under an asset this transaction enables: the minimum balance Stellar keeps for it. The first value is an amount of XLM (0.5), the second the asset's code (USDC)"))
                         }
                     }
                 }
@@ -274,6 +306,23 @@ struct StellarConfirmationSheet<Details: View>: View {
         .listRowBackground(Color.clear)
     }
 
+    /// The sheet's read of the account, while it is under way or when it failed: Confirm waits for it either way.
+    @ViewBuilder private var accountCheckSection: some View {
+        switch accountCheck {
+        case .reading:
+            Section {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading your balances…").foregroundStyle(.secondary) }
+            }
+        case .failed:
+            Section {
+                InlineError(message: "Couldn’t check your wallet’s balance. Check your connection and try again.")
+                Button("Try Again", systemImage: "arrow.clockwise") { Task { await readAccount() } }
+            }
+        case .read:
+            EmptyView()
+        }
+    }
+
     // MARK: Running
 
     /// The plan, through the store's own task (it goes on if the sheet closes, and settles once): the key provider asks
@@ -310,6 +359,16 @@ struct StellarConfirmationSheet<Details: View>: View {
 
     /// What a step does: its fee kind, or its intent's kind.
     static func kind(of step: PlanStep) -> String? { step.stepKind ?? step.intent?.kind }
+
+    /// Whether a step enables an asset: a trust step, or the account's setup, which enables USDC with the account
+    /// (`activate`, mainnet).
+    static func enables(_ step: PlanStep) -> Bool {
+        switch kind(of: step) {
+        case "trust": true
+        case "activate": !(step.intent?.trust ?? []).isEmpty
+        default: false
+        }
+    }
 
     /// The code of the asset a trust step enables.
     static func code(of step: PlanStep) -> String {
@@ -416,17 +475,18 @@ struct StellarXLMShortage: Equatable {
     /// What the account keeps to stay open.
     let minBalance: Int64
 
-    /// Nil when `position` covers `action`: a built step counts its own fee, an unbuilt one its estimate (`estimates`, or
-    /// the shipped defaults), and DyorHQ's verified steps nothing.
-    static func of(_ action: PreparedAction, position: XLMReserve, estimates: StellarFees?, isXLM: (String) -> Bool) -> StellarXLMShortage? {
+    /// Nil when `position` covers a plan's `fees` and the XLM among its `limits` (`PreparedAction`'s): a built step counts
+    /// its own fee, an unbuilt one its estimate (`estimates`, or the shipped defaults), and DyorHQ's verified steps nothing.
+    static func of(fees plan: PlanFees, limits: [String: Int64], position: XLMReserve, estimates: StellarFees?,
+                   isXLM: (String) -> Bool) -> StellarXLMShortage? {
         var fees: Int64 = 0
-        for step in action.fees.steps where step.payer == .user {
+        for step in plan.steps where step.payer == .user {
             let estimate = step.stepKind.flatMap { estimates?.estimate($0) ?? StellarFeeDefaults.estimate($0) }
             fees = sum(fees, step.built ? step.maxFee : estimate ?? step.maxFee)
         }
-        let spent = action.limits.filter { isXLM($0.key) }.values.reduce(Int64(0)) { sum($0, max(0, $1)) }
+        let spent = limits.filter { isXLM($0.key) }.values.reduce(Int64(0)) { sum($0, max(0, $1)) }
         let payable = sum(fees, spent)
-        let need = sum(payable, position.reserves(action.fees.newReserves))
+        let need = sum(payable, position.reserves(plan.newReserves))
         guard position.spendable < need else { return nil }
         return StellarXLMShortage(fee: position.spendable < payable, need: need, spendable: position.spendable, minBalance: position.minBalance)
     }

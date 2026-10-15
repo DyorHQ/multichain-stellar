@@ -1,9 +1,11 @@
-// The Stellar section's app-side foundations (docs/DESIGN-stellar-parity.md §3.8, §3.9, §3.10, §4.6, §12.2): the review's
-// fee words, checked addresses, the media pipeline's sources, the saved figures and the build's pins and media base.
+// The Stellar section's app-side foundations (docs/DESIGN-stellar-parity.md §3.8, §3.9, §3.10, §4.6, §8.7, §12.2): the
+// review's fee words, enabled assets, XLM preflight and progress, checked addresses, the media pipeline's sources, the
+// saved figures and the build's pins and media base.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
 import StellarKit
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -13,21 +15,38 @@ final class StellarFoundationsTests: XCTestCase {
     /// The API's plan fixture's built step: an Enable USDC transaction declaring 0.001 XLM, from GCLJ….
     private static let trustXDR = "AAAAAgAAAACWkx+5IqHDdKtQ/Z773xUBaGRNzFg8rllQIi8Zjpt54AAAJxAAToEGAAAAAQAAAAEAAAAAas9OLAAAAABqz1CEAAAAAAAAAAEAAAAAAAAABgAAAAFVU0RDAAAAAEI+fQXy7K+/7BkrIVo/G+lq7bjY5wJUq+NBPgIH3layf/////////8AAAAAAAAAAA=="
 
-    private func step(_ id: String, kind: String, built: Bool, intentKind: String = "trust") -> [String: Any] {
+    /// A step of a plan as the API sends it. A built one is `trustXDR`, its intent `intentKind` (`trust`, or the setup's
+    /// `activate`, which enables USDC with the account); one not built yet declares `maxFee` as its ceiling.
+    private func step(_ id: String, kind: String, built: Bool, intentKind: String = "trust", maxFee: String = "500000",
+                      reserveDelta: Int = 0) -> [String: Any] {
         var step: [String: Any] = ["id": id, "label": "Step \(id)", "status": built ? "built" : "pending", "stepKind": kind,
-                                   "maxFee": built ? "10000" : "500000", "feePayer": "user", "reserveDelta": 0]
+                                   "maxFee": built ? "10000" : maxFee, "feePayer": "user", "reserveDelta": reserveDelta]
         if built {
             step["xdr"] = Self.trustXDR
-            step["intent"] = ["kind": intentKind, "summary": "Enable USDC", "spend": [String: String](), "ops": ["changeTrust"],
-                              "trust": ["USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"], "display": ["asset": "USDC"]]
+            let usdc = "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+            let intent: [String: Any] = intentKind == "activate"
+                ? ["kind": intentKind, "summary": "Create your Stellar account (paid by DyorHQ)", "spend": [String: String](),
+                   "ops": ["beginSponsoringFutureReserves", "createAccount", "changeTrust", "endSponsoringFutureReserves"], "trust": [usdc]]
+                : ["kind": intentKind, "summary": "Enable USDC", "spend": [String: String](), "ops": ["changeTrust"], "trust": [usdc],
+                   "display": ["asset": "USDC"]]
+            step["intent"] = intent
         }
         return step
     }
 
-    private func fees(_ steps: [[String: Any]], pinned: PinnedContracts = .testnet) throws -> PlanFees {
+    private func plan(_ steps: [[String: Any]]) throws -> PlanView {
         let json: [String: Any] = ["planId": "p1", "kind": "swap", "expiresAt": "2026-10-14T09:56:00.000Z", "steps": steps]
-        let plan = try JSONDecoder().decode(PlanView.self, from: JSONSerialization.data(withJSONObject: json))
-        return try PlanFees(plan: plan, pinned: pinned)
+        return try JSONDecoder().decode(PlanView.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    private func fees(_ steps: [[String: Any]], pinned: PinnedContracts = .testnet) throws -> PlanFees {
+        try PlanFees(plan: plan(steps), pinned: pinned)
+    }
+
+    /// The pins of a network whose sponsor is the fixture's source, so its setup (`activate`) is one DyorHQ pays.
+    private func sponsorPins() throws -> PinnedContracts {
+        let source = try TransactionEnvelope(base64: Self.trustXDR).transaction.source
+        return PinnedContracts(network: .testnet, sponsor: source, launchTokenWasmHash: "", roles: [:])
     }
 
     func testOneBuiltStepReadsUpToItsFee() throws {
@@ -48,17 +67,122 @@ final class StellarFoundationsTests: XCTestCase {
 
     func testDyorHQPaysOnlyWhatThePhoneChecked() throws {
         // The account's setup, sent from the pinned sponsor: checked on the phone, so the sponsored value.
-        let source = try TransactionEnvelope(base64: Self.trustXDR).transaction.source
-        let sponsored = PinnedContracts(network: .testnet, sponsor: source, launchTokenWasmHash: "", roles: [:])
-        let summary = StellarFeeSummary(try fees([step("s1", kind: "trust", built: true, intentKind: "activate")], pinned: sponsored))
+        let summary = StellarFeeSummary(try fees([step("s1", kind: "activate", built: true, intentKind: "activate")], pinned: sponsorPins()))
         XCTAssertEqual(summary.value, .paidByDyorHQ)
         XCTAssertEqual(StellarFormat.feeSummary(summary), StellarFormat.sponsoredFee)
         XCTAssertTrue(StellarFormat.sponsoredFee.hasSuffix("by DyorHQ"), StellarFormat.sponsoredFee)
         XCTAssertEqual(summary.sponsorReason, .setup)
         // The same transaction from anyone but the pinned sponsor is the user's to pay, whatever the server says.
-        let mine = StellarFeeSummary(try fees([step("s1", kind: "trust", built: true, intentKind: "activate")]))
+        let mine = StellarFeeSummary(try fees([step("s1", kind: "activate", built: true, intentKind: "activate")]))
         XCTAssertEqual(StellarFormat.feeSummary(mine), "Up to 0.001 XLM")
         XCTAssertNil(mine.sponsorReason)
+    }
+
+    func testTheEnableSectionListsTrustStepsAndTheSetupsUSDC() throws {
+        let steps = try plan([step("s1", kind: "activate", built: true, intentKind: "activate"), step("s2", kind: "trust", built: true),
+                              step("s3", kind: "swap_soroswap", built: false), step("s4", kind: "activate", built: false)]).steps
+        typealias Review = StellarConfirmationSheet<EmptyView>
+        // The setup enables USDC with the account; a setup not built yet says nothing it enables, and a swap enables nothing.
+        XCTAssertEqual(steps.filter(Review.enables).map(\.id), ["s1", "s2"])
+        XCTAssertEqual(steps.prefix(2).map(Review.code(of:)), ["USDC", "USDC"])
+        // Only the setup the phone checked is DyorHQ's: "DyorHQ pays this reserve." under it, the user's reserve otherwise.
+        let sponsored = try fees([step("s1", kind: "activate", built: true, intentKind: "activate"), step("s2", kind: "trust", built: true)],
+                                 pinned: sponsorPins())
+        XCTAssertEqual(sponsored.step("s1")?.payer, .dyorHQ(.setup))
+        XCTAssertEqual(sponsored.step("s2")?.payer, .user)
+    }
+
+    // MARK: - Not enough XLM (§4.6)
+
+    /// 1.5 XLM kept (one subentry at a 0.5 XLM base reserve), and `spendable` above it.
+    private func position(spendable: Int64) -> XLMReserve {
+        XLMReserve(balance: 15_000_000 + spendable, baseReserve: 5_000_000, subentries: 1)
+    }
+
+    private func estimates(_ byKind: [String: String]) throws -> StellarFees {
+        let json: [String: Any] = ["network": "testnet", "baseReserve": "5000000", "baseFee": "100",
+                                   "inclusionFee": ["classic": "100", "soroban": "150"], "estimates": byKind, "estimateBasis": [String: String]()]
+        return try JSONDecoder().decode(StellarFees.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    private func shortage(_ plan: PlanFees, limits: [String: Int64] = [:], spendable: Int64, estimates: StellarFees? = nil) -> StellarXLMShortage? {
+        StellarXLMShortage.of(fees: plan, limits: limits, position: position(spendable: spendable), estimates: estimates, isXLM: { $0 == "XLM" })
+    }
+
+    func testThePreflightCountsFeesXLMSpentAndNewReserves() throws {
+        // A built step's own fee (0.001 XLM) and its trustline's reserve, a step not built yet at its estimate, and the XLM
+        // the plan spends; another asset's spend isn't XLM.
+        let plan = try fees([step("s1", kind: "trust", built: true, reserveDelta: 1), step("s2", kind: "swap_soroswap", built: false)])
+        let limits: [String: Int64] = ["XLM": 20_000_000, "USDC": 99_000_000]
+        let quoted = try estimates(["swap_soroswap": "700000"])
+        let payable: Int64 = 10_000 + 700_000 + 20_000_000
+        let need = payable + 5_000_000
+        XCTAssertNil(shortage(plan, limits: limits, spendable: need, estimates: quoted), "exactly enough")
+
+        // The reserve alone breaks it: Stellar's minimum balance.
+        let reserve = try XCTUnwrap(shortage(plan, limits: limits, spendable: need - 1, estimates: quoted))
+        XCTAssertEqual(reserve, StellarXLMShortage(fee: false, need: need, spendable: need - 1, minBalance: 15_000_000))
+        // The fee and the XLM spent can't be paid: the network fee.
+        let fee = try XCTUnwrap(shortage(plan, limits: limits, spendable: payable - 1, estimates: quoted))
+        XCTAssertTrue(fee.fee)
+        XCTAssertEqual(fee.need, need)
+
+        // Before `/v1/fees` is read, the shipped defaults price the step not built yet (0.05 XLM for a Soroswap swap).
+        XCTAssertEqual(shortage(plan, limits: limits, spendable: 0)?.need, 10_000 + 500_000 + 20_000_000 + 5_000_000)
+        // A kind with no estimate anywhere counts its ceiling.
+        let unknown = try fees([step("s1", kind: "launch_mystery", built: false, maxFee: "900000")])
+        XCTAssertEqual(shortage(unknown, spendable: 0)?.need, 900_000)
+    }
+
+    func testThePreflightLeavesOutWhatDyorHQPays() throws {
+        // The setup the phone checked is the sponsor's: nothing for the account to cover.
+        let setup = [step("s1", kind: "activate", built: true, intentKind: "activate")]
+        XCTAssertNil(shortage(try fees(setup, pinned: sponsorPins()), spendable: 0))
+        // The same step from anyone else is the user's: its fee counts.
+        XCTAssertEqual(shortage(try fees(setup), spendable: 0), StellarXLMShortage(fee: true, need: 10_000, spendable: 0, minBalance: 15_000_000))
+    }
+
+    // MARK: - Progress (§8.7)
+
+    func testASeedAccountsRowDoesntChangeWhenItsStepIsSigned() {
+        var progress = StellarPlanProgress()
+        progress.apply(.building(stepId: "s1", label: "Step s1"), title: "Swap", passkey: false)
+        progress.apply(.signing(stepId: "s1", label: "Step s1"), title: "Swap", passkey: false)
+        // Its one App Lock prompt, if any, came at Confirm.
+        XCTAssertEqual(progress.steps, [.preparing("Swap")])
+        XCTAssertFalse(progress.reachedNetwork)
+        progress.apply(.submitted(stepId: "s1", hash: "h1"), title: "Swap", passkey: false)
+        XCTAssertEqual(progress.steps, [.sent("Swap", hash: "h1")])
+        XCTAssertTrue(progress.reachedNetwork)
+        progress.apply(.confirmed(stepId: "s1", hash: "h1"), title: "Swap", passkey: false)
+        XCTAssertEqual(progress.steps, [.confirmed("Swap", hash: "h1")])
+
+        // A step signed before any other event shows as being prepared.
+        progress.apply(.signing(stepId: "s2", label: "Step s2"), title: "Enable USDC", passkey: false)
+        XCTAssertEqual(progress.steps, [.confirmed("Swap", hash: "h1"), .preparing("Enable USDC")])
+    }
+
+    func testAPasskeyAccountsRowWaitsOnItsPasskey() {
+        var progress = StellarPlanProgress()
+        progress.apply(.building(stepId: "s1", label: "Step s1"), title: "Swap", passkey: true)
+        progress.apply(.signing(stepId: "s1", label: "Step s1"), title: "Swap", passkey: true)
+        XCTAssertEqual(progress.steps, [.confirming("Swap")])
+        XCTAssertFalse(progress.reachedNetwork)
+    }
+
+    func testARowNeverGoesBackAndRowsKeepTheOrderTheirStepsStarted() {
+        var progress = StellarPlanProgress()
+        progress.apply(.building(stepId: "s1", label: "Step s1"), title: "Enable USDC", passkey: true)
+        progress.apply(.submitted(stepId: "s1", hash: "h1"), title: "Enable USDC", passkey: true)
+        // Events that arrive late leave the furthest row.
+        progress.apply(.signing(stepId: "s1", label: "Step s1"), title: "Enable USDC", passkey: true)
+        progress.apply(.building(stepId: "s1", label: "Step s1"), title: "Enable USDC", passkey: true)
+        XCTAssertEqual(progress.steps, [.sent("Enable USDC", hash: "h1")])
+
+        progress.apply(.building(stepId: "s2", label: "Step s2"), title: "Swap", passkey: true)
+        progress.apply(.confirmed(stepId: "s1", hash: "h1"), title: "Enable USDC", passkey: true)
+        progress.apply(.submitted(stepId: "s1", hash: "h1"), title: "Enable USDC", passkey: true)
+        XCTAssertEqual(progress.steps, [.confirmed("Enable USDC", hash: "h1"), .preparing("Swap")])
     }
 
     func testAmountsAndFeesAreWrittenAsTheAppWritesThem() {
@@ -187,9 +311,8 @@ final class StellarFoundationsTests: XCTestCase {
     }
 
     /// Waits until every save asked for so far is written: saves are written in order, so a later one that lands says
-    /// the earlier ones were dealt with.
-    private func settle(_ saved: StellarSaved) async throws {
-        let marker = Address(data: Data(repeating: 9, count: 20))!
+    /// the earlier ones were dealt with. It saves `marker`'s My Launchpad to tell.
+    private func settle(_ saved: StellarSaved, marker: Address = Address(data: Data(repeating: 9, count: 20))!) async throws {
         let stamp = Int.random(in: 1...Int.max)
         saved.save(Figures(total: stamp), .myLaunchpad, owner: marker, savedAt: Date(), epoch: saved.epoch(for: marker))
         for _ in 0..<200 {
@@ -254,10 +377,12 @@ final class StellarFoundationsTests: XCTestCase {
         let account = Address(data: Data((0..<20).map { _ in UInt8.random(in: 0...255) }))!
         let saved = StellarSaved.shared
         saved.save(Figures(total: 3), .home, owner: account, savedAt: Date(), epoch: saved.epoch(for: account))
-        try await settle(saved)
+        // The account's own marker, which the forget erases with the rest: the app's real folder keeps nothing of the test.
+        try await settle(saved, marker: account)
         XCTAssertEqual(saved.load(Figures.self, .home, owner: account)?.value, Figures(total: 3))
         DyorHQLiteKeys.forget(evm: account)
         XCTAssertNil(saved.load(Figures.self, .home, owner: account))
+        XCTAssertNil(saved.load(Figures.self, .myLaunchpad, owner: account))
     }
 
     // MARK: - Text tables (§10)

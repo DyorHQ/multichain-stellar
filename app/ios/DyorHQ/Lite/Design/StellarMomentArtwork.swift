@@ -15,11 +15,15 @@ struct StellarMomentArtwork: View {
     /// The Moment's name, for its letters.
     let name: String
 
+    /// Moment art keeps the full caps at every size, as on Monad: where no rendered copy is served (a Debug build, which
+    /// loads originals only, and a gif), a row's thumbnail is decoded from the creator's original, up to the 5 MB
+    /// `lite-media` takes, rather than refused by the logo-sized caps.
+    static let caps = RemoteMedia.caps(forThumbnail: ImageSizeBucket.largest)
+
     /// Warms the picture a card `side` points across will ask for — the same sources, size bucket and caps as `body` —
     /// ahead of the board's scroll (`BoardPrefetch`, `ImagePipeline.prefetch`).
     @MainActor static func prefetch(image: String?, side: CGFloat) {
-        let bucket = ImageSizeBucket.bucket(points: side)
-        RemoteImageLoader.shared.prefetch(StellarImages.sources(image, pointSize: side), bucket: bucket, caps: RemoteMedia.caps(forThumbnail: bucket))
+        RemoteImageLoader.shared.prefetch(StellarImages.sources(image, pointSize: side), bucket: ImageSizeBucket.bucket(points: side), caps: caps)
     }
 
     var body: some View {
@@ -27,7 +31,7 @@ struct StellarMomentArtwork: View {
             let side = max(frame.size.width, frame.size.height)
             Group {
                 if side > 0 {
-                    RemoteImage(sources: StellarImages.sources(image, pointSize: side), pointSize: side) { loading in
+                    RemoteImage(sources: StellarImages.sources(image, pointSize: side), pointSize: side, caps: Self.caps) { loading in
                         if loading { ZStack { Color(.tertiarySystemFill); ImageLoadingSpinner() } } else { placeholder }
                     }
                 } else {
