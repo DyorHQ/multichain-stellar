@@ -1,10 +1,11 @@
 // LiteHarness: runs DyorHQ's Stellar screens on their own, for internal testers, without the DyorHQ app.
-// Its account is a 24-word phrase generated on first launch and kept in the Keychain (this device only); the same
-// SEP-5 account opens in DyorHQ from that phrase. It plays the host the app plays: it owns the account's `LiteSession`,
-// draws a header and a network chip for Stellar Home, and shows the setup run (the invite and account-setup steps,
-// which the app shows in its network sheet).
+// Its account is a 24-word phrase generated on first launch and kept in the Keychain (this device only), with the
+// Stellar seed it derives; the same SEP-5 account opens in DyorHQ from that phrase. It plays the host the app plays: it
+// owns the account's `LiteSession` (a seed account: the sign-in is silent, and Face ID comes once per confirmed action),
+// draws a header and a network chip for Stellar Home, and shows the setup run (the invite and account-setup steps, which
+// the app shows in its network sheet). Nothing locks (decision 6).
 import DyorLite
-import LocalAuthentication
+import Security
 import StellarKit
 import SwiftUI
 
@@ -38,9 +39,13 @@ struct HarnessRoot: View {
                 }
             }
         }
-        // The signer a setup run holds never outlives the app's time on screen.
+        // The session renews while the app is in front; nothing secret is held when it leaves.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { session?.appDidEnterBackground() }
+            switch phase {
+            case .active: session?.appDidBecomeActive()
+            case .background: session?.appDidEnterBackground()
+            default: break
+            }
         }
         .alert("Monad lives in the DyorHQ app", isPresented: $monadNote) {
             Button("OK", role: .cancel) {}
@@ -53,13 +58,6 @@ struct HarnessRoot: View {
         LiteChrome(
             header: { context in AnyView(HarnessHeader(context: context)) },
             networkChip: { AnyView(HarnessChip { setup = true }) },
-            unlock: {
-                // As the app does: run the setup inline; if it stops for the user, show the steps.
-                Task {
-                    await session.run()
-                    if session.state != .ready { setup = true }
-                }
-            },
             switchToMonad: { monadNote = true }
         )
     }
@@ -146,7 +144,7 @@ struct HarnessSetupView: View {
                     }
                 case .running:
                     Section { ProgressView().frame(maxWidth: .infinity) }
-                case .idle, .locked:
+                case .idle:
                     Section { Button("Start") { Task { await session.run() } } }
                 case .ready, .waiting:
                     EmptyView()
@@ -170,10 +168,10 @@ struct HarnessSetupView: View {
 
     private func title(_ step: LiteSession.Step) -> String {
         switch step {
-        case .unlock: "Unlock your Stellar key"
         case .signIn: "Sign in"
         case .invite: "Enter your invite code"
         case .setUp: "Set up your Stellar account"
+        default: ""
         }
     }
 
@@ -219,7 +217,8 @@ struct InviteView: View {
     }
 }
 
-/// Creates the Stellar account (DyorHQ pays) and enables USDC: one tap, the run's own key.
+/// Creates the Stellar account (Friendbot on testnet) and enables USDC: one tap, with Face ID once for the Enable USDC
+/// transaction, whose fee and reserve are the account's own.
 struct ActivationView: View {
     let session: LiteSession
 
@@ -233,8 +232,16 @@ struct ActivationView: View {
         } header: {
             Text("Set up your Stellar account")
         } footer: {
-            Text("Creates your account and adds USDC. DyorHQ pays the network fees and the reserve, so you spend nothing. On testnet you also get 10,000 test XLM.")
+            Text(price)
         }
+    }
+
+    /// What Enable USDC costs, as the session priced it: its estimate until the step is built, then its own fee.
+    private var price: String {
+        let base = "Creates your test account with test XLM from Stellar's testnet faucet, then enables USDC."
+        guard let fee = session.setupFee, let reserve = session.baseReserve else { return base }
+        let holds = StellarAmount.format(reserve * Int64(max(1, fee.newReserves)))
+        return base + " Holds \(holds) XLM · network fee up to \(StellarAmount.format(fee.userMax)) XLM, paid from your test XLM."
     }
 }
 
@@ -249,28 +256,27 @@ enum HarnessConfig {
 enum HarnessAccount {
     private static let slot = "harness-entropy"
 
-    /// The harness account's session: its phrase unlocks with the device owner's check, once per setup run.
+    /// The harness account's session: a seed account, whose sign-in is silent and whose actions ask Face ID once each.
     @MainActor
     static func session() -> LiteSession {
         let keys = provider()
-        return LiteSession(env: HarnessConfig.environment, stellarAddress: keys.address, monad: nil, keys: keys) { reason in
-            LiteSession.UnlockResult(keys: keys, signer: try await keys.signer(reason: reason))
-        }
+        return LiteSession(env: HarnessConfig.environment, stellarAddress: keys.address, monad: nil, keys: keys)
     }
 
-    static func provider() -> PhraseKeyProvider {
+    /// The harness account's key: its phrase's entropy, and the Stellar seed the phrase derives (SEP-5), both in the
+    /// Keychain. App Lock always applies here: every confirmed action asks for Face ID once.
+    static func provider() -> StoredSeedKeyProvider {
         let entropy = StellarKeychain.seed(account: slot, network: "testnet") ?? {
             var bytes = [UInt8](repeating: 0, count: 32)
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, &bytes)
             try? StellarKeychain.saveSeed(bytes, account: slot, network: "testnet")
             return bytes
         }()
-        let phrase = Mnemonic.phrase(entropy: entropy) ?? ""
-        let address = (try? StellarDerivation.sep5(mnemonic: phrase).address) ?? ""
-        return PhraseKeyProvider(address: address, methodLabel: "Test phrase (this device)") { reason in
-            let ctx = LAContext()
-            _ = try await ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
-            return phrase
+        let signer = Mnemonic.phrase(entropy: entropy).flatMap { try? StellarDerivation.sep5(mnemonic: $0) }
+        let address = signer?.address ?? ""
+        if let signer, StellarKeychain.seed(account: address, network: "testnet") == nil, let seed = try? StrKey.decode(.seed, signer.secret) {
+            try? StellarKeychain.saveSeed(seed, account: address, network: "testnet")
         }
+        return StoredSeedKeyProvider(address: address, methodLabel: "Test phrase (this device)", network: "testnet", appLock: { true })
     }
 }

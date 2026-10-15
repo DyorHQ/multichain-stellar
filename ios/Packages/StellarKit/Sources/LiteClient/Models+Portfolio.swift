@@ -83,6 +83,9 @@ public struct StellarHoldings: Codable, Equatable, Sendable {
     public let change24h: Change
     /// "ok" or "failed", by part: "spot", "earn", "launch", "moments".
     public let parts: [String: String]
+    /// "owner" (the session's own account) or "public" (the viewer's account, without a session: on-chain facts only,
+    /// DyorHQ's history nil). Nil from older servers.
+    public let view: String?
 }
 
 /// A section's figures over a period, in USD at today's prices. Network fees are counted apart, never in `fees`.

@@ -22,7 +22,7 @@ struct LiteEarnView: View {
                     LiteParagraph(tr("Your deposits are lent through Blend, a Stellar lending protocol. Rates move with demand. Withdrawals need the pool to have free liquidity."))
                 }
                 Section(tr("Markets")) {
-                    ForEach(store.markets) { m in
+                    ForEach(store.earnMarkets) { m in
                         Button { selected = m } label: {
                             HStack(spacing: 12) {
                                 AssetBadge(code: m.code)
@@ -43,7 +43,7 @@ struct LiteEarnView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    if store.markets.isEmpty {
+                    if store.earnMarkets.isEmpty {
                         if store.failed.contains(.earn) {
                             LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
                         } else {
@@ -57,7 +57,7 @@ struct LiteEarnView: View {
             }
             .navigationTitle(tr("Earn"))
             .refreshable { await store.refreshEarn() }
-            .task { if store.markets.isEmpty { await store.refreshEarn() } }
+            .task { if store.earnMarkets.isEmpty { await store.refreshEarn() } }
             .sheet(item: $selected) { EarnMarketSheet(market: $0) }
         }
     }
@@ -133,7 +133,7 @@ struct EarnMarketSheet: View {
                     Task {
                         busy = true
                         defer { busy = false }
-                        do { prepared = try await store.earnPlan(deposit: deposit, market: market, amount: StellarAmount.parse(amount) ?? 0) } catch { self.error = describe(error) }
+                        do { prepared = try await store.earnPlan(deposit: deposit, market: market, amount: StellarAmount.parse(amount) ?? 0) } catch { self.error = LiteErrorText.describe(error) }
                     }
                 }
                 .padding()

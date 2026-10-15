@@ -81,14 +81,15 @@ final class LiteL10nTests: XCTestCase {
         XCTAssertEqual(tr("Testnet"), "Testnet")
         XCTAssertEqual(tr("\(1) trades"), "1 trade")
         XCTAssertEqual(tr("\(12) trades"), "12 trades")
-        XCTAssertEqual(tr("Unlock with \("Face ID")"), "Unlock with Face ID")
+        XCTAssertEqual(tr("Sign in to \("Anchor")"), "Sign in to Anchor")
         XCTAssertEqual(tr("95% goes to the creator. Your edition carries a 5% creator royalty for future sales."),
                        "95% goes to the creator. Your edition carries a 5% creator royalty for future sales.", "a percent sign stays one")
         XCTAssertEqual(tr("\(42)% to graduation"), "42% to graduation")
         XCTAssertEqual(LiteL10n.string(LocalizedStringResource("activity.done", defaultValue: "Done", bundle: LiteL10n.lite)), "Done")
 
         LiteL10n.locale = Locale(identifier: "fr_FR")
-        XCTAssertEqual(tr("Unlock with \("Face ID")"), "Déverrouiller avec Face ID")
+        XCTAssertEqual(tr("Sign in to \("Anchor")"), "Se connecter à Anchor")
+        XCTAssertEqual(LiteSession.Failure.cancelled.errorDescription, "Pas terminé. Réessayez.")
         XCTAssertEqual(tr("\(1) trades"), "1 transaction")
         XCTAssertEqual(tr("\(3) trades"), "3 transactions")
         XCTAssertEqual(tr("\(42)% to graduation"), "42% vers la graduation")
@@ -118,6 +119,6 @@ final class LiteL10nTests: XCTestCase {
         XCTAssertTrue(LiteWordWrap.keepsWordsWhole(Locale(identifier: "ko_KR").language))
         XCTAssertFalse(LiteWordWrap.keepsWordsWhole(Locale(identifier: "en_US").language))
         XCTAssertEqual(LiteWordWrap.lines(of: "잠금 해제하면  Stellar 잔액을\n볼 수 있어요."), [["잠금", "해제하면", "Stellar", "잔액을"], ["볼", "수", "있어요."]])
-        XCTAssertEqual(LiteWordWrap.lines(of: "Unlock with Face ID"), [["Unlock", "with", "Face ID"]], "Apple's names stay whole")
+        XCTAssertEqual(LiteWordWrap.lines(of: "Confirm with Face ID"), [["Confirm", "with", "Face ID"]], "Apple's names stay whole")
     }
 }

@@ -4,10 +4,10 @@ import SwiftUI
 /// The Stellar screens: Home · Earn · Launch · Moments, in DyorHQ's own look (the host's tokens, header and chip).
 /// The host shows it in place of Monad's tabs while the account is on Stellar, and keeps the selection.
 ///
-/// It follows the session: ready → the four tabs with the account's figures; locked → Home with the locked card
-/// (the other tabs say to unlock); unavailable → Home with the paused card. Each time it appears it looks at a session
-/// that isn't ready or mid-run again without a prompt (`resumeAtLaunch()`), and a ready one shows its last figures at
-/// once and reads them again (spec §2.6 rule 6).
+/// It follows the session: ready → the four tabs with the account's figures; unavailable → Home with the paused card;
+/// still opening → a spinner. Nothing on Stellar locks (decision 6). Each time it appears it looks again, without a
+/// prompt, at a session that isn't ready or mid-run (`resumeAtLaunch()`), and a ready one shows its last figures at once
+/// and reads them again (spec §2.6 rule 6).
 @MainActor
 public struct LiteRootView: View {
     private let session: LiteSession
@@ -57,21 +57,13 @@ public struct LiteRootView: View {
     }
 }
 
-/// Earn, Launch or Moments while the session is locked, paused or still opening: what Home's card says, with its
-/// button.
+/// Earn, Launch or Moments while the session is paused or still opening: what Home's card says, with its button.
 struct LiteRestingTab: View {
     let session: LiteSession
     @Environment(\.liteChrome) private var chrome
 
     var body: some View {
         switch session.home {
-        case .locked:
-            ContentUnavailableView {
-                Label(tr("Unlock to see your Stellar balance."), systemImage: "lock.fill")
-            } actions: {
-                LitePrimaryButton(title: tr("Unlock with \(LiteBiometrics.promptName)"), busy: session.state == .running, action: chrome.unlock)
-                    .fixedSize()
-            }
         case .paused(let failure):
             ContentUnavailableView {
                 Label(failure.errorDescription ?? "", systemImage: "pause.circle")
