@@ -1,6 +1,180 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ %@ to %@" : {
+      "comment" : "A notification after a send on Stellar: %1$@ %2$@ is the amount and its asset, %3$@ where it went (a short address, or a cash provider's name).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ a %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ à %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%3$@에 %1$@ %2$@ 보냄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 至 %3$@"
+          }
+        }
+      }
+    },
+    "%@ %@ · Blend" : {
+      "comment" : "A notification after an Earn deposit or withdrawal: %@ %@ is the amount and its asset. Blend is the lending protocol's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · Blend"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · Blend"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · Blend"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ · Blend"
+          }
+        }
+      }
+    },
+    "%@ failed on the network (%@)." : {
+      "comment" : "An error: a step of a transaction failed on Stellar; %1$@ is the step, %2$@ the network's own code for why.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ falló en la red (%2$@)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ a échoué sur le réseau (%2$@)."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 단계가 네트워크에서 실패했습니다(%2$@)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 在网络上失败（%2$@）。"
+          }
+        }
+      }
+    },
+    "%@ failed on the network." : {
+      "comment" : "An error: a step of a transaction failed on Stellar; %@ is the step.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ falló en la red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ a échoué sur le réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 단계가 네트워크에서 실패했습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 在网络上失败。"
+          }
+        }
+      }
+    },
+    "%@ graduated" : {
+      "comment" : "A notification's title: a coin moved to its Soroswap pool; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ se graduó"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ gradué"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已毕业"
+          }
+        }
+      }
+    },
+    "%@ was sent; confirmation not seen yet." : {
+      "comment" : "An error: a step was sent to Stellar, but its confirmation hasn't been seen yet; %@ is the step.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ se envió; aún no se ve la confirmación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ a été envoyé ; confirmation pas encore reçue."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 단계를 보냈지만 아직 확인되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已发送；尚未看到确认。"
+          }
+        }
+      }
+    },
     "%@ · %lld collected" : {
       "comment" : "A Moment tile's caption: %@ is its price with its asset (“1.5 USDC”), the number how many editions were collected (an open edition, with no maximum).",
       "localizations" : {
@@ -155,6 +329,89 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld 份"
+          }
+        }
+      }
+    },
+    "%lld editions · %@" : {
+      "comment" : "A notification after a Moment collect: the number of editions, then what they cost (an amount and its asset).",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edition · %2$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld editions · %2$@"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld edición · %2$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld ediciones · %2$@"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld édition · %2$@"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld éditions · %2$@"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "에디션 %1$lld개 · %2$@"
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%1$lld 份 · %2$@"
+                }
+              }
+            }
           }
         }
       }
@@ -342,6 +599,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "95% 归创作者。你的版本在今后转售时附带 5% 的创作者版税。"
+          }
+        }
+      }
+    },
+    "A video needs its cover frame." : {
+      "comment" : "An error when publishing a video Moment: its first frame, which becomes the NFT's image, couldn't be read.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un vídeo necesita su fotograma de portada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une vidéo a besoin de son image de couverture."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동영상에는 표지 프레임이 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频需要封面帧。"
           }
         }
       }
@@ -810,6 +1096,35 @@
         }
       }
     },
+    "Bought %@" : {
+      "comment" : "A notification's title: a coin was bought on its curve; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compraste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Achat de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 매수"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已买入 %@"
+          }
+        }
+      }
+    },
     "Bridge" : {
       "comment" : "[tight] A noun: the Stellar Home action that moves USDC between Monad and Stellar, and its sheet's title.",
       "localizations" : {
@@ -1129,6 +1444,35 @@
         }
       }
     },
+    "Claim it on Monad once Circle confirms." : {
+      "comment" : "A notification after USDC left Stellar for Monad: the user claims it on Monad once Circle (the bridge) confirms it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclámalo en Monad cuando Circle lo confirme."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réclamez-le sur Monad une fois que Circle l'a confirmé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Circle이 확인하면 Monad에서 수령하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Circle 确认后在 Monad 上领取。"
+          }
+        }
+      }
+    },
     "Claim on Monad" : {
       "comment" : "A button in the bridge: receive the USDC on Monad. Monad is a network's name.",
       "localizations" : {
@@ -1361,6 +1705,64 @@
         }
       }
     },
+    "Collected %@" : {
+      "comment" : "A notification's title: editions of a Moment were collected; %@ is its title.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coleccionaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ collecté"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수집"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏 %@"
+          }
+        }
+      }
+    },
+    "Collected %@ creator fees" : {
+      "comment" : "A notification's title: a coin's creator fees were claimed; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobraste las comisiones del creador de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais du créateur %@ collectés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 크리에이터 수수료 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取 %@ 创作者费用"
+          }
+        }
+      }
+    },
     "Confirm" : {
       "comment" : "The review sheet's button that signs and sends (a verb).",
       "localizations" : {
@@ -1386,6 +1788,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "确认"
+          }
+        }
+      }
+    },
+    "Confirm %@" : {
+      "comment" : "The Face ID prompt's reason when a Stellar transaction is confirmed: %@ is its title (“Swap”).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirmer %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 확인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认%@"
           }
         }
       }
@@ -1478,7 +1909,7 @@
       }
     },
     "Couldn't set up your Stellar account. Nothing was spent." : {
-      "comment" : "An error: setting up the Stellar account failed. DyorHQ pays the fees, so nothing left the user's account.",
+      "comment" : "An error: setting up the Stellar account failed before anything was sent, so nothing was spent.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -1535,31 +1966,31 @@
         }
       }
     },
-    "Creates your Stellar account. Paid by DyorHQ." : {
-      "comment" : "The review sheet: what a step does.",
+    "Creates your Stellar account." : {
+      "comment" : "The review sheet: what a step does (it creates the account).",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crea tu cuenta de Stellar. DyorHQ paga el costo."
+            "value" : "Crea tu cuenta de Stellar."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Crée votre compte Stellar. Payé par DyorHQ."
+            "value" : "Crée votre compte Stellar."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stellar 계정을 만들어요. 비용은 DyorHQ가 부담해요."
+            "value" : "Stellar 계정을 만들어요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "创建你的 Stellar 账户。费用由 DyorHQ 支付。"
+            "value" : "创建你的 Stellar 账户。"
           }
         }
       }
@@ -1709,6 +2140,35 @@
         }
       }
     },
+    "DyorHQ doesn't support that token on Stellar." : {
+      "comment" : "An error: the token chosen isn't one DyorHQ supports on Stellar.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ no admite ese token en Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ ne prend pas en charge ce jeton sur Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 Stellar에서 이 토큰을 지원하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 不支持 Stellar 上的该代币。"
+          }
+        }
+      }
+    },
     "DyorHQ on Stellar is paused for maintenance. Monad is unaffected." : {
       "comment" : "Stellar Home's card and the setup's error while DyorHQ pauses its Stellar features. Monad and Stellar are network names.",
       "localizations" : {
@@ -1734,6 +2194,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Stellar 上的 DyorHQ 正在维护，暂停使用。Monad 不受影响。"
+          }
+        }
+      }
+    },
+    "DyorHQ on Stellar sent an answer this version can't read. Try again, or update DyorHQ." : {
+      "comment" : "An error: the server's answer couldn't be read by this version of the app.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ en Stellar envió una respuesta que esta versión no puede leer. Vuelve a intentarlo o actualiza DyorHQ."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ sur Stellar a envoyé une réponse que cette version ne sait pas lire. Réessayez ou mettez à jour DyorHQ."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar의 DyorHQ가 이 버전에서 읽을 수 없는 응답을 보냈습니다. 다시 시도하거나 DyorHQ를 업데이트하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 上的 DyorHQ 返回了此版本无法读取的应答。重试，或更新 DyorHQ。"
+          }
+        }
+      }
+    },
+    "DyorHQ's free setup is busy today. Try again tomorrow." : {
+      "comment" : "An error: DyorHQ's free account setup reached today's limit.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La configuración gratuita de DyorHQ está saturada hoy. Vuelve a intentarlo mañana."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La configuration gratuite de DyorHQ est saturée aujourd'hui. Réessayez demain."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오늘은 DyorHQ의 무료 설정 요청이 많습니다. 내일 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 的免费设置今天已满。明天再试。"
           }
         }
       }
@@ -1941,31 +2459,176 @@
         }
       }
     },
-    "Enables an asset on your account. The reserve is paid by DyorHQ." : {
-      "comment" : "The review sheet: what a step does. The reserve: the XLM a Stellar account must hold for each asset it enables.",
+    "Enable %@ first." : {
+      "comment" : "An error: the asset must be enabled on the account first (a Stellar trustline); %@ is its code.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Activa un activo en tu cuenta. La reserva la paga DyorHQ."
+            "value" : "Activa %@ primero."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Active un actif sur votre compte. La réserve est payée par DyorHQ."
+            "value" : "Activez d'abord %@."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "계정에서 자산을 사용할 수 있게 해요. 준비금은 DyorHQ가 부담해요."
+            "value" : "먼저 %@ 사용을 설정하십시오."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "在你的账户中启用一种资产。储备金由 DyorHQ 支付。"
+            "value" : "先启用 %@。"
+          }
+        }
+      }
+    },
+    "Enable USDC" : {
+      "comment" : "The Face ID or passkey prompt's reason for the setup's Enable USDC transaction. USDC is a coin's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar USDC"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer USDC"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC 사용 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 USDC"
+          }
+        }
+      }
+    },
+    "Enable this token first." : {
+      "comment" : "An error: the asset must be enabled on the account first (a Stellar trustline; the server didn't say which).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activa este token primero."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activez d'abord ce jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 이 토큰 사용을 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先启用此代币。"
+          }
+        }
+      }
+    },
+    "Enabled %@" : {
+      "comment" : "A notification's title: an asset was enabled on the Stellar account; %@ is its code.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ activé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 사용 설정 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已启用 %@"
+          }
+        }
+      }
+    },
+    "Enables an asset on your account. Stellar holds some of your XLM while it is enabled." : {
+      "comment" : "The review sheet: what an Enable step does. XLM is Stellar's coin; the network keeps some of it while the asset is enabled.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activa un activo en tu cuenta. Stellar retiene parte de tu XLM mientras esté activado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Active un actif sur votre compte. Stellar bloque une partie de vos XLM tant qu'il est activé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정에서 자산을 사용하도록 설정해요. 설정되어 있는 동안 Stellar가 XLM 일부를 보관해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的账户中启用一项资产。启用期间，Stellar 会保留你的部分 XLM。"
+          }
+        }
+      }
+    },
+    "Enter your invite code to continue." : {
+      "comment" : "An error: a first sign-in needs an invite code.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Introduce tu código de invitación para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez votre code d'invitation pour continuer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계속하려면 초대 코드를 입력하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入你的邀请码以继续。"
           }
         }
       }
@@ -2082,6 +2745,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "获取价格"
+          }
+        }
+      }
+    },
+    "Get test XLM" : {
+      "comment" : "An Activity row: the testnet faucet gave the account test XLM, amount not known. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtener XLM de prueba"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenir des XLM de test"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트 XLM 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取测试 XLM"
           }
         }
       }
@@ -2463,6 +3155,35 @@
         }
       }
     },
+    "Launched $%@" : {
+      "comment" : "A notification's title: a coin was launched; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lanzaste $%@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "$%@ lancé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "$%@ 런칭"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发射 $%@"
+          }
+        }
+      }
+    },
     "Launches" : {
       "comment" : "The Stellar search: the section listing launched coins.",
       "localizations" : {
@@ -2575,6 +3296,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "最大"
+          }
+        }
+      }
+    },
+    "Max network fee" : {
+      "comment" : "[tight] The review sheet: the row of the most the network can charge.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisión de red máx."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de réseau max"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최대 네트워크 수수료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最高网络费"
           }
         }
       }
@@ -2956,6 +3706,35 @@
         }
       }
     },
+    "Muxed (M…) addresses aren't supported. Use the G… address and the memo you were given." : {
+      "comment" : "An error: a muxed Stellar address (it starts with M) was entered; G… addresses and memos work.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las direcciones muxed (M…) no son compatibles. Usa la dirección G… y el memo que te dieron."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les adresses muxed (M…) ne sont pas prises en charge. Utilisez l'adresse G… et le mémo qu'on vous a donnés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muxed(M…) 주소는 지원되지 않습니다. 받은 G… 주소와 메모를 사용하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "不支持 Muxed（M…）地址。改用你收到的 G… 地址和备注。"
+          }
+        }
+      }
+    },
     "My Holdings" : {
       "comment" : "Stellar Home's card with the account's balances, and the search's section.",
       "localizations" : {
@@ -3130,6 +3909,35 @@
         }
       }
     },
+    "New launches are paused." : {
+      "comment" : "An error: the launchpad isn't taking new launches now.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los nuevos lanzamientos están en pausa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouveaux lancements sont en pause."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 런칭이 일시 중지되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新发射已暂停。"
+          }
+        }
+      }
+    },
     "No Moments yet" : {
       "comment" : "Moments on Stellar, empty.",
       "localizations" : {
@@ -3275,6 +4083,354 @@
         }
       }
     },
+    "Not enough %@." : {
+      "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of the asset it sends; %@ is the asset's code (USDC).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不足。"
+          }
+        }
+      }
+    },
+    "Not enough XLM for Stellar's minimum balance." : {
+      "comment" : "An error: the account would fall below the XLM Stellar keeps in every account. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM para el saldo mínimo de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM pour le solde minimum de Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 최소 잔액을 유지할 XLM이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足以满足 Stellar 的最低余额。"
+          }
+        }
+      }
+    },
+    "Not enough XLM for the network fee." : {
+      "comment" : "An error: the account can't pay the network fee. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM para la comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM pour les frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크 수수료를 낼 XLM이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足以支付网络费用。"
+          }
+        }
+      }
+    },
+    "Not enough XLM." : {
+      "comment" : "An error: the account doesn't have enough XLM for this. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足。"
+          }
+        }
+      }
+    },
+    "Not enough XLM. %@ XLM stays in your account." : {
+      "comment" : "An error: %@ is the XLM Stellar keeps in the account (its minimum balance), which can't be spent.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM. %@ XLM se quedan en tu cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM. %@ XLM restent sur votre compte."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM이 부족합니다. %@ XLM은 계정에 남아 있어야 합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足。%@ XLM 需留在你的账户中。"
+          }
+        }
+      }
+    },
+    "Not enough funds for this." : {
+      "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of what it sends.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay fondos suficientes para esto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fonds insuffisants pour cette opération."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 작업에 필요한 잔액이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "余额不足，无法完成此操作。"
+          }
+        }
+      }
+    },
+    "Not finished. Try again." : {
+      "comment" : "An error: a step was cancelled or interrupted (the app left the screen) before it finished; nothing was signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se terminó. Vuelve a intentarlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas terminé. Réessayez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "완료되지 않았습니다. 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未完成。再试一次。"
+          }
+        }
+      }
+    },
+    "Not signed: %@ didn't pass the checks (%@). Nothing was sent." : {
+      "comment" : "An error: the phone refused to sign a step; %1$@ is the step, %2$@ the check that failed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: %1$@ no superó las comprobaciones (%2$@). No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : %1$@ n'a pas passé les vérifications (%2$@). Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: %1$@ 단계가 검사를 통과하지 못했습니다(%2$@). 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：%1$@ 未通过检查（%2$@）。未发送任何内容。"
+          }
+        }
+      }
+    },
+    "Not signed: the network fee for %@ went up since you confirmed. Nothing was sent." : {
+      "comment" : "An error: a step's network fee came out higher than the one confirmed; %@ is the step.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: la comisión de red de %@ subió desde que confirmaste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : les frais de réseau de %@ ont augmenté depuis votre confirmation. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: 확인한 뒤 %@의 네트워크 수수료가 올랐습니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：你确认后，%@ 的网络费用上涨了。未发送任何内容。"
+          }
+        }
+      }
+    },
+    "Not signed: the network fee is unusually high right now (%@ XLM). Nothing was sent. Try again in a minute." : {
+      "comment" : "An error: the network fee is above the app's limit; %@ is the fee in XLM.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: la comisión de red es inusualmente alta ahora mismo (%@ XLM). No se envió nada. Vuelve a intentarlo en un minuto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : les frais de réseau sont anormalement élevés en ce moment (%@ XLM). Rien n'a été envoyé. Réessayez dans une minute."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: 지금 네트워크 수수료가 평소보다 높습니다(%@ XLM). 아무것도 보내지 않았습니다. 1분 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：当前网络费用异常偏高（%@ XLM）。未发送任何内容。一分钟后重试。"
+          }
+        }
+      }
+    },
+    "Not signed: the network fee is unusually high right now. Nothing was sent. Try again in a minute." : {
+      "comment" : "An error: the network fee is above the app's limit.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: la comisión de red es inusualmente alta ahora mismo. No se envió nada. Vuelve a intentarlo en un minuto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : les frais de réseau sont anormalement élevés en ce moment. Rien n'a été envoyé. Réessayez dans une minute."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: 지금 네트워크 수수료가 평소보다 높습니다. 아무것도 보내지 않았습니다. 1분 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：当前网络费用异常偏高。未发送任何内容。一分钟后重试。"
+          }
+        }
+      }
+    },
+    "Not signed: this would spend more than you confirmed. Nothing was sent." : {
+      "comment" : "An error: a step would spend more than the amount confirmed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: esto gastaría más de lo que confirmaste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : cela dépenserait plus que ce que vous avez confirmé. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: 확인한 금액보다 더 많이 지출하게 됩니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：这会花费超出你确认的金额。未发送任何内容。"
+          }
+        }
+      }
+    },
     "Nothing collected yet" : {
       "comment" : "My collection on Moments, empty.",
       "localizations" : {
@@ -3300,6 +4456,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "还没有收藏"
+          }
+        }
+      }
+    },
+    "Nothing to claim yet." : {
+      "comment" : "An error: a coin's creator has no fees to claim yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no hay nada que reclamar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rien à réclamer pour l'instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 받을 수 있는 것이 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无可领取的内容。"
           }
         }
       }
@@ -3810,6 +4995,35 @@
         }
       }
     },
+    "Priced as each step is signed" : {
+      "comment" : "The review sheet's network fee row: no step is priced yet; each is priced when it is signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se calcula al firmar cada paso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calculés à la signature de chaque étape"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "각 단계 서명 시 산정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在签名每个步骤时计价"
+          }
+        }
+      }
+    },
     "Priced in" : {
       "comment" : "A picker's label: the asset a coin or a Moment is priced in.",
       "localizations" : {
@@ -3951,6 +5165,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "以 %@ %@ 发布 Moment"
+          }
+        }
+      }
+    },
+    "Published %@" : {
+      "comment" : "A notification's title: a Moment was published; %@ is its title.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publicaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ publié"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 게시"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发布 %@"
           }
         }
       }
@@ -4125,35 +5368,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "刷新"
-          }
-        }
-      }
-    },
-    "Reserves paid by DyorHQ" : {
-      "comment" : "The Stellar account screen: how many of the account's reserves (the XLM it must hold for each asset) DyorHQ pays.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Reservas pagadas por DyorHQ"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Réserves payées par DyorHQ"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DyorHQ가 부담한 준비금"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "由 DyorHQ 支付的储备金"
           }
         }
       }
@@ -4622,6 +5836,35 @@
         }
       }
     },
+    "Send to %@" : {
+      "comment" : "The review's title for a cash out: the payment to the cash provider; %@ is its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviar a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyer à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에 보내기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送给 %@"
+          }
+        }
+      }
+    },
     "Send to Monad" : {
       "comment" : "A transaction's title: the bridge from Stellar to Monad.",
       "localizations" : {
@@ -4680,6 +5923,64 @@
         }
       }
     },
+    "Sent" : {
+      "comment" : "[tight] A notification's title: a send on Stellar went through.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "보냄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送"
+          }
+        }
+      }
+    },
+    "Sent %@ USDC to the bridge" : {
+      "comment" : "A notification's title: USDC left Stellar for Monad through the bridge; %@ is the amount. USDC is a coin's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviaste %@ USDC al puente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC envoyés au pont"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC를 브리지로 보냄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已将 %@ USDC 发送至跨链桥"
+          }
+        }
+      }
+    },
     "Sent, waiting for the network…" : {
       "comment" : "A transaction step's progress: sent, not yet confirmed.",
       "localizations" : {
@@ -4705,6 +6006,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已发送，正在等待网络确认…"
+          }
+        }
+      }
+    },
+    "Set up your Stellar account" : {
+      "comment" : "The Face ID or passkey prompt's reason when the Stellar account is set up.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configura tu cuenta de Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configurer votre compte Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 계정 설정"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置你的 Stellar 账户"
           }
         }
       }
@@ -4767,6 +6097,64 @@
         }
       }
     },
+    "Sign in" : {
+      "comment" : "A button under Stellar Activity with no session: signs in to DyorHQ on Stellar again (a passkey account asks for its passkey).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录"
+          }
+        }
+      }
+    },
+    "Sign in again to see your Stellar history." : {
+      "comment" : "Stellar Home's Activity with no session (the account's sign-in ended and couldn't renew by itself): what signing in again brings back.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuelve a iniciar sesión para ver tu historial de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnectez-vous pour voir votre historique Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 내역을 보려면 다시 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新登录以查看你的 Stellar 记录。"
+          }
+        }
+      }
+    },
     "Sign in on Stellar to continue." : {
       "comment" : "An error: the Stellar session ended.",
       "localizations" : {
@@ -4821,6 +6209,64 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "登录 %@"
+          }
+        }
+      }
+    },
+    "Sign in to DyorHQ on Stellar" : {
+      "comment" : "The passkey prompt's reason when signing in to DyorHQ's Stellar service.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión en DyorHQ en Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter à DyorHQ sur Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar의 DyorHQ에 로그인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 上登录 DyorHQ"
+          }
+        }
+      }
+    },
+    "Sign in with your passkey to continue." : {
+      "comment" : "An error: only the account's passkey can sign in, and no session is held.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión con tu llave de acceso para continuar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connectez-vous avec votre clé d'accès pour continuer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계속하려면 패스키로 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用你的通行密钥登录以继续。"
           }
         }
       }
@@ -4908,6 +6354,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在签名…"
+          }
+        }
+      }
+    },
+    "Sold %@" : {
+      "comment" : "A notification's title: a coin was sold on its curve; %@ is its ticker.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vendiste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vente de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 매도"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已卖出 %@"
           }
         }
       }
@@ -5086,31 +6561,31 @@
         }
       }
     },
-    "Stellar balance, locked." : {
-      "comment" : "VoiceOver label of Stellar Home's locked card.",
+    "Supplied to Earn" : {
+      "comment" : "A notification's title: a deposit to Earn on Stellar went through.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Saldo de Stellar, bloqueado."
+            "value" : "Depositaste en Rendimientos"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Solde Stellar, verrouillé."
+            "value" : "Placé dans Rendement"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stellar 잔액, 잠김."
+            "value" : "예치 완료"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stellar 余额，已锁定。"
+            "value" : "已存入理财"
           }
         }
       }
@@ -5198,6 +6673,70 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "将 %1$@ %2$@ 兑换为 %3$@"
+          }
+        }
+      }
+    },
+    "Swap complete" : {
+      "comment" : "A notification's title: a swap on Stellar went through.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambio completado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échange terminé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "스왑 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "兑换完成"
+          }
+        }
+      }
+    },
+    "Swapped %@ → %@" : {
+      "comment" : "A notification after a swap on Stellar: %1$@ is what was paid, %2$@ what came back, each an amount and its asset.",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swapped %1$@ → %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambiaste %1$@ → %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échange %1$@ → %2$@ effectué"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ → %2$@ 스왑 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已兑换 %1$@ → %2$@"
           }
         }
       }
@@ -5347,31 +6886,31 @@
         }
       }
     },
-    "Testnet balances have no value. DyorHQ pays the Stellar network fees." : {
-      "comment" : "The Stellar account screen's note.",
+    "Testnet balances have no value. You pay Stellar's network fees in XLM, as you pay MON on Monad." : {
+      "comment" : "The Stellar account page's testnet note. XLM and MON are the networks' coins.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Los saldos de testnet no tienen valor. DyorHQ paga las comisiones de la red Stellar."
+            "value" : "Los saldos de testnet no tienen valor. Pagas las comisiones de red de Stellar en XLM, como pagas MON en Monad."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Les soldes du testnet n'ont aucune valeur. DyorHQ paie les frais du réseau Stellar."
+            "value" : "Les soldes du testnet n'ont aucune valeur. Vous payez les frais de réseau de Stellar en XLM, comme vous payez en MON sur Monad."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "테스트넷 잔액은 가치가 없어요. Stellar 네트워크 수수료는 DyorHQ가 부담해요."
+            "value" : "테스트넷 잔액에는 가치가 없어요. Monad에서 MON으로 내듯이 Stellar 네트워크 수수료는 XLM으로 내요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "测试网余额没有价值。DyorHQ 支付 Stellar 网络费用。"
+            "value" : "测试网余额没有价值。你用 XLM 支付 Stellar 的网络费用，就像在 Monad 上用 MON 支付一样。"
           }
         }
       }
@@ -5492,6 +7031,35 @@
         }
       }
     },
+    "That ticker looks like another token's. Choose another." : {
+      "comment" : "An error: the ticker chosen for a new coin looks like an existing token's.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ese ticker se parece al de otro token. Elige otro."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce symbole ressemble à celui d'un autre jeton. Choisissez-en un autre."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "그 티커는 다른 토큰의 티커와 비슷합니다. 다른 티커를 고르십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该代号与其他代币的相似。换一个。"
+          }
+        }
+      }
+    },
     "The USDC leaves Stellar now. You claim it on Monad with your Monad wallet once Circle confirms, in a few minutes." : {
       "comment" : "The bridge from Stellar to Monad. Circle is the company that issues USDC.",
       "localizations" : {
@@ -5517,6 +7085,180 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "USDC 现在离开 Stellar。几分钟后 Circle 确认，你即可用 Monad 钱包在 Monad 上领取。"
+          }
+        }
+      }
+    },
+    "The price is below the Moment's minimum." : {
+      "comment" : "An error: a Moment's price is below the lowest the contract allows.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio está por debajo del mínimo del Moment."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix est inférieur au minimum du Moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가격이 Moment의 최솟값보다 낮습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格低于该 Moment 的最低价。"
+          }
+        }
+      }
+    },
+    "The price is below the minimum (%@)." : {
+      "comment" : "An error: a Moment's price is below the lowest the contract allows; %@ is that minimum (an amount and its asset).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio está por debajo del mínimo (%@)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix est inférieur au minimum (%@)."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가격이 최솟값(%@)보다 낮습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格低于最低价（%@）。"
+          }
+        }
+      }
+    },
+    "The price moved past your 1% limit. Nothing was sent. Review again for a new price." : {
+      "comment" : "An error: a curve trade's price moved more than the 1% allowed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El precio superó tu límite del 1 %. No se envió nada. Vuelve a revisar para obtener un nuevo precio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le prix a dépassé votre limite de 1 %. Rien n'a été envoyé. Revoyez la transaction pour obtenir un nouveau prix."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가격이 1% 한도를 넘었습니다. 아무것도 보내지 않았습니다. 새 가격으로 다시 검토하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "价格已超出你的 1% 限制。未发送任何内容。重新查看以获取新价格。"
+          }
+        }
+      }
+    },
+    "The provider's page couldn't be opened." : {
+      "comment" : "An error: the cash provider's page has no address the app can open.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir la página del proveedor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d'ouvrir la page du fournisseur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제공업체 페이지를 열 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法打开服务商的页面。"
+          }
+        }
+      }
+    },
+    "The provider's sign-in didn't pass this iPhone's checks (%@)." : {
+      "comment" : "An error: a cash provider's sign-in request failed the phone's checks; %@ names the check.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El inicio de sesión del proveedor no superó las comprobaciones de este iPhone (%@)."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion du fournisseur n'a pas passé les vérifications de cet iPhone (%@)."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제공업체 로그인이 이 iPhone의 검사를 통과하지 못했습니다(%@)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务商的登录未通过此 iPhone 的检查（%@）。"
+          }
+        }
+      }
+    },
+    "The sign-in didn't pass this iPhone's checks. Nothing was signed." : {
+      "comment" : "An error: the sign-in request the server sent failed the phone's checks.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El inicio de sesión no superó las comprobaciones de este iPhone. No se firmó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion n'a pas passé les vérifications de cet iPhone. Rien n'a été signé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인 요청이 이 iPhone의 검사를 통과하지 못했습니다. 아무것도 서명하지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录未通过此 iPhone 的检查。未签名任何内容。"
           }
         }
       }
@@ -5550,6 +7292,209 @@
         }
       }
     },
+    "This Moment is sold out." : {
+      "comment" : "An error: every edition of the Moment was collected.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este Moment está agotado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce Moment est épuisé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment는 매진되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Moment 已售罄。"
+          }
+        }
+      }
+    },
+    "This Moment's collect window has closed." : {
+      "comment" : "An error: the Moment no longer takes collects.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ventana de colección de este Moment se cerró."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La période de collection de ce Moment est terminée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment의 수집 기간이 끝났습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Moment 的收藏窗口已关闭。"
+          }
+        }
+      }
+    },
+    "This account doesn't exist yet, so it can't receive %@." : {
+      "comment" : "An error before a send: the recipient's account doesn't exist yet; %@ is the asset's code.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta aún no existe, así que no puede recibir %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'existe pas encore, il ne peut donc pas recevoir de %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 아직 없어서 %@을(를) 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户尚不存在，因此无法接收 %@。"
+          }
+        }
+      }
+    },
+    "This account doesn't exist yet, so it can't receive this token." : {
+      "comment" : "An error before a send: the recipient's account doesn't exist yet (the server didn't say which asset).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta aún no existe, así que no puede recibir este token."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'existe pas encore, il ne peut donc pas recevoir ce jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 아직 없어서 이 토큰을 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户尚不存在，因此无法接收此代币。"
+          }
+        }
+      }
+    },
+    "This account hasn't enabled %@, so it can't receive it." : {
+      "comment" : "An error before a send: the recipient hasn't enabled the asset (a Stellar trustline); %@ is its code.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta no ha activado %@, así que no puede recibirlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'a pas activé %@, il ne peut donc pas en recevoir."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 %@ 사용을 설정하지 않아 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户未启用 %@，因此无法接收。"
+          }
+        }
+      }
+    },
+    "This account hasn't enabled this token, so it can't receive it." : {
+      "comment" : "An error before a send: the recipient hasn't enabled the asset (a Stellar trustline; the server didn't say which).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta no ha activado este token, así que no puede recibirlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'a pas activé ce jeton, il ne peut donc pas le recevoir."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 이 토큰 사용을 설정하지 않아 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户未启用此代币，因此无法接收。"
+          }
+        }
+      }
+    },
+    "This curve isn't taking trades now." : {
+      "comment" : "An error: the coin's curve doesn't take trades now.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta curva no acepta operaciones ahora."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette courbe n'accepte pas de transactions pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 커브는 지금 거래를 받지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此曲线目前不接受交易。"
+          }
+        }
+      }
+    },
     "This launch hit its target and is moving to Soroswap." : {
       "comment" : "A launch that reached its target.",
       "localizations" : {
@@ -5575,6 +7520,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此发射已达到目标，正在迁移到 Soroswap。"
+          }
+        }
+      }
+    },
+    "This provider's setup file is missing %@." : {
+      "comment" : "An error: a cash provider's setup file (stellar.toml) lacks an entry; %@ names it.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al archivo de configuración de este proveedor le falta %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier de configuration de ce fournisseur ne contient pas %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 제공업체의 설정 파일에 %@이(가) 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务商的配置文件缺少 %@。"
           }
         }
       }
@@ -5811,6 +7785,35 @@
         }
       }
     },
+    "Transaction" : {
+      "comment" : "An Activity row's title for a Stellar transaction the app has no words for.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "거래"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交易"
+          }
+        }
+      }
+    },
     "Transfer" : {
       "comment" : "A noun: a cash or bridge transfer, a row label and a section.",
       "localizations" : {
@@ -5840,118 +7843,114 @@
         }
       }
     },
-    "Unlock to see your Stellar balance." : {
-      "comment" : "Stellar Home's locked card: the session ended and must be unlocked.",
+    "Up to %@" : {
+      "comment" : "The review sheet's network fee row: the most the network can charge; %@ is an amount of XLM (“0.0154 XLM”).",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Desbloquea para ver tu saldo de Stellar."
+            "value" : "Hasta %@"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Déverrouillez pour voir votre solde Stellar."
+            "value" : "Jusqu'à %@"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "잠금 해제하면 Stellar 잔액을 볼 수 있어요."
+            "value" : "최대 %@"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "解锁即可查看你的 Stellar 余额。"
+            "value" : "最多 %@"
           }
         }
       }
     },
-    "Unlock was cancelled." : {
-      "comment" : "An error: the Face ID or passkey prompt was cancelled.",
+    "Up to %@ + %lld more steps" : {
+      "comment" : "The review sheet's network fee row: %@ is the most the steps priced so far can cost (an amount of XLM), the number how many more steps are priced as they are signed.",
       "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$@ + %2$lld more step"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Up to %1$@ + %2$lld more steps"
+                }
+              }
+            }
+          }
+        },
         "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se canceló el desbloqueo."
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Hasta %1$@ + %2$lld paso más"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Hasta %1$@ + %2$lld pasos más"
+                }
+              }
+            }
           }
         },
         "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le déverrouillage a été annulé."
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Jusqu'à %1$@ + %2$lld étape supplémentaire"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Jusqu'à %1$@ + %2$lld étapes supplémentaires"
+                }
+              }
+            }
           }
         },
         "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "잠금 해제가 취소되었습니다."
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "최대 %1$@ + 추가 단계 %2$lld개"
+                }
+              }
+            }
           }
         },
         "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "解锁已取消。"
-          }
-        }
-      }
-    },
-    "Unlock with %@" : {
-      "comment" : "The locked card's button: %@ is Face ID, Touch ID or the device passcode.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desbloquear con %@"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Déverrouiller avec %@"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "%@로 잠금 해제"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "使用 %@ 解锁"
-          }
-        }
-      }
-    },
-    "Unlock your Stellar key" : {
-      "comment" : "The Face ID prompt's reason during the setup.",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desbloquea tu clave de Stellar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Déverrouillez votre clé Stellar"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stellar 키 잠금 해제"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "解锁你的 Stellar 密钥"
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "最多 %1$@ + 另外 %2$lld 个步骤"
+                }
+              }
+            }
           }
         }
       }
@@ -6159,6 +8158,35 @@
         }
       }
     },
+    "Withdrawn to Spot" : {
+      "comment" : "A notification's title: a withdrawal from Earn on Stellar went through.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiraste a Spot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiré vers Spot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현물로 출금 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已提取到现货"
+          }
+        }
+      }
+    },
     "You get about" : {
       "comment" : "Swap: the row with the amount received, about.",
       "localizations" : {
@@ -6275,31 +8303,89 @@
         }
       }
     },
-    "You'll unlock and sign in again to use Stellar. Your Stellar funds stay in your account." : {
-      "comment" : "The sign-out confirmation's message.",
+    "You'll sign in again to use Stellar. Your Stellar funds stay in your account." : {
+      "comment" : "The Sign out of Stellar dialog's message.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Tendrás que desbloquear e iniciar sesión de nuevo para usar Stellar. Tus fondos de Stellar se quedan en tu cuenta."
+            "value" : "Volverás a iniciar sesión para usar Stellar. Tus fondos de Stellar se quedan en tu cuenta."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vous devrez déverrouiller et vous reconnecter pour utiliser Stellar. Vos fonds Stellar restent sur votre compte."
+            "value" : "Vous vous reconnecterez pour utiliser Stellar. Vos fonds Stellar restent sur votre compte."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stellar를 사용하려면 다시 잠금 해제하고 로그인해야 해요. Stellar 자금은 계정에 그대로 남아요."
+            "value" : "Stellar를 사용하려면 다시 로그인해야 해요. Stellar 자금은 계정에 그대로 있어요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "之后需要重新解锁并登录才能使用 Stellar。你的 Stellar 资金会留在你的账户中。"
+            "value" : "你需要重新登录才能使用 Stellar。你的 Stellar 资金仍在你的账户中。"
+          }
+        }
+      }
+    },
+    "You've bridged in many times today. Try again tomorrow." : {
+      "comment" : "An error: the daily limit of bridge transfers into Stellar was reached.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hoy ya has traído fondos por el puente muchas veces. Vuelve a intentarlo mañana."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous avez utilisé le pont entrant de nombreuses fois aujourd'hui. Réessayez demain."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오늘 브리지로 너무 많이 들여왔습니다. 내일 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你今天已多次跨链转入。明天再试。"
+          }
+        }
+      }
+    },
+    "You've uploaded a lot today. Try again tomorrow." : {
+      "comment" : "An error: the daily upload limit was reached.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hoy has subido mucho. Vuelve a intentarlo mañana."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous avez beaucoup téléversé aujourd'hui. Réessayez demain."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오늘 업로드를 많이 했습니다. 내일 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你今天上传了很多内容。明天再试。"
           }
         }
       }
@@ -6333,6 +8419,35 @@
         }
       }
     },
+    "Your Stellar account isn't ready yet. Try again in a moment." : {
+      "comment" : "An error at the end of the Stellar account's setup: its transaction was sent, but the account doesn't read as set up yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu cuenta de Stellar aún no está lista. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre compte Stellar n'est pas encore prêt. Réessayez dans un instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 계정이 아직 준비되지 않았습니다. 잠시 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Stellar 账户尚未就绪。请稍后重试。"
+          }
+        }
+      }
+    },
     "Your Stellar key isn't on this iPhone yet. Sign in again on this iPhone to use Stellar." : {
       "comment" : "An error: this device doesn't hold the account's Stellar key (the host usually shows its own, more exact copy).",
       "localizations" : {
@@ -6358,6 +8473,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "你的 Stellar 密钥尚未在此 iPhone 上。在此 iPhone 上重新登录以使用 Stellar。"
+          }
+        }
+      }
+    },
+    "Your account is already set up." : {
+      "comment" : "An error: the Stellar account's setup was already done.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu cuenta ya está configurada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre compte est déjà configuré."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정이 이미 설정되어 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的账户已设置。"
           }
         }
       }

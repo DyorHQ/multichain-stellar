@@ -1,24 +1,233 @@
-// The verifier is the line between "the server built it" and "the user signs it". Each test builds a transaction
-// offline and checks the verdict.
-import { Account, Address, Asset, Contract, Keypair, nativeToScVal, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
-import { assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { Intent, verifyTransaction, VerifyError } from "../../supabase/functions/_shared/verify.ts";
+// The verifier is the line between "the server built it" and "the user signs it". The shared vectors
+// (ios/Packages/StellarKit/Tests/StellarCoreTests/Vectors/verifier.json, from backend/tests/vectors/gen-vectors.ts) are
+// judged again here and by the Swift verifier, which must agree on each; the tests below build transactions offline
+// for the rules the vectors don't reach. Contracts v2 (DESIGN-stellar-contracts-v2 §20.4): the vectors cover every
+// binding of a launch, a refund, a collect and the claims, calls anyone may make, and runtime contracts by WASM hash;
+// the tests below cover where v2's pins come from.
+import { Account, Address, Asset, Contract, Keypair, Memo, nativeToScVal, Operation, scValToNative, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { assert, assertEquals, assertGreater, assertThrows } from "jsr:@std/assert@1";
+import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
+import { TESTNET, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
+import {
+  FeeCaps,
+  Intent,
+  V2PinSource,
+  v2Pins,
+  v2PinsOf,
+  verifyFeePayer,
+  VerifyContext,
+  verifyTransaction,
+  VerifyError,
+} from "../../supabase/functions/_shared/verify.ts";
 
 const PASS = "Test SDF Network ; September 2015";
 const user = Keypair.random().publicKey();
 const sponsor = Keypair.random().publicKey();
-const ROUTER = Keypair.random().publicKey() && new Contract("CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD").contractId();
+const friend = Keypair.random().publicKey();
+const ROUTER = new Contract("CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD").contractId();
 const XLM = Asset.native().contractId(PASS);
 const USDC_ASSET = new Asset("USDC", "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5");
 const USDC = USDC_ASSET.contractId(PASS);
 const EVIL = "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526";
+const FEES: FeeCaps = { maxFee: 30_000_000n, maxInclusionPerOp: 200_000n, starterInnerFeeMax: 1_000_000n };
 
-const ctx = { user, sponsor, passphrase: PASS, allowedContracts: new Set([ROUTER, XLM, USDC]) };
+const ctx = { user, sponsor, passphrase: PASS, allowedContracts: new Set([ROUTER, XLM, USDC]), feePolicy: FEES, monadDomain: 15, launchTokenWasmHash: "" };
 
-function tx(ops: xdr.Operation[], source = user, timeout = 300) {
-  const b = new TransactionBuilder(new Account(source, "41"), { fee: "100", networkPassphrase: PASS }).setTimeout(timeout);
+// ------------------------------------------------------------------------------------------------ shared vectors
+
+interface Vector {
+  name: string;
+  envelope: string;
+  intent: Intent;
+  user: string;
+  sponsor: string;
+  allowed: string[];
+  launchTokens: string[];
+  launchTokenWasmHash: string;
+  monadDomain: number;
+  feePolicy: { maxFee: string; maxInclusionPerOp: string; starterInnerFeeMax: string };
+  v2: (V2PinSource & { maxLaunchFeeStroops: string }) | null;
+  runtime: Record<string, string>;
+  now: number;
+  step?: { feePayer: string | null; sponsorReason: string | null };
+  expect: { ok: boolean; reason?: string; outflow?: Record<string, string>; step?: { ok: boolean; payer?: string; reason?: string } };
+}
+
+const vectors: Vector[] = JSON.parse(
+  await Deno.readTextFile(new URL("../../../ios/Packages/StellarKit/Tests/StellarCoreTests/Vectors/verifier.json", import.meta.url)),
+);
+
+/** `v`'s verdict, judged with its own pins and context, or with `change` made to that context. */
+function judge(v: Vector, change: Partial<VerifyContext> = {}) {
+  const tx = TransactionBuilder.fromXDR(v.envelope, PASS) as Transaction;
+  const vctx = {
+    user: v.user,
+    sponsor: v.sponsor,
+    passphrase: PASS,
+    allowedContracts: new Set([...v.allowed, ...v.launchTokens]),
+    now: v.now,
+    feePolicy: { maxFee: BigInt(v.feePolicy.maxFee), maxInclusionPerOp: BigInt(v.feePolicy.maxInclusionPerOp), starterInnerFeeMax: BigInt(v.feePolicy.starterInnerFeeMax) },
+    launchTokenWasmHash: v.launchTokenWasmHash,
+    monadDomain: v.monadDomain,
+    v2: v.v2 ? v2Pins(v.v2, BigInt(v.v2.maxLaunchFeeStroops)) : null,
+    runtimeContracts: v.runtime,
+    ...change,
+  };
+  let verdict: Vector["expect"];
+  try {
+    verdict = { ok: true, outflow: verifyTransaction(tx, v.intent, vctx).outflow };
+  } catch (e) {
+    if (!(e instanceof VerifyError)) throw e;
+    verdict = { ok: false, reason: e.message };
+  }
+  if (v.step) {
+    try {
+      verdict.step = { ok: true, payer: verifyFeePayer(tx, v.intent, v.step, vctx) };
+    } catch (e) {
+      if (!(e instanceof VerifyError)) throw e;
+      verdict.step = { ok: false, reason: e.message };
+    }
+  }
+  return verdict;
+}
+
+Deno.test("every shared vector gets the verdict it records", () => {
+  assertGreater(vectors.length, 30);
+  for (const v of vectors) assertEquals(judge(v), v.expect, v.name);
+});
+
+Deno.test("the vectors cover every case of the design's list, with the verdict it gives", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  const fails: [string, string][] = [
+    ["sponsor outside activation", "the sponsor appears outside account activation"],
+    ["inclusion over the cap", "the inclusion fee is above the limit"],
+    ["soroban fee over the cap", "the network fee is above the limit"],
+    ["resource fee above fee", "the resource fee is out of range"],
+    ["activate funds XLM", "unexpected account creation"],
+    ["payment to another destination", "the destination is not the one you confirmed"],
+    ["memo mismatch", "the memo is not the one you confirmed"],
+    ["SAC transfer to another to", "the destination is not the one you confirmed"],
+    ["soroswap to another account", "swap output goes to another account"],
+    ["soroswap min below receive", "the minimum received is lower than quoted"],
+    ["curve buy min_tokens_out below receive", "the minimum received is lower than quoted"],
+    ["blend submit to another account", "the call acts for another account"],
+    ["cctp burn to another mint recipient", "the destination is not the one you confirmed"],
+    ["restore with a footprint outside the allowlist", "the restore touches data outside the allowlist"],
+  ];
+  for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
+  for (const name of ["classic fee at the cap ok", "activate ok", "user-paid trust ok", "restore ok"]) assertEquals(byName.get(name)?.ok, true, name);
+  assertEquals(byName.get("starter step with an inner fee above the cap")?.step, { ok: false, reason: "the sponsored step's network fee is above the limit" });
+});
+
+Deno.test("the vectors cover v2's bindings (§20.4), with the verdict each gives", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  const fails: [string, string][] = [
+    // The launch fee: to the launchpad, exactly the terms', at most the pinned 10 XLM.
+    ["v2 launch fee to the treasury", "the launch fee goes to another address than the launchpad"],
+    ["v2 launch fee to another address than the launchpad", "the launch fee goes to another address than the launchpad"],
+    ["v2 launch fee other than the terms", "the launch fee is not the one in the terms"],
+    ["v2 launch without its fee", "the launch fee is not the one in the terms"],
+    ["v2 launch fee above the pinned bound", "the launch fee is above the limit"],
+    // The terms: pinned executors, locker, token WASM and durations; never testnet-qa's failing venue.
+    ["v2 launch terms with an unpinned executor", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with an unpinned fallback executor", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with the qa-exec-fail venue on the testnet pins", "the launch terms name a venue this app doesn't pin"],
+    ["v2 launch terms with durations other than the pins", "the launch terms are not the ones this app pins"],
+    ["v2 launch terms with another locker", "the launch terms are not the ones this app pins"],
+    ["v2 launch terms with another token WASM", "the launch terms are not the ones this app pins"],
+    ["v2 launch for another creator", "the call acts for another account"],
+    ["v2 launch with a ticker that is not letters or digits", "the ticker is not 2 to 10 letters or digits"],
+    ["v1 launch arguments on the v2 launchpad", "the call's arguments are not as expected"],
+    // Refunds, collects and claims act for the user; claims spend nothing.
+    ["v2 refund for another holder", "the call acts for another account"],
+    ["v2 moments collect from another account", "the call acts for another account"],
+    ["v2 claim rewards for another account", "the call acts for another account"],
+    ["v2 claim owed for another account", "the call acts for another account"],
+    ["v2 moments claim for another account", "the call acts for another account"],
+    ["v2 moments claim all for another account", "the call acts for another account"],
+    ["v2 claim owed with a spend", "a claim must not spend anything"],
+    ["v2 claim rewards with a spend", "a claim must not spend anything"],
+    ["v2 moments claim with a spend", "a claim must not spend anything"],
+    ["v2 moments claim all with a spend", "a claim must not spend anything"],
+    // A Moment's terms: the pinned graduator, executor, locker, NFT and coin WASMs and durations.
+    ["v2 moments publish with another graduator", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another executor", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another locker", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another NFT WASM", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with another coin WASM", "the Moment's terms are not the ones this app pins"],
+    ["v2 moments publish with durations other than the pins", "the Moment's terms are not the ones this app pins"],
+    // Calls anyone may make carry none of the user's authorization.
+    ["v2 graduate with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 claim owed with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 harvest with your authorization", "a call anyone may make carries your authorization"],
+    ["v2 moments expire with your authorization", "a call anyone may make carries your authorization"],
+    // Runtime contracts only by a pinned WASM hash.
+    ["v2 restore of an unknown runtime WASM's data", "the restore touches data outside the allowlist"],
+    ["v2 restore of an unknown runtime WASM's code", "the restore touches data outside the allowlist"],
+  ];
+  for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
+  const stranger = vectors.find((v) => v.name === "v2 claim rewards from an unknown runtime WASM")!;
+  assertEquals(stranger.expect, { ok: false, reason: `contract ${Object.keys(stranger.runtime)[0]} is not on the allowlist` });
+  const collect = byName.get("v2 moments collect with max_total above the spend")!;
+  assert(!collect.ok && collect.reason!.startsWith("the transaction spends more than this action declares"));
+  for (
+    const name of [
+      "v2 launch create ok",
+      "v2 launch create with an initial buy ok",
+      "v2 refund ok",
+      "v2 moments collect ok",
+      "v2 claim rewards ok",
+      "v2 claim owed ok",
+      "v2 moments claim ok",
+      "v2 moments claim all ok",
+      "v2 graduate ok",
+      "v2 harvest ok",
+      "v2 recipient transfer ok",
+      "v2 moments publish ok",
+      "v2 moment coin transfer ok",
+      "v2 restore of a launch token's data and code ok",
+    ]
+  ) assertEquals(byName.get(name)?.ok, true, name);
+  // The fee and the initial buy are what the launch takes; the refund's outflow is its burn.
+  const XLM_SAC = Asset.native().contractId(PASS);
+  assertEquals(byName.get("v2 launch create ok")?.outflow, { [XLM_SAC]: "100000000" });
+  assertEquals(byName.get("v2 launch create with an initial buy ok")?.outflow, { [XLM_SAC]: "150000000" });
+  assertEquals(Object.values(byName.get("v2 refund ok")!.outflow!), ["500"]);
+  // Every v2 vector is judged against the testnet pins: 10 XLM, and no qa-exec-fail.
+  for (const v of vectors.filter((v) => v.name.startsWith("v2 "))) {
+    assertEquals(v.v2?.maxLaunchFeeStroops, "100000000", v.name);
+    assertEquals(Object.keys(v.v2!.contracts).includes("qaExecFail"), false, v.name);
+  }
+});
+
+Deno.test("the vectors keep the cases where a decoder or a comparison could tell the two verifiers apart", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  const fails: [string, string][] = [
+    // An authorization is of the call itself only byte for byte.
+    ["auth root that is the call in another normalization", "the destination is not the one you confirmed"],
+    ["auth root that is the call with another error code", "the destination is not the one you confirmed"],
+    // A function name is read as written.
+    ["call to a function name with a byte-order mark", "call \ufefftransfer is not part of this action"],
+    // A trust limit is positive.
+    ["trust removed", "the transaction removes a trustline"],
+    ["trust with a negative limit", "the transaction removes a trustline"],
+  ];
+  for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
+  assertEquals(byName.get("soroban swap with a footprint ok")?.ok, true);
+});
+
+// ------------------------------------------------------------------------------------------------ offline transactions
+
+function tx(ops: xdr.Operation[], source = user, timeout = 300, memo?: Memo) {
+  const b = new TransactionBuilder(new Account(source, "41"), { fee: "100", networkPassphrase: PASS, memo }).setTimeout(timeout);
   ops.forEach((o) => b.addOperation(o));
   return b.build();
+}
+
+function withFee(t: Transaction, fee: number): Transaction {
+  const envelope = t.toEnvelope();
+  envelope.v1().tx().fee(fee);
+  return new Transaction(envelope, PASS);
 }
 
 function call(contract: string, fn: string, args: xdr.ScVal[]): xdr.InvokeContractArgs {
@@ -45,7 +254,13 @@ function swapOp(amount: bigint, authAmount: bigint, contract = ROUTER, creds?: x
   return Operation.invokeHostFunction({ func: xdr.HostFunction.hostFunctionTypeInvokeContract(c), auth: [entry] });
 }
 
-const swapIntent = (spend: bigint): Intent => ({ kind: "swap", summary: "", spend: { [XLM]: spend.toString() }, calls: [{ contract: ROUTER, fn: "swap_exact_tokens_for_tokens" }] });
+const swapIntent = (spend: bigint): Intent => ({
+  kind: "swap",
+  summary: "",
+  spend: { [XLM]: spend.toString() },
+  receive: { [USDC]: "1" },
+  calls: [{ contract: ROUTER, fn: "swap_exact_tokens_for_tokens" }],
+});
 
 Deno.test("accepts a Soroban swap whose authorized outflow matches the intent", () => {
   const r = verifyTransaction(tx([swapOp(100n, 100n)]), swapIntent(100n), ctx);
@@ -92,12 +307,13 @@ Deno.test("rejects SetOptions, AccountMerge and friends", () => {
   assertThrows(() => verifyTransaction(tx([Operation.accountMerge({ destination: sponsor })]), { ...intent, ops: ["accountMerge"] }, ctx), VerifyError, "not allowed");
 });
 
-Deno.test("classic payment: amount cap and op source", () => {
-  const pay = (amount: string, source?: string) => Operation.payment({ destination: sponsor, asset: Asset.native(), amount, source });
-  const intent: Intent = { kind: "payment", summary: "", spend: { [XLM]: "50000000" }, ops: ["payment"] };
+Deno.test("classic payment: amount cap, op source and the confirmed destination", () => {
+  const pay = (amount: string, source?: string, destination = friend) => Operation.payment({ destination, asset: Asset.native(), amount, source });
+  const intent: Intent = { kind: "payment", summary: "", spend: { [XLM]: "50000000" }, ops: ["payment"], to: friend };
   verifyTransaction(tx([pay("5")]), intent, ctx);
   assertThrows(() => verifyTransaction(tx([pay("5.0000001")]), intent, ctx), VerifyError, "spends more");
   assertThrows(() => verifyTransaction(tx([pay("1", Keypair.random().publicKey())]), intent, ctx), VerifyError, "third account");
+  assertThrows(() => verifyTransaction(tx([pay("1", undefined, sponsor)]), intent, ctx), VerifyError, "not the one you confirmed");
 });
 
 Deno.test("path payment must pay the user at least the quoted minimum", () => {
@@ -109,17 +325,21 @@ Deno.test("path payment must pay the user at least the quoted minimum", () => {
   assertThrows(() => verifyTransaction(tx([op(sponsor, "0.9")]), intent, ctx), VerifyError, "another account");
 });
 
-Deno.test("sponsored trustline: only declared assets, sponsor only begins sponsorship", () => {
+Deno.test("the sponsor appears only in an activation, and there only begins sponsorship or creates the account", () => {
   const ops = (asset: Asset) => [
     Operation.beginSponsoringFutureReserves({ sponsoredId: user, source: sponsor }),
     Operation.changeTrust({ asset, source: user }),
     Operation.endSponsoringFutureReserves({ source: user }),
   ];
-  const intent: Intent = { kind: "trust", summary: "", spend: {}, ops: ["beginSponsoringFutureReserves", "changeTrust", "endSponsoringFutureReserves"], trust: [`USDC:${USDC_ASSET.getIssuer()}`] };
+  const trust = [`USDC:${USDC_ASSET.getIssuer()}`];
+  const intent: Intent = { kind: "activate", summary: "", spend: {}, ops: ["beginSponsoringFutureReserves", "changeTrust", "endSponsoringFutureReserves"], trust };
   verifyTransaction(tx(ops(USDC_ASSET)), intent, ctx);
+  assertThrows(() => verifyTransaction(tx(ops(USDC_ASSET)), { ...intent, kind: "trust" }, ctx), VerifyError, "outside account activation");
   assertThrows(() => verifyTransaction(tx(ops(new Asset("EVIL", sponsor))), intent, ctx), VerifyError, "unexpected trustline");
   const sneaky = [...ops(USDC_ASSET), Operation.payment({ destination: user, asset: Asset.native(), amount: "1", source: sponsor })];
   assertThrows(() => verifyTransaction(tx(sneaky), { ...intent, ops: [...intent.ops!, "payment"] }, ctx), VerifyError, "sponsor account runs");
+  // The user-paid trustline that replaces the sandwich.
+  verifyTransaction(tx([Operation.changeTrust({ asset: USDC_ASSET })]), { ...intent, kind: "trust", ops: ["changeTrust"] }, ctx);
 });
 
 Deno.test("an approval counts as outflow in full", () => {
@@ -128,4 +348,120 @@ Deno.test("an approval counts as outflow in full", () => {
   const intent: Intent = { kind: "approve", summary: "", spend: { [USDC]: "499" }, calls: [{ contract: USDC, fn: "approve" }] };
   assertThrows(() => verifyTransaction(tx([op]), intent, ctx), VerifyError, "spends more");
   verifyTransaction(tx([op]), { ...intent, spend: { [USDC]: "500" } }, ctx);
+});
+
+Deno.test("fee caps: the network's policy applies when the context names none", () => {
+  const pay = Operation.payment({ destination: friend, asset: Asset.native(), amount: "1" });
+  const intent: Intent = { kind: "payment", summary: "", spend: { [XLM]: "10000000" }, ops: ["payment"], to: friend };
+  const { feePolicy: _caps, ...envCtx } = ctx;
+  // Testnet's maxInclusionPerOp is 0.02 XLM (networks.ts), the same as FEES.
+  verifyTransaction(withFee(tx([pay]), 200_000), intent, envCtx);
+  assertThrows(() => verifyTransaction(withFee(tx([pay]), 200_001), intent, envCtx), VerifyError, "inclusion fee is above the limit");
+  const tight = { ...ctx, feePolicy: { ...FEES, maxFee: 150n } };
+  assertThrows(() => verifyTransaction(withFee(tx([pay]), 151), intent, tight), VerifyError, "network fee is above the limit");
+});
+
+Deno.test("memo: the one the user confirmed, or none", () => {
+  const pay = Operation.payment({ destination: friend, asset: Asset.native(), amount: "1" });
+  const intent: Intent = { kind: "payment", summary: "", spend: { [XLM]: "10000000" }, ops: ["payment"], to: friend };
+  verifyTransaction(tx([pay], user, 300, Memo.text("12345")), { ...intent, memo: { type: "text", value: "12345" } }, ctx);
+  verifyTransaction(tx([pay], user, 300, Memo.id("12345")), { ...intent, memo: { type: "id", value: "12345" } }, ctx);
+  assertThrows(() => verifyTransaction(tx([pay], user, 300, Memo.text("12345")), intent, ctx), VerifyError, "memo");
+  assertThrows(() => verifyTransaction(tx([pay]), { ...intent, memo: { type: "text", value: "12345" } }, ctx), VerifyError, "memo");
+  assertThrows(() => verifyTransaction(tx([pay], user, 300, Memo.id("12345")), { ...intent, memo: { type: "id", value: "012345" } }, ctx), VerifyError, "memo");
+});
+
+Deno.test("who pays: setup only from the sponsor in an activation, a starter swap within its cap", () => {
+  const pay = Operation.payment({ destination: friend, asset: Asset.native(), amount: "1" });
+  const intent: Intent = { kind: "swap", summary: "", spend: {}, ops: ["payment"], to: friend };
+  const starter = { feePayer: "sponsor", sponsorReason: "starter_swap" };
+  assertEquals(verifyFeePayer(withFee(tx([pay]), 1_000_000), intent, starter, ctx), "starter_swap");
+  assertThrows(() => verifyFeePayer(withFee(tx([pay]), 1_000_001), intent, starter, ctx), VerifyError, "sponsored step");
+  assertEquals(verifyFeePayer(tx([pay]), intent, { feePayer: "user" }, ctx), "user");
+  assertEquals(verifyFeePayer(tx([pay]), { ...intent, kind: "activate" }, { feePayer: "sponsor", sponsorReason: "setup" }, ctx), "user");
+  assertEquals(verifyFeePayer(tx([pay], sponsor), { ...intent, kind: "activate" }, {}, ctx), "setup");
+  assert(vectors.some((v) => v.step));
+});
+
+// ------------------------------------------------------------------------------------------------ v2's pins
+
+const fixed = (n: number) => StrKey.encodeContract(Buffer.alloc(32, n));
+
+/** A v2 deployment file as deploy-contracts-v2.ts's deploymentRecord() writes it. */
+function v2File(deployment: "testnet" | "testnet-qa"): Record<string, unknown> {
+  const qa = deployment === "testnet-qa";
+  const set = qa ? "testnet-qa" : "production";
+  const hash = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
+  return {
+    network: "testnet",
+    deployment,
+    name: `${deployment}-v2`,
+    generation: 1,
+    deployer: Keypair.fromRawEd25519Seed(Buffer.alloc(32, 11)).publicKey(),
+    contracts: {
+      launchpadV2: fixed(0x41),
+      momentsV2: fixed(0x42),
+      lpLocker: fixed(0x43),
+      execSoroswap: fixed(0x44),
+      momentsGraduator: fixed(0x45),
+      ...(qa ? { qaExecFail: fixed(0x46), momentsV2QaFail: fixed(0x4c), momentsGraduatorQaFail: fixed(0x4d) } : {}),
+    },
+    wasmHashes: {
+      launchpadV2: hash(1),
+      launchTokenV2: hash(2),
+      execSoroswap: hash(3),
+      lpLocker: hash(4),
+      momentsV2: hash(5),
+      momentNft: hash(6),
+      momentCoin: hash(7),
+      momentsGraduator: hash(8),
+      ...(qa ? { qaExecFail: hash(9) } : {}),
+    },
+    venues: [{ id: 0, kind: "Soroswap", executor: fixed(0x44), feeFraction: 0, enabled: true }, ...(qa ? [{ id: 1, kind: "QaFail", executor: fixed(0x46), feeFraction: 0, enabled: true }] : [])],
+    quotes: {},
+    aquarius: { enabled: false, reason: "--aquarius off" },
+    durations: { set, ...DURATION_SETS_V2[set] },
+    ttl: { threshold: 120_960, extend_to: 518_400 },
+    deployLedger: 1_000,
+    deployedAt: "2026-10-15T00:00:00.000Z",
+  };
+}
+
+Deno.test("v2's pins come from the deployment: its own executors (qa-exec-fail on testnet-qa only), its durations and the 10 XLM bound", () => {
+  const testnet = v2PinsOf(withDeploymentV2(TESTNET, parseDeploymentV2("testnet-v2", v2File("testnet"))))!;
+  assertEquals([testnet.launchpad, testnet.moments, testnet.locker, testnet.graduator, testnet.soroswapExecutor], [fixed(0x41), fixed(0x42), fixed(0x43), fixed(0x45), fixed(0x44)]);
+  assertEquals(testnet.executors, [fixed(0x44)]);
+  assertEquals(testnet.durations, { launch: DURATION_SETS_V2.production.launch, moments: DURATION_SETS_V2.production.moments });
+  assertEquals(testnet.maxLaunchFeeStroops, 100_000_000n);
+  // testnet-qa's API builds launches on its failing venue (CT-18's e2e); the app's pins never name it (finding F4).
+  const qaDeployment = parseDeploymentV2("testnet-qa-v2", v2File("testnet-qa"));
+  const qaNet = withDeploymentV2(TESTNET, qaDeployment);
+  const qa = v2PinsOf(qaNet)!;
+  assertEquals(qa.executors, [fixed(0x44), fixed(0x46)]);
+  assertEquals(qa.durations.launch, DURATION_SETS_V2["testnet-qa"].launch);
+  // The shared vector's failing venue is testnet-qa's as its deployment lists it: its id, kind QaFail (3) and executor.
+  const qaVenue = qaDeployment.venues.find((v) => v.kind === "QaFail")!;
+  const qaLaunch = vectors.find((v) => v.name === "v2 launch terms with the qa-exec-fail venue on the testnet pins")!;
+  const launch = (TransactionBuilder.fromXDR(qaLaunch.envelope, PASS) as Transaction).operations[0] as Operation.InvokeHostFunction;
+  const [, launchParams, launchTerms] = launch.func.invokeContract().args().map((a) => scValToNative(a));
+  assertEquals(launchParams.venue, qaVenue.id);
+  assertEquals([launchTerms.venue.id, launchTerms.venue.kind, launchTerms.venue.executor], [qaVenue.id, 3, qaVenue.executor]);
+  // A network whose v2 deployment is taken away has no v2 pins.
+  assertEquals(v2PinsOf(withDeploymentV2(qaNet, null)), null);
+});
+
+Deno.test("without v2's pins a call is judged by v1's rules, and a runtime contract's hash allows nothing", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v]));
+  // launchpad-v2's launch has three arguments, v1's eight.
+  assertEquals(judge(byName.get("v2 launch create ok")!, { v2: null }), { ok: false, reason: "the call's arguments are not as expected" });
+  const rewards = byName.get("v2 claim rewards ok")!;
+  assertEquals(judge(rewards, { v2: null }), { ok: false, reason: `contract ${Object.keys(rewards.runtime)[0]} is not on the allowlist` });
+});
+
+Deno.test("the server's launch tokens (plans.ts allowlists the ones the indexer saw the launchpads create) take the same rules", () => {
+  const rewards = vectors.find((v) => v.name === "v2 claim rewards ok")!;
+  const token = Object.keys(rewards.runtime)[0];
+  assertEquals(judge(rewards, { runtimeContracts: {}, allowedContracts: new Set([...rewards.allowed, token]) }), { ok: true, outflow: {} });
+  const other = vectors.find((v) => v.name === "v2 claim rewards for another account")!;
+  assertEquals(judge(other, { runtimeContracts: {}, allowedContracts: new Set([...other.allowed, token]) }), { ok: false, reason: "the call acts for another account" });
 });

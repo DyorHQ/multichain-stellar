@@ -19,8 +19,11 @@ public enum Asset: Equatable, Hashable {
 public enum SCAddress: Equatable, Hashable {
     case account(String)
     case contract(String)
-    case other(Int32)
+    /// A muxed account, a claimable balance or a liquidity pool: never a party the app signs for. Kept whole, so two
+    /// of them compare as their bytes do.
+    case other(type: Int32, body: [UInt8])
 
+    /// A G… or C… address; nil for every other kind.
     public var string: String? {
         switch self {
         case .account(let s), .contract(let s): return s
@@ -32,7 +35,8 @@ public enum SCAddress: Equatable, Hashable {
 public indirect enum SCVal: Equatable {
     case bool(Bool)
     case void
-    case error
+    /// An SCError: its type (0 for a contract's own error), and the contract's code or the host's error code.
+    case error(type: Int32, code: UInt32)
     case u32(UInt32)
     case i32(Int32)
     case u64(UInt64)
@@ -52,10 +56,13 @@ public indirect enum SCVal: Equatable {
     case ledgerKeyContractInstance
     case ledgerKeyNonce(Int64)
 
+    /// The same value, as its XDR says it: strings and symbols compare as bytes (Swift's `==` on text would also match
+    /// another Unicode normalization of them), errors by type and code.
     public static func == (a: SCVal, b: SCVal) -> Bool {
         switch (a, b) {
         case let (.bool(x), .bool(y)): return x == y
-        case (.void, .void), (.error, .error), (.ledgerKeyContractInstance, .ledgerKeyContractInstance): return true
+        case (.void, .void), (.ledgerKeyContractInstance, .ledgerKeyContractInstance): return true
+        case let (.error(t1, c1), .error(t2, c2)): return t1 == t2 && c1 == c2
         case let (.u32(x), .u32(y)): return x == y
         case let (.i32(x), .i32(y)): return x == y
         case let (.u64(x), .u64(y)), let (.timepoint(x), .timepoint(y)), let (.duration(x), .duration(y)): return x == y
@@ -63,7 +70,7 @@ public indirect enum SCVal: Equatable {
         case let (.u128(h1, l1), .u128(h2, l2)): return h1 == h2 && l1 == l2
         case let (.i128(h1, l1), .i128(h2, l2)): return h1 == h2 && l1 == l2
         case let (.u256(x), .u256(y)), let (.i256(x), .i256(y)), let (.bytes(x), .bytes(y)): return x == y
-        case let (.string(x), .string(y)), let (.symbol(x), .symbol(y)): return x == y
+        case let (.string(x), .string(y)), let (.symbol(x), .symbol(y)): return x.utf8.elementsEqual(y.utf8)
         case let (.vec(x), .vec(y)): return x == y
         case let (.map(x), .map(y)):
             guard let x, let y else { return x == nil && y == nil }
@@ -99,6 +106,11 @@ public struct InvokeContractArgs: Equatable {
     public let contract: SCAddress
     public let function: String
     public let args: [SCVal]
+    /// The call as the transaction encodes it.
+    public let xdr: [UInt8]
+
+    /// The same call: the same bytes, as verify.ts compares calls.
+    public static func == (a: InvokeContractArgs, b: InvokeContractArgs) -> Bool { a.xdr == b.xdr }
 }
 
 public enum AuthorizedFunction: Equatable {
@@ -165,13 +177,51 @@ public struct TimeBounds: Equatable {
     public let maxTime: UInt64
 }
 
+/// A transaction's memo. Text is kept as its bytes: the network doesn't require UTF-8.
+public enum StellarMemo: Equatable {
+    case none
+    case text([UInt8])
+    case id(UInt64)
+    case hash([UInt8])
+    case returnHash([UInt8])
+}
+
+/// A ledger entry's key, as a Soroban footprint lists it. Only the kinds a restore may name are decoded in full.
+public enum StellarLedgerKey: Equatable {
+    case account(String)
+    case contractData(contract: SCAddress, key: SCVal, durability: Int32)
+    case contractCode(hash: [UInt8])
+    /// Trustlines, offers, data, claimable balances, pools, config settings and TTL entries.
+    case other(Int32)
+}
+
+/// The ledger entries a Soroban transaction reads and writes (for a restore: the entries it brings back).
+public struct StellarFootprint: Equatable {
+    public let readOnly: [StellarLedgerKey]
+    public let readWrite: [StellarLedgerKey]
+
+    /// The contracts whose data the footprint names, in order, each once.
+    public var contracts: [String] {
+        var seen = Set<String>()
+        return (readOnly + readWrite).compactMap { key -> String? in
+            guard case let .contractData(.contract(id), _, _) = key, seen.insert(id).inserted else { return nil }
+            return id
+        }
+    }
+}
+
 public struct Transaction: Equatable {
+    /// The source: a G-address, or an M-address for a muxed source (which is never the user's own G-address).
     public let source: String
     public let fee: UInt32
     public let sequence: Int64
     public let timeBounds: TimeBounds?
+    public let memo: StellarMemo
     public let operations: [Operation]
+    /// A Soroban transaction's resource fee; nil for a classic transaction.
     public let resourceFee: Int64?
+    /// A Soroban transaction's footprint; nil for a classic transaction.
+    public let footprint: StellarFootprint?
 }
 
 public struct DecoratedSignature: Equatable {
@@ -220,14 +270,15 @@ enum XDRDecode {
         return StrKey.accountID(try r.fixed(32))
     }
 
-    /// Muxed accounts resolve to their underlying G-address (the id is dropped: Lite never uses muxed sources).
+    /// A muxed account is its M-address (SEP-23: the key, then the id), as stellar-sdk writes it: it never equals a
+    /// G-address, so a payment to one never counts as a payment to the account the user confirmed.
     static func muxedAccount(_ r: inout XDRReader) throws -> String {
         let t = try r.int32()
         switch t {
         case 0: return StrKey.accountID(try r.fixed(32))
         case 0x100:
-            _ = try r.uint64()
-            return StrKey.accountID(try r.fixed(32))
+            let id = try r.fixed(8)
+            return StrKey.encode(.muxed, try r.fixed(32) + id)
         default: throw XDRError.unsupported("muxed account type \(t)")
         }
     }
@@ -255,18 +306,12 @@ enum XDRDecode {
         switch t {
         case 0: return .account(try accountID(&r))
         case 1: return .contract(StrKey.contractID(try r.fixed(32)))
-        case 2:
-            _ = try r.uint64()
-            _ = try r.fixed(32)
-            return .other(2)
+        case 2: return .other(type: 2, body: try r.fixed(8) + r.fixed(32))
         case 3:
             let v = try r.int32()
             guard v == 0 else { throw XDRError.unsupported("claimable balance id \(v)") }
-            _ = try r.fixed(32)
-            return .other(3)
-        case 4:
-            _ = try r.fixed(32)
-            return .other(4)
+            return .other(type: 3, body: try r.fixed(32))
+        case 4: return .other(type: 4, body: try r.fixed(32))
         default: throw XDRError.unsupported("address type \(t)")
         }
     }
@@ -277,10 +322,7 @@ enum XDRDecode {
         switch t {
         case 0: return .bool(try r.bool())
         case 1: return .void
-        case 2:
-            let et = try r.int32()
-            if et == 0 { _ = try r.uint32() } else { _ = try r.int32() }
-            return .error
+        case 2: return .error(type: try r.int32(), code: try r.uint32())
         case 3: return .u32(try r.uint32())
         case 4: return .i32(try r.int32())
         case 5: return .u64(try r.uint64())
@@ -307,10 +349,11 @@ enum XDRDecode {
     }
 
     static func invokeContractArgs(_ r: inout XDRReader) throws -> InvokeContractArgs {
+        let start = r.offset
         let contract = try scAddress(&r)
         let fn = try r.string(max: 32, "function name")
         let args = try r.array(max: 100, "args") { r in try scVal(&r) }
-        return InvokeContractArgs(contract: contract, function: fn, args: args)
+        return InvokeContractArgs(contract: contract, function: fn, args: args, xdr: Array(r.bytes[start..<r.offset]))
     }
 
     static func authorizedInvocation(_ r: inout XDRReader, depth: Int = 0) throws -> AuthorizedInvocation {
@@ -412,21 +455,22 @@ enum XDRDecode {
         }
     }
 
-    static func memo(_ r: inout XDRReader) throws {
+    static func memo(_ r: inout XDRReader) throws -> StellarMemo {
         let t = try r.int32()
         switch t {
-        case 0: return
-        case 1: _ = try r.variable(max: 28, "memo")
-        case 2: _ = try r.uint64()
-        case 3, 4: _ = try r.fixed(32)
+        case 0: return .none
+        case 1: return .text(try r.variable(max: 28, "memo"))
+        case 2: return .id(try r.uint64())
+        case 3: return .hash(try r.fixed(32))
+        case 4: return .returnHash(try r.fixed(32))
         default: throw XDRError.unsupported("memo type \(t)")
         }
     }
 
-    static func ledgerKey(_ r: inout XDRReader) throws {
+    static func ledgerKey(_ r: inout XDRReader) throws -> StellarLedgerKey {
         let t = try r.int32()
         switch t {
-        case 0: _ = try accountID(&r)
+        case 0: return .account(try accountID(&r))
         case 1:
             _ = try accountID(&r)
             let at = try r.int32()
@@ -451,31 +495,29 @@ enum XDRDecode {
             _ = try r.int32()
             _ = try r.fixed(32)
         case 5: _ = try r.fixed(32)
-        case 6:
-            _ = try scAddress(&r)
-            _ = try scVal(&r)
-            _ = try r.int32()
-        case 7: _ = try r.fixed(32)
+        case 6: return .contractData(contract: try scAddress(&r), key: try scVal(&r), durability: try r.int32())
+        case 7: return .contractCode(hash: try r.fixed(32))
         case 8: _ = try r.int32()
         case 9: _ = try r.fixed(32)
         default: throw XDRError.unsupported("ledger key \(t)")
         }
+        return .other(t)
     }
 
-    /// SorobanTransactionData; returns the resource fee.
-    static func sorobanData(_ r: inout XDRReader) throws -> Int64 {
+    /// SorobanTransactionData: the footprint and the resource fee.
+    static func sorobanData(_ r: inout XDRReader) throws -> (footprint: StellarFootprint, resourceFee: Int64) {
         let ext = try r.int32()
         switch ext {
         case 0: break
         case 1: _ = try r.array(max: 1_000, "archived entries") { r in try r.uint32() }
         default: throw XDRError.unsupported("soroban data ext \(ext)")
         }
-        _ = try r.array(max: 1_000, "read-only footprint") { r in try ledgerKey(&r) }
-        _ = try r.array(max: 1_000, "read-write footprint") { r in try ledgerKey(&r) }
+        let readOnly = try r.array(max: 1_000, "read-only footprint") { r in try ledgerKey(&r) }
+        let readWrite = try r.array(max: 1_000, "read-write footprint") { r in try ledgerKey(&r) }
         _ = try r.uint32() // instructions
         _ = try r.uint32() // disk read bytes
         _ = try r.uint32() // write bytes
-        return try r.int64()
+        return (StellarFootprint(readOnly: readOnly, readWrite: readWrite), try r.int64())
     }
 
     static func transaction(_ r: inout XDRReader) throws -> Transaction {
@@ -483,15 +525,15 @@ enum XDRDecode {
         let fee = try r.uint32()
         let seq = try r.int64()
         let tb = try preconditions(&r)
-        try memo(&r)
+        let memo = try memo(&r)
         let ops = try r.array(max: 100, "operations") { r in try operation(&r) }
         let ext = try r.int32()
-        var resourceFee: Int64?
+        var soroban: (footprint: StellarFootprint, resourceFee: Int64)?
         switch ext {
         case 0: break
-        case 1: resourceFee = try sorobanData(&r)
+        case 1: soroban = try sorobanData(&r)
         default: throw XDRError.unsupported("transaction ext \(ext)")
         }
-        return Transaction(source: source, fee: fee, sequence: seq, timeBounds: tb, operations: ops, resourceFee: resourceFee)
+        return Transaction(source: source, fee: fee, sequence: seq, timeBounds: tb, memo: memo, operations: ops, resourceFee: soroban?.resourceFee, footprint: soroban?.footprint)
     }
 }

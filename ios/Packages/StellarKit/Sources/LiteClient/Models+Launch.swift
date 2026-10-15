@@ -14,6 +14,8 @@ public struct StellarLaunchBoard: Codable, Equatable, Sendable {
     /// The next page's cursor; nil on the last page (and from older servers, which send one page).
     public let nextCursor: String?
     public let counts: Counts?
+    /// "owner" or "public" (asked without a session). Nil from older servers.
+    public let view: String?
 }
 
 /// A coin's creator fees, in base units of its quote asset.

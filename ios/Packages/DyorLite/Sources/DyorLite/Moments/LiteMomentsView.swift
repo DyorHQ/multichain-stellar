@@ -1,3 +1,4 @@
+import AVFoundation
 import PhotosUI
 import StellarKit
 import SwiftUI
@@ -113,14 +114,15 @@ struct MomentSheet: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    if moment.open {
-                        Stepper(tr("Editions: \(quantity)"), value: $quantity, in: 1...20)
+                    if StellarMomentState(moment, now: Date()).isCollecting {
+                        Stepper(tr("Editions: \(quantity)"), value: $quantity,
+                                in: 1...StellarMomentState.collectLimit(maxEditions: moment.maxEditions, minted: moment.minted, maxPerCollect: store.config?.limits?.collectMax ?? 20))
                         if let error { LiteInlineError(message: error) }
                         LitePrimaryButton(title: tr("Collect for \(StellarAmount.format((Int64(moment.price) ?? 0) * Int64(quantity))) \(code)"), busy: busy) {
                             Task {
                                 busy = true
                                 defer { busy = false }
-                                do { prepared = try await store.collectPlan(moment, quantity: quantity) } catch { self.error = describe(error) }
+                                do { prepared = try await store.collectPlan(moment: moment, quantity: quantity) } catch { self.error = LiteErrorText.describe(error) }
                             }
                         }
                     } else {
@@ -204,10 +206,21 @@ struct PublishMomentSheet: View {
         defer { busy = false }
         error = nil
         do {
-            let (data, type) = isVideo ? (media, "video/mp4") : (jpeg(media), "image/jpeg")
-            prepared = try await store.publishPlan(media: data, contentType: type, title: title, description: description, price: StellarAmount.parse(price) ?? 0, quote: quote, editions: editions, windowSecs: Int(hours) * 3600)
+            let form = StellarMomentForm(title: title, description: description.isEmpty ? nil : description, price: StellarAmount.parse(price) ?? 0,
+                                         quote: quote, maxEditions: editions, windowSecs: Int(hours) * 3600)
+            let file: StellarMedia
+            if isVideo {
+                guard let poster = await coverFrame(media) else {
+                    self.error = tr("A video needs its cover frame.")
+                    return
+                }
+                file = .video(media, poster: poster)
+            } else {
+                file = .photo(jpeg(media))
+            }
+            prepared = try await store.publishPlan(form, media: file)
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }
@@ -218,4 +231,19 @@ func jpeg(_ data: Data) -> Data {
     if let img = UIImage(data: data), let out = img.jpegData(compressionQuality: 0.85) { return out }
     #endif
     return data
+}
+
+/// A video's first frame as a JPEG: the cover the NFT shows (§6.9 needs one for every video); nil when it can't be read.
+func coverFrame(_ video: Data) async -> Data? {
+    #if canImport(UIKit)
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mov")
+    defer { try? FileManager.default.removeItem(at: file) }
+    guard (try? video.write(to: file)) != nil else { return nil }
+    let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+    generator.appliesPreferredTrackTransform = true
+    guard let frame = try? await generator.image(at: .zero).image else { return nil }
+    return UIImage(cgImage: frame).jpegData(compressionQuality: 0.85)
+    #else
+    return nil
+    #endif
 }

@@ -42,7 +42,8 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(title("moment_publish", ["price": .string("10000000"), "quote": .string("USDC"), "editions": .number(100)]), "Publish a Moment at 1 USDC")
         XCTAssertEqual(title("approve", ["amount": .string("50000000"), "spender": .string("Circle CCTP")]), "Allow Circle's bridge to move 5 USDC")
         XCTAssertEqual(title("bridge_out", ["amount": .string("50000000"), "to": .string("0x1234")]), "Send 5 USDC to Monad")
-        XCTAssertEqual(title("faucet"), "Get \(ReceiveSheet.faucetAmount) test XLM", "the faucet's log row has no intent")
+        XCTAssertEqual(title("faucet", ["amount": .string("5000")]), "Get 5,000 test XLM", "the server's amount, in the language's digits")
+        XCTAssertEqual(title("faucet"), "Get test XLM", "the faucet's row carries no intent: no number made up, and never the bare kind")
     }
 
     func testAnUnknownKindOrAMissingFieldKeepsTheServersWords() {
@@ -78,6 +79,22 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(LiteTitles.activity(older), "Add cash")
         let unknown = try item(#"{"type":"airdrop","id":"x","kind":"drop","summary":"Got a drop","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertNil(LiteTitles.activity(unknown), "Activity shows the server's summary")
+    }
+
+    /// Today's Activity row: the phone's words, else the server's summary while none of its words is a stand-in, else
+    /// "Transaction"; a faucet row (no intent) never shows its bare kind.
+    @MainActor
+    func testTheActivityRowNeverShowsAStandInOrABareKind() throws {
+        func item(_ json: String) throws -> StellarActivityItem { try JSONDecoder().decode(StellarActivityItem.self, from: Data(json.utf8)) }
+        let faucet = try item(#"{"type":"tx","id":"f","kind":"faucet","summary":"faucet","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(faucet), "Get test XLM")
+        let unknown = try item(#"{"type":"tx","id":"u","kind":"blend_borrow","summary":"Borrow 5 USDC","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(unknown), "Borrow 5 USDC")
+        let old = try item(#"{"type":"tx","id":"o","kind":"blend_borrow","summary":"Buy TOKEN with 2 XLM","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(old), "Transaction")
+        XCTAssertNil(LiteFormat.sentence("Swap 1 XLM for $TOKEN."), "a stand-in with marks around it is still one")
+        XCTAssertNil(LiteFormat.sentence("  "))
+        XCTAssertEqual(LiteFormat.sentence("Tokenomics update"), "Tokenomics update", "only whole words")
     }
 
     /// The new field never costs the list: an older payload decodes without it, and a display the app can't read only
@@ -124,13 +141,27 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(LiteTitles.venue("comet"), "Comet")
     }
 
-    /// Horizon's num_sponsored counts base reserves (an account 2, a trustline 1), 0.5 XLM each.
-    @MainActor
-    func testReservesReadInXLM() {
-        XCTAssertEqual(LiteAccountView.reserveXLM(1), "0.5 XLM", "a sponsored USDC trustline (testnet: Friendbot created the account)")
-        XCTAssertEqual(LiteAccountView.reserveXLM(3), "1.5 XLM", "a sponsored account and its trustline (mainnet)")
-        XCTAssertEqual(LiteAccountView.reserveXLM(2), "1 XLM")
-        XCTAssertEqual(LiteAccountView.reserveXLM(0), "0 XLM")
+    /// A settled action's notification (§8.15): Monad's words where Monad has them, past tense, with what it did.
+    func testSettledActionsSayWhatHappened() throws {
+        let swapped = try JSONDecoder().decode(TxStatus.self, from: Data(#"{"hash":"h","status":"success","result":{"amountOut":"18938032"}}"#.utf8))
+        let swap = LiteTitles.settled(.swap(amountIn: 100_000_000, sell: "XLM", buy: "USDC", quotedOut: 18_000_000), results: [swapped])
+        XCTAssertEqual(swap.title, "Swap complete")
+        XCTAssertEqual(swap.body, "Swapped 10 XLM → 1.8938 USDC", "what came back, not the quote")
+        XCTAssertEqual(LiteTitles.settled(.swap(amountIn: 100_000_000, sell: "XLM", buy: "USDC", quotedOut: 18_000_000), results: []).body,
+                       "Swapped 10 XLM → 1.8 USDC")
+        XCTAssertEqual(LiteTitles.settled(.earn(deposit: true, amount: 125_000_000, code: "USDC"), results: []).title, "Supplied to Earn")
+        XCTAssertEqual(LiteTitles.settled(.earn(deposit: false, amount: 125_000_000, code: "USDC"), results: []).body, "12.5 USDC · Blend")
+        XCTAssertEqual(LiteTitles.settled(.send(amount: 105_000_000, code: "XLM", to: "GDRXE2BQUC3AZNPVFSCEZ76NJ3WWL25FYFK6RGZGIEKWE4SOOHSUJUJ6"), results: []).body,
+                       "10.5 XLM to GDRX…JUJ6")
+        XCTAssertEqual(LiteTitles.settled(.launchTrade(buy: true, symbol: "ECAT", amount: 20_000_000, quoteCode: "XLM"), results: []).title, "Bought ECAT")
+        XCTAssertEqual(LiteTitles.settled(.launchCreate(symbol: "ECAT", name: "E Cat"), results: []).title, "Launched $ECAT")
+        XCTAssertEqual(LiteTitles.settled(.publish(title: "Sunset"), results: []).title, "Published Sunset")
+        XCTAssertEqual(LiteTitles.settled(.launchGraduate(symbol: "ECAT"), results: []).title, "ECAT graduated")
+        for summary: LiteActionSummary in [.enable(code: "USDC"), .launchClaim(symbol: "ECAT"), .bridgeOut(amount: 50_000_000),
+                                           .collect(title: "Sunset", quantity: 2, total: 20_000_000, quoteCode: "XLM"),
+                                           .cashOut(amount: 500_000_000, code: "USDC", anchor: "Test Anchor")] {
+            XCTAssertFalse(LiteTitles.settled(summary, results: []).title.isEmpty, "\(summary)")
+        }
     }
 
     func testAddressesBreakOnlyBetweenGroupsOfFour() {

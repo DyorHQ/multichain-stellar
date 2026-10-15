@@ -1,15 +1,47 @@
-// Writes .secrets/local-functions.env for the local stack (backend/scripts/local-stack.sh): the five function
-// secrets copied verbatim from .secrets/testnet-functions.env, plus a LITE_DB_URL for the LOCAL Postgres (lite_api on
-// 127.0.0.1:54329, trust auth, no password). The source file's own LITE_DB_URL (the hosted pooler) is never copied,
-// so a process started with this file cannot reach the hosted database. Prints variable names only, never a value.
+// Writes a local stack's env file (backend/scripts/local-stack.sh): the function secrets copied verbatim from
+// .secrets/testnet-functions.env, the stack's settings, and a LITE_DB_URL for the stack's LOCAL Postgres (lite_api on
+// 127.0.0.1, trust auth, no password). The source file's own LITE_DB_URL (the hosted pooler) is never copied, so a
+// process started with this file cannot reach the hosted database. Prints variable names only, never a value.
 //
-//   deno run --no-config --allow-read=.secrets/testnet-functions.env --allow-write=.secrets/local-functions.env \
-//     backend/scripts/local/make-local-env.ts
+//   deno run --no-config --allow-read=<from> --allow-write=<to> --allow-env=<the settings below> \
+//     backend/scripts/local/make-local-env.ts [--from <file>] [--to <file>]
+//
+// --from defaults to .secrets/testnet-functions.env, --to to .local-stack/functions.env (the default stack's).
+// From the source file: LITE_NETWORK, LITE_MIN_BUILD, SPONSOR_SECRET, LITE_JWT_SECRET and LITE_CRON_SECRET, which it
+// must have, and KEEPER_SECRET and LITE_ACTIVATION when it has them. From this process's environment, when set (the
+// stack's options, which win over the source): the settings below. The local stack runs on testnet only.
 const root = new URL("../../../", import.meta.url).pathname;
-const source = `${root}.secrets/testnet-functions.env`;
-const target = `${root}.secrets/local-functions.env`;
 const COPY = ["LITE_NETWORK", "LITE_MIN_BUILD", "SPONSOR_SECRET", "LITE_JWT_SECRET", "LITE_CRON_SECRET"];
-const LOCAL_DB_URL = "postgresql://lite_api@127.0.0.1:54329/lite";
+const COPY_WHEN_PRESENT = ["KEEPER_SECRET", "LITE_ACTIVATION"];
+/** The stack's settings and what each may be: none is a secret. */
+const SETTINGS: Record<string, RegExp> = {
+  // The stack's own Postgres: lite_api on the loopback address, never a hosted database.
+  LITE_DB_URL: /^postgresql:\/\/lite_api@127\.0\.0\.1:[0-9]{4,5}\/lite$/,
+  LITE_DEPLOYMENT: /^(testnet|testnet-qa)$/,
+  LITE_ACTIVATION: /^(friendbot|sponsored)$/,
+  LITE_KEEPER: /^(on|off)$/,
+  // env.ts's minimums: 60 s and 120 s.
+  LITE_JWT_TTL_S: /^([6-9][0-9]|[1-9][0-9]{2,6})$/,
+  LITE_REFRESH_TTL_S: /^(1[2-9][0-9]|[2-9][0-9]{2}|[1-9][0-9]{3,7})$/,
+  LITE_INVITE_REQUIRED: /^[01]$/,
+  LITE_LOCAL_STORAGE_DIR: /^\/[^\n]+$/,
+  LITE_PUBLIC_BASE: /^http:\/\/127\.0\.0\.1:[0-9]{4,5}\/lite$/,
+};
+const DEFAULT_DB_URL = "postgresql://lite_api@127.0.0.1:54329/lite";
+
+function fail(message: string): never {
+  console.error(`make-local-env: ${message}; nothing written`);
+  Deno.exit(1);
+}
+
+let source = `${root}.secrets/testnet-functions.env`;
+let target = `${root}.local-stack/functions.env`;
+for (let i = 0; i < Deno.args.length; i += 2) {
+  const [flag, value] = [Deno.args[i], Deno.args[i + 1]];
+  if (flag === "--from" && value) source = value;
+  else if (flag === "--to" && value) target = value;
+  else fail("usage: make-local-env.ts [--from <file>] [--to <file>]");
+}
 
 const values = new Map<string, string>();
 for (const raw of (await Deno.readTextFile(source)).split("\n")) {
@@ -19,21 +51,28 @@ for (const raw of (await Deno.readTextFile(source)).split("\n")) {
   if (m) values.set(m[1], m[2]);
 }
 const missing = COPY.filter((name) => !values.get(name));
-if (missing.length) {
-  console.error(`make-local-env: ${source} has no ${missing.join(", ")}; nothing written`);
-  Deno.exit(1);
+if (missing.length) fail(`${source} has no ${missing.join(", ")}`);
+
+const settings = new Map<string, string>();
+for (const [name, shape] of Object.entries(SETTINGS)) {
+  const v = Deno.env.get(name);
+  if (v === undefined || v === "") continue;
+  if (!shape.test(v)) fail(`${name} isn't one this stack takes`);
+  settings.set(name, v);
 }
-// The local stack is testnet-only (Friendbot activation, testnet contracts).
+// The local stack is testnet-only (Friendbot activation, testnet contracts), and so are its QA settings.
 if (values.get("LITE_NETWORK")!.replace(/^["']|["']$/g, "") !== "testnet") {
-  console.error("make-local-env: LITE_NETWORK in the source file is not testnet; nothing written");
-  Deno.exit(1);
+  const short = settings.has("LITE_JWT_TTL_S") || settings.has("LITE_REFRESH_TTL_S");
+  fail(`LITE_NETWORK in ${source} isn't testnet, and the local stack runs on testnet only${short ? " (short sessions are refused on mainnet)" : ""}`);
 }
 
+const names = [...COPY, ...COPY_WHEN_PRESENT.filter((name) => values.get(name) && !settings.has(name))];
 const text = [
   "# Generated by backend/scripts/local/make-local-env.ts for backend/scripts/local-stack.sh. Local only:",
-  "# LITE_DB_URL is the local Postgres; regenerate instead of editing.",
-  ...COPY.map((name) => `${name}=${values.get(name)}`),
-  `LITE_DB_URL=${LOCAL_DB_URL}`,
+  "# LITE_DB_URL is the stack's own Postgres; regenerate instead of editing.",
+  ...names.map((name) => `${name}=${values.get(name)}`),
+  ...[...settings].map(([name, v]) => `${name}=${v}`),
+  ...(settings.has("LITE_DB_URL") ? [] : [`LITE_DB_URL=${DEFAULT_DB_URL}`]),
   "",
 ].join("\n");
 
@@ -47,4 +86,5 @@ try {
 } finally {
   file.close();
 }
-console.log(`wrote ${target} (mode 600): ${[...COPY, "LITE_DB_URL"].join(", ")}`);
+const written = [...names, ...settings.keys(), ...(settings.has("LITE_DB_URL") ? [] : ["LITE_DB_URL"])];
+console.log(`wrote ${target} (mode 600): ${written.join(", ")}`);

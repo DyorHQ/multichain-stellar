@@ -1,0 +1,24 @@
+{
+  "launchpad": {
+    "XLM": {
+      "phantom": "2000000000",
+      "threshold": "4324555320",
+      "enabled": true
+    },
+    "USDC": {
+      "phantom": "200000000",
+      "threshold": "432455532",
+      "enabled": true
+    }
+  },
+  "moments": {
+    "XLM": {
+      "minPrice": "1000000",
+      "enabled": true
+    },
+    "USDC": {
+      "minPrice": "1000000",
+      "enabled": true
+    }
+  }
+}

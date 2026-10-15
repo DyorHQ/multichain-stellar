@@ -1,23 +1,28 @@
 import StellarKit
 import SwiftUI
 
-/// Add cash / cash out through SEP-24 anchors. The anchor's own page runs in an in-app browser; the phone signs in
-/// to the anchor with the Stellar key (SEP-10) and follows the transfer. For a withdrawal the anchor gives an
-/// address and memo, and the phone sends the payment (fee paid by DyorHQ).
+/// Add cash / cash out through SEP-24 anchors. The anchor's own page runs in an in-app browser; the store signs in to
+/// the anchor with the Stellar key (SEP-10, inside DyorLite) and follows the transfer. For a withdrawal the anchor gives
+/// an address and memo, and the phone sends the payment, its network fee paid in XLM like any other.
 @MainActor
 struct CashSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var anchors: [AnchorInfo] = []
     @State private var loaded = false
-    @State private var deposit = true
+    @State private var deposit: Bool
     @State private var asset = "USDC"
     @State private var web: WebPage?
-    @State private var tracking: (anchor: AnchorClient, toml: AnchorClient.Toml, jwt: String, id: String)?
+    @State private var tracking: LiteCashFlow?
     @State private var status: AnchorClient.AnchorTransaction?
     @State private var busy = false
     @State private var error: String?
     @State private var prepared: PreparedAction?
+
+    /// `deposit`: Add cash at first, else Cash out.
+    init(deposit: Bool = true) {
+        _deposit = State(initialValue: deposit)
+    }
 
     var body: some View {
         NavigationStack {
@@ -58,9 +63,9 @@ struct CashSheet: View {
                     Section(tr("Status")) {
                         LabeledContent(tr("Transfer"), value: status.status.replacingOccurrences(of: "_", with: " "))
                         if let m = status.message { Text(verbatim: m).font(.footnote) }
-                        if !deposit, status.status == "pending_user_transfer_start", let to = status.withdraw_anchor_account, let amount = status.amount_in {
+                        if !deposit, status.status == "pending_user_transfer_start", status.withdraw_anchor_account != nil, let amount = status.amount_in {
                             LitePrimaryButton(title: tr("Send \(amount) \(asset == "native" ? "XLM" : asset) to the provider"), busy: busy) {
-                                Task { await payAnchor(to: to, amount: amount, memo: status.withdraw_memo, memoType: status.withdraw_memo_type) }
+                                Task { await payAnchor(status) }
                             }
                         }
                         Button(tr("Refresh")) { Task { await refresh() } }
@@ -74,7 +79,7 @@ struct CashSheet: View {
             .navigationTitle(deposit ? tr("Add cash") : tr("Cash out"))
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }
             .task {
-                do { anchors = try await store.anchors() } catch { self.error = describe(error) }
+                do { anchors = try await store.anchors() } catch { self.error = LiteErrorText.describe(error) }
                 loaded = true
             }
             .sheet(item: $web) { page in
@@ -90,38 +95,31 @@ struct CashSheet: View {
         defer { busy = false }
         error = nil
         do {
-            let client = AnchorClient(domain: a.domain, network: store.network)
-            let toml = try await client.toml()
-            let signer = try await store.signer(reason: tr("Sign in to \(a.name)"))
-            let jwt = try await client.authenticate(signer: signer, toml: toml)
-            let flow = try await client.interactive(deposit: deposit, assetCode: asset, account: store.address, jwt: jwt, toml: toml)
-            tracking = (client, toml, jwt, flow.id)
-            await store.trackCash(anchor: a.domain, deposit: deposit, asset: asset, id: flow.id, status: "incomplete", amount: nil)
-            web = URL(string: flow.url).map(WebPage.init)
+            let flow = try await store.startCash(anchor: a, deposit: deposit, asset: asset == "native" ? "XLM" : asset)
+            tracking = flow
+            web = WebPage(url: flow.url)
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 
     private func refresh() async {
-        guard let t = tracking else { return }
+        guard let flow = tracking else { return }
         do {
-            let s = try await t.anchor.transaction(id: t.id, jwt: t.jwt, toml: t.toml)
-            status = s
-            await store.trackCash(anchor: t.anchor.domain, deposit: deposit, asset: asset, id: t.id, status: s.status, amount: s.amount_in)
+            status = try await store.cashStatus(flow)
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 
-    private func payAnchor(to: String, amount: String, memo: String?, memoType: String?) async {
-        guard let units = StellarAmount.parse(amount) else { return }
+    private func payAnchor(_ transaction: AnchorClient.AnchorTransaction) async {
+        guard let flow = tracking else { return }
         busy = true
         defer { busy = false }
         do {
-            prepared = try await store.sendPlan(asset: asset == "native" ? "XLM" : asset, to: to, amount: units, memo: memo, memoType: memoType)
+            prepared = try await store.cashOutPlan(flow, transaction: transaction)
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }
@@ -136,7 +134,7 @@ struct WebPage: Identifiable {
 struct BridgeSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State private var toStellar = true
+    @State private var toStellar: Bool
     @State private var amount = ""
     @State private var monadAddress = ""
     @State private var transfer: BridgeTransfer?
@@ -144,6 +142,11 @@ struct BridgeSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var prepared: PreparedAction?
+
+    /// `toStellar`: Monad → Stellar at first, else Stellar → Monad.
+    init(toStellar: Bool = true) {
+        _toStellar = State(initialValue: toStellar)
+    }
 
     var body: some View {
         NavigationStack {
@@ -203,12 +206,12 @@ struct BridgeSheet: View {
                 await refresh()
             } else {
                 let dest = store.monad?.monadAddress ?? monadAddress
-                let (action, t) = try await store.bridgeOut(amount: units7 - units7 % 10, monadAddress: dest)
+                let (action, t) = try await store.bridgeOutPlan(amount: units7 - units7 % 10, monadAddress: dest)
                 transfer = t
                 prepared = action
             }
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 
@@ -224,7 +227,7 @@ struct BridgeSheet: View {
             try await store.claimOnMonad(s)
             await refresh()
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }
