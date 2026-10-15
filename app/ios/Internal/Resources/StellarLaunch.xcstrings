@@ -1208,6 +1208,35 @@
         }
       }
     },
+    "Recipient takeover window" : {
+      "comment" : "In the review of a Stellar launch: once its notice is over, how long a fee recipient change DyorHQ's admin proposed can be applied before it lapses. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plazo para aplicar el cambio de receptor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fenêtre d'application du changement de destinataire"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수령인 변경 적용 기간"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接收方变更执行窗口"
+          }
+        }
+      }
+    },
     "Refund" : {
       "comment" : "[tight] The confirm button of a Stellar refund's review: give back coins at the fixed rate",
       "localizations" : {
@@ -1295,60 +1324,118 @@
         }
       }
     },
-    "Refunds after" : {
+    "Refunds by DyorHQ after" : {
+      "comment" : "In the review of a Stellar launch: how long after a delay DyorHQ's admin can switch it to refunds, before anyone can. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por DyorHQ tras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par DyorHQ après"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 환불 개시까지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 开启退款需等待"
+          }
+        }
+      }
+    },
+    "Refunds by DyorHQ from" : {
+      "comment" : "On a Stellar coin whose graduation is delayed: from when DyorHQ's admin may switch it to refunds, before anyone may. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por DyorHQ desde"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par DyorHQ dès le"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 환불 개시 가능일"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 可开启退款于"
+          }
+        }
+      }
+    },
+    "Refunds by anyone after" : {
       "comment" : "In the review of a Stellar launch: how long after a delay anyone can switch it to refunds",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reembolsos tras"
+            "value" : "Reembolsos por cualquiera tras"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remboursements après"
+            "value" : "Remboursements par tous après"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "환불 가능까지"
+            "value" : "누구나 환불 개시까지"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "退款开放于"
+            "value" : "任何人开启退款需等待"
           }
         }
       }
     },
-    "Refunds from" : {
+    "Refunds by anyone from" : {
       "comment" : "On a Stellar coin whose graduation is delayed: from when anyone may switch it to refunds",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reembolsos desde"
+            "value" : "Reembolsos por cualquiera desde"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remboursements à partir du"
+            "value" : "Remboursements par tous dès le"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "환불 시작"
+            "value" : "누구나 환불 개시 가능일"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "退款开始于"
+            "value" : "任何人可开启退款于"
           }
         }
       }
@@ -1378,6 +1465,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "生效时间"
+          }
+        }
+      }
+    },
+    "Telegram: an https link on t.me, at most %lld characters." : {
+      "comment" : "Under the Telegram field of Stellar's Launch a Coin screen: what a coin's Telegram link may be. The value is the most characters (200). Telegram, https and t.me stay as they are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram: un enlace https de t.me, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram : un lien https sur t.me, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram: t.me의 https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram：t.me 上的 https 链接，最多 %lld 个字符。"
           }
         }
       }
@@ -1900,6 +2016,35 @@
         }
       }
     },
+    "Website: an https link, at most %lld characters." : {
+      "comment" : "Under the website field of Stellar's Launch a Coin screen: what a coin's website link may be. The value is the most characters (200). https stays as it is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sitio web: un enlace https, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Site web : un lien https, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "웹사이트: https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网站：https 链接，最多 %lld 个字符。"
+          }
+        }
+      }
+    },
     "With fee sharing on, the creator tax and the creator's share of the curve fee go to holders as rewards." : {
       "comment" : "Footer of a Stellar coin's creator fees, when it shares its fees with holders",
       "localizations" : {
@@ -1925,6 +2070,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开启费用分享后，创作者税和创作者所得的曲线费用将作为奖励发给持有者。"
+          }
+        }
+      }
+    },
+    "X: an https link to a profile on x.com or twitter.com, at most %lld characters." : {
+      "comment" : "Under the X profile field of Stellar's Launch a Coin screen: what a coin's X link may be. The value is the most characters (200). X, https, x.com and twitter.com stay as they are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X: un enlace https a un perfil en x.com o twitter.com, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X : un lien https vers un profil sur x.com ou twitter.com, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X: x.com 또는 twitter.com 프로필의 https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X：x.com 或 twitter.com 上个人主页的 https 链接，最多 %lld 个字符。"
           }
         }
       }
