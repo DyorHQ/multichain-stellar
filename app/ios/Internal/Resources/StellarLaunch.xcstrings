@@ -1238,7 +1238,7 @@
       }
     },
     "Refund" : {
-      "comment" : "[tight] The confirm button of a Stellar refund's review: give back coins at the fixed rate",
+      "comment" : "[tight] The button of a rescued Stellar launch's refund ticket, and the confirm button of its review: give back coins at the fixed rate",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -1730,6 +1730,35 @@
         }
       }
     },
+    "This coin couldn't be read just now." : {
+      "comment" : "On a Stellar coin's page, with Retry: its name, price and other figures couldn't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer esta moneda en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce jeton n'a pas pu être lu pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 코인을 읽을 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取此币。"
+          }
+        }
+      }
+    },
     "This coin is on DyorHQ's retired launchpad: you can sell it on its curve and claim its fees. New buys are closed." : {
       "comment" : "On a Stellar coin of the retired launchpad (v1), above its ticket: only selling and claiming remain. DyorHQ is never translated",
       "localizations" : {
@@ -2041,6 +2070,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "网站：https 链接，最多 %lld 个字符。"
+          }
+        }
+      }
+    },
+    "With fee sharing on, the creator fee and the creator's share of the curve fee go to holders as rewards, so there are no creator fees to claim. Turn sharing off to keep them." : {
+      "comment" : "On Stellar's Launch a Coin screen and its review, while Share fees with holders is on: the creator's fees all go to the coin's holders",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con el reparto de comisiones activado, la comisión de creador y la parte del creador de la comisión de la curva van a los holders como recompensas, así que no habrá comisiones de creador que reclamar. Desactiva el reparto para quedártelas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec le partage des frais activé, les frais de créateur et la part du créateur des frais de courbe vont aux détenteurs sous forme de récompenses : il n'y aura donc aucuns frais de créateur à réclamer. Désactivez le partage pour les garder."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 공유가 켜져 있으면 크리에이터 수수료와 크리에이터 몫의 커브 수수료가 홀더에게 보상으로 가서 받을 크리에이터 수수료가 없어요. 직접 받으려면 공유를 끄세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启费用分享后，创作者费用和创作者所得的曲线费用将作为奖励发给持有者，因此没有可领取的创作者费用。关闭分享即可自己保留。"
           }
         }
       }

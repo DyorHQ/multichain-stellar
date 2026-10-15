@@ -87,9 +87,19 @@ struct StellarCreateLaunchView: View {
 
     private var chosenVenue: Int? { quote?.venueLocked == true ? quote?.defaultVenue : venue ?? quote?.defaultVenue }
 
+    /// The launch preview of the quote and venue chosen: one read for another pair (just before a change, while the
+    /// next one is read) is never used for its terms, Max or shortfall.
+    private var currentPreview: StellarLaunchPreviewV2? { Self.preview(preview, quote: quote?.contract, venue: chosenVenue) }
+
+    /// `preview` when it was read for the quote asset `quote` (its contract) and `venue`; nil when it was another pair's.
+    static func preview(_ preview: StellarLaunchPreviewV2?, quote: String?, venue: Int?) -> StellarLaunchPreviewV2? {
+        guard let preview, preview.terms.quote == quote, preview.venue.id == venue else { return nil }
+        return preview
+    }
+
     /// The terms the launch binds: the preview's for this quote and venue, else the economics' for its default venue.
     private var terms: StellarLaunchTermsV2? {
-        if let preview, preview.terms.quote == quote?.contract, preview.venue.id == chosenVenue { return preview.terms }
+        if let currentPreview { return currentPreview.terms }
         return chosenVenue == quote?.defaultVenue ? quote?.terms : nil
     }
 
@@ -126,7 +136,7 @@ struct StellarCreateLaunchView: View {
     /// The XLM (or quote) missing before the review (F18, V12): the launch fee, its network fee and the account's minimum
     /// balance come first; for an XLM quote the developer buy too.
     private var shortfall: String? {
-        switch preview.flatMap({ Self.shortage($0, initialBuy: initialBuy, quoteIsXLM: quoteIsXLM) }) {
+        switch currentPreview.flatMap({ Self.shortage($0, initialBuy: initialBuy, quoteIsXLM: quoteIsXLM) }) {
         case nil:
             return nil
         case .quote(let balance)?:
@@ -155,9 +165,10 @@ struct StellarCreateLaunchView: View {
         Self.linkAccepted(website, .website) && Self.linkAccepted(twitter, .x) && Self.linkAccepted(telegram, .telegram)
     }
 
+    /// Review waits for the preview of the quote and venue chosen too: its shortfall is what the launch checks first.
     private var valid: Bool {
         trimmedName.count >= 2 && ticker != nil && refusal == nil && terms != nil && blocker == nil && !recipientInvalid && linksValid
-            && shortfall == nil && (initialBuy == 0 || firstBuy != nil) && (session?.canSign ?? false)
+            && currentPreview != nil && shortfall == nil && (initialBuy == 0 || firstBuy != nil) && (session?.canSign ?? false)
     }
 
     var body: some View {
@@ -344,7 +355,7 @@ struct StellarCreateLaunchView: View {
     private var developerBuySection: some View {
         Section {
             StellarAmountField(title: "0" as String, text: $initialBuyText, code: quoteCode.isEmpty ? nil : quoteCode) {
-                if let max = preview.flatMap({ Int64($0.maxInitialBuy) }) { initialBuyText = StellarFormat.plain(units: max) }
+                if let max = currentPreview.flatMap({ Int64($0.maxInitialBuy) }) { initialBuyText = StellarFormat.plain(units: max) }
             }
             if let firstBuy {
                 DetailRow("You receive", verbatim: "\(StellarFormat.units(firstBuy.tokensOut, compact: true)) \(ticker ?? symbol)")
@@ -388,11 +399,17 @@ struct StellarCreateLaunchView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Paragraph(LocalizedStringResource("The creator fee is charged on curve trades only. After graduation the pool's fees are shared instead: half to DyorHQ, half to holders or the fee recipient.", table: "StellarLaunch", comment: "Footer of the advanced terms on Stellar's Launch a Coin screen: the creator fee stops at graduation, when the pool's fees are split. DyorHQ is never translated"))
                 if holderSharing {
+                    // launchpad-v2's split_fees: with sharing on, the whole creator part goes to holders.
+                    Paragraph(Self.sharingTakesCreatorFees).foregroundStyle(creatorFeeBps > 0 ? Color.attention : Color.secondary)
                     Paragraph(LocalizedStringResource("Holders also earn part of the pool fees after graduation, in this coin and in \(quoteCode).", table: "StellarLaunch", comment: "Under a Stellar coin's holder rewards, and the Share fees with holders setting: after graduation holders also get part of the pool's fees, in the coin and in its quote asset. The value is the quote asset (XLM)"))
                 }
             }
         }
     }
+
+    /// With fee sharing on, the creator fee and the creator's share of the curve fee go to holders: said under the
+    /// setting and in the review, so a creator who sets a fee knows there will be none to claim.
+    static let sharingTakesCreatorFees = LocalizedStringResource("With fee sharing on, the creator fee and the creator's share of the curve fee go to holders as rewards, so there are no creator fees to claim. Turn sharing off to keep them.", table: "StellarLaunch", comment: "On Stellar's Launch a Coin screen and its review, while Share fees with holders is on: the creator's fees all go to the coin's holders")
 
     /// Wallets that pay no early-buy tax on this coin, besides the creator and the fee recipient.
     private var exemptSection: some View {
@@ -461,6 +478,9 @@ struct StellarCreateLaunchView: View {
                 DetailRow(Text("Creator fee (until graduation)", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: the creator's fee on every curve trade, charged until the coin graduates"),
                           Text(verbatim: NumberStyle.basisPoints(creatorFeeBps)))
                 DetailRow(Text("Fee sharing"), Text(holderSharing ? "On" : "Off"))
+                if holderSharing {
+                    Paragraph(Self.sharingTakesCreatorFees).font(.footnote).foregroundStyle(.secondary)
+                }
                 if let recipient { DetailRow("Fee recipient", verbatim: recipient.short) }
                 if !exempt.isEmpty {
                     DetailRow(Text("Early-buy tax exemptions", tableName: "StellarLaunch", comment: "A section on Stellar's Launch a Coin screen: wallets that pay no early-buy (snipe) tax on the new coin"),

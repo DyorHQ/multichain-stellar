@@ -1,6 +1,7 @@
 // The Stellar launch page and Create (docs/DESIGN-stellar-parity.md §8.10.2, §8.10.3; docs/DESIGN-stellar-contracts-v2.md
 // §21): the phase each v2 status reads as, the holders' minimum and its footnote, the price chart's points, the create
-// screen's name, description, links, ticker, XLM shortage and durations, and the source rules the Lite launch screens keep.
+// screen's name, description, links, ticker, XLM shortage, preview and durations, actions waiting for the coin's row, and
+// the source rules the Lite launch screens keep.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -62,6 +63,12 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertFalse(unread.incomplete)
     }
 
+    func testNoActionOpensBeforeTheCoinsRowIsRead() {
+        XCTAssertFalse(StellarLaunchDetailView.canAct(canSign: true, symbol: ""), "no ticker for the review, the activity or the notification")
+        XCTAssertFalse(StellarLaunchDetailView.canAct(canSign: false, symbol: "ECAT"))
+        XCTAssertTrue(StellarLaunchDetailView.canAct(canSign: true, symbol: "ECAT"))
+    }
+
     func testThePriceChartIsInDollarsAndEndsOnTheLivePrice() throws {
         let points = try decode([StellarLaunchDetail.Point].self, #"[{"t": "2026-10-15T10:00:00.000Z", "price": "0.000002"}, {"t": "2026-10-15T11:00:00Z", "price": "0.000004"}]"#)
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -120,16 +127,18 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertNil(StellarTickerV2.normalized("ABCDEFGHIJK"))
     }
 
+    /// The launch preview of an XLM launch on Soroswap (venue 0) for an account that can spend `spendable` on its first buy.
+    private func preview(spendable: String, shortfall: String?, quoteBalance: String = "0") throws -> StellarLaunchPreviewV2 {
+        try decode(StellarLaunchPreviewV2.self, """
+            {"quote": {"id": "XLM", "code": "XLM", "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"}, "venue": \(Self.soroswap),
+             "terms": \(Self.terms()), "launchFee": {"asset": "XLM", "amount": "100000000", "booked": true, "to": "CACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAINCW"},
+             "xlm": {"balance": "50000000", "minBalance": "10000000", "sellingLiabilities": "0", "launchFee": "100000000", "fees": "4650100",
+                     "buffer": "5000000", "spendable": "\(spendable)"},
+             "quoteBalance": "\(quoteBalance)", "maxInitialBuy": "\(max(0, Int64(spendable) ?? 0))", "shortfall": \(shortfall.map { "\"\($0)\"" } ?? "null")}
+            """)
+    }
+
     func testTheXLMALaunchIsShortOfIsSaidBeforeTheReview() throws {
-        func preview(spendable: String, shortfall: String?, quoteBalance: String = "0") throws -> StellarLaunchPreviewV2 {
-            try decode(StellarLaunchPreviewV2.self, """
-                {"quote": {"id": "XLM", "code": "XLM", "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"}, "venue": \(Self.soroswap),
-                 "terms": \(Self.terms()), "launchFee": {"asset": "XLM", "amount": "100000000", "booked": true, "to": "CACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAINCW"},
-                 "xlm": {"balance": "50000000", "minBalance": "10000000", "sellingLiabilities": "0", "launchFee": "100000000", "fees": "4650100",
-                         "buffer": "5000000", "spendable": "\(spendable)"},
-                 "quoteBalance": "\(quoteBalance)", "maxInitialBuy": "\(max(0, Int64(spendable) ?? 0))", "shortfall": \(shortfall.map { "\"\($0)\"" } ?? "null")}
-                """)
-        }
         // 5 XLM: short of the fee before any buy; an XLM developer buy adds to what is missing.
         let short = try preview(spendable: "-69650100", shortfall: "69650100")
         XCTAssertEqual(StellarCreateLaunchView.shortage(short, initialBuy: 0, quoteIsXLM: true), .xlm(69_650_100))
@@ -142,6 +151,16 @@ final class StellarLaunchTests: XCTestCase {
         let usdc = try preview(spendable: "610349900", shortfall: nil, quoteBalance: "20000000")
         XCTAssertEqual(StellarCreateLaunchView.shortage(usdc, initialBuy: 30_000_000, quoteIsXLM: false), .quote(balance: 20_000_000))
         XCTAssertNil(StellarCreateLaunchView.shortage(usdc, initialBuy: 20_000_000, quoteIsXLM: false))
+    }
+
+    func testAPreviewReadForAnotherQuoteOrVenueIsNeverUsed() throws {
+        let xlm = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+        let read = try preview(spendable: "610349900", shortfall: nil)
+        XCTAssertEqual(StellarCreateLaunchView.preview(read, quote: xlm, venue: 0), read)
+        XCTAssertNil(StellarCreateLaunchView.preview(read, quote: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA", venue: 0),
+                     "Paired with just changed: the XLM preview's Max and shortfall aren't USDC's")
+        XCTAssertNil(StellarCreateLaunchView.preview(read, quote: xlm, venue: 1), "nor another venue's")
+        XCTAssertNil(StellarCreateLaunchView.preview(nil, quote: xlm, venue: 0))
     }
 
     func testTheReviewsFallbackWaitsForAVenueLockedLaunchsLockedFallback() throws {

@@ -78,9 +78,14 @@ struct StellarLaunchDetailView: View {
     }
 
     private var store: LiteStore? { session?.store }
-    private var canSign: Bool { session?.canSign ?? false }
     private var coin: StellarLaunch? { detail?.launch ?? row }
     private var symbol: String { coin?.symbol ?? "" }
+    private var canAct: Bool { Self.canAct(canSign: session?.canSign ?? false, symbol: symbol) }
+
+    /// Every action needs a session that can sign and the coin's row read: its ticker names the review, the activity and
+    /// the notification, so nothing opens while the page has none.
+    static func canAct(canSign: Bool, symbol: String) -> Bool { canSign && !symbol.isEmpty }
+
     private var isRetired: Bool { stateRead && state == nil }
 
     private var phase: Phase { Self.phase(state?.status, coin: coin) }
@@ -223,7 +228,8 @@ struct StellarLaunchDetailView: View {
                     // symbol-keyed logos off the app's screens).
                     StellarLogoDisc(size: 48) { StellarArtwork(symbol: symbol, image: coin?.image, pointSize: 48) }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: coin?.name ?? symbol).font(.title3.weight(.semibold))
+                        // The token's address while its row is unread, never a blank title.
+                        Text(verbatim: coin?.name ?? StellarAccountID(token)?.short ?? token).font(.title3.weight(.semibold))
                         Text(verbatim: statusLine).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
@@ -294,7 +300,12 @@ struct StellarLaunchDetailView: View {
             }
             if detailUnread {
                 HStack(alignment: .firstTextBaseline) {
-                    InlineError(message: "This coin's trades couldn't be read just now.")
+                    // With no board row either, the page has none of the coin's own figures: its name and ticker included.
+                    if coin == nil {
+                        InlineError(message: LocalizedStringResource("This coin couldn't be read just now.", table: "StellarLaunch", comment: "On a Stellar coin's page, with Retry: its name, price and other figures couldn't be read"))
+                    } else {
+                        InlineError(message: "This coin's trades couldn't be read just now.")
+                    }
                     Spacer(minLength: 8)
                     Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
                 }
@@ -396,8 +407,7 @@ struct StellarLaunchDetailView: View {
                 amountText = StellarFormat.plain(units: maxUnits)
             }
             quoteRows
-            PrimaryButton(title: side == .buy && buysOpen ? "Buy \(symbol)" : "Sell \(symbol)",
-                          isDisabled: amountUnits == 0 || !canSign || !tradeReady || shortfall != nil) {
+            PrimaryButton(title: tradeTitle, isDisabled: amountUnits == 0 || !canAct || !tradeReady || shortfall != nil) {
                 review = .trade
             }
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -410,6 +420,13 @@ struct StellarLaunchDetailView: View {
             }
         }
         .onChange(of: buysOpen, initial: true) { _, open in if !open { side = .sell } }
+    }
+
+    /// "Buy PEPE" or "Sell PEPE"; without the ticker while the coin's row is unread.
+    private var tradeTitle: LocalizedStringKey {
+        let buying = side == .buy && buysOpen
+        if symbol.isEmpty { return buying ? "Buy" : "Sell" }
+        return buying ? "Buy \(symbol)" : "Sell \(symbol)"
     }
 
     /// What the trade's review needs: the quote for this amount, and on launchpad v2 the launch's state it trades on (a
@@ -481,8 +498,8 @@ struct StellarLaunchDetailView: View {
                 DetailRow("You receive", verbatim: StellarFormat.amount(quote.out, code: quoteCode))
             }
             if let quoteError, amountUnits > 0 { InlineError(message: quoteError) }
-            PrimaryButton(title: Text(StellarLaunchWords.refund(symbol)),
-                          isDisabled: amountUnits == 0 || !canSign || quote == nil || shortfall != nil || state?.status.actions.refund != true) {
+            PrimaryButton(title: Text(symbol.isEmpty ? StellarLaunchWords.refundConfirm : StellarLaunchWords.refund(symbol)),
+                          isDisabled: amountUnits == 0 || !canAct || quote == nil || shortfall != nil || state?.status.actions.refund != true) {
                 review = .trade
             }
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -518,7 +535,7 @@ struct StellarLaunchDetailView: View {
             default:
                 if state?.status.actions.graduate != false || isRetired {
                     Button("Graduate", systemImage: "arrow.up.forward.circle") { Haptics.tap(); review = .graduate(fallback: false) }
-                        .disabled(!canSign)
+                        .disabled(!canAct)
                 }
                 if state?.status.actions.markStuck == true {
                     Button {
@@ -526,7 +543,7 @@ struct StellarLaunchDetailView: View {
                     } label: {
                         Label { Text(StellarLaunchWords.markDelayed) } icon: { Image(systemName: "clock.badge.exclamationmark") }
                     }
-                    .disabled(!canSign)
+                    .disabled(!canAct)
                 }
             }
         } header: {
@@ -603,7 +620,7 @@ struct StellarLaunchDetailView: View {
                 }
             }
             if status.actions.graduate {
-                Button("Retry Graduation", systemImage: "arrow.clockwise") { review = .graduate(fallback: false) }.disabled(!canSign)
+                Button("Retry Graduation", systemImage: "arrow.clockwise") { review = .graduate(fallback: false) }.disabled(!canAct)
             }
             if status.actions.graduateFallback {
                 Button {
@@ -611,7 +628,7 @@ struct StellarLaunchDetailView: View {
                 } label: {
                     Label { Text("Graduate on \(fallbackName)", tableName: "StellarLaunch", comment: "Button on a Stellar coin whose graduation is delayed: graduate it on its fallback venue. The value is the venue's name (Soroswap)") } icon: { Image(systemName: "arrow.triangle.branch") }
                 }
-                .disabled(!canSign)
+                .disabled(!canAct)
             }
             if status.actions.rescue {
                 Button {
@@ -619,7 +636,7 @@ struct StellarLaunchDetailView: View {
                 } label: {
                     Label { Text(StellarLaunchWords.openRefunds) } icon: { Image(systemName: "arrow.uturn.backward.circle") }
                 }
-                .disabled(!canSign)
+                .disabled(!canAct)
             }
         }
     }
@@ -674,7 +691,7 @@ struct StellarLaunchDetailView: View {
                 }
             }
             if pendingQuote > 0 || pendingToken > 0 {
-                Button("Claim Rewards", systemImage: "gift") { Haptics.tap(); review = .claimRewards }.disabled(!canSign)
+                Button("Claim Rewards", systemImage: "gift") { Haptics.tap(); review = .claimRewards }.disabled(!canAct)
             }
         } header: {
             Text("Holder rewards")
@@ -713,7 +730,7 @@ struct StellarLaunchDetailView: View {
                     LabeledContent("Your claimable fees") {
                         Text(verbatim: StellarFormat.amount(claimable, code: quoteCode)).monospacedDigit().fontWeight(.semibold).foregroundStyle(Color.brand)
                     }
-                    Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); review = .claimCreator }.disabled(!canSign)
+                    Button("Claim Creator Fees", systemImage: "banknote") { Haptics.tap(); review = .claimCreator }.disabled(!canAct)
                 } else if state?.rewards.sharing != true {
                     // With sharing on the creator's part goes to holders, so nothing ever waits here.
                     Paragraph("Nothing to claim yet — fees accrue as people trade your coin.").font(.caption).foregroundStyle(.secondary)
@@ -724,7 +741,7 @@ struct StellarLaunchDetailView: View {
                     } label: {
                         Label { Text(StellarLaunchWords.changeRecipient) } icon: { Image(systemName: "arrow.left.arrow.right.circle") }
                     }
-                    .disabled(!canSign)
+                    .disabled(!canAct)
                 }
             }
             if let owed = owedFees, owed > 0 {
@@ -739,7 +756,7 @@ struct StellarLaunchDetailView: View {
                 } label: {
                     Label { Text(StellarLaunchWords.claimOwed) } icon: { Image(systemName: "banknote") }
                 }
-                .disabled(!canSign)
+                .disabled(!canAct)
             }
         } header: {
             Text("Creator Fees")
@@ -793,7 +810,7 @@ struct StellarLaunchDetailView: View {
                 } label: {
                     Label { Text("Veto", tableName: "StellarLaunch", comment: "[tight] Button on a Stellar coin's page, for its fee recipient: refuse a proposed change of the account that receives its creator fees") } icon: { Image(systemName: "hand.raised") }
                 }
-                .disabled(!canSign)
+                .disabled(!canAct)
             }
             if open == "open" {
                 Button {
@@ -801,7 +818,7 @@ struct StellarLaunchDetailView: View {
                 } label: {
                     Label { Text(StellarLaunchWords.applyChange) } icon: { Image(systemName: "checkmark.circle") }
                 }
-                .disabled(!canSign)
+                .disabled(!canAct)
             }
         }
     }
@@ -874,7 +891,7 @@ struct StellarLaunchDetailView: View {
     // MARK: Reviews (§8.10.5)
 
     @ViewBuilder private func confirmation(_ review: Review) -> some View {
-        if let launches, let store {
+        if let launches, let store, !symbol.isEmpty {
             switch review {
             case .trade: tradeConfirmation(launches, store: store)
             case .graduate(let fallback):
@@ -963,8 +980,7 @@ struct StellarLaunchDetailView: View {
                     DetailRow("You receive", verbatim: StellarFormat.amount(quote.out, code: quoteCode))
                 }
             case .refund:
-                StellarConfirmationSheet(title: StellarLaunchWords.refund(symbol),
-                                         confirmTitle: LocalizedStringResource("Refund", table: "StellarLaunch", comment: "[tight] The confirm button of a Stellar refund's review: give back coins at the fixed rate"),
+                StellarConfirmationSheet(title: StellarLaunchWords.refund(symbol), confirmTitle: StellarLaunchWords.refundConfirm,
                                          build: { try await launches.tradePlan(quote, token: token, symbol: symbol, asset: state.quote) },
                                          onDone: { amountText = ""; reloads += 1 }) {
                     DetailRow("You sell", verbatim: "\(StellarFormat.units(quote.amount, compact: true)) \(symbol)")
@@ -1200,6 +1216,7 @@ enum StellarLaunchWords {
     static let newRecipient = LocalizedStringResource("New recipient", table: "StellarLaunch", comment: "The account that will receive a Stellar coin's creator fees after a change of its fee recipient")
     static let proposedRecipient = LocalizedStringResource("Proposed recipient", table: "StellarLaunch", comment: "On a Stellar coin's page: the account DyorHQ's admin proposed to receive its creator fees, a change the current recipient can veto. DyorHQ is never translated")
     static let networkFeeOnly = LocalizedStringResource("You (network fee only)", table: "StellarLaunch", comment: "In the review that graduates, marks or rescues a Stellar coin, as who pays: anyone may, and the user pays only the network fee")
+    static let refundConfirm = LocalizedStringResource("Refund", table: "StellarLaunch", comment: "[tight] The button of a rescued Stellar launch's refund ticket, and the confirm button of its review: give back coins at the fixed rate")
     static let feesStay = LocalizedStringResource("Curve fees earned so far stay with the current recipient. Pool fees not yet collected go to the new one.", table: "StellarLaunch", comment: "On a Stellar coin's page and in the review of a fee recipient change: what a change of the account that receives creator fees does to fees already earned")
 
     static func refund(_ symbol: String) -> LocalizedStringResource {
