@@ -39,8 +39,9 @@ screen-by-screen spec. §9 to §12 cover placeholders, strings, accessibility an
    - placeholder symbols;
    - a fake owner or treasury.
 
-   The owner will redeploy the Stellar contracts with their own admin and treasury keys (RUNBOOK-testnet §2), so
-   nothing may depend on today's admin or treasury. The design stays mainnet-ready; mainnet values come later.
+   The owner deploys contracts v2 with their own admin and treasury keys (DESIGN-stellar-contracts-v2 §17 step 5;
+   the v1 contracts are not redeployed, decision O5 there), so nothing may depend on today's admin or treasury. The
+   design stays mainnet-ready; mainnet values come later.
 3. **Fees are hybrid.**
    - **DyorHQ pays only:**
      - (a) the one-time account setup: a sponsored account plus its USDC trustline on mainnet, Friendbot activation on
@@ -75,6 +76,24 @@ screen-by-screen spec. §9 to §12 cover placeholders, strings, accessibility an
    Scope: this covers the device lock, session expiry and, on TESTNET, the invite code too (lead decision on the
    owner's "no need for gating it since it's on Testnet"): `inviteRequired` is false on testnet, so a first sign-in
    needs no code and registers the address as a tester (still revocable). Mainnet keeps `inviteRequired` true.
+
+7. **Funding and cash on testnet (owner, 2026-10-15).** "Integrate with Friendbot so users can click on Fund with
+   Friendbot and claim a one-time 10,000 testnet XLM" and "remove the Add Cash button and feature as a whole, we can
+   build that when we go to mainnet". This overrides every other mention of cash, anchors and the faucet below:
+   - **Add cash and Cash out are removed until mainnet.** No Add cash tile, row or Home action, no Cash out section,
+     no `StellarCashSheet`, cash tracker or in-app browser, no SEP-10/SEP-24 code (StellarKit `Anchors.swift`,
+     DyorLite's cash flow), no `/v1/cash/*` routes, no `anchors` in `/v1/config`, no `cash` activity kind or titles,
+     no anchor e2e phase. Bridge from Monad stays. Git history keeps the code for the mainnet program.
+   - **"Fund with Friendbot": one claim of `faucet.amount` (10,000) test XLM per Stellar address, ever.** For a new
+     account the setup's account step is the claim: on testnet its button reads "Fund with Friendbot" and Friendbot
+     creates the account (`/v1/account/activate`). An address whose account already existed (an imported wallet)
+     and never claimed sees "Fund with Friendbot" on Home's add-funds card and in Deposit while
+     `firstFunding.faucet.claimed` is false; the tap calls `POST /v1/account/faucet` (a Friendbot-funded temporary
+     account merged into the user's). After either claim nothing offers test XLM again: the daily "Get 10,000 test
+     XLM" is gone, and the faucet route answers `faucet_used` "You already claimed your test XLM." The server decides
+     `claimed` (the address's Friendbot activation or any faucet row in `lite.tx_log`), so a later policy change is
+     server-only. `firstFunding.faucet` becomes `{amount, claimed}` (claimed null on viewer reads); mainnet has no
+     faucet (null). Activity titles the claim "Funded with Friendbot".
 
 ### 1.2 Lead defaults adopted
 
@@ -567,7 +586,7 @@ Every A package runs the full DyorKit suite (§12.3), because these rules are on
 | Mainnet account activation: `createAccount(user, 0)` + sponsored USDC trustline (3 base reserves, 1.5 XLM) and that transaction's fee | DyorHQ sponsor | The existing `activate` builder (account.ts:45-64). The sponsor is the source; sponsor and user both sign. |
 | Mainnet starter swap: one swap of a registry asset into XLM while spendable XLM < 0.05 | DyorHQ sponsor | Fee-bump of the user-signed swap, once per address (§4.3). |
 | Graduation keeper, TTL/rent keeper, CCTP `mint_and_forward` relay | DyorHQ keeper key (`KEEPER_SECRET`) | The keeper's own transactions. |
-| Testnet faucet ("Get 10,000 test XLM", once a day) | Friendbot | Unchanged, testnet only. |
+| Testnet "Fund with Friendbot" (one claim of 10,000 test XLM per address, ever; decision 7) | Friendbot | The activation of a new account is the claim; an account that already existed claims once through `/v1/account/faucet`. Testnet only. |
 
 Ordinary user transactions cover: send, trustline, swap, Earn deposit and withdraw, launch create/buy/sell/claim/
 graduate, Moment publish and collect, bridge approve and burn, and restore.
@@ -700,7 +719,7 @@ hard-codes 0.5 XLM.
 | `needsXlm` | spendable < `fundingFloor` (0.1 XLM) |
 | `suggestXlm` | 2 XLM when the account doesn't exist (1 XLM minimum + 0.5 USDC trustline + fees); otherwise 1 XLM plus any reserve the account is missing |
 | `starterSwap` | `available` \| `used` \| `unavailable` |
-| `faucet` | testnet only: `{amount: "10000", usedToday: bool}` |
+| `faucet` | testnet only: `{amount: "10000", claimed: bool}` (decision 7: one claim per address, ever) |
 
 ### 4.6 UX (mirrors Monad one for one)
 
@@ -1432,7 +1451,7 @@ returns `{uri, posterUrl}`.
 - **Relay key:** `keeper()`.
 - **Mainnet:** the testnet-only 501 gate (bridge.ts:103) stays until the mainnet program.
 
-**Cash** (WP-17):
+**Cash** (WP-17): **removed until mainnet (decision 7).** What follows is kept for the mainnet program only.
 - `/v1/cash/anchors` is unchanged.
 - `POST /v1/cash/track` records the anchor transfer in `tx_log`-linked rows, so the background tracker can resume it
   from `/v1/activity`.
@@ -1967,8 +1986,8 @@ under it) only in the passkey public-view case of §8.
 | Tile | Symbol | Opens | Enabled |
 |---|---|---|---|
 | Bridge | `point.3.connected.trianglepath.dotted` | `StellarBridgeView()` | Home ready |
-| Deposit | `creditcard` | `StellarReceiveSheet()`: Receive + Add cash + testnet faucet | whenever the Stellar address is known |
-| Withdraw | `arrow.up` | `StellarSendSheet()`: Send + Cash out | Home ready and `canSign` |
+| Deposit | `creditcard` | `StellarReceiveSheet()`: Receive + Bridge from Monad + "Fund with Friendbot" while unclaimed (testnet, decision 7) | whenever the Stellar address is known |
+| Withdraw | `arrow.up` | `StellarSendSheet()`: Send (no Cash out, decision 7) | Home ready and `canSign` |
 | Transfer | `arrow.left.arrow.right` | `StellarTransferSheet(direction: .toEarn, market: nil)` | Home ready and `canSign` |
 
 #### 8.2.3 Add-funds card (copy of AddFundsCard.swift:8-196 as `StellarAddFundsCard`, with `StellarFundingWatch`)
@@ -1979,8 +1998,8 @@ under it) only in the passkey public-view case of §8.
 
 | Phase | Condition | UI |
 |---|---|---|
-| `addFunds` | `needsXlm` and no other balance worth $1 or more | **Header:** tray icon in brand, "Add funds to start trading" (key). **Detail:** testnet "Send test XLM or USDC on the Stellar testnet to your account, or get free test XLM below."; mainnet "Send about %@ XLM or USDC on Stellar to your account. Funds usually arrive in seconds." (`suggestXlm`). **Body:** a 112 pt QR on a white plate; the short address (tap to reveal) with Copy (copies `address.checksummed`) and Share (keys); "Watching for your deposit" (key) with an animated radiowaves symbol; Divider. **Rows:** "Bridge from Monad"; testnet "Get %@ test XLM" (`faucet.amount`, locale digits). |
-| `needsXLM` | `needsXlm` and another asset worth $1 or more | **Header:** "Get XLM for network fees". **Detail:** "Every Stellar transaction pays a small network fee in XLM. Send about %@ XLM to your account." **Buttons:** when `starterSwap == available`, `PrimaryButton("Swap %@ USDC for XLM")` with the caption "DyorHQ pays this first swap's network fee.", which calls `router.openStellarSwap(sell: "USDC", buy: "XLM", starter: true)`; on testnet, the faucet button. |
+| `addFunds` | `needsXlm` and no other balance worth $1 or more | **Header:** tray icon in brand, "Add funds to start trading" (key). **Detail:** testnet "Send test XLM or USDC on the Stellar testnet to your account, or fund it once with Friendbot below." while `faucet.claimed` is false, else "Send test XLM or USDC on the Stellar testnet to your account." (decision 7); mainnet "Send about %@ XLM or USDC on Stellar to your account. Funds usually arrive in seconds." (`suggestXlm`). **Body:** a 112 pt QR on a white plate; the short address (tap to reveal) with Copy (copies `address.checksummed`) and Share (keys); "Watching for your deposit" (key) with an animated radiowaves symbol; Divider. **Rows:** "Bridge from Monad"; testnet "Fund with Friendbot" with the caption "Get %@ free test XLM, once" (`faucet.amount`, locale digits) only while `faucet.claimed` is false (decision 7). |
+| `needsXLM` | `needsXlm` and another asset worth $1 or more | **Header:** "Get XLM for network fees". **Detail:** "Every Stellar transaction pays a small network fee in XLM. Send about %@ XLM to your account." **Buttons:** when `starterSwap == available`, `PrimaryButton("Swap %@ USDC for XLM")` with the caption "DyorHQ pays this first swap's network fee.", which calls `router.openStellarSwap(sell: "USDC", buy: "XLM", starter: true)`; on testnet, "Fund with Friendbot" only while `faucet.claimed` is false (decision 7). |
 | `arrived` | a balance rose since the last read | "Funds arrived" (key), "%@ %@ is in your account." (key), a success haptic and a VoiceOver announcement |
 | `firstTrade` | funded, with no trade in `/v1/activity` | "Make your first trade" (key); "Swap %@ for %@ at the best price across Stellar's venues."; `PrimaryButton` "Swap %@ for %@" (key) → `openStellarSwap`. The ✕ ("Hide", key) sets `done` (`lite.funding.<G>`). |
 
@@ -2255,7 +2274,7 @@ it after that signature.
     alone."
   - Copy (`address.checksummed`) and Share, bordered (keys).
 - **Row card** (`secondarySystemGroupedBackground`, radius 16):
-  - "Add cash" (`banknote`) → `StellarCashSheet(mode: .deposit)`;
+  - (removed by decision 7: no "Add cash" row; "Fund with Friendbot" shows while `faucet.claimed` is false);
   - "Bridge from Monad" → `StellarBridgeView(direction: .toStellar)`;
   - testnet only, "Get %@ test XLM" (`drop`) with a spinner, then "%@ test XLM added", or the server's message ("You
     already got test XLM today.");
@@ -2283,9 +2302,9 @@ it after that signature.
   - "Memo (optional)", with the footer "Exchanges and cash providers often need a memo. Use the one they give you."
 - **Amount.** Ranked asset picker (copy of `assetRow` and the `WalletHoldings` ranking) with logos and USD.
   `StellarAmountField` with Max (§4.5). Footer "Available: %@ %@" (key) + " · %@ locked" for XLM.
-- **Cash out** (header): "Cash out to a bank or cash pickup" → `StellarCashSheet(mode: .withdraw)`.
+- **Cash out:** removed until mainnet (decision 7).
 
-#### 8.8.3 Add cash / Cash out: `StellarCashSheet(mode:)`
+#### 8.8.3 Add cash / Cash out: `StellarCashSheet(mode:)` (removed until mainnet, decision 7; kept for the mainnet program)
 
 `List(.insetGrouped)`, title "Add Cash" or "Cash Out" (via `tr(...)`).
 
@@ -2778,7 +2797,7 @@ Perps' slot. The "Now" badge follows `isCurrent` (§3.5). The footer stays "Dyor
 
   | Network | Copy |
   |---|---|
-  | Testnet | "Creates your test account with %@ test XLM from Stellar's testnet faucet, then enables USDC. Enabling USDC holds 0.5 XLM and costs a small network fee, paid from your test XLM." (`faucet.amount`) |
+  | Testnet | The account step's button reads "Fund with Friendbot" (decision 7). Copy: "Get %@ free test XLM from Stellar's Friendbot (one claim per account), then enable USDC. Enabling USDC holds 0.5 XLM and costs a small network fee, paid from your test XLM." (`faucet.amount`) |
   | Mainnet | "Creates your Stellar account and enables USDC. DyorHQ pays this one-time setup. After it, you pay Stellar's network fees in XLM." |
 - **Enable USDC row** in the setup checklist. Before the tap it shows "Holds %@ XLM · network fee up to %@ XLM" from
   `session.setupFee`: `baseReserve`, and the `trust` estimate of `/v1/fees` (public). Once the step is built, the
@@ -3421,7 +3440,7 @@ Screen ids used below: S01 Home, S02 Home after the session expired (no lock), S
     - Position, Assets and History tabs; the APY chart fills;
     - Home's Transfer sheet in both directions;
     - the BUSDC footer, plus "Swap for Blend test USDC" only when a route exists.
-14. **F11 Wallet** (S07, S08, S11): Deposit (QR, Copy writes the address, Add cash, faucet on testnet only). Send with
+14. **F11 Wallet** (S07, S08): Deposit (QR, Copy writes the address, "Fund with Friendbot" only while unclaimed on testnet; no Add cash, decision 7). Send with
     a memo; the review "To" is the typed address. Send to a missing account accepts XLM ≥ 1 only. An M… address is
     refused. Cash: testanchor deposit and cash-out, and the tracker posts once.
 15. **F12 Bridge** (S10): a real Iris fee; ETA present or omitted.
