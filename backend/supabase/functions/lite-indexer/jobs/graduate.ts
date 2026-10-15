@@ -5,8 +5,8 @@ import { env } from "../../_shared/env.ts";
 import { inclusionFee } from "../../_shared/fees.ts";
 import { invoke, keeper, keeperSend, requireAccount, sv, waitForTx, withInclusionBid } from "../../_shared/stellar.ts";
 
-/** How long a run may keep graduating, from its start. */
-const RUN_MS = 25_000;
+/** How long a run may keep graduating, from its start, so the jobs after it keep their time. */
+const RUN_MS = 20_000;
 
 /** Graduates completed curves nobody graduated yet, at most 3 a run, one transaction at a time: the keeper's account
  *  has at most one in flight. Answers how many graduated. */

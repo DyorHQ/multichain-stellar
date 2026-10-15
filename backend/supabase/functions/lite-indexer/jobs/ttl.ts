@@ -3,8 +3,9 @@
 import { env } from "../../_shared/env.ts";
 import { upkeep, upkeepEntries } from "../../_shared/ttl.ts";
 
-/** How long a run may keep sending extensions, from its start: the indexer's budget leaves the late jobs this much. */
-const RUN_MS = 20_000;
+/** How long a run may keep sending extensions, from its start. It is a late job (lite-indexer/index.ts): what it doesn't
+ *  extend in time comes first the next minute. */
+const RUN_MS = 15_000;
 
 export async function ttl() {
   const started = Date.now();
