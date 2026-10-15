@@ -1,0 +1,1532 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ creator · %@ DyorHQ" : {
+      "comment" : "A retired Stellar Moment's split of each collect: the creator's share, then DyorHQ's (95%, 5%). DyorHQ is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ creator · %2$@ DyorHQ"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ creador · %2$@ DyorHQ"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ créateur · %2$@ DyorHQ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터 %1$@ · DyorHQ %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创作者 %1$@ · DyorHQ %2$@"
+          }
+        }
+      }
+    },
+    "%@ of every collect builds the reserve. At the threshold the coin graduates into a Soroswap pool whose liquidity is locked forever." : {
+      "comment" : "Under a Stellar Moment's progress bar. The value is a share of each collect (75%). Soroswap is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El %@ de cada colección forma la reserva. Al llegar al umbral, la moneda se gradúa en un pool de Soroswap cuya liquidez queda bloqueada para siempre."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ de chaque collecte alimente la réserve. Au seuil, le coin est diplômé dans un pool Soroswap dont la liquidité est verrouillée pour toujours."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집할 때마다 %@가 준비금으로 쌓입니다. 기준에 도달하면 코인은 유동성이 영구히 잠기는 Soroswap 풀로 졸업합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次收藏的 %@ 计入储备。达到门槛后，代币将毕业进入 Soroswap 池，其流动性永久锁定。"
+          }
+        }
+      }
+    },
+    "%@ of every collect waits here for you to withdraw. Your coins vest from graduation: 20%% then, and 16%% more each period." : {
+      "comment" : "Under a Stellar Moment's creator section. The value is the creator's share of each collect (20%)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El %@ de cada colección te espera aquí para retirarlo. Tus monedas se liberan desde la graduación: 20%% entonces y 16%% más cada periodo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ de chaque collecte vous attend ici, à retirer. Vos coins se libèrent dès le diplôme : 20%% à ce moment, puis 16%% de plus à chaque période."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집할 때마다 %@가 여기에 쌓여 출금을 기다립니다. 코인은 졸업 시점부터 베스팅됩니다. 졸업 시 20%%, 이후 기간마다 16%%씩 더."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每次收藏的 %@ 在此等你提取。你的代币自毕业起归属：毕业时 20%%，之后每期再增加 16%%。"
+          }
+        }
+      }
+    },
+    "A graduation attempt failed. Anyone can try again; it graduates as soon as an attempt succeeds." : {
+      "comment" : "A Stellar Moment whose graduation failed and was recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un intento de graduación falló. Cualquiera puede volver a intentarlo; se gradúa en cuanto un intento lo logre."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une tentative de diplôme a échoué. Tout le monde peut réessayer ; il est diplômé dès qu'une tentative réussit."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 시도가 실패했습니다. 누구나 다시 시도할 수 있으며, 시도가 성공하는 즉시 졸업합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一次毕业尝试失败。任何人都可以重试；只要有一次尝试成功即会毕业。"
+          }
+        }
+      }
+    },
+    "Can expire from" : {
+      "comment" : "A row on a Stellar Moment that hasn't graduated: from when anyone can end it without graduating (a date follows)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puede expirar desde"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peut expirer dès le"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "만료 가능 시점"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可过期时间"
+          }
+        }
+      }
+    },
+    "Collection" : {
+      "comment" : "A row on a Stellar Moment: the address of its NFT contract, which holds its editions",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colección"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collection"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컬렉션"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合集"
+          }
+        }
+      }
+    },
+    "Collectors" : {
+      "comment" : "[tight] A Stellar Moment's stat: how many accounts collected it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coleccionistas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collecteurs"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집가"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏者"
+          }
+        }
+      }
+    },
+    "Contract address" : {
+      "comment" : "Label in the Freighter sheet: the address of the NFT contract that holds the edition",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dirección del contrato"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Adresse du contrat"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컨트랙트 주소"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "合约地址"
+          }
+        }
+      }
+    },
+    "Each edition is an NFT in your Stellar account. Freighter can show it once you add it." : {
+      "comment" : "Under a Stellar Moment's position. Stellar and Freighter are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada edición es un NFT en tu cuenta de Stellar. Freighter puede mostrarla cuando la añadas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque édition est un NFT dans votre compte Stellar. Freighter peut l'afficher une fois que vous l'avez ajoutée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "각 에디션은 Stellar 계정에 있는 NFT입니다. 추가하면 Freighter에서 볼 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每个版本都是你 Stellar 账户中的一个 NFT。添加后，Freighter 即可显示它。"
+          }
+        }
+      }
+    },
+    "Edition #%@" : {
+      "comment" : "Under a Moment's name: which edition of it this is. The value is its number (12)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edición n.º %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Édition nº %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션 #%@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %@ 版"
+          }
+        }
+      }
+    },
+    "Edition size" : {
+      "comment" : "A row on a Stellar Moment: how many editions it can have",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño de la edición"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taille de l'édition"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션 수량"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本数量"
+          }
+        }
+      }
+    },
+    "Freighter shows the cover image; the video plays in DyorHQ." : {
+      "comment" : "A note in the Freighter sheet, for a video Moment: the wallet shows its still image only. Freighter and DyorHQ are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter muestra la imagen de portada; el vídeo se reproduce en DyorHQ."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter affiche l'image de couverture ; la vidéo se lit dans DyorHQ."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter에는 커버 이미지가 표시되며, 동영상은 DyorHQ에서 재생됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter 显示封面图片；视频在 DyorHQ 中播放。"
+          }
+        }
+      }
+    },
+    "Freighter, the Stellar wallet, can show this edition once you add it. You'll need the contract address and the token ID." : {
+      "comment" : "The Freighter sheet's introduction. Freighter and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter, la billetera de Stellar, puede mostrar esta edición cuando la añadas. Necesitarás la dirección del contrato y el ID del token."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter, le portefeuille Stellar, peut afficher cette édition une fois que vous l'avez ajoutée. Il vous faut l'adresse du contrat et l'ID du jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 지갑인 Freighter에 이 에디션을 추가하면 볼 수 있습니다. 컨트랙트 주소와 토큰 ID가 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 钱包 Freighter 在你添加后即可显示此版本。你需要合约地址和代币 ID。"
+          }
+        }
+      }
+    },
+    "From DyorHQ's first Stellar Moments contract, now retired: it can't be collected any more. Editions stay with their collectors." : {
+      "comment" : "Under a retired Stellar Moment's header. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Del primer contrato de Moments de DyorHQ en Stellar, ya retirado: ya no se puede coleccionar. Las ediciones siguen con sus coleccionistas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Du premier contrat Moments de DyorHQ sur Stellar, désormais retiré : il ne peut plus être collecté. Les éditions restent à leurs collecteurs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ의 첫 Stellar Moments 컨트랙트에서 발행되었으며 지금은 종료되어 더 이상 수집할 수 없습니다. 에디션은 수집가가 계속 보유합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 DyorHQ 首个 Stellar Moments 合约，现已停用：无法再收藏。版本仍归收藏者所有。"
+          }
+        }
+      }
+    },
+    "Get Freighter" : {
+      "comment" : "Button in the Freighter sheet: opens Freighter's website to install the wallet. Freighter is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtener Freighter"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenir Freighter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取 Freighter"
+          }
+        }
+      }
+    },
+    "Get USDC" : {
+      "comment" : "Button on a Stellar Moment's collect ticket when the account's USDC is short: opens Swap to buy USDC. USDC is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtener USDC"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenir des USDC"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取 USDC"
+          }
+        }
+      }
+    },
+    "Graduated on Soroswap. Of its pool's fees on the locked liquidity, %@ stay in the pool; of the rest, the USDC goes %@ to the creator and %@ to DyorHQ, and the coins are burned." : {
+      "comment" : "Under a graduated Stellar Moment's pool. The values are shares (33.33%, 40%, 60%). Soroswap, USDC and DyorHQ are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduated on Soroswap. Of its pool's fees on the locked liquidity, %1$@ stay in the pool; of the rest, the USDC goes %2$@ to the creator and %3$@ to DyorHQ, and the coins are burned."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduada en Soroswap. De las comisiones del pool sobre la liquidez bloqueada, el %1$@ se queda en el pool; del resto, los USDC van %2$@ al creador y %3$@ a DyorHQ, y las monedas se queman."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diplômé sur Soroswap. Des frais du pool sur la liquidité verrouillée, %1$@ restent dans le pool ; du reste, les USDC vont %2$@ au créateur et %3$@ à DyorHQ, et les coins sont brûlés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soroswap에서 졸업했습니다. 잠긴 유동성에서 발생한 풀 수수료 중 %1$@는 풀에 남고, 나머지에서 USDC는 크리에이터에게 %2$@, DyorHQ에 %3$@가 가며 코인은 소각됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在 Soroswap 毕业。锁定流动性产生的池手续费中，%1$@ 留在池内；其余部分中，USDC 的 %2$@ 归创作者、%3$@ 归 DyorHQ，代币则被销毁。"
+          }
+        }
+      }
+    },
+    "Graduates on" : {
+      "comment" : "A row of Publish a Moment on Stellar: the exchange its coin's pool opens on (Soroswap follows, never translated)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se gradúa en"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diplômé sur"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 거래소"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业至"
+          }
+        }
+      }
+    },
+    "Graduation Failed" : {
+      "comment" : "Section header on a Stellar Moment whose graduation attempt failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La graduación falló"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec du diplôme"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 실패"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业失败"
+          }
+        }
+      }
+    },
+    "Graduation failed" : {
+      "comment" : "[tight] A Stellar Moment's badge: its graduation attempt failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduación fallida"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Diplôme échoué"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 실패"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业失败"
+          }
+        }
+      }
+    },
+    "Graduation is taking longer than usual." : {
+      "comment" : "A Stellar Moment that has waited over an hour to graduate",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La graduación está tardando más de lo habitual."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le diplôme prend plus de temps que d'habitude."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업이 평소보다 오래 걸리고 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业耗时比平常更久。"
+          }
+        }
+      }
+    },
+    "If it never graduates, it can expire: %@ of its reserve goes to the creator and the rest to the DyorHQ treasury. Collectors keep their editions." : {
+      "comment" : "Under a Stellar Moment's graduation: what happens if it expires instead. The value is the creator's share (70%). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si nunca se gradúa, puede expirar: el %@ de su reserva va al creador y el resto a la tesorería de DyorHQ. Los coleccionistas conservan sus ediciones."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "S'il n'est jamais diplômé, il peut expirer : %@ de sa réserve va au créateur et le reste à la trésorerie de DyorHQ. Les collecteurs gardent leurs éditions."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "끝내 졸업하지 못하면 만료될 수 있습니다. 준비금의 %@는 크리에이터에게, 나머지는 DyorHQ 트레저리로 갑니다. 수집가는 에디션을 그대로 보유합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如果始终未能毕业，它可以过期：储备的 %@ 归创作者，其余归 DyorHQ 金库。收藏者保留其版本。"
+          }
+        }
+      }
+    },
+    "In My Moments once it settles" : {
+      "comment" : "The value of the collect review's 'Your NFTs' row",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En Mis Moments en cuanto se confirme"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dans Mes Moments dès la confirmation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "처리되면 내 Moments에 표시"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "确认后显示在“我的 Moments”中"
+          }
+        }
+      }
+    },
+    "It ended before graduating: %@ of its reserve went to the creator and the rest to the DyorHQ treasury. Collectors keep their editions; its coin was never made." : {
+      "comment" : "An expired Stellar Moment. The value is the creator's share of the reserve (70%). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Terminó antes de graduarse: el %@ de su reserva fue al creador y el resto a la tesorería de DyorHQ. Los coleccionistas conservan sus ediciones; su moneda nunca se creó."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il a pris fin avant son diplôme : %@ de sa réserve est allé au créateur et le reste à la trésorerie de DyorHQ. Les collecteurs gardent leurs éditions ; son coin n'a jamais été créé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 전에 종료되었습니다. 준비금의 %@는 크리에이터에게, 나머지는 DyorHQ 트레저리로 갔습니다. 수집가는 에디션을 보유하며, 코인은 발행되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "它在毕业前结束：储备的 %@ 归创作者，其余归 DyorHQ 金库。收藏者保留其版本；其代币从未创建。"
+          }
+        }
+      }
+    },
+    "Name: at most 32 bytes. Accented letters and emoji count as more than one." : {
+      "comment" : "Under the name field of Publish a Moment on Stellar: the name is too long for the contract",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre: 32 bytes como máximo. Las letras acentuadas y los emojis cuentan como más de uno."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nom : 32 octets au maximum. Les lettres accentuées et les emoji comptent pour plus d'un."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이름: 최대 32바이트입니다. 악센트 문자와 이모지는 1바이트보다 많이 계산됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "名称：最多 32 字节。带重音的字母和表情符号算作多个字节。"
+          }
+        }
+      }
+    },
+    "Needs Freighter 5.37 or later." : {
+      "comment" : "A note in the Freighter sheet: the oldest Freighter version that can add a Stellar NFT. Freighter is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requiere Freighter 5.37 o posterior."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nécessite Freighter 5.37 ou ultérieur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter 5.37 이상이 필요합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要 Freighter 5.37 或更高版本。"
+          }
+        }
+      }
+    },
+    "No collects yet." : {
+      "comment" : "A Stellar Moment nobody has collected yet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no hay colecciones."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune collecte pour l'instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 수집이 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无收藏。"
+          }
+        }
+      }
+    },
+    "Open Collectibles and choose Add manually." : {
+      "comment" : "A step in the Freighter sheet: where in Freighter an NFT is added by hand. 'Collectibles' and 'Add manually' are Freighter's own English labels",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre Collectibles y elige Add manually."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrez Collectibles et choisissez Add manually."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collectibles를 열고 Add manually를 선택하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Collectibles，选择 Add manually。"
+          }
+        }
+      }
+    },
+    "Open Freighter and switch to the test network." : {
+      "comment" : "A step in the Freighter sheet, on testnet: the wallet must show the Stellar test network. Freighter is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abre Freighter y cambia a la red de prueba."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrez Freighter et passez au réseau de test."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter를 열고 테스트 네트워크로 전환하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开 Freighter 并切换到测试网络。"
+          }
+        }
+      }
+    },
+    "Open edition" : {
+      "comment" : "The edition size of a Stellar Moment with no cap",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edición abierta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Édition ouverte"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "오픈 에디션"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开放版本"
+          }
+        }
+      }
+    },
+    "Paid in USDC: %@ reserve, %@ creator, %@ DyorHQ. Your editions show in My Moments as soon as it settles." : {
+      "comment" : "Under a Stellar Moment's collect ticket: how each collect is split. The values are shares (75%, 20%, 5%). USDC and DyorHQ are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Paid in USDC: %1$@ reserve, %2$@ creator, %3$@ DyorHQ. Your editions show in My Moments as soon as it settles."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se paga en USDC: %1$@ reserva, %2$@ creador, %3$@ DyorHQ. Tus ediciones aparecen en Mis Moments en cuanto se confirme."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Payé en USDC : %1$@ réserve, %2$@ créateur, %3$@ DyorHQ. Vos éditions apparaissent dans Mes Moments dès la confirmation."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC로 결제: 준비금 %1$@, 크리에이터 %2$@, DyorHQ %3$@. 처리되는 즉시 내 Moments에 에디션이 표시됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "以 USDC 支付：储备 %1$@，创作者 %2$@，DyorHQ %3$@。确认后，你的版本会显示在“我的 Moments”中。"
+          }
+        }
+      }
+    },
+    "Paste the contract address, then type the token ID." : {
+      "comment" : "A step in the Freighter sheet: what to enter in Freighter to add the edition",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pega la dirección del contrato y escribe el ID del token."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collez l'adresse du contrat, puis saisissez l'ID du jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "컨트랙트 주소를 붙여넣고 토큰 ID를 입력하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴合约地址，然后输入代币 ID。"
+          }
+        }
+      }
+    },
+    "Place: at most 64 bytes." : {
+      "comment" : "Under the place field of Publish a Moment on Stellar: the place is too long for the contract",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lugar: 64 bytes como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lieu : 64 octets au maximum."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "장소: 최대 64바이트입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地点：最多 64 字节。"
+          }
+        }
+      }
+    },
+    "Publishing new Moments is paused." : {
+      "comment" : "Publish a Moment on Stellar, while DyorHQ has paused publishing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publicación de nuevos Moments está en pausa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publication de nouveaux Moments est en pause."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 Moments 발행이 일시 중지되었습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布新 Moments 已暂停。"
+          }
+        }
+      }
+    },
+    "Publishing opens once DyorHQ Moments are live on Stellar." : {
+      "comment" : "Publish a Moment on Stellar, when the network has no Moments contract yet. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publicación se abrirá cuando DyorHQ Moments esté activo en Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publication ouvrira quand DyorHQ Moments sera en service sur Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Moments가 Stellar에서 운영되면 발행할 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Moments 在 Stellar 上线后即可发布。"
+          }
+        }
+      }
+    },
+    "Reason" : {
+      "comment" : "A row on a Stellar Moment whose graduation failed: the contract error it failed with (shown in English, as the contract names it)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raison"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사유"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原因"
+          }
+        }
+      }
+    },
+    "Retired" : {
+      "comment" : "[tight] A badge on a Moment of DyorHQ's first, retired Stellar Moments contract: it can't be collected any more",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停用"
+          }
+        }
+      }
+    },
+    "Shown in DyorHQ and in Freighter as the NFT." : {
+      "comment" : "Under Publish a Moment's media, for a photo. DyorHQ and Freighter are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se muestra como el NFT en DyorHQ y en Freighter."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Affiché comme NFT dans DyorHQ et dans Freighter."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ와 Freighter에서 NFT로 표시됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 和 Freighter 中作为 NFT 显示。"
+          }
+        }
+      }
+    },
+    "Soroswap · locked forever" : {
+      "comment" : "A row of a Stellar Moment's graduation review: where its coin's liquidity goes. Soroswap is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soroswap · bloqueada para siempre"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soroswap · verrouillée pour toujours"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soroswap · 영구 잠금"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Soroswap · 永久锁定"
+          }
+        }
+      }
+    },
+    "The Moments terms changed since you started. Review them again." : {
+      "comment" : "In a Stellar Moment's publish review: the contract's terms differ from the ones the review shows, so Confirm is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las condiciones de Moments cambiaron desde que empezaste. Revísalas de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les conditions de Moments ont changé depuis que vous avez commencé. Vérifiez-les à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시작한 이후 Moments 조건이 변경되었습니다. 다시 검토하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "自你开始以来，Moments 条款已更改。请重新查看。"
+          }
+        }
+      }
+    },
+    "The video plays in DyorHQ; its cover frame is the NFT image." : {
+      "comment" : "Under Publish a Moment's media, for a video. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El vídeo se reproduce en DyorHQ; su fotograma de portada es la imagen del NFT."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vidéo se lit dans DyorHQ ; son image de couverture est l'image du NFT."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동영상은 DyorHQ에서 재생되며, 커버 프레임이 NFT 이미지가 됩니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频在 DyorHQ 中播放；其封面帧即为 NFT 图片。"
+          }
+        }
+      }
+    },
+    "This Moment reached its goal. DyorHQ graduates it within about a minute, and anyone can." : {
+      "comment" : "A Stellar Moment waiting to graduate into its coin and pool. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este Moment alcanzó su meta. DyorHQ lo gradúa en un minuto aproximadamente, y cualquiera puede hacerlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce Moment a atteint son objectif. DyorHQ le diplôme en une minute environ, et tout le monde peut le faire."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment는 목표에 도달했습니다. DyorHQ가 약 1분 안에 졸업시키며, 누구나 졸업시킬 수 있습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Moment 已达成目标。DyorHQ 会在约一分钟内让它毕业，任何人也都可以操作。"
+          }
+        }
+      }
+    },
+    "This collect completes the Moment: it takes only what the reserve still needs, and the coin graduates right after." : {
+      "comment" : "On a Stellar Moment's collect ticket: this many editions reach the threshold",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta colección completa el Moment: solo toma lo que aún le falta a la reserva, y la moneda se gradúa justo después."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette collecte complète le Moment : elle ne prend que ce qu'il manque à la réserve, et le coin est diplômé juste après."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이번 수집으로 Moment가 완성됩니다. 준비금에 남은 만큼만 결제되며, 코인은 바로 뒤이어 졸업합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这次收藏将完成该 Moment：只收取储备仍需的部分，代币随后立即毕业。"
+          }
+        }
+      }
+    },
+    "Ticker: 2–10 letters (A–Z) or digits, without accents, spaces or symbols." : {
+      "comment" : "Under the coin ticker field of Publish a Moment on Stellar: what a ticker may be",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ticker: de 2 a 10 letras (A–Z) o dígitos, sin acentos, espacios ni símbolos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ticker : 2 à 10 lettres (A–Z) ou chiffres, sans accents, espaces ni symboles."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "티커: 2~10자의 영문(A–Z) 또는 숫자이며, 악센트·공백·기호는 쓸 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码：2–10 个字母（A–Z）或数字，不含重音、空格或符号。"
+          }
+        }
+      }
+    },
+    "Token ID" : {
+      "comment" : "Label in the Freighter sheet: the edition's token number, which the user types into Freighter",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID del token"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ID du jeton"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "토큰 ID"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代币 ID"
+          }
+        }
+      }
+    },
+    "Videos up to 25 MB." : {
+      "comment" : "Publish a Moment on Stellar: the video picked is larger than the limit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vídeos de hasta 25 MB."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vidéos jusqu'à 25 Mo."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동영상은 최대 25MB입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频最大 25 MB。"
+          }
+        }
+      }
+    },
+    "View #%@ in Freighter" : {
+      "comment" : "A button on a Stellar Moment: how to see this edition in Freighter, the Stellar wallet. The value is the edition's number. Freighter is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver n.º %@ en Freighter"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir nº %@ dans Freighter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter에서 #%@ 보기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Freighter 中查看第 %@ 版"
+          }
+        }
+      }
+    },
+    "View in Freighter" : {
+      "comment" : "Title of the sheet that explains how to see a Moment edition in Freighter, the Stellar wallet. Freighter is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver en Freighter"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir dans Freighter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter에서 보기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Freighter 中查看"
+          }
+        }
+      }
+    },
+    "Yes, right after" : {
+      "comment" : "The value of a Stellar Moment's collect review row 'Graduates': this collect completes it, and it graduates in the following ledgers",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sí, justo después"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oui, juste après"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예, 바로 뒤이어"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是，随后立即"
+          }
+        }
+      }
+    },
+    "Your NFTs" : {
+      "comment" : "A row of a Stellar Moment's collect review: where the editions collected appear",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tus NFT"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vos NFT"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내 NFT"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 NFT"
+          }
+        }
+      }
+    },
+    "photo, stored by DyorHQ" : {
+      "comment" : "The Media row of a Stellar Moment's publish review, for a photo. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "foto, guardada por DyorHQ"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "photo, stockée par DyorHQ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사진, DyorHQ 보관"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片，由 DyorHQ 存储"
+          }
+        }
+      }
+    },
+    "video + cover frame, stored by DyorHQ" : {
+      "comment" : "The Media row of a Stellar Moment's publish review, for a video. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "vídeo + portada, guardados por DyorHQ"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "vidéo + couverture, stockées par DyorHQ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "동영상 + 커버 프레임, DyorHQ 보관"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "视频 + 封面帧，由 DyorHQ 存储"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
