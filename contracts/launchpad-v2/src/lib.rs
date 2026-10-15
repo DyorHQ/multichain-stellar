@@ -27,8 +27,8 @@
 //! `ERR_BASE + 1·100 + n` (V10).
 //!
 //! The contract interface (entry points, contract types, events and errors) is documented with `//` comments, not
-//! `///`: the SDK copies doc comments into the WASM's contract spec, and this contract's size budget (110 KB, §18.3)
-//! can't carry them.
+//! `///`: the SDK copies doc comments into the WASM's contract spec, where wasm-opt can't shrink them, and they would
+//! take about 10 KB of this contract's size budget (110 KB, §18.3).
 #![no_std]
 
 mod admin;

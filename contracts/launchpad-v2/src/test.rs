@@ -3215,17 +3215,8 @@ fn error_values_lie_in_the_launchpad_range() {
     assert_eq!((Error::GraduationInvalid as u32, Error::FallbackTooEarly as u32), (10_134, 10_137));
 }
 
-/// The network refuses a contract WASM over 131,072 B (§2).
+/// §18.3's budget for launchpad-v2, on the WASM build.sh writes (spec-shaken, then wasm-opt -Oz).
 #[test]
-fn the_release_wasm_fits_the_network_limit() {
-    let wasm = include_bytes!("../../dist/dyor_launchpad_v2.wasm");
-    assert!(wasm.len() <= 131_072, "{} bytes", wasm.len());
-}
-
-/// §18.3's budget for launchpad-v2. Not met yet: the release WASM is about 125 KB, and the code, the contract spec of
-/// the §5 interface and the SDK's own panic formatting leave no 15 KB to cut in this crate. Run with `--ignored`.
-#[test]
-#[ignore = "over the 110 KB budget of §18.3 until build.sh optimizes the WASM or the interface shrinks"]
 fn the_release_wasm_fits_in_110_kb() {
     let wasm = include_bytes!("../../dist/dyor_launchpad_v2.wasm");
     assert!(wasm.len() <= 110 * 1024, "{} bytes", wasm.len());
