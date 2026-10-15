@@ -11,12 +11,19 @@ import StellarCore
 // durations seconds, times ISO 8601. v1's Moments (StellarMoment, SEP-50 editions without a coin) stay for the retired
 // generation.
 //
-// The routes, as the API serves them for v2 (CT-18 wires them):
+// The routes, as the API serves them for v2 (CT-18 wires them; CT-18b adds the indexed reads):
 //   GET  /v1/economics               public    the Moments block (StellarEconomicsV2.moments)
+//   GET  /v1/moments/v2              viewer    the feed: listed Moments, newest first, a page at a time
+//   GET  /v1/moments/v2/:nft         viewer    a Moment's page: its row, collects, the viewer's editions and coins
+//   GET  /v1/moments/v2/owned        viewer    the Moments the account holds editions of or coins in
+//   GET  /v1/moments/v2/mine         session   the Moments the user published and collected (DyorHQ's history)
 //   GET  /v1/moments/:nft/status     public    a Moment's state, read live, with when it may expire
 //   GET  /v1/moments/:nft/vesting    viewer    the account's coins in it: the session's, or the viewer's
 //   POST /v1/moments/build           session   every v2 action, keyed by the NFT address (MomentRequestV2)
 //   POST /v1/moments/metadata        session   as for v1 (LiteAPI.momentMetadata)
+// The indexed reads (the feed, a page, an account's and a creator's Moments) say what the indexer recorded: a
+// Moment's name, media, place, date and progress. Its live state, expiry clocks and the account's vesting are the
+// status and vesting reads.
 
 /// The economics a Moment published now snapshots (moments-v2 Policy).
 public struct StellarMomentsPolicyV2: Codable, Equatable, Sendable {
@@ -285,6 +292,174 @@ public struct StellarMomentVestingV2: Codable, Equatable, Sendable {
     public let creator: Side?
 }
 
+/// A v2 Moment as the API's indexer recorded it: the feed's card, a page's header, an account's or a creator's Moment.
+/// Its NFT contract is its id. Amounts in USDC base units (7 decimals); v1's StellarMoment field names where they mean
+/// the same.
+public struct StellarMomentRowV2: Codable, Equatable, Sendable, Identifiable {
+    /// 2.
+    public let generation: Int
+    /// The Moment's NFT contract: its id.
+    public let nft: String
+    /// DyorHQ's display number, in publish order.
+    public let number: Int?
+    public let creator: String
+    public let uri: String
+    /// The NFT's and its coin's name and ticker, on chain.
+    public let name: String
+    public let symbol: String
+    /// From DyorHQ's metadata, as v1's feed gives them; nil without it.
+    public let title: String?
+    public let description: String?
+    public let place: String?
+    /// "2026-10-14".
+    public let takenOn: String?
+    public let mediaUrl: String?
+    /// "image" or "video".
+    public let mediaType: String?
+    /// The photo, or a video's cover frame.
+    public let posterUrl: String?
+    /// Per edition.
+    public let price: String
+    /// USDC's contract, the only quote of v2 Moments.
+    public let quote: String
+    public let quoteCode: String
+    public let priceUsd: Double?
+    /// The reserve that completes it.
+    public let threshold: String
+    /// USDC collected so far: the gross of every collect.
+    public let totalGross: String
+    /// What its reserve holds now: 0 once graduated or expired.
+    public let reserve: String
+    /// How far it got to its threshold, 0 to 1: 1 once it completed.
+    public let progress: Double
+    /// Editions minted: v2 Moments have no edition cap.
+    public let minted: Int
+    public let collects: Int
+    public let collectors: Int
+    /// The creator's coins, in bps of the coin's supply.
+    public let creatorAllocBps: Int
+    public let platformBps: Int?
+    public let royaltyBps: Int?
+    public let deadline: String
+    /// "collecting", "graduation_pending", "graduated" or "expired", as the indexer last saw it.
+    public let state: String
+    /// Collecting, before its deadline.
+    public let open: Bool
+    /// Its coin and Soroswap pool once graduated; nil before.
+    public let coin: String?
+    public let pool: String?
+    /// The durations its terms bound.
+    public let durations: StellarMomentsDurationsV2
+    public let publishedAt: String
+    public let completedAt: String?
+    public let graduatedAt: String?
+    public let expiredAt: String?
+
+    public var id: String { nft }
+    public var isVideo: Bool { mediaType == "video" }
+    /// The NFT's image: the photo, or the video's cover frame.
+    public var image: String? { posterUrl ?? (isVideo ? nil : mediaUrl) }
+}
+
+/// `GET /v1/moments/v2`: one page of the feed.
+public struct StellarMomentFeedV2: Codable, Equatable, Sendable {
+    public let moments: [StellarMomentRowV2]
+    /// The next page's cursor; nil on the last page.
+    public let nextCursor: String?
+    /// "owner" or "public" (asked without a session).
+    public let view: String?
+}
+
+/// `GET /v1/moments/v2/:nft`: a Moment's page as the indexer recorded it.
+public struct StellarMomentDetailV2: Codable, Equatable, Sendable {
+    /// The viewer's account in the Moment.
+    public struct You: Codable, Equatable, Sendable {
+        /// The editions it holds: the NFT's token ids.
+        public let editions: [Int]
+        /// The coins it was promised as a collector, and claimed so far, in coin base units.
+        public let entitlement: String
+        public let claimed: String
+        /// What it paid collecting; nil in the public view (DyorHQ's history).
+        public let spent: String?
+    }
+
+    public let moment: StellarMomentRowV2
+    /// The newest 50 collects.
+    public let collectors: [StellarMomentDetail.Collector]
+    public let collectorsSummary: StellarMomentDetail.CollectorsSummary
+    /// Nil without a session or a viewer.
+    public let you: You?
+    /// The creator's share of every collect, and of an expired Moment's reserve.
+    public let creatorEarned: String
+    public let view: String?
+}
+
+/// A v2 Moment an account holds editions of, or was promised coins in.
+public struct StellarMomentHoldingV2: Codable, Equatable, Sendable, Identifiable {
+    public let moment: StellarMomentRowV2
+    /// The editions it holds: the NFT's token ids. Empty when it passed them on and keeps its coins.
+    public let editions: [Int]
+    /// The coins promised as a collector, and claimed so far, in coin base units.
+    public let entitlement: String
+    public let claimed: String
+    /// What it paid collecting; nil in the public view.
+    public let spent: String?
+    public var id: String { moment.nft }
+}
+
+/// `GET /v1/moments/v2/owned`: the account's v2 Moments, newest first.
+public struct StellarOwnedMomentsV2: Codable, Equatable, Sendable {
+    public let moments: [StellarMomentHoldingV2]
+    public let view: String?
+}
+
+/// `GET /v1/moments/v2/mine`: the v2 side of My Moments.
+public struct StellarMyMomentsV2: Codable, Equatable, Sendable {
+    /// A Moment the user published, with what it has earned them. On the wire, the Moment's fields and these sit side
+    /// by side in one object.
+    public struct Created: Codable, Equatable, Sendable, Identifiable {
+        public let moment: StellarMomentRowV2
+        /// The creator's share of every collect, and of an expired Moment's reserve.
+        public let proceeds: String
+        public let proceedsUsd: Double?
+        /// What the creator has withdrawn of it.
+        public let withdrawn: String
+        public var id: String { moment.nft }
+
+        enum CodingKeys: String, CodingKey { case proceeds, proceedsUsd, withdrawn }
+
+        public init(from decoder: Decoder) throws {
+            moment = try StellarMomentRowV2(from: decoder)
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            proceeds = try c.decode(String.self, forKey: .proceeds)
+            proceedsUsd = try c.decodeIfPresent(Double.self, forKey: .proceedsUsd)
+            withdrawn = try c.decode(String.self, forKey: .withdrawn)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            try moment.encode(to: encoder)
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(proceeds, forKey: .proceeds)
+            try c.encodeIfPresent(proceedsUsd, forKey: .proceedsUsd)
+            try c.encode(withdrawn, forKey: .withdrawn)
+        }
+    }
+
+    public struct Totals: Codable, Equatable, Sendable {
+        /// Editions held, and the Moments they are from.
+        public let editions: Int
+        public let moments: Int
+        /// Base units, by quote asset id ("USDC").
+        public let spentByQuote: [String: String]
+        public let earnedByQuote: [String: String]
+    }
+
+    public let created: [Created]
+    /// As `GET /v1/moments/v2/owned` answers for the user.
+    public let collected: [StellarMomentHoldingV2]
+    public let totals: Totals
+}
+
 extension LiteAPI {
     /// A v2 Moments action (`POST /v1/moments/build`), keyed by the Moment's NFT address.
     public struct MomentRequestV2: Encodable, Sendable {
@@ -333,6 +508,27 @@ extension LiteAPI {
             self.nfts = nfts
         }
     }
+
+    /// One page of the v2 Moments feed, newest first. `filter`: "all", "collecting" or "closed" (nil: all); `cursor`: a
+    /// page's `nextCursor`. A viewer read.
+    public func momentsV2(filter: String? = nil, limit: Int? = nil, cursor: String? = nil) async throws -> StellarMomentFeedV2 {
+        try await request("GET", Self.path("moments/v2", ["filter": filter, "limit": limit.map(String.init), "cursor": cursor]), access: .viewer(aboutAccount: false))
+    }
+
+    /// A v2 Moment's page, by its NFT address. A viewer read: `you` is the session's account or the viewer's
+    /// (`spent` nil in the public view), nil with neither.
+    public func momentV2(_ nft: String) async throws -> StellarMomentDetailV2 {
+        try await request("GET", "moments/v2/\(Self.segment(nft))", access: .viewer(aboutAccount: false))
+    }
+
+    /// The v2 Moments the account holds editions of or coins in. A viewer read about the account: the session's, or
+    /// the viewer's.
+    public func ownedMomentsV2() async throws -> StellarOwnedMomentsV2 {
+        try await request("GET", "moments/v2/owned", access: .viewer(aboutAccount: true))
+    }
+
+    /// The v2 Moments the user published and collected, with totals: DyorHQ's history, so a session's.
+    public func myMomentsV2() async throws -> StellarMyMomentsV2 { try await request("GET", "moments/v2/mine") }
 
     /// A v2 Moment's state. Public: it reads nothing about the viewer.
     public func momentStatusV2(_ nft: String) async throws -> StellarMomentStatusV2 {

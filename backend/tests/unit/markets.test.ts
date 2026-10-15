@@ -85,10 +85,14 @@ const quote = (ref: string, usd: number, at: number, extra: Row = {}): Row => ({
   ...extra,
 });
 
-const QUOTES = [
-  quote("XLM", 0.1901, NOW - MINUTE, { change_24h: "-0.0123", volume_24h_usd: "3712345.2" }),
-  quote("USDC", 0.9999, NOW - MINUTE, { change_24h: "0.0001", volume_24h_usd: "912003.5" }),
+/** The reference cache quoted a minute before `at`. */
+const quotesAt = (at: number): Row[] => [
+  quote("XLM", 0.1901, at - MINUTE, { change_24h: "-0.0123", volume_24h_usd: "3712345.2" }),
+  quote("USDC", 0.9999, at - MINUTE, { change_24h: "0.0001", volume_24h_usd: "912003.5" }),
 ];
+const QUOTES = quotesAt(NOW);
+/** For the routes, which read the reference cache at the wall clock's time: quoted a minute ago. */
+const routeQuotes = () => quotesAt(Date.now());
 
 /** A launch row as launchpad.ts launchMarketRows() writes them (WP-14). */
 function launch(id: string, volume: number | null, extra: Row = {}): Row {
@@ -165,7 +169,7 @@ Deno.test("launch rows are exactly MarketRows: other keys dropped, no 24h change
 Deno.test("every markets route is public: no token needed, any token ignored, cached 30 s", async () => {
   for (const path of ["/v1/markets", "/v1/markets/XLM", "/v1/markets/XLM/history?range=week", "/v1/prices"]) {
     for (const authorization of [undefined, "Bearer not-a-token"]) {
-      database({ quotes: QUOTES, first: new Date(NOW - 40 * DAY) });
+      database({ quotes: routeQuotes(), first: new Date(Date.now() - 40 * DAY) });
       const res = await get(path, authorization);
       assertEquals([res.status, res.cache], [200, "public, max-age=30"], `${path} ${authorization ?? "no token"}`);
     }
@@ -174,7 +178,7 @@ Deno.test("every markets route is public: no token needed, any token ignored, ca
 
 Deno.test("a token page: a registry asset by id or contract; BUSDC a test asset at USDC's price, without volume; else 404", async () => {
   const db = database({
-    quotes: QUOTES,
+    quotes: routeQuotes(),
     directory: [{ asset: TESTNET.assets[2].classic, home_domain: "centre.io", name: null, image: null }],
   });
   const busdc = (await get("/v1/markets/BUSDC")).body;
@@ -386,7 +390,7 @@ Deno.test("the directory looks up 5 misses a call; the others are empty, with no
 });
 
 Deno.test("USDC's page on testnet: the home domain testnet Horizon links, whose toml lists mainnet's USDC only", async () => {
-  const db = database({ quotes: QUOTES });
+  const db = database({ quotes: routeQuotes() });
   const horizon = "https://horizon-testnet.stellar.org/assets";
   const toml = "https://centre.io/.well-known/stellar.toml";
   const asked = web({ [horizon]: () => new Response(readRef("horizon-testnet-assets-usdc.json")), [toml]: () => new Response(readRef("centre.io-stellar.toml")) });

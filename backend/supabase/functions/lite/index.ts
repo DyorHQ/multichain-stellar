@@ -52,9 +52,10 @@ import * as swap from "./routes/swap.ts";
 const PUBLIC = /^[A-Z]+ \/v1\/(auth\/|config$|fees$|markets(\/|$)|prices$|economics$|earn\/(markets|history)$|moments\/:nft\/status$|local-media\/)/;
 
 /** Reads of on-chain facts, whose session is optional (§6.0, §6.18): with a token, the owner's view; with no
- *  Authorization header, the public view of ?address= (routes/auth.ts viewer()). A v2 launch's state and an account's
- *  vesting in a v2 Moment are such reads. */
-const VIEWER = /^GET \/v1\/(account|holdings|earn\/positions|moments\/owned|launches(\/:token(\/state)?)?|moments(\/:id|\/:nft\/vesting)?|assets)$/;
+ *  Authorization header, the public view of ?address= (routes/auth.ts viewer()). A v2 launch's state, an account's
+ *  vesting in a v2 Moment, and the v2 Moments feed, a v2 Moment's page and an account's v2 editions are such reads; the
+ *  v2 Moments a creator published are DyorHQ's history (a session route, as v1's are). */
+const VIEWER = /^GET \/v1\/(account|holdings|earn\/positions|moments\/owned|launches(\/:token(\/state)?)?|moments(\/:id|\/:nft\/vesting)?|moments\/v2(\/owned|\/:nft)?|assets)$/;
 
 export function isPublic(route: string): boolean {
   return PUBLIC.test(route);
@@ -186,14 +187,16 @@ export const SHARED_ROUTES: Record<string, (v1: Handler) => Handler> = {
     return net.deploymentV2 ? json(await economicsV2(net), 200, PUBLIC_CACHE) : await v1(ctx);
   },
 
-  // Buy, sell and, on a rescued launch, refund (at its fixed rate, no fees).
+  // Buy, sell and, on a rescued launch, refund (at its fixed rate, no fees). The request is checked before the launch's
+  // generation is looked up, so a bad body is 400 on launches of either generation, and never waits on the RPC.
   "POST /v1/launches/:token/quote": (v1) => async (ctx) => {
     const net = env.network;
-    if (!net.deploymentV2 || (await launchGeneration(net, ctx.params.token)) === 1) return await v1(ctx);
-    const u = await auth.user(ctx.req);
-    const b = await readJson(ctx.req);
+    if (!net.deploymentV2) return await v1(ctx);
+    const b = await readJson(ctx.req.clone());
     if (b.side !== "buy" && b.side !== "sell" && b.side !== "refund") throw bad("bad_side", "side is buy, sell or refund.");
-    return json(await quoteTradeV2(u, ctx.params.token, b.side, amountArg(b.amount, "amount")));
+    const amount = amountArg(b.amount, "amount");
+    if ((await launchGeneration(net, ctx.params.token)) === 1) return await v1(ctx);
+    return json(await quoteTradeV2(await auth.user(ctx.req), ctx.params.token, b.side, amount));
   },
 
   // Every v2 launch action; a recipient change answers its harvest backlog beside the plan (V7).

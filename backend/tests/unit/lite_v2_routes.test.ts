@@ -296,6 +296,26 @@ Deno.test("with v2 deployed, each shared route answers v2's requests and leaves 
   await v2Answered(ask(quote, q2.handler, `/v1/launches/${V2_TOKEN}/quote`, trade, { token: V2_TOKEN }), q2, "a quote on a v2 launch");
 });
 
+Deno.test("a launch quote's body is checked before its launch's generation: 400 on a token of either generation, nothing asked", async () => {
+  const quote = "POST /v1/launches/:token/quote";
+  const cases: [unknown, number, string, string][] = [
+    [{ side: "hold", amount: "1" }, 400, "bad_side", "side is buy, sell or refund."],
+    [{ side: "buy", amount: "0" }, 400, "bad_amount", "amount must be positive."],
+    [{ side: "refund", amount: "1.5" }, 400, "bad_amount", "amount must be a whole number of base units, as a string."],
+    [[], 400, "bad_arg", "The request body must be a JSON object."],
+  ];
+  for (const token of [V1_TOKEN, V2_TOKEN, RPC_DOWN_TOKEN]) {
+    for (const [body, status, code, message] of cases) {
+      fresh();
+      const v1 = v1Handler();
+      const err = await assertRejects(() => ask(quote, v1.handler, `/v1/launches/${token}/quote`, body, { token }), ApiError);
+      const e = err as InstanceType<typeof ApiError>;
+      assertEquals([e.status, e.code, e.message], [status, code, message], `${token} ${JSON.stringify(body)}`);
+      assertEquals([...queries, ...rpcAsked, ...v1.bodies], [], `${JSON.stringify(body)}: nothing asked, v1 not run`);
+    }
+  }
+});
+
 // ------------------------------------------------------------------------------------------------ the economics
 
 const POLICY: MomentsV2Policy = {

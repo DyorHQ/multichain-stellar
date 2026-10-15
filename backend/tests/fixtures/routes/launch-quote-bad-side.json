@@ -17,7 +17,7 @@
     "body": {
       "error": {
         "code": "bad_side",
-        "message": "side is buy or sell.",
+        "message": "side is buy, sell or refund.",
         "detail": null
       }
     }
