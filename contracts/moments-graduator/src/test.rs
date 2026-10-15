@@ -197,8 +197,12 @@ pub enum Lie {
     LiquidityOverstated,
     /// Mints the LP to itself instead of the locker (the locker's LP balance).
     KeepsLp,
-    /// Reports this pair as the pool and the LP token (the factory's pair).
+    /// Reports this pair as the pool and the LP token (the factory's pair; the locker's LP and the pool's balances
+    /// see it too).
     WrongPool(Address),
+    /// Keeps both assets and reports itself as the pool and the LP token, and its `balance` vouches for any holder:
+    /// every check passes but the factory's pair.
+    PosesAsPool,
     /// Reports this token as the LP token (the pool is its own LP token).
     WrongLpToken(Address),
     /// After seeding, pays one unit of its own USDC to this address; paid to moments, its balance no longer falls by
@@ -231,6 +235,11 @@ impl TestExecutor {
         e.storage().instance().set(&ExecKey::Lie, &lie);
     }
 
+    /// For `Lie::PosesAsPool`, which reports this contract as the LP token: any holder holds plenty.
+    pub fn balance(_e: Env, _id: Address) -> i128 {
+        i128::MAX / 4
+    }
+
     pub fn graduate(e: Env, a: GraduateArgs) -> GraduateResult {
         a.source.require_auth();
         let lie: Lie = e.storage().instance().get(&ExecKey::Lie).unwrap();
@@ -239,6 +248,15 @@ impl TestExecutor {
         let usdc = TokenClient::new(&e, &a.quote);
         coin.transfer(&a.source, &this, &a.token_amount);
         usdc.transfer(&a.source, &this, &a.quote_amount);
+        if lie == Lie::PosesAsPool {
+            return GraduateResult {
+                pool: this.clone(),
+                lp_token: this,
+                liquidity: a.min_liquidity,
+                token_used: a.token_amount,
+                quote_used: a.quote_amount,
+            };
+        }
 
         // What stays out of the pair, and whether it goes back to the source.
         let dust = |amount: i128| mul_div(amount, GRAD_DUST_BPS as i128, BPS as i128);
@@ -434,6 +452,16 @@ impl T {
         f.pair_exists(coin, &self.usdc).then(|| f.get_pair(coin, &self.usdc))
     }
 
+    /// Where the Soroswap factory will create the pair of `coin` and USDC: its salt is sha256 of the two token
+    /// addresses' XDR, in sorted order.
+    fn predicted_pair(&self, coin: &Address) -> Address {
+        let (first, second) = if *coin < self.usdc { (coin, &self.usdc) } else { (&self.usdc, coin) };
+        let mut seed = first.clone().to_xdr(&self.e);
+        seed.append(&second.clone().to_xdr(&self.e));
+        let salt: BytesN<32> = self.e.crypto().sha256(&seed).into();
+        self.e.deployer().with_address(self.factory.clone(), salt).deployed_address()
+    }
+
     /// The pair's reserves as (coin side, USDC side).
     fn reserves(&self, pair: &Address, coin: &Address) -> (i128, i128) {
         let p = soroswap_pair::Client::new(&self.e, pair);
@@ -568,6 +596,9 @@ fn leftovers_within_the_dust_bound_are_burned_and_returned() {
         (1_000 * ONE, 1_000_000 * ONE, 0, 30),
         // Equal sides with one unit of each left over: exactly the unit of rounding min_liquidity allows.
         (100_000 * ONE, 100_000 * ONE, 1, 1),
+        // Exactly 1 bp of one side left over, the dust bound's edge, on pools small enough that it costs no √k unit.
+        (1_000_000, 100, 100, 0),
+        (100, 1_000_000, 0, 100),
     ];
     for (pool_coins, reserve, coins_left, usdc_left) in cases {
         t.lying_exec().set_lie(&Lie::LeavesDust(coins_left, usdc_left));
@@ -606,8 +637,8 @@ fn the_graduated_coin_trades_on_the_router() {
 #[test]
 fn nobody_can_create_the_coins_pair_before_the_graduation() {
     // The coin's address is public from publish on, but a Soroswap pair reads its tokens' symbols when it is created,
-    // and the coin exists only from inside the graduation's frame. So nobody can create the pair early, let alone seed
-    // it or donate to it: the graduation always creates it and opens it at exactly reserve / pool_coins.
+    // and the coin exists only from inside the graduation's frame. So nobody can create the pair early or seed it with
+    // coins: the graduation always creates it. (USDC can still be sent to its address beforehand: the next test.)
     let t = setup(Venue::Soroswap);
     let a = t.moment();
     let early =
@@ -621,6 +652,31 @@ fn nobody_can_create_the_coins_pair_before_the_graduation() {
 }
 
 #[test]
+fn usdc_sent_to_the_pairs_address_early_only_lifts_the_opening_price() {
+    // The pair's address is as predictable as the coin's (the factory salts it with the sorted token pair), and a SAC
+    // credits a contract address before any contract lives there. So anyone can send USDC to the pair before the
+    // graduation. The deposit counts it in: the graduation still succeeds, moments pays exactly the reserve, the
+    // locker holds every LP unit but Soroswap's lock, and the pool opens slightly above reserve / pool_coins.
+    let t = setup(Venue::Soroswap);
+    let a = t.moment();
+    let pair = t.predicted_pair(&a.expected_coin);
+    let donation = 5 * ONE;
+    t.mint_usdc(&pair, donation);
+    let u0 = t.usdc().balance(&t.moments);
+
+    let r = t.graduated(&a);
+
+    assert_eq!(r.pool, pair);
+    assert_eq!(t.reserves(&pair, &r.coin), (POOL_COINS, RESERVE + donation));
+    assert_eq!((r.coin_used, r.usdc_used, r.usdc_returned), (POOL_COINS, RESERVE, 0));
+    assert_eq!(t.usdc().balance(&t.moments), u0 - RESERVE);
+    let liquidity = isqrt_u128((POOL_COINS * (RESERVE + donation)) as u128) as i128 - SOROSWAP_MIN_LIQ;
+    let lp = soroswap_pair::Client::new(&t.e, &pair);
+    assert_eq!(r.liquidity, liquidity);
+    assert_eq!((lp.balance(&t.locker), lp.total_supply()), (liquidity, liquidity + SOROSWAP_MIN_LIQ));
+}
+
+#[test]
 fn stray_usdc_at_the_graduator_stays_put() {
     // Anyone can send USDC to the graduator. It compares its balance before and after the executor, so a stray
     // balance moves no check, and it only ever moves the reserve it pulled.
@@ -631,6 +687,36 @@ fn stray_usdc_at_the_graduator_stays_put() {
     let r = t.graduated(&a);
     assert_eq!(t.usdc().balance(&t.grad), 3 * ONE);
     assert_eq!(t.usdc().balance(&t.moments), u0 - RESERVE);
+    assert_eq!(t.reserves(&r.pool, &r.coin), (POOL_COINS, RESERVE));
+}
+
+// ------------------------------------------------------------------------------------------------ names and symbols
+
+#[test]
+fn a_symbol_soroswap_cant_read_fails_pair_creation_as_a_recorded_failure() {
+    // Soroswap's pair reads the first 6 bytes of each token's symbol as UTF-8 when it is created. Two emoji are 8
+    // bytes, so the cut lands inside the second one and the pair can't be created: the graduation fails recoverably
+    // (a trap, origin 99 once try_ narrows it), moments records it and nothing else changes. moments-v2 and
+    // launchpad-v2 accept only 2-10 ASCII letters or digits as a symbol for this reason (review finding D1).
+    let t = setup(Venue::Soroswap);
+    let mut a = t.moment();
+    a.symbol = String::from_str(&t.e, "😀😀");
+    let before = t.snapshot(&a);
+    let trapped = GradFailure { origin: ORIGIN_HOST, code: ScErrorCode::InvalidAction as u32 };
+    assert_eq!(t.failure(&a), trapped);
+    assert_eq!(t.snapshot(&a), before);
+    assert_eq!(t.recorded(&a), Some(trapped));
+}
+
+#[test]
+fn a_ten_character_ascii_symbol_and_a_non_ascii_name_graduate() {
+    let t = setup(Venue::Soroswap);
+    let mut a = t.moment();
+    a.name = String::from_str(&t.e, "Soleil à Labadi ☀");
+    a.symbol = String::from_str(&t.e, "LABADI2026");
+    let r = t.graduated(&a);
+    let coin = t.coin(&r.coin);
+    assert_eq!((coin.name(), coin.symbol()), (a.name.clone(), a.symbol.clone()));
     assert_eq!(t.reserves(&r.pool, &r.coin), (POOL_COINS, RESERVE));
 }
 
@@ -648,6 +734,10 @@ fn only_the_configured_moments_can_graduate() {
     // moments' auth is missing, which the host reports as an auth failure (narrowed by try_, origin 99).
     let auth_failure = GradFailure { origin: ORIGIN_HOST, code: ScErrorCode::InvalidAction as u32 };
     assert_eq!(TestMomentsClient::new(&t.e, &intruder).attempt(&a), Attempt::Failed(auth_failure));
+    // moments' auth comes first: even arguments the graduator would refuse fail on it, before anything is read.
+    let mut refused = t.moment();
+    refused.reserve = 0;
+    assert_eq!(TestMomentsClient::new(&t.e, &intruder).attempt(&refused), Attempt::Failed(auth_failure));
     // Called directly, with nobody's authorization.
     assert!(t.grad().try_graduate(&a).is_err());
 
@@ -723,28 +813,42 @@ fn every_lie_of_an_executor_is_graduation_invalid_with_nothing_changed() {
     let other_pair = t.as_anyone(|| soroswap_factory::Client::new(&t.e, &t.factory).create_pair(&t.usdc, &other_asset));
     t.mint_usdc(&t.locker, 1_000_000 * ONE);
     t.mint_usdc(&t.exec, ONE);
+    // The testnet Moment, and one whose reserve dwarfs its coins: there a USDC unit moves √k by far less than a unit,
+    // so only the pool's USDC balance can show it was kept.
+    let (testnet, usdc_heavy) = ((POOL_COINS, RESERVE), (1_000 * ONE, 1_000_000 * ONE));
+    // Pools so small that 1 bp of one side moves √k by less than a unit: only that side's dust bound shows a
+    // shortfall the executor owns up to.
+    let (coin_dust_edge, usdc_dust_edge) = ((1_000_000, 100), (100, 1_000_000));
     let lies = [
-        (Lie::CoinsOverReported, "coins used above pool_coins"),
-        (Lie::CoinsBelowDust, "coins used below pool_coins − 1 bp"),
-        (Lie::CoinsUnderReported, "a coin balance delta that differs from coin_used"),
-        (Lie::ReturnsCoins(1), "a coin short in the pool, returned, every coin reported as used"),
-        (Lie::KeepsCoins(1), "a coin short in the pool, kept, every coin reported as used"),
-        (Lie::KeepsCoins(POOL_COINS / 2), "half the coins kept, every coin reported as used"),
-        (Lie::UsdcOverReported, "USDC used above the reserve"),
-        (Lie::UsdcBelowDust, "USDC used below the reserve − 1 bp"),
-        (Lie::UsdcUnderReported, "a USDC balance delta that differs from usdc_used"),
-        (Lie::KeepsUsdc(1), "a USDC unit short in the pool, kept, the whole reserve reported as used"),
-        (Lie::LiquidityBelowMinimum, "liquidity below the minimum"),
-        (Lie::LiquidityOverstated, "more liquidity reported than the locker received"),
-        (Lie::KeepsLp, "the LP sent elsewhere"),
-        (Lie::WrongPool(other_pair), "another pair reported as the pool"),
-        (Lie::WrongLpToken(t.usdc.clone()), "another token reported as the LP token"),
-        (Lie::PaysTo(t.moments.clone()), "moments paid behind the graduator's back"),
+        (Lie::CoinsOverReported, testnet, "coins used above pool_coins"),
+        (Lie::CoinsBelowDust, testnet, "coins used below pool_coins − 1 bp"),
+        (Lie::CoinsBelowDust, coin_dust_edge, "coins used below pool_coins − 1 bp: only its bound shows it"),
+        (Lie::CoinsUnderReported, testnet, "a coin balance delta that differs from coin_used"),
+        (Lie::ReturnsCoins(1), testnet, "a coin short in the pool, returned, every coin reported as used"),
+        (Lie::KeepsCoins(1), testnet, "a coin unit kept, every coin reported as used: only the pool's coins show it"),
+        (Lie::KeepsCoins(POOL_COINS / 2), testnet, "half the coins kept, every coin reported as used"),
+        (Lie::UsdcOverReported, testnet, "USDC used above the reserve"),
+        (Lie::UsdcBelowDust, testnet, "USDC used below the reserve − 1 bp"),
+        (Lie::UsdcBelowDust, usdc_dust_edge, "USDC used below the reserve − 1 bp: only its bound shows it"),
+        (Lie::UsdcUnderReported, testnet, "a USDC balance delta that differs from usdc_used"),
+        (Lie::KeepsUsdc(1), testnet, "a USDC unit kept, the whole reserve reported as used"),
+        (Lie::KeepsUsdc(1), usdc_heavy, "a USDC unit kept from a large reserve: only the pool's USDC shows it"),
+        (Lie::LiquidityBelowMinimum, testnet, "liquidity below the minimum"),
+        (Lie::LiquidityOverstated, testnet, "more liquidity reported than the locker received"),
+        (Lie::KeepsLp, testnet, "the LP sent elsewhere"),
+        (Lie::WrongPool(other_pair), testnet, "another pair reported as the pool"),
+        (
+            Lie::PosesAsPool,
+            testnet,
+            "both assets kept, the executor posing as the pool: only the factory's pair shows it",
+        ),
+        (Lie::WrongLpToken(t.usdc.clone()), testnet, "another token reported as the LP token"),
+        (Lie::PaysTo(t.moments.clone()), testnet, "moments paid behind the graduator's back"),
     ];
     let mut rolled_back = std::vec::Vec::new();
-    for (lie, what) in lies {
+    for (lie, (pool_coins, reserve), what) in lies {
         t.lying_exec().set_lie(&lie);
-        let a = t.moment();
+        let a = t.args(&Address::generate(&t.e), pool_coins, reserve);
         let before = t.snapshot(&a);
         assert_eq!(t.attempt(&a), Attempt::Failed(invalid()), "{what}");
         assert_eq!(t.snapshot(&a), before, "{what}");

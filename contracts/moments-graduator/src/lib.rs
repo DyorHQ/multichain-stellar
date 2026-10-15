@@ -22,7 +22,9 @@
 //!      Soroswap venue), the locker holds at least `liquidity` of it, and the pool holds the coins and USDC
 //!      reported as used. That last pair of checks catches an executor that keeps part of what it pulled while it
 //!      reports everything as used: the balance deltas can't see it, and the liquidity bound sees it only once the
-//!      shortfall moves √k by a unit;
+//!      shortfall moves √k by a unit. USDC that anyone sent to the pair's (predictable) address before the
+//!      graduation counts in the pool too, so on the USDC side an executor could keep up to such a donation unseen;
+//!      the executor is fixed configuration, so that is accepted;
 //! 6. it burns the coins the pool didn't take, sends the USDC it didn't use back to moments and checks the USDC
 //!    accounting against moments' own balance.
 //!
