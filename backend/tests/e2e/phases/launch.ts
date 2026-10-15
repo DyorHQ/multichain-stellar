@@ -1,9 +1,12 @@
 // launch (docs/DESIGN-stellar-parity.md §12.6; WP-14): a coin launched with its metadata (an uploaded image, a
 // description, links) and a developer buy at the client's 1% minimum, shown with them on the board's public view;
 // holders 1 → 2 as a second account buys; sold back, bought to the threshold, graduated by hand (the user pays), then
-// bought through Soroswap (a priced pool_swaps row); the creator's fees claimed (a creator_claims row); market cap in
-// USD set; My Launchpad lists it (with a session only); and reconcile leaves every holder's indexed balance equal to
-// its live balance(). The economics and the board need no session.
+// bought through Soroswap (a priced pool_swaps row) and sold into USDC through two pools, [coin, XLM, USDC] (a sell
+// row whose trader is the seller, though the pair's swap pays the next pool); the creator's fees claimed (a
+// creator_claims row); market cap in USD set; My Launchpad lists it (with a session only); reconcile leaves every
+// holder's indexed balance equal to its live balance(); and no unlisted launch is served by the board, the markets or
+// the search (§9): those indexed, and this coin while it is marked as a smoke launch is. The economics and the board
+// need no session.
 //
 // Before the owner's redeploy (O-1) it runs on the current deployment, whose feed that redeploy retires; after it,
 // only on testnet-qa (Q3), and anywhere else it is skipped. E2E_NO_MEDIA=1 is for a stack without media storage
@@ -214,6 +217,24 @@ export default async function launch(t: E2E): Promise<string | null> {
   const swaps = await t.db`select trader, side, price from lite.pool_swaps where token = ${coin}`;
   if (!swaps.some((s) => s.trader === me && s.side === "buy" && s.price !== null)) throw new Error(`pool swaps: ${JSON.stringify(swaps)}`);
 
+  // A sell into USDC through two pools, [coin, XLM, USDC]: the coin's pair pays its XLM to the XLM/USDC pool, which is
+  // the swap's `to`; the row's trader is still the seller, so the sale counts in the owner's position.
+  const held = BigInt((await api(t, t.token, "GET", `/launches/${coin}`)).you.balance);
+  let hub: any = null;
+  for (let i = 0; i < 6 && !hub; i++) {
+    const q = await call(t, t.token, "POST", "/swap/quote", { sell: coin, buy: "USDC", amount: (held / 100n).toString(), slippageBps: 300 });
+    if (q.status === 200) hub = q.body;
+    else await new Promise((r) => setTimeout(r, 10_000));
+  }
+  if (!hub) throw new Error("no route to sell the graduated coin into USDC");
+  if (hub.best.venue !== "soroswap" || JSON.stringify(hub.best.path) !== JSON.stringify([coin, xlm, t.config.assets.find((a: any) => a.id === "USDC").contract])) {
+    throw new Error(`the sell into USDC isn't routed [coin, XLM, USDC] through Soroswap: ${JSON.stringify(hub.best)}`);
+  }
+  await t.runPlan(await api(t, t.token, "POST", "/swap/build", { quoteId: hub.quoteId }));
+  await indexed(t);
+  const sells = await t.db`select trader, price from lite.pool_swaps where token = ${coin} and side = 'sell'`;
+  if (sells.length !== 1 || sells[0].trader !== me || sells[0].price === null) throw new Error(`the sell through two pools: ${JSON.stringify(sells)}`);
+
   // The creator's fees, claimed and recorded.
   await t.runPlan(await api(t, t.token, "POST", "/launches/build", { action: "claim", token: coin }));
   await indexed(t);
@@ -246,9 +267,54 @@ export default async function launch(t: E2E): Promise<string | null> {
     if (!live || live.balance !== BigInt(h.balance)) throw new Error(`${h.address}: indexed ${h.balance}, live ${live?.balance}`);
   }
 
+  const unlisted = await notServedWhenUnlisted(t, coin);
+
   const xlmPaid = (BigInt(fill.used) / ONE).toString();
   return `${SYMBOL} ${coin.slice(0, 8)}… ${media ? "with its image, description and links" : "without metadata (E2E_NO_MEDIA)"}; holders 1 → ${page.launch.holders}; ` +
     `filled for ${xlmPaid} XLM, graduated by hand to ${page.launch.pair.slice(0, 8)}… (pool fee ${page.launch.poolFeeBps} bps); ` +
-    `a Soroswap buy via ${quote.best?.venue ?? "the best route"} priced ${swaps.find((s) => s.trader === me)?.price}; claimed ${claim.amount} stroops; ` +
-    `market cap $${page.launch.marketCapUsd}; My Launchpad lists it; ${holders.length} balances reconciled (${mismatched} corrected)`;
+    `a Soroswap buy via ${quote.best?.venue ?? "the best route"} priced ${swaps.find((s) => s.trader === me)?.price}; ` +
+    `a sell into USDC through two pools recorded as the seller's; claimed ${claim.amount} stroops; ` +
+    `market cap $${page.launch.marketCapUsd}; My Launchpad lists it; ${holders.length} balances reconciled (${mismatched} corrected); ` +
+    `${unlisted} unlisted launch(es) served by none of the board, the markets and the search`;
+}
+
+/** The API keeps the markets' launch rows 15 s per isolate (launchpad.ts launchMarketRows). */
+const MARKET_CACHE_MS = 15_000;
+
+/** §9: no listed=false launch is served by the board (either section), the markets (the list and a market's page) or
+ *  the search (launchpad.ts launchSearch, which feeds GET /v1/assets). Checked for every unlisted launch indexed, and
+ *  for `coin` too, marked as the indexer marks a deployment's smoke launch for as long as the check runs, so the check
+ *  never has nothing to look at. Answers how many unlisted launches were checked. */
+async function notServedWhenUnlisted(t: E2E, coin: string): Promise<number> {
+  const { launchSearch } = await import("../../../supabase/functions/_shared/launchpad.ts");
+  // Listed, it is served by all three.
+  const listed = [
+    (await call(t, null, "GET", `/markets/${coin}`)).status,
+    (await call(t, null, "GET", `/launches?section=graduated&q=${coin}`)).body?.launches?.some((r: any) => r.token === coin),
+    (await launchSearch(coin)).some((r) => r.id === coin),
+  ];
+  if (JSON.stringify(listed) !== "[200,true,true]") throw new Error(`while listed, the market page, the board and the search: ${JSON.stringify(listed)}`);
+  await t.db`update lite.launches set listed = false where token = ${coin}`;
+  try {
+    const unlisted = await t.db`select token, symbol from lite.launches where not listed`;
+    // The markets read their launch rows again once the API's copy is older than this.
+    await new Promise((r) => setTimeout(r, MARKET_CACHE_MS + 1_000));
+    const markets = await call(t, null, "GET", "/markets");
+    if (markets.status !== 200) throw new Error(`/markets → ${markets.status}`);
+    for (const l of unlisted) {
+      const token = String(l.token);
+      for (const section of ["explore", "graduated"]) {
+        const board = await call(t, null, "GET", `/launches?section=${section}&q=${token}`);
+        if (board.status !== 200 || board.body.launches.some((r: any) => r.token === token)) throw new Error(`the ${section} board serves unlisted ${token}`);
+      }
+      if (markets.body.rows.some((r: any) => r.id === token)) throw new Error(`/markets serves unlisted ${token}`);
+      if ((await call(t, null, "GET", `/markets/${token}`)).status !== 404) throw new Error(`/markets/${token} serves an unlisted launch`);
+      for (const q of [token, String(l.symbol)]) {
+        if ((await launchSearch(q)).some((r) => r.id === token)) throw new Error(`the search for ${q} finds unlisted ${token}`);
+      }
+    }
+    return unlisted.length;
+  } finally {
+    await t.db`update lite.launches set listed = true where token = ${coin}`;
+  }
 }
