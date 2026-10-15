@@ -1,7 +1,8 @@
 // Contract deployments by name (docs/DESIGN-stellar-parity.md §6.16), in two generations
 // (docs/DESIGN-stellar-contracts-v2.md §17, §20.1): v1 (retired) and v2 (live). LITE_DEPLOYMENT picks a deployment and
 // defaults to the network's name:
-// - testnet: v1 from testnet.json, v2 from testnet-v2.json once the owner's deploy has written it;
+// - testnet: v1 from testnet.json, v2 from testnet-v2.json once the owner's file is committed and imported here
+//   (BUNDLED_V2); both are bundled, so the hosted functions never read a file;
 // - testnet-qa: v2 from testnet-qa-v2.json and v1 from testnet-qa.json, each where it was made (read when testnet-qa is
 //   first selected);
 // - mainnet: nothing deployed yet.
@@ -100,9 +101,11 @@ const QA = "testnet-qa";
 
 const files = new Map<string, Record<string, unknown> | null>();
 
-/** deployments/<file>.json, read on first use; null when there is no such file. The files read this way exist only
- *  where they were made (no hosted function has testnet-qa.json). A malformed file throws when its deployment is
- *  selected, never while importing this module, so it can't break networks.ts and the main deployment. */
+/** deployments/<file>.json, read on first use; null when there is no such file. Only testnet-qa's files are read this
+ *  way: they exist only where they were made, and testnet-qa is served only there (local-stack.sh). A hosted function
+ *  can't read a file while it serves a request (Supabase allows synchronous file reads only while a module loads), so
+ *  the hosted deployment's files are imported instead. A malformed file throws when its deployment is selected, never
+ *  while importing this module, so it can't break networks.ts and the main deployment. */
 function readDeploymentFile(file: string): Record<string, unknown> | null {
   if (!files.has(file)) {
     let text: string | null = null;
@@ -211,6 +214,66 @@ export const MOMENTS_DURATION_KEYS: readonly (keyof MomentsDurationsV2)[] = [
   "harvest_interval",
 ];
 
+const MINUTE = 60;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** dyor-common's two duration sets (contracts/common/src/durations.rs, §14.3), which deploy-contracts-v2.ts deploys
+ *  and no other (lib/v2-profile.ts checkDurations; a unit test compares the values): production on every deployment
+ *  but testnet-qa. The pins and the verifiers bind the production values for the owner's testnet. */
+export const DURATION_SETS_V2: Readonly<
+  Record<"production" | "testnet-qa", { launch: LaunchDurationsV2; moments: MomentsDurationsV2 }>
+> = {
+  production: {
+    launch: {
+      grace: HOUR,
+      fallback_delay: HOUR,
+      rescue_admin: 7 * DAY,
+      rescue_public: 30 * DAY,
+      locked_fallback: DAY,
+      takeover_delay: 3 * DAY,
+      takeover_window: 3 * DAY,
+      timelock: 48 * HOUR,
+      timelock_window: 7 * DAY,
+      harvest_interval: HOUR,
+    },
+    moments: {
+      vest_period: 30 * DAY,
+      stuck_expiry: 7 * DAY,
+      pending_backstop: 30 * DAY,
+      timelock: 48 * HOUR,
+      timelock_window: 7 * DAY,
+      min_window: HOUR,
+      max_window: 30 * DAY,
+      harvest_interval: HOUR,
+    },
+  },
+  "testnet-qa": {
+    launch: {
+      grace: MINUTE,
+      fallback_delay: MINUTE,
+      rescue_admin: 5 * MINUTE,
+      rescue_public: 15 * MINUTE,
+      locked_fallback: 2 * MINUTE,
+      takeover_delay: 2 * MINUTE,
+      takeover_window: 5 * MINUTE,
+      timelock: 2 * MINUTE,
+      timelock_window: 10 * MINUTE,
+      harvest_interval: MINUTE,
+    },
+    moments: {
+      vest_period: 10 * MINUTE,
+      stuck_expiry: 5 * MINUTE,
+      pending_backstop: 30 * MINUTE,
+      timelock: 2 * MINUTE,
+      timelock_window: 10 * MINUTE,
+      min_window: 2 * MINUTE,
+      max_window: 30 * DAY,
+      harvest_interval: MINUTE,
+    },
+  },
+};
+
 export type VenueKindV2 = "Soroswap" | "Aquarius" | "HoldOnly" | "QaFail";
 
 /** One row of launchpad-v2's venue table, as the deploy read it back from venues() (finding F8). */
@@ -267,6 +330,7 @@ const VENUE_KINDS: readonly VenueKindV2[] = ["Soroswap", "Aquarius", "HoldOnly",
 
 /** deployments/<id>.json of v2, checked: throws on anything deploy-contracts-v2.ts wouldn't have written, and on any
  *  test-only piece (qa-exec-fail, the failing Moments stack, the QA durations) outside testnet-qa (decision O3). The
+ *  durations must be the deployment's own set exactly, value by value, not only by its label (§14.3). The
  *  file also records the deployer and the roles (admin, guardians, treasury), for the runbook. Nothing here reads them:
  *  the API never depends on who they are, and the treasury is settable (decision O6, finding A15e). */
 export function parseDeploymentV2(id: string, raw: Record<string, unknown>): DeploymentV2 {
@@ -358,8 +422,15 @@ export function parseDeploymentV2(id: string, raw: Record<string, unknown>): Dep
   };
   const launch = durationSet(durations.launch, "durations.launch", LAUNCH_DURATION_KEYS);
   const moments = durationSet(durations.moments, "durations.moments", MOMENTS_DURATION_KEYS);
-  // Both constructors require the locker's interval (finding F6).
-  if (launch.harvest_interval !== moments.harvest_interval) fail("durations: the launch and Moments harvest_interval differ");
+  // A set labelled production but holding other values would be pinned in the app: compare every value,
+  // harvest_interval (equal in both, finding F6), fallback_delay and pending_backstop included.
+  const own = DURATION_SETS_V2[set as "production" | "testnet-qa"];
+  for (const [what, got, want] of [["launch", launch, own.launch], ["moments", moments, own.moments]] as const) {
+    for (const [k, v] of Object.entries(want)) {
+      const value = (got as Record<string, number>)[k];
+      if (value !== v) fail(`durations.${what}.${k} is ${value} s: the ${set} set has ${v} s (§14.3)`);
+    }
+  }
 
   const ttl = object(raw.ttl, "ttl");
   const quotes = object(raw.quotes, "quotes");
@@ -389,21 +460,24 @@ export function parseDeploymentV2(id: string, raw: Record<string, unknown>): Dep
   };
 }
 
-/** v2 files bundled with the functions. A hosted function has only what is imported, so the owner's testnet-v2.json
- *  joins this map, imported as testnet.json is, when it is committed (a unit test checks it does); until then, and for
- *  testnet-qa-v2.json always, a file is read where it exists. */
-const BUNDLED_V2: Record<string, Record<string, unknown>> = {};
+/** v2 files bundled with the functions, by file. testnet's v2 deployment comes from here only: a hosted function has
+ *  only what is imported, and it can't read a file while serving. When the owner's testnet-v2.json is committed it
+ *  joins this map, imported beside testnet.json (a unit test and gen-pinned.ts check it did):
+ *    import testnetV2 from "./testnet-v2.json" with { type: "json" };
+ *  and { "testnet-v2": testnetV2 } here. Until then testnet has no v2 deployment and the v2 routes answer
+ *  not_deployed. testnet-qa-v2.json is never bundled: it is read where it exists. */
+export const BUNDLED_V2: Readonly<Record<string, Record<string, unknown>>> = {};
 
 const v2Parsed = new Map<string, DeploymentV2 | null>();
 
-/** The v2 deployment of the deployment called `name`; null until its file exists, and the v2 routes answer
- *  not_deployed. Throws on a name nobody deployed. */
+/** The v2 deployment of the deployment called `name`; null until its file exists (bundled, or testnet-qa's on disk),
+ *  and the v2 routes answer not_deployed. Throws on a name nobody deployed. */
 export function deploymentV2ByName(name: string): DeploymentV2 | null {
   knownName(name);
   const file = V2_FILES[name];
   if (!file) return null;
   if (!v2Parsed.has(file)) {
-    const raw = BUNDLED_V2[file] ?? readDeploymentFile(file);
+    const raw = BUNDLED_V2[file] ?? (name === QA ? readDeploymentFile(file) : null);
     v2Parsed.set(file, raw ? parseDeploymentV2(file, raw) : null);
   }
   return v2Parsed.get(file)!;

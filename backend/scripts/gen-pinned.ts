@@ -15,13 +15,16 @@
 // testnet writes PinnedContracts+Testnet.swift (PinnedContracts.testnet); testnet-qa writes PinnedContracts+TestnetQA.swift
 // (PinnedContracts.testnetQA), which Debug builds select with LITE_PINNED=testnet-qa. A --deployment run also rewrites
 // v2_errors.ts when contracts/dist holds the v2 WASMs, and with a v2 deployment it requires them to be exactly the
-// deployed ones, so the table names the errors of the contracts the app is pinned to. --errors rewrites v2_errors.ts
+// deployed ones, so the table names the errors of the contracts the app is pinned to. It refuses a v2 file the
+// functions don't serve (testnet-v2.json not yet imported into deployments/index.ts). --errors rewrites v2_errors.ts
 // alone. The output depends only on its inputs, so running it again changes nothing.
 import { StrKey } from "@stellar/stellar-sdk";
 import {
   DEPLOYMENT_NETWORKS,
+  type DeploymentV2,
   LAUNCH_DURATION_KEYS,
   MOMENTS_DURATION_KEYS,
+  V2_FILES,
 } from "../supabase/functions/_shared/deployments/index.ts";
 import {
   contractAllowlist,
@@ -35,6 +38,7 @@ import { readSpec } from "./lib/wasm-spec.ts";
 
 const ROOT = new URL("../../", import.meta.url).pathname;
 const ERRORS_FILE = "backend/supabase/functions/_shared/v2_errors.ts";
+const DEPLOYMENTS_DIR = "backend/supabase/functions/_shared/deployments";
 
 /** The Swift file and property each deployment is pinned as. */
 const SWIFT: Record<string, { file: string; property: string }> = {
@@ -112,6 +116,21 @@ export function renderPins(net: NetworkConfig, name: string, sponsor: string): s
   }
   lines.push("    )", "}", "");
   return lines.join("\n");
+}
+
+/** Why the deployment called `name` can't be pinned as `net` carries it, or null: its v2 file is in deployments/ under
+ *  `root`, but `net` has none, because the file isn't imported into deployments/index.ts's BUNDLED_V2. Pinning then
+ *  would leave the app on v1 while the hosted functions answer not_deployed for v2. */
+export function unbundledV2(name: string, net: NetworkConfig, root = ROOT): string | null {
+  const file = V2_FILES[name];
+  if (!file || net.deploymentV2) return null;
+  try {
+    Deno.statSync(`${root}${DEPLOYMENTS_DIR}/${file}.json`);
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) return null;
+    throw e;
+  }
+  return `deployments/${file}.json is there but the functions don't serve it: import it in deployments/index.ts and add it to BUNDLED_V2`;
 }
 
 // ------------------------------------------------------------------------------------------------ the error table
@@ -226,7 +245,7 @@ const HOST: [string, number][] = [
 ];
 
 /** Soroswap's contracts as deployed, whose errors reach a graduation through exec-soroswap (origin 0). */
-const SOROSWAP_FIXTURES = ["soroswap_router.wasm", "soroswap_pair.wasm", "soroswap_factory.wasm"];
+export const SOROSWAP_FIXTURES = ["soroswap_router.wasm", "soroswap_pair.wasm", "soroswap_factory.wasm"];
 
 /** Every `#[contracterror]` enum in a WASM's contract spec. */
 export function errorEnums(wasm: Uint8Array): ErrorEnum[] {
@@ -427,6 +446,28 @@ export async function generateErrors(root = ROOT): Promise<{ text: string; dist:
   return { text: renderErrors(table, from), dist };
 }
 
+/** Why `dist` can't give v2_errors.ts the errors of `v2`'s contracts, or null. With v2 pinned, every v2 WASM must be
+ *  there and each one the deployment uploaded must be exactly that WASM, so the table names the errors of the
+ *  contracts the app is pinned to. Without a v2 deployment anything goes. */
+export function distMismatch(v2: DeploymentV2 | null, dist: DistWasm[]): string | null {
+  if (!v2) return null;
+  const absent = dist.filter((w) => !w.bytes);
+  if (absent.length) {
+    return `contracts/dist lacks ${
+      absent.map((w) => w.file).join(", ")
+    }: build the deployed WASMs so v2_errors.ts names their errors`;
+  }
+  const differ = dist.filter((w) =>
+    v2.wasmHashes[camel(w.key)] !== undefined && v2.wasmHashes[camel(w.key)] !== w.sha256
+  );
+  if (differ.length) {
+    return `contracts/dist isn't what deployments/${v2.id}.json deployed (${
+      differ.map((w) => w.key).join(", ")
+    }): build the reviewed commit's dist (contracts/review/reviewed-wasm.sha256)`;
+  }
+  return null;
+}
+
 // ------------------------------------------------------------------------------------------------ main
 
 function refuse(message: string, status = 1): never {
@@ -460,35 +501,17 @@ async function main(args: string[]) {
   let pins: string;
   try {
     net = withDeployment(networkByName(DEPLOYMENT_NETWORKS[name]), name);
+    const unbundled = unbundledV2(name, net);
+    if (unbundled) return refuse(unbundled);
     pins = renderPins(net, name, sponsor);
   } catch (e) {
     return refuse((e as Error).message);
   }
-  // With v2 pinned, the error table must come from exactly the deployed WASMs.
-  const v2 = net.deploymentV2;
   const dist = await readDist();
-  const absent = dist.filter((w) => !w.bytes);
-  if (v2) {
-    if (absent.length) {
-      refuse(
-        `contracts/dist lacks ${
-          absent.map((w) => w.file).join(", ")
-        }: build the deployed WASMs so v2_errors.ts names their errors`,
-      );
-    }
-    const differ = dist.filter((w) =>
-      v2.wasmHashes[camel(w.key)] !== undefined && v2.wasmHashes[camel(w.key)] !== w.sha256
-    );
-    if (differ.length) {
-      refuse(
-        `contracts/dist isn't what deployments/${v2.id}.json deployed (${
-          differ.map((w) => w.key).join(", ")
-        }): build the reviewed commit's dist (contracts/review/reviewed-wasm.sha256)`,
-      );
-    }
-  }
+  const mismatch = distMismatch(net.deploymentV2, dist);
+  if (mismatch) refuse(mismatch);
   await write(`ios/Packages/StellarKit/Sources/StellarCore/Network/PinnedContracts+${SWIFT[name].file}.swift`, pins);
-  if (absent.length === 0) await writeErrors();
+  if (dist.every((w) => w.bytes)) await writeErrors();
   else console.log(`${ERRORS_FILE} unchanged: contracts/dist has no v2 WASMs`);
 }
 

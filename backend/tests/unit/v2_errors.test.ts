@@ -3,14 +3,31 @@
 // app's pins, with v1 unchanged while no v2 file exists.
 import { StrKey } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertFalse, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
-import { generateErrors, renderPins } from "../../scripts/gen-pinned.ts";
+import {
+  distMismatch,
+  type DistWasm,
+  type ErrorEnum,
+  errorEnums,
+  errorTable,
+  generateErrors,
+  renderErrors,
+  renderPins,
+  SOROSWAP_FIXTURES,
+  unbundledV2,
+} from "../../scripts/gen-pinned.ts";
+import type { WasmKey } from "../../scripts/lib/v2-constructors.ts";
 import {
   PRODUCTION_LAUNCH_DURATIONS,
   PRODUCTION_MOMENTS_DURATIONS,
   TESTNET_QA_LAUNCH_DURATIONS,
   TESTNET_QA_MOMENTS_DURATIONS,
 } from "../../scripts/lib/v2-profile.ts";
-import { deploymentsByName, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
+import {
+  BUNDLED_V2,
+  deploymentsByName,
+  DURATION_SETS_V2,
+  parseDeploymentV2,
+} from "../../supabase/functions/_shared/deployments/index.ts";
 import {
   contractAllowlist,
   MAINNET,
@@ -25,6 +42,7 @@ import {
   errorsFor,
   FOREIGN_ERRORS,
   HOST_ERRORS,
+  type NamedError,
   V2_CONTRACT_TAGS,
   V2_ERRORS,
   V2_ERRORS_FROM,
@@ -134,13 +152,92 @@ Deno.test({
   },
 });
 
+/** The v2 contracts' error enums as v2_errors.ts lists them, with OpenZeppelin's beside the token contracts' own as
+ *  their specs carry them: what errorTable reads from contracts/dist, without contracts/dist. */
+function specEnums(): { key: WasmKey; enums: ErrorEnum[] }[] {
+  const cases = (errors: readonly NamedError[]) => errors.map((e) => ({ name: e.name, value: e.code }));
+  const openZeppelin = (name: string, source: string): ErrorEnum => ({
+    name,
+    cases: cases(FOREIGN_ERRORS.filter((e) => e.source === source)),
+  });
+  return (Object.keys(V2_CONTRACT_TAGS) as WasmKey[]).map((key) => ({
+    key,
+    enums: [
+      { name: "Error", cases: cases(V2_ERRORS.filter((e) => e.source === key)) },
+      ...(key === "launch-token-v2" || key === "moment-coin"
+        ? [openZeppelin("FungibleTokenError", "OpenZeppelin fungible")]
+        : key === "moment-nft"
+        ? [openZeppelin("NonFungibleTokenError", "OpenZeppelin non-fungible")]
+        : []),
+    ],
+  }));
+}
+
+const SOROSWAP_ENUMS = SOROSWAP_FIXTURES.flatMap((f) =>
+  errorEnums(Deno.readFileSync(`${ROOT}contracts/testdata/${f}`))
+);
+
+Deno.test("gen-pinned.ts renders v2_errors.ts as committed from its table and Soroswap's fixture WASMs, without contracts/dist", () => {
+  assertEquals(
+    renderErrors(errorTable(specEnums(), SOROSWAP_ENUMS), V2_ERRORS_FROM),
+    Deno.readTextFileSync(`${ROOT}backend/supabase/functions/_shared/v2_errors.ts`),
+  );
+});
+
+Deno.test("errorTable refuses a code outside its tag's range or twice, a contract without errors, an unknown enum and a foreign code in the namespace", () => {
+  type Contracts = { key: WasmKey; enums: ErrorEnum[] }[];
+  const refused = (change: (contracts: Contracts, soroswap: ErrorEnum[]) => void, message: string) => {
+    const contracts = specEnums();
+    const soroswap = structuredClone(SOROSWAP_ENUMS);
+    change(contracts, soroswap);
+    assertThrows(() => errorTable(contracts, soroswap), Error, message);
+  };
+  const enumsOf = (contracts: Contracts, key: WasmKey) => contracts.find((c) => c.key === key)!.enums;
+  // launchpad-v2's first error numbered in launch-token-v2's range, or a bare local code beside namespaced ones.
+  refused(
+    (cs) => (enumsOf(cs, "launchpad-v2")[0].cases[0].value = 10_201),
+    "= 10201 is outside its namespace 10101–10199",
+  );
+  refused(
+    (cs) => enumsOf(cs, "lp-locker")[0].cases.push({ name: "Bare", value: 3 }),
+    "lp-locker: Error::Bare = 3 is outside",
+  );
+  // One code in two of a contract's enums.
+  refused((cs) => {
+    const own = enumsOf(cs, "lp-locker");
+    own.push({ name: "Again", cases: [{ ...own[0].cases[0] }] });
+  }, `lp-locker: code ${V2_ERRORS.find((e) => e.source === "lp-locker")!.code} repeats`);
+  // A contract whose spec has no error enum, or only OpenZeppelin's.
+  refused((cs) => enumsOf(cs, "moments-graduator").splice(0), "moments-graduator: its contract spec has no error enum");
+  refused((cs) => enumsOf(cs, "moment-nft").shift(), "moment-nft: its contract spec has no error enum");
+  // An enum outside the namespace that isn't OpenZeppelin's, or is OpenZeppelin's with other cases.
+  refused(
+    (cs) => enumsOf(cs, "exec-soroswap").push({ name: "Strange", cases: [{ name: "Oops", value: 7 }] }),
+    "exec-soroswap: error enum Strange is outside the v2 namespace and isn't OpenZeppelin's",
+  );
+  refused(
+    (cs) => enumsOf(cs, "moment-coin")[1].cases.pop(),
+    "moment-coin: error enum FungibleTokenError is outside the v2 namespace and isn't OpenZeppelin's",
+  );
+  // A v2 contract not read at all.
+  refused((cs) => cs.splice(cs.findIndex((c) => c.key === "qa-exec-fail"), 1), "no errors read for qa-exec-fail");
+  // An origin-0 code inside the namespace, which a v2 code's name could be mistaken for.
+  refused(
+    (_, soroswap) => soroswap.push({ name: "PairError", cases: [{ name: "Shadow", value: 10_404 }] }),
+    "a foreign code is inside the v2 namespace: Soroswap Shadow",
+  );
+});
+
+const camel = (key: string) => key.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
 Deno.test({
   name: "v2_errors.ts names the errors of the WASMs the owner's v2 deployment runs",
   ignore: !exists("backend/supabase/functions/_shared/deployments/testnet-v2.json"),
   fn() {
-    const v2 = deploymentsByName("testnet").v2!;
+    const v2 = deploymentsByName("testnet").v2;
+    assert(v2, "testnet-v2.json isn't bundled: import it in deployments/index.ts and add it to BUNDLED_V2");
     for (const [contract, sha256] of Object.entries(V2_ERRORS_FROM)) {
-      const deployed = v2.wasmHashes[contract.replace(/-([a-z0-9])/g, (_, c: string) => c.toUpperCase())];
+      const deployed = v2.wasmHashes[camel(contract)];
       if (deployed) assertEquals(sha256, deployed, `${contract}: regenerate v2_errors.ts from the deployed dist`);
     }
   },
@@ -378,12 +475,34 @@ Deno.test("a v2 deployment file is refused when it holds what the deploy wouldn'
   const noRuntimeHash = record("testnet");
   delete noRuntimeHash.wasmHashes.momentCoin;
   refused("testnet-v2", noRuntimeHash, "wasmHashes.momentCoin");
-  const intervals = record("testnet");
-  intervals.durations = {
-    ...intervals.durations,
-    moments: { ...intervals.durations.moments, harvest_interval: 7_200 },
+  const moments = (id: "testnet" | "testnet-qa", change: Record<string, number>) => {
+    const raw = record(id);
+    raw.durations = { ...raw.durations, moments: { ...raw.durations.moments, ...change } };
+    return raw;
   };
-  refused("testnet-v2", intervals, "harvest_interval differ");
+  refused(
+    "testnet-v2",
+    moments("testnet", { harvest_interval: 7_200 }),
+    "durations.moments.harvest_interval is 7200 s",
+  );
+  // The values are checked, not only the label: the QA values called production, values dyor-common refuses (a
+  // backstop under 4 × stuck_expiry, a duration over 400 days), and production values called testnet-qa.
+  refused(
+    "testnet-v2",
+    { ...record("testnet"), durations: { ...record("testnet-qa").durations, set: "production" } },
+    "durations.launch.grace is 60 s: the production set has 3600 s (§14.3)",
+  );
+  refused(
+    "testnet-v2",
+    moments("testnet", { pending_backstop: 86_400 }),
+    "durations.moments.pending_backstop is 86400 s",
+  );
+  refused("testnet-v2", moments("testnet", { max_window: 401 * 86_400 }), "durations.moments.max_window is 34646400 s");
+  refused(
+    "testnet-qa-v2",
+    { ...record("testnet-qa"), durations: { ...record("testnet").durations, set: "testnet-qa" } },
+    "durations.launch.grace is 3600 s: the testnet-qa set has 60 s",
+  );
   const noBackstop = record("testnet");
   const { pending_backstop: _, ...rest } = noBackstop.durations.moments;
   noBackstop.durations = { ...noBackstop.durations, moments: rest };
@@ -416,15 +535,105 @@ Deno.test("LITE_DEPLOYMENT names both generations; withDeploymentV2 attaches or 
   assertEquals(contractAllowlist(cleared), contractAllowlist(TESTNET));
 });
 
+Deno.test("a v2 file's durations are held to the deploy profile's sets, which are dyor-common's", () => {
+  assertEquals(DURATION_SETS_V2, {
+    production: { launch: PRODUCTION_LAUNCH_DURATIONS, moments: PRODUCTION_MOMENTS_DURATIONS },
+    "testnet-qa": { launch: TESTNET_QA_LAUNCH_DURATIONS, moments: TESTNET_QA_MOMENTS_DURATIONS },
+  });
+});
+
+// ------------------------------------------------------------------------------------------------ the hosted functions
+
+const DEPLOYMENTS_DIR = "backend/supabase/functions/_shared/deployments";
+
+Deno.test("testnet's deployments are served without reading a file, as a hosted function must (no sync reads in a handler)", async () => {
+  // A fresh copy of the module, loaded as a hosted function loads it. Supabase then refuses synchronous file reads,
+  // inside Deno.serve's handler, where env.network first selects a deployment.
+  const fresh: typeof import("../../supabase/functions/_shared/deployments/index.ts") = await import(
+    new URL("../../supabase/functions/_shared/deployments/index.ts?hosted", import.meta.url).href
+  );
+  const blocked = ["readTextFileSync", "readFileSync", "statSync", "lstatSync", "openSync", "readDirSync"] as const;
+  const deno = Deno as unknown as Record<string, unknown>;
+  const saved = blocked.map((fn) => [fn, deno[fn]] as const);
+  for (const fn of blocked) {
+    deno[fn] = () => {
+      throw new Error(`Deno.${fn} is blocklisted on the current context`);
+    };
+  }
+  try {
+    const { v1, v2 } = fresh.deploymentsByName("testnet");
+    assertEquals(v1, TESTNET.deployment);
+    assertEquals(v2 === null, !Object.hasOwn(fresh.BUNDLED_V2, "testnet-v2"));
+    assertEquals(fresh.deploymentV2ByName("testnet"), v2, "and again, from the cache");
+    assertEquals(fresh.deploymentsByName("mainnet"), { v1: null, v2: null });
+    // testnet-qa is served only where it was made (local-stack.sh), from its files.
+    assertThrows(() => fresh.deploymentsByName("testnet-qa"), Error, "blocklisted");
+  } finally {
+    for (const [fn, original] of saved) deno[fn] = original;
+  }
+});
+
+Deno.test("testnet's v2 file is served only from BUNDLED_V2, and gen-pinned.ts refuses one that isn't bundled", async () => {
+  assertEquals(Object.keys(BUNDLED_V2).filter((f) => f !== "testnet-v2"), [], "testnet-qa-v2.json is never bundled");
+  // Here: a testnet-v2.json that is there is bundled.
+  assertEquals(unbundledV2("testnet", withDeployment(TESTNET, "testnet")), null);
+  const root = await Deno.makeTempDir();
+  try {
+    const v1Only = withDeploymentV2(TESTNET, null);
+    assertEquals(unbundledV2("testnet", v1Only, `${root}/`), null, "no file yet");
+    await Deno.mkdir(`${root}/${DEPLOYMENTS_DIR}`, { recursive: true });
+    await Deno.writeTextFile(`${root}/${DEPLOYMENTS_DIR}/testnet-v2.json`, JSON.stringify(record("testnet")));
+    assertStringIncludes(
+      unbundledV2("testnet", v1Only, `${root}/`)!,
+      "deployments/testnet-v2.json is there but the functions don't serve it: import it in deployments/index.ts",
+    );
+    const bundled = withDeploymentV2(TESTNET, parseDeploymentV2("testnet-v2", record("testnet")));
+    assertEquals(unbundledV2("testnet", bundled, `${root}/`), null);
+    assertEquals(unbundledV2("mainnet", MAINNET, `${root}/`), null);
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test({
-  name: "the owner's testnet-v2.json is bundled with the functions (imported), not only read from disk",
+  name: "the owner's testnet-v2.json is bundled with the functions (BUNDLED_V2), and it is testnet's v2 deployment",
   ignore: !ownerFile,
   fn() {
-    const index = Deno.readTextFileSync(`${ROOT}backend/supabase/functions/_shared/deployments/index.ts`);
-    assert(
-      /import \w+ from "\.\/testnet-v2\.json" with \{ type: "json" \};/.test(index),
+    const file = JSON.parse(Deno.readTextFileSync(`${ROOT}${DEPLOYMENTS_DIR}/testnet-v2.json`));
+    assertEquals(
+      BUNDLED_V2["testnet-v2"],
+      file,
       "import testnet-v2.json in deployments/index.ts and add it to BUNDLED_V2",
     );
-    assert(deploymentsByName("testnet").v2, "testnet's v2 deployment");
+    assertEquals(deploymentsByName("testnet").v2, parseDeploymentV2("testnet-v2", BUNDLED_V2["testnet-v2"]));
   },
+});
+
+// ------------------------------------------------------------------------------------------------ gen-pinned's dist check
+
+Deno.test("with v2 pinned, gen-pinned.ts refuses a contracts/dist that lacks a v2 WASM or isn't what the deployment uploaded", () => {
+  const v2 = parseDeploymentV2("testnet-v2", record("testnet"));
+  // The deployed WASMs; qa-exec-fail and exec-aquarius, which this deployment didn't upload, as the build left them.
+  const dist = (Object.keys(V2_CONTRACT_TAGS) as WasmKey[]).map((key): DistWasm => ({
+    key,
+    file: `contracts/dist/dyor_${key.replace(/-/g, "_")}.wasm`,
+    bytes: new Uint8Array([0]),
+    sha256: v2.wasmHashes[camel(key)] ?? H(99),
+  }));
+  assertEquals(distMismatch(v2, dist), null);
+  assertEquals(
+    distMismatch(null, dist.map((w) => ({ ...w, bytes: null, sha256: null }))),
+    null,
+    "no v2: anything goes",
+  );
+  const rebuilt = dist.map((w) => (w.key === "lp-locker" ? { ...w, sha256: H(98) } : w));
+  assertStringIncludes(
+    distMismatch(v2, rebuilt)!,
+    "contracts/dist isn't what deployments/testnet-v2.json deployed (lp-locker)",
+  );
+  const absent = dist.map((w) => (w.key === "moment-coin" ? { ...w, bytes: null, sha256: null } : w));
+  assertStringIncludes(distMismatch(v2, absent)!, "contracts/dist lacks contracts/dist/dyor_moment_coin.wasm");
+  // An Aquarius executor the deployment uploaded is held to its hash too.
+  const withAquarius = parseDeploymentV2("testnet-v2", record("testnet", true));
+  assertStringIncludes(distMismatch(withAquarius, dist)!, "deployed (exec-aquarius)");
 });
