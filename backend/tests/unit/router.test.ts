@@ -35,6 +35,7 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/auth/refresh", "/v1/auth/refresh", true],
   ["POST /v1/auth/signout", "/v1/auth/signout", true],
   ["GET /v1/config", "/v1/config", true],
+  ["GET /v1/fees", "/v1/fees", true],
   ["GET /v1/account", "/v1/account", false],
   ["POST /v1/account/activate", "/v1/account/activate", false],
   ["POST /v1/account/trust", "/v1/account/trust", false],
@@ -82,9 +83,11 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
+/** Viewer routes whose handlers serve the public view (§6.0). */
+const PUBLIC_VIEWS = ["GET /v1/account"];
+
 /** Registered in their final place, answering 501 until written. */
 const NOT_WRITTEN = [
-  "GET /v1/recipient/:address",
   "POST /v1/launches/metadata",
   "GET /v1/economics",
   "GET /v1/launchpad/me",
@@ -222,14 +225,23 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  // Viewer routes pass the guard without a header, but until their packages serve the public view (WP-10, WP-14,
-  // WP-15, WP-16, WP-18) their handlers still ask for a session, as before.
-  Deno.test("without a session, every route answers 401 but the open ones", async () => {
+  // Viewer routes pass the guard without a header. Those whose handlers serve the public view (PUBLIC_VIEWS) need
+  // ?address= there; until their packages serve it (WP-14, WP-15, WP-16, WP-18) the others still ask for a session.
+  Deno.test("without a session, every route answers 401 but the open ones and the public views", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
       const text = await res.text();
-      if (open) assertNotEquals(res.status, 401, spec);
+      if (PUBLIC_VIEWS.includes(spec)) assertEquals([res.status, JSON.parse(text).error.code], [400, "address_required"], spec);
+      else if (open) assertNotEquals(res.status, 401, spec);
       else assertEquals([res.status, JSON.parse(text).error.message], [401, "Sign in on Stellar to continue."], spec);
+    }
+  });
+
+  Deno.test("public views: ?address= with no token gets the public view, cached 15 s", async () => {
+    for (const spec of PUBLIC_VIEWS) {
+      const [, path] = ROUTES.find(([s]) => s === spec)!;
+      const res = await quietly(() => handle(request(spec, `${path}?address=${OTHER.publicKey()}`, null)));
+      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], spec);
     }
   });
 
@@ -292,6 +304,19 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     const fixture = JSON.parse(await Deno.readTextFile(new URL("../fixtures/api/error-address-required.json", import.meta.url)));
     assertEquals({ error: { code: missing.code, message: missing.message, detail: null } }, fixture);
     assertEquals(missing.status, 400);
+  });
+
+  Deno.test("a POST body that is JSON but not an object is 400 bad_arg on every route that reads one (sign-in reads it as no fields)", async () => {
+    const other = await signJwt({ sub: OTHER.publicKey(), net: "testnet", aud: "dyorhq-lite", iss: "dyorhq-lite", exp: 4_102_444_800, iat: 1_760_400_000 });
+    const bodyless = ["POST /v1/account/activate", "POST /v1/account/faucet", "POST /v1/plans/:plan/steps/:step/build"];
+    const reading = ROUTES.filter(([spec, , open]) => spec.startsWith("POST ") && !open && !bodyless.includes(spec) && !NOT_WRITTEN.includes(spec));
+    assert(reading.length >= 15, `${reading.length} routes`);
+    for (const [spec, path] of reading) {
+      for (const body of ["null", "[]", '"x"', "7"]) {
+        const res = await quietly(() => handle(new Request(`http://127.0.0.1/functions/v1/lite${path}`, { method: "POST", headers: { authorization: `Bearer ${other}` }, body })));
+        assertEquals([res.status, (await res.json()).error.code], [400, "bad_arg"], `${spec} ${body}`);
+      }
+    }
   });
 
   Deno.test("routes not written yet answer 501, after the session check", async () => {

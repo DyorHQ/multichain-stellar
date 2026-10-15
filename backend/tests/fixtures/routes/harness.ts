@@ -216,7 +216,7 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "auth-challenge-bad-address", method: "POST", path: "/v1/auth/challenge", body: { address: "not-an-address" }, auth: false },
   { name: "auth-verify-used-nonce", method: "POST", path: "/v1/auth/verify", body: { address: USER.publicKey(), nonce: "n0", signature: "c2ln" }, auth: false },
   { name: "config", method: "GET", path: "/v1/config", auth: false, grown: "the fields of docs/DESIGN-stellar-parity.md §6.2, and public caching" },
-  { name: "account", method: "GET", path: "/v1/account", auth: true },
+  { name: "account", method: "GET", path: "/v1/account", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.4, and the public view without a token" },
   { name: "account-activate-friendbot-down", method: "POST", path: "/v1/account/activate", auth: true },
   { name: "account-trust-native", method: "POST", path: "/v1/account/trust", body: { asset: "XLM" }, auth: true },
   { name: "account-faucet-used", method: "POST", path: "/v1/account/faucet", auth: true },
