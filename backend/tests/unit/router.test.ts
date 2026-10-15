@@ -53,6 +53,7 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/markets/:id", "/v1/markets/XLM", true],
   ["GET /v1/markets/:id/history", "/v1/markets/XLM/history", true],
   ["GET /v1/prices", "/v1/prices", true],
+  ["GET /v1/assets", "/v1/assets", false],
   ["GET /v1/launches", "/v1/launches", false],
   ["GET /v1/launches/:token", `/v1/launches/${TOKEN}`, false],
   ["POST /v1/launches/:token/quote", `/v1/launches/${TOKEN}/quote`, false],
@@ -80,17 +81,21 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/bridge/:id", `/v1/bridge/${ID}`, false],
   ["GET /v1/cash/anchors", "/v1/cash/anchors", false],
   ["POST /v1/cash/track", "/v1/cash/track", false],
+  ["GET /v1/holdings", "/v1/holdings", false],
+  ["GET /v1/portfolio", "/v1/portfolio", false],
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
 /** Viewer routes whose handlers serve the public view (§6.0) of the account ?address= names: 400 address_required
  *  without it. Earn's positions read Blend's pools, which the route harness can't reach: earn.test.ts covers their
  *  public view with a stand-in for the pool. */
-const PUBLIC_VIEWS = ["GET /v1/account", "GET /v1/earn/positions", "GET /v1/moments/owned"];
+const PUBLIC_VIEWS = ["GET /v1/account", "GET /v1/holdings", "GET /v1/earn/positions", "GET /v1/moments/owned"];
 
 /** Viewer routes whose handlers serve the public view (§6.0) and need no ?address=: what each answers with neither a
- *  token nor ?address= (the route harness has no launch at TOKEN and no Moment 7). */
+ *  token nor ?address= (the route harness has no launch at TOKEN and no Moment 7; the asset search with no q lists the
+ *  registry). */
 const PUBLIC_BOARDS: Record<string, number> = {
+  "GET /v1/assets": 200,
   "GET /v1/launches": 200,
   "GET /v1/launches/:token": 404,
   "GET /v1/moments": 200,
@@ -228,9 +233,8 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  // Viewer routes pass the guard without a header. Those whose handlers serve the public view (PUBLIC_VIEWS) need
-  // ?address= there; the launch and Moments boards and their pages (PUBLIC_BOARDS) need none. Until its package serves
-  // it (WP-18) the other still asks for a session.
+  // Viewer routes pass the guard without a header and serve the public view. Those about an account (PUBLIC_VIEWS) need
+  // ?address= there; the asset search, the launch and Moments boards and their pages (PUBLIC_BOARDS) need none.
   Deno.test("without a session, every route answers 401 but the open ones, the public views and the public boards", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
