@@ -52,7 +52,7 @@ use dyor_common::{
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, panic_with_error, token::TokenClient, vec, xdr::ToXdr, Address, Bytes,
-    BytesN, Env, Executable, Vec,
+    BytesN, Env, Executable, String, Vec,
 };
 use storage::{
     config, exempt, find_venue, instance_get, items, load_curve, load_launch, quote_economics, recipient, save_curve,
@@ -83,7 +83,8 @@ pub const MAX_CLAIM_TOKENS: u32 = 20;
 /// All of a launch's LP fee growth is harvested and split (O1).
 pub const LAUNCH_HARVEST_BPS: u32 = BPS;
 pub const MAX_NAME: u32 = 32;
-pub const MAX_SYMBOL: u32 = 12;
+pub const MIN_SYMBOL: u32 = 2;
+pub const MAX_SYMBOL: u32 = 10;
 pub const MAX_URI: u32 = 256;
 pub const MAX_SCHEDULE: u32 = 10;
 pub const MAX_SNIPE_STEP_SECS: u32 = 60;
@@ -99,6 +100,7 @@ pub enum Error {
     // The quote has no economics, or they are disabled.
     QuoteNotAllowed = 10_103,
     InvalidName = 10_104,
+    // Not 2 to 10 ASCII letters or digits.
     InvalidSymbol = 10_105,
     InvalidUri = 10_106,
     CreatorFeeTooHigh = 10_107,
@@ -820,13 +822,13 @@ fn launch_terms(e: &Env, cfg: &Config, quote: &Address, venue_id: u32) -> Launch
     }
 }
 
-/// The creator's own inputs: name 1–32 bytes, symbol 1–12, URI at most 256 (the backend enforces a 2–10 character
-/// ticker), the creator fee within the cap, at most 32 exemptions, and no negative initial buy.
+/// The creator's own inputs: name 1–32 bytes, symbol 2–10 ASCII letters or digits, URI at most 256, the creator fee
+/// within the cap, at most 32 exemptions, and no negative initial buy.
 fn check_launch_params(e: &Env, cfg: &Config, p: &LaunchParams) {
     if p.name.is_empty() || p.name.len() > MAX_NAME {
         panic_with_error!(e, Error::InvalidName);
     }
-    if p.symbol.is_empty() || p.symbol.len() > MAX_SYMBOL {
+    if !symbol_ok(&p.symbol) {
         panic_with_error!(e, Error::InvalidSymbol);
     }
     if p.uri.len() > MAX_URI {
@@ -842,6 +844,21 @@ fn check_launch_params(e: &Env, cfg: &Config, p: &LaunchParams) {
     if p.initial_buy < 0 {
         panic_with_error!(e, Error::ZeroAmount);
     }
+}
+
+/// A symbol is 2 to 10 ASCII letters or digits ([A-Za-z0-9]), the rule of moments-v2, the backend and the app.
+/// Soroswap's pair constructor reads the first 6 bytes of each token's symbol as UTF-8 with an unwrap, so a symbol cut
+/// inside a multi-byte character there could never graduate on Soroswap, its fallback included. Names stay free-form:
+/// the pair doesn't read them.
+fn symbol_ok(symbol: &String) -> bool {
+    let len = symbol.len();
+    if !(MIN_SYMBOL..=MAX_SYMBOL).contains(&len) {
+        return false;
+    }
+    let mut buf = [0u8; MAX_SYMBOL as usize];
+    let bytes = &mut buf[..len as usize];
+    symbol.copy_into_slice(bytes);
+    bytes.iter().all(u8::is_ascii_alphanumeric)
 }
 
 /// sha256("dyorhq/launch/v2" ‖ creator.to_xdr() ‖ nonce big-endian) (L15): no global counter.

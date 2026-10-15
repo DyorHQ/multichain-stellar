@@ -1039,8 +1039,28 @@ fn launch_rejects_bad_input() {
     };
     assert_eq!(refused(&|p| p.name = s("")), err(Error::InvalidName));
     assert_eq!(refused(&|p| p.name = s("abcdefghijklmnopqrstuvwxyz0123456")), err(Error::InvalidName)); // 33 bytes
-    assert_eq!(refused(&|p| p.symbol = s("")), err(Error::InvalidSymbol));
-    assert_eq!(refused(&|p| p.symbol = s("TOOLONGSYMBOL")), err(Error::InvalidSymbol));
+                                                                                                        // 2 to 10 ASCII letters or digits. Soroswap's pair reads a symbol's first 6 bytes as UTF-8 and traps on anything
+                                                                                                        // else, so another symbol could leave a launch unable to graduate.
+    let symbols = [
+        "",
+        "D",
+        "ELEVENCHARS",
+        "🐱CAT",
+        "ABCDE€",
+        "ÉCU",
+        "DC AT",
+        "DC-AT",
+        "DC_AT",
+        "DCAT!",
+        "$DCAT",
+        "DC\tAT",
+        "DCAT\n",
+        "\u{7}DCAT",
+        "DC\0AT",
+    ];
+    for symbol in symbols {
+        assert_eq!(refused(&|p| p.symbol = s(symbol)), err(Error::InvalidSymbol), "{symbol:?}");
+    }
     let long_uri = std::string::String::from_utf8(std::vec![b'u'; 257]).unwrap();
     assert_eq!(refused(&|p| p.uri = s(&long_uri)), err(Error::InvalidUri));
     assert_eq!(refused(&|p| p.creator_fee_bps = 1_001), err(Error::CreatorFeeTooHigh));
@@ -1051,11 +1071,11 @@ fn launch_rejects_bad_input() {
     let other = e.register_stellar_asset_contract_v2(t.admin.clone()).address();
     assert_eq!(refused(&|p| p.quote = other.clone()), err(Error::QuoteNotAllowed));
 
-    // The limits themselves are fine: 32-byte name, 12-byte symbol, 256-byte URI, the cap, 32 exemptions.
+    // The limits themselves are fine: 32-byte name, 10-character symbol, 256-byte URI, the cap, 32 exemptions.
     let long_uri = std::string::String::from_utf8(std::vec![b'u'; 256]).unwrap();
     let mut p = t.params(SOROSWAP, false);
     p.name = s("abcdefghijklmnopqrstuvwxyz012345");
-    p.symbol = s("TWELVECHARSS");
+    p.symbol = s("TENCHARSYM");
     p.uri = s(&long_uri);
     p.creator_fee_bps = 1_000;
     p.snipe_exempt = Vec::from_array(e, [(); 32].map(|_| Address::generate(e)));
@@ -1872,6 +1892,26 @@ fn graduation_survives_a_precreated_pair_with_dust_and_sync() {
     assert_eq!(t.graduate(&token), GraduationOutcome::Graduated(pair.clone()));
     assert!(t.balance(&pair, &t.locker) > 0);
     assert_eq!(t.locker().position(&pair).unwrap().lp, t.balance(&pair, &t.locker));
+}
+
+/// The shortest and the longest symbols `launch` takes graduate on the real Soroswap pair, which reads the first 6
+/// bytes of each token's symbol, and so do names outside ASCII: the pair never reads names.
+#[test]
+fn the_shortest_and_longest_symbols_with_non_ascii_names_graduate_on_soroswap() {
+    let t = setup();
+    for (name, symbol) in [("Café 🐱 Ñandú", "D7"), ("ドヨル 猫", "ABCDEFGH10")] {
+        let mut p = t.params(SOROSWAP, false);
+        p.name = String::from_str(&t.e, name);
+        p.symbol = String::from_str(&t.e, symbol);
+        let token = t.launch_p(&t.creator, &p);
+        assert_eq!((t.token(&token).name(), t.token(&token).symbol()), (p.name, p.symbol));
+        t.complete(&token);
+        let pool = match t.graduate(&token) {
+            GraduationOutcome::Graduated(pool) => pool,
+            f => panic!("{symbol}: {f:?}"),
+        };
+        assert_eq!(t.pair_of(&token), Some(pool), "{symbol}");
+    }
 }
 
 #[test]
