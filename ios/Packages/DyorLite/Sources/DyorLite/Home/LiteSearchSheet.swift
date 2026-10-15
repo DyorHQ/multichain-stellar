@@ -10,7 +10,7 @@ struct LiteSearchSheet: View {
         case launch(token: String)
     }
 
-    /// Nil while the session is locked or paused: nothing to list but the note about Monad.
+    /// Nil while the session is paused or still opening: nothing to list but the note about Monad.
     let store: LiteStore?
     let onPick: (Pick) -> Void
     @Environment(\.dismiss) private var dismiss

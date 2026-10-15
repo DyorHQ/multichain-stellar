@@ -2,8 +2,8 @@ import StellarKit
 import SwiftUI
 
 /// Stellar Home, in Monad Home's frame (design spec §3.3): the host's header, the balance card with the network chip
-/// and the serif figure, five actions, My Holdings and Activity. Locked, the card holds the unlock; paused, it says why
-/// and offers Monad.
+/// and the serif figure, five actions, My Holdings and Activity. Paused, the card says why and offers Monad; nothing on
+/// Stellar locks (decision 6).
 @MainActor
 struct LiteHomeView: View {
     let session: LiteSession
@@ -130,7 +130,6 @@ struct LiteHomeView: View {
             chipRow
             switch session.home {
             case .ready, .loading: figure
-            case .locked: locked
             case .paused(let failure): paused(failure)
             }
         }
@@ -167,26 +166,6 @@ struct LiteHomeView: View {
         session.env.pinned.network.name == "testnet"
             ? tr("Valued at reference prices. Testnet assets have no value.")
             : tr("Valued at reference prices.")
-    }
-
-    /// Locked (the session ended): the placeholder figure, why, and the unlock. The host runs Setup inline.
-    private var locked: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                hero(0).unreadFigure(true)
-                Label {
-                    LiteParagraph(tr("Unlock to see your Stellar balance."))
-                } icon: {
-                    Image(systemName: "lock.fill")
-                }
-                .modifier(LiteParagraphLabel())
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(tr("Stellar balance, locked."))
-            LitePrimaryButton(title: tr("Unlock with \(LiteBiometrics.promptName)"), busy: session.state == .running, action: chrome.unlock)
-        }
     }
 
     /// Paused for maintenance, or this build is too old: why, and the way back to Monad, which always works.
@@ -328,7 +307,7 @@ struct LiteHomeTile: View {
     let perform: () -> Void
     /// One height for every symbol, so the tiles and their labels line up.
     @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
-    /// Off while the session is locked or paused: drawn faded, so the card above says why.
+    /// Off while the session is paused or still opening: drawn faded, so the card above says why.
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -512,10 +491,10 @@ struct SwapSheet: View {
             if let quote {
                 prepared = try await store.swapPlan(quote)
             } else {
-                quote = try await store.quoteSwap(sell: sell, buy: buy, amount: units, slippageBps: 100)
+                quote = try await store.swapQuote(sell: sell, buy: buy, amount: units, slippageBps: 100)
             }
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }
@@ -526,13 +505,18 @@ struct SwapSheet: View {
 struct SendSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State private var asset = "XLM"
+    @State private var asset: String
     @State private var to = ""
     @State private var amount = ""
     @State private var memo = ""
     @State private var busy = false
     @State private var error: String?
     @State private var prepared: PreparedAction?
+
+    /// `asset`: the one to send at first (a registry id); XLM when nil.
+    init(asset: String? = nil) {
+        _asset = State(initialValue: asset ?? "XLM")
+    }
 
     var body: some View {
         NavigationStack {
@@ -556,7 +540,7 @@ struct SendSheet: View {
                         defer { busy = false }
                         do {
                             prepared = try await store.sendPlan(asset: asset, to: to, amount: StellarAmount.parse(amount) ?? 0, memo: memo.isEmpty ? nil : memo, memoType: memo.allSatisfy(\.isNumber) && !memo.isEmpty ? "id" : "text")
-                        } catch { self.error = describe(error) }
+                        } catch { self.error = LiteErrorText.describe(error) }
                     }
                 }
                 .padding()
@@ -569,8 +553,8 @@ struct SendSheet: View {
     }
 }
 
-/// Deposit: the account's Stellar address and its QR code. Receiving needs no sign-in, so it shows while the session
-/// is locked too (`store` nil); the test XLM needs one.
+/// Deposit: the account's Stellar address and its QR code. Receiving needs nothing but the address, so it shows before
+/// the account's figures are read too (`store` nil); the test XLM is the store's, with the amount the server gives.
 struct ReceiveSheet: View {
     let address: String
     let store: LiteStore?
@@ -598,10 +582,10 @@ struct ReceiveSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if let store, store.isTestnet {
-                    Button(tr("Get \(Self.faucetAmount) test XLM")) {
+                if let store, store.isTestnet, let amount = Self.faucetAmount(store.config) {
+                    Button(tr("Get \(amount) test XLM")) {
                         Task {
-                            do { try await store.faucet() } catch { self.error = describe(error) }
+                            do { try await store.faucet() } catch { self.error = LiteErrorText.describe(error) }
                         }
                     }
                     .font(.footnote)
@@ -632,6 +616,10 @@ struct ReceiveSheet: View {
         contentHeight > 0 ? headerHeight + contentHeight + bottomInset : 560
     }
 
-    /// The testnet faucet's 10,000 XLM, in the current language's digits.
-    static var faucetAmount: String { 10_000.formatted(.number.locale(LiteL10n.locale)) }
+    /// The testnet faucet's amount, as the server's config gives it (`faucet.amount`, in XLM), in the current
+    /// language's digits; nil off testnet and from servers that don't say.
+    static func faucetAmount(_ config: LiteConfig?) -> String? {
+        guard let text = config?.faucet?.amount, let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return nil }
+        return amount.formatted(.number.locale(LiteL10n.locale))
+    }
 }

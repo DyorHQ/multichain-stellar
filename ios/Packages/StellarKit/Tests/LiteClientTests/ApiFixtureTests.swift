@@ -77,12 +77,11 @@ final class ApiFixtureTests: XCTestCase {
         "market-history": (roundTrip(StellarPriceHistory.self), []),
         "assets": (roundTrip(Listed<StellarAssetResult>.self), []),
         "prices": (roundTrip(StellarPrices.self), []),
-        // StellarHoldings (Models+Portfolio.swift) and StellarLaunchBoard (Models+Launch.swift) don't keep `view` yet.
-        "holdings": (roundTrip(StellarHoldings.self), ["view"]),
+        "holdings": (roundTrip(StellarHoldings.self), []),
         "holdings.partial": (roundTrip(StellarHoldings.self), []),
-        "holdings.public": (roundTrip(StellarHoldings.self), ["view"]),
+        "holdings.public": (roundTrip(StellarHoldings.self), []),
         "portfolio": (roundTrip(StellarPortfolio.self), []),
-        "launches": (roundTrip(StellarLaunchBoard.self), ["view"]),
+        "launches": (roundTrip(StellarLaunchBoard.self), []),
         "launches.legacy": (roundTrip(StellarLaunchBoard.self), []),
         "launch": (roundTrip(StellarLaunchDetail.self), []),
         "launch.legacy": (roundTrip(StellarLaunchDetail.self), []),
@@ -204,8 +203,10 @@ final class ApiFixtureTests: XCTestCase {
         let board = try ApiFixtures.decode("launches", as: StellarLaunchBoard.self)
         XCTAssertEqual(board.counts?.explore, 12)
         XCTAssertEqual(board.launches.map(\.phase), ["completed", "curve"])
+        XCTAssertEqual(board.view, "owner")
         let oldBoard = try ApiFixtures.decode("launches.legacy", as: StellarLaunchBoard.self)
         XCTAssertNil(oldBoard.counts)
+        XCTAssertNil(oldBoard.view)
         XCTAssertNil(oldBoard.launches[0].marketCapQuote)
 
         let launch = try ApiFixtures.decode("launch", as: StellarLaunchDetail.self)
@@ -274,6 +275,9 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(account.firstFunding?.faucet?.amount, "10000")
 
         let holdings = try ApiFixtures.decode("holdings.public", as: StellarHoldings.self)
+        XCTAssertEqual(holdings.view, "public")
+        XCTAssertEqual(try ApiFixtures.decode("holdings", as: StellarHoldings.self).view, "owner")
+        XCTAssertNil(try ApiFixtures.decode("holdings.partial", as: StellarHoldings.self).view)
         XCTAssertEqual(holdings.earn.first?.supplied, "1000012340")
         XCTAssertNil(holdings.earn.first?.earned)
         XCTAssertEqual(holdings.earn.first?.earnedComplete, false)
