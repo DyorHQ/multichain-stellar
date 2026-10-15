@@ -325,8 +325,7 @@ Deno.test("the feed: listed Moments with a title, newest first; collecting, or c
   assertEquals(assertThrows(() => m.filterArg("sold_out"), ApiError).code, "bad_arg");
 });
 
-Deno.test("a row indexed before migration 09: its media type from the file, no terms, no poster for a video", async () => {
-  database(() => []);
+Deno.test("a row indexed before migration 09: its media type from the file, no terms, no poster for a video", () => {
   const prices = { XLM: { ref: "XLM", usd: null, stale: true, at: null, market: "", change24h: null, volume24hUsd: null }, USDC: { ref: "USDC", usd: 1, stale: false, at: null, market: "", change24h: null, volume24hUsd: null } } as const;
   const old = m.momentRowOf({ ...ROW, media_type: null, poster_url: null, platform_bps: null, royalty_bps: null, taken_on: null }, prices as any, NOW);
   assertEquals([old.mediaType, old.posterUrl, old.platformBps, old.royaltyBps, old.priceUsd], ["video", null, undefined, undefined, null]);
