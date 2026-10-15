@@ -912,7 +912,7 @@ impl Measured {
 
     pub fn row(&self) -> std::string::String {
         std::format!(
-            "| {} | {:.1}M | {:.1} MB | {} | {} | {} | {} | {:.7} | {:.7} |",
+            "| {} | {:.1}M | {:.1} MB | {} | {} | {} | {} | {} | {:.7} | {:.7} |",
             self.label,
             self.instructions as f64 / 1e6,
             self.mem_bytes as f64 / 1e6,
@@ -920,10 +920,11 @@ impl Measured {
             self.write_entries,
             self.read_bytes,
             self.write_bytes,
+            self.events_bytes,
             self.rent_stroops as f64 / 1e7,
             self.fee_stroops as f64 / 1e7,
         )
     }
 }
 
-pub const TABLE_HEADER: &str = "| action | instructions | memory | footprint entries (read+write) | write entries | disk read bytes | write bytes | rent (XLM) | total fee (XLM) |\n|---|---|---|---|---|---|---|---|---|";
+pub const TABLE_HEADER: &str = "| action | instructions | memory | footprint entries (read+write) | write entries | disk read bytes | write bytes | event bytes | rent (XLM) | total fee (XLM) |\n|---|---|---|---|---|---|---|---|---|---|";
