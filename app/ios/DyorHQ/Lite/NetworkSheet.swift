@@ -66,6 +66,10 @@ protocol NetworkSetupSession: AnyObject, Observable {
     /// What Friendbot gives a new testnet account, in XLM, as the server's config says it (`faucet.amount`); nil off
     /// testnet and until the config is read.
     var friendbotAmount: String? { get }
+    /// `friendbotAmount`, read from the server's config now when the session doesn't hold it yet: a passkey account's
+    /// run waits for its Set Up tap before it signs in, so before that tap it has no account store to hold the config.
+    /// Nil off testnet, or when the config can't be read.
+    func readFriendbotAmount() async -> String?
     /// What a switch to Stellar needs now. Local: no network, no prompt.
     func plan() -> NetworkSetup.Plan
     /// Check → [sign in] → [set up], from the first unfinished step. Returns once it is ready, waits for the user
@@ -90,6 +94,15 @@ extension LiteSession.StepRow: NetworkSetupStepRow {}
 extension LiteSession: NetworkSetupSession {
     /// Friendbot's amount from the server's config, as the account's store holds it.
     var friendbotAmount: String? { store?.config?.faucet?.amount }
+
+    /// The store's figure, or else the server's public config read for it (`GET /v1/config`, no session needed), within
+    /// 10 seconds, as the session's own reads.
+    func readFriendbotAmount() async -> String? {
+        if let friendbotAmount { return friendbotAmount }
+        guard isTestnet else { return nil }
+        let api = LiteAPI(baseURL: env.apiURL, network: env.pinned.network.name)
+        return try? await api.config(timeout: 10).faucet?.amount
+    }
 }
 
 extension NetworkSetupSession {
@@ -228,6 +241,9 @@ struct NetworkSheetContent: View {
     @State private var tapped: SetupAction?
     /// The switch was handed over (or Setup finished): closing the sheet then cancels nothing.
     @State private var finished = false
+    /// Friendbot's amount as the sheet read it from the server's config, for a passkey account's session, which holds
+    /// none before its Set Up tap.
+    @State private var friendbotRead: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The status column of Setup's rows, grown with the text.
     @ScaledMetric(relativeTo: .subheadline) private var statusColumn: CGFloat = 24
@@ -492,11 +508,16 @@ struct NetworkSheetContent: View {
     private var inviteRequired: Bool { setup?.inviteRequired ?? true }
 
     private var shownRows: [Row] {
-        Self.displayRows(steps: rows, state: state, inviteRequired: inviteRequired)
+        Self.displayRows(steps: rows, state: state, inviteRequired: inviteRequired, passkey: passkey)
     }
 
     private var accountStep: AccountStep {
-        Self.accountStep(testnet: setup?.isTestnet ?? AppNetwork.stellar.isTestnet, friendbotAmount: setup?.friendbotAmount)
+        Self.accountStep(testnet: setup?.isTestnet ?? AppNetwork.stellar.isTestnet, friendbotAmount: setup?.friendbotAmount ?? friendbotRead)
+    }
+
+    /// A passkey account's Set Up tap is signing in: its one passkey prompt is up, or the sign-in it signed is on its way.
+    private var signsInFromSetUp: Bool {
+        Self.runsFromSetUp(steps: rows, state: state, passkey: passkey) && !rows.contains { $0.kind == .signIn && $0.status == .done }
     }
 
     /// The optional invite field under a passkey account's account step.
@@ -527,6 +548,12 @@ struct NetworkSheetContent: View {
             // The run starts on entry, at its first unfinished step (Confirm is never shown again after it).
             guard !resumesRun, let setup else { return }
             await setup.run()
+        }
+        .task {
+            // A passkey account's run waits for its Set Up tap before it signs in, so its session holds no config before
+            // that tap: Friendbot's amount is read from the config here, beside the run's own check.
+            guard passkey, let setup, setup.isTestnet, setup.friendbotAmount == nil else { return }
+            friendbotRead = await setup.readFriendbotAmount()
         }
     }
 
@@ -561,11 +588,12 @@ struct NetworkSheetContent: View {
         var id: RowKind { kind }
     }
 
-    /// The checklist as drawn (§8.14): Sign in, the account step, then Enable USDC. The invite step takes sign-in's place
-    /// while the server asks for a code, and only where codes are asked for at all (`inviteRequired`): on testnet there is
-    /// never an invite step. The account step needs the user only while the run waits for its tap: a passkey account's
-    /// tap signs in first, and a code asked for comes before it.
-    static func displayRows(steps: [Row], state: NetworkSetup.State, inviteRequired: Bool) -> [Row] {
+    /// The checklist as drawn (§8.14). A seed account's is Sign in, the account step, then Enable USDC. A passkey
+    /// account's starts with the account step, whose tap comes first and starts the run: then Sign in, which its one
+    /// passkey prompt signs, then Enable USDC. The invite step takes sign-in's place while the server asks for a code, and
+    /// only where codes are asked for at all (`inviteRequired`): on testnet there is never an invite step. The account
+    /// step needs the user only while the run waits for its tap.
+    static func displayRows(steps: [Row], state: NetworkSetup.State, inviteRequired: Bool, passkey: Bool = false) -> [Row] {
         let invite = steps.first { $0.kind == .invite }
         let inviting: Bool = inviteRequired && {
             switch state {
@@ -573,28 +601,50 @@ struct NetworkSheetContent: View {
             default: return invite.map { $0.status != .pending && $0.status != .done } ?? false
             }
         }()
-        var shown: [Row] = []
+        // From a passkey account's tap until its account step starts, that step shows the run ("Confirm with your
+        // passkey") and the sign-in below it stays pending until it is done.
+        let fromSetUp = runsFromSetUp(steps: steps, state: state, passkey: passkey)
+        func signInStatus(_ status: NetworkSetup.StepStatus) -> NetworkSetup.StepStatus {
+            fromSetUp && status == .running ? .pending : status
+        }
+        var signIn: [Row] = []
+        var account: [Row] = []
+        var enable: [Row] = []
         for row in steps {
             switch row.kind {
             case .invite:
                 if !inviteRequired {
                     // No code is asked for here: the step stays Sign in, whatever the session calls it.
-                    shown.append(Row(kind: .signIn, status: row.status == .needsYou ? .pending : row.status))
+                    signIn.append(Row(kind: .signIn, status: row.status == .needsYou ? .pending : signInStatus(row.status)))
                 } else if inviting, !steps.contains(where: { $0.kind == .signIn }) {
                     // Drawn in sign-in's place below, or not at all; at its own place only if the session lists no sign-in.
-                    shown.append(inviteRow(invite, state: state))
+                    signIn.append(inviteRow(invite, state: state))
                 }
             case .signIn where inviting:
-                shown.append(inviteRow(invite, state: state))
+                signIn.append(inviteRow(invite, state: state))
+            case .signIn:
+                signIn.append(Row(kind: .signIn, status: signInStatus(row.status)))
             case .setUp:
-                let status: NetworkSetup.StepStatus = row.status == .needsYou && state != .waiting(.setUp) ? .pending : row.status
-                shown.append(Row(kind: .setUp, status: status))
-                shown.append(Row(kind: .enableUSDC, status: enableStatus(status)))
-            default:
-                shown.append(row)
+                let status: NetworkSetup.StepStatus
+                switch row.status {
+                case .needsYou where state == .waiting(.setUp): status = .needsYou
+                case .needsYou: status = fromSetUp ? .running : .pending
+                default: status = row.status
+                }
+                account = [Row(kind: .setUp, status: status)]
+                enable = [Row(kind: .enableUSDC, status: enableStatus(row.status))]
+            case .enableUSDC:
+                break
             }
         }
-        return shown
+        // Enable USDC comes last; a passkey account's account step comes first.
+        return passkey ? account + signIn + enable : signIn + account + enable
+    }
+
+    /// Whether a passkey account's run is under way from its Set Up tap, before the account step itself has started
+    /// (§8.14): the tap's one passkey prompt signs in first, then the account is read.
+    static func runsFromSetUp(steps: [Row], state: NetworkSetup.State, passkey: Bool) -> Bool {
+        passkey && state == .running && steps.contains { $0.kind == .setUp && $0.status == .needsYou }
     }
 
     private static func inviteRow(_ row: Row?, state: NetworkSetup.State) -> Row {
@@ -772,15 +822,16 @@ struct NetworkSheetContent: View {
         case (_, .failed(let failure)):
             return (failure.message(method: method), true)
         case (.signIn, .running):
-            // A seed account's sign-in signs only the challenge, with no prompt; a passkey account's is its one ceremony.
-            if passkey {
-                return (liteTr(LocalizedStringResource("Confirm with your passkey", table: "StellarSetup", comment: "The network sheet's sign-in step on a passkey account while it runs: the passkey prompt is up, and that one prompt signs in and sets up the account")), false)
-            }
-            return (liteTr(LocalizedStringResource("Signing in…", table: "StellarSetup", comment: "The network sheet's sign-in step while it runs, with no prompt: DyorHQ checks this account owns its Stellar key")), false)
+            // A seed account's sign-in signs only the challenge, with no prompt; a passkey account's (set up already, so
+            // with no account step) is its one ceremony.
+            return (passkey ? confirmWithPasskey : liteTr(LocalizedStringResource("Signing in…", table: "StellarSetup", comment: "The network sheet's sign-in step while it runs, with no prompt: DyorHQ checks this account owns its Stellar key")), false)
         case (.signIn, .done):
             return (tr("Signed in"), false)
         case (.setUp, .needsYou):
             return (accountStep.line, false)
+        case (.setUp, .running) where signsInFromSetUp:
+            // A passkey account's tap: its one prompt signs the sign-in, then the setup.
+            return (confirmWithPasskey, false)
         case (.setUp, .running):
             return (liteTr(LocalizedStringResource("Setting up… This can take a few seconds.", table: "Lite", comment: "The network sheet's account setup step while its transaction is sent")), false)
         case (.setUp, .done):
@@ -788,6 +839,12 @@ struct NetworkSheetContent: View {
         default:
             return nil
         }
+    }
+
+    /// A passkey account's one prompt is up: under the account step its tap started, or under the sign-in of an account
+    /// set up already.
+    private var confirmWithPasskey: String {
+        liteTr(LocalizedStringResource("Confirm with your passkey", table: "StellarSetup", comment: "The network sheet's Setup on a passkey account while its passkey prompt is up: under the account step its tap started, where that one prompt signs in and sets up the account, or under the sign-in step of an account already set up"))
     }
 
     /// "{title}. {Done / In progress / Needs you / Failed}. {detail}", for VoiceOver.
@@ -966,7 +1023,8 @@ struct NetworkSheetContent: View {
 #if DEBUG
 /// A scripted Stellar session for the network sheet's previews, each step a second: a seed account signs in with no
 /// prompt and waits for its Set Up tap; a passkey account waits for its tap first, then signs in and sets up with its one
-/// passkey prompt. On mainnet the first sign-in asks for an invite code (K7Q2XM9P) once; on testnet none is asked. Never
+/// passkey prompt. On mainnet the first sign-in asks for an invite code (K7Q2XM9P) once; on testnet none is asked. As
+/// DyorLite's session, it holds Friendbot's amount only once signed in (the sheet reads it for a passkey account). Never
 /// used by the app.
 @MainActor
 @Observable
@@ -985,8 +1043,9 @@ final class PreviewSetupSession: NetworkSetupSession {
     var inviteRequired: Bool { !isTestnet }
     private(set) var setupFee: PlanFees? = nil
     private(set) var baseReserve: Int64? = nil
-    var friendbotAmount: String? { isTestnet ? "10000" : nil }
+    var friendbotAmount: String? { isTestnet && signedIn ? Self.friendbot : nil }
     private let script: Script
+    private var signedIn = false
     private var invited = false
     private var wentOffline = false
     private var cancelled = false
@@ -996,10 +1055,17 @@ final class PreviewSetupSession: NetworkSetupSession {
         self.isTestnet = testnet
         self.state = state
         self.steps = steps ?? [.init(step: .signIn, status: .pending), .init(step: .setUp, status: .pending)]
+        signedIn = self.steps.contains { $0.step == .signIn && $0.status == .done }
         if state != .idle { readFees() }
     }
 
     func plan() -> NetworkSetup.Plan { .setup([.signIn, .setUp]) }
+
+    func readFriendbotAmount() async -> String? {
+        guard isTestnet else { return nil }
+        _ = await pause()
+        return Self.friendbot
+    }
 
     func run() async {
         cancelled = false
@@ -1086,6 +1152,7 @@ final class PreviewSetupSession: NetworkSetupSession {
             invited = true
         }
         set(.signIn, .done)
+        signedIn = true
         return true
     }
 
@@ -1102,6 +1169,9 @@ final class PreviewSetupSession: NetworkSetupSession {
         set(.setUp, .done)
         state = .ready
     }
+
+    /// The server config's `faucet.amount`.
+    private static let friendbot = "10000"
 
     /// `/v1/fees` as the session reads it: a 0.5 XLM base reserve, and Enable USDC's estimate.
     private func readFees() {
@@ -1166,6 +1236,11 @@ private struct NetworkSheetPreview: View {
 #Preview("Setup · Fund with Friendbot waits") {
     NetworkSheetPreview(startAt: .setup, setup: PreviewSetupSession(state: .waiting(.setUp), steps: [
         .init(step: .signIn, status: .done), .init(step: .setUp, status: .needsYou),
+    ]))
+}
+#Preview("Setup · passkey, Fund with Friendbot waits") {
+    NetworkSheetPreview(startAt: .setup, method: .meraPasskey, setup: PreviewSetupSession(.passkey, state: .waiting(.setUp), steps: [
+        .init(step: .signIn, status: .pending), .init(step: .setUp, status: .needsYou),
     ]))
 }
 #Preview("Chips") {

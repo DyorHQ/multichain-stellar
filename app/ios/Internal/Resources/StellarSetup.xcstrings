@@ -2,7 +2,7 @@
   "sourceLanguage" : "en",
   "strings" : {
     "Confirm with your passkey" : {
-      "comment" : "The network sheet's sign-in step on a passkey account while it runs: the passkey prompt is up, and that one prompt signs in and sets up the account",
+      "comment" : "The network sheet's Setup on a passkey account while its passkey prompt is up: under the account step its tap started, where that one prompt signs in and sets up the account, or under the sign-in step of an account already set up",
       "localizations" : {
         "es" : {
           "stringUnit" : {
