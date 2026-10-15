@@ -160,6 +160,8 @@ export const routeRows: Responder = (q) => {
   if (q.startsWith("select 1 from lite.tx_log where address = ? and kind = 'faucet'")) return [{ "?column?": 1 }];
   if (/^select \* from lite\.launches .*order by/.test(q)) return [LAUNCH_ROW];
   if (q === "select * from lite.launches where token = ?") return [];
+  // The launch board and a launch's page (launchpad.ts launchQuery): the board lists LAUNCH_ROW, and TOKEN has no page.
+  if (q.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total")) return q.includes("where l.token = ?") ? [] : [LAUNCH_ROW];
   if (q.startsWith("select * from lite.moments order by created_at desc")) return [MOMENT_ROW];
   if (q.includes("from lite.moment_collects c join lite.moments m")) return [];
   if (q === "select * from lite.moments where id = ?") return [];
@@ -229,8 +231,8 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "earn-markets-rpc-down", method: "GET", path: "/v1/earn/markets", auth: true },
   { name: "earn-positions-rpc-down", method: "GET", path: "/v1/earn/positions", auth: true },
   { name: "earn-build-bad-action", method: "POST", path: "/v1/earn/build", body: { action: "borrow", pool: "C", asset: "XLM", amount: "1" }, auth: true },
-  { name: "launches", method: "GET", path: "/v1/launches?sort=hot&limit=5", auth: true },
-  { name: "launch-unknown", method: "GET", path: `/v1/launches/${TOKEN}`, auth: true },
+  { name: "launches", method: "GET", path: "/v1/launches?sort=hot&limit=5", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.9, and the public view without a token" },
+  { name: "launch-unknown", method: "GET", path: `/v1/launches/${TOKEN}`, auth: true, grown: "the public view without a token (§6.0): still 404 for a token with no launch" },
   { name: "launch-quote-bad-side", method: "POST", path: `/v1/launches/${TOKEN}/quote`, body: { side: "hold", amount: "1" }, auth: true },
   { name: "launch-build-no-name", method: "POST", path: "/v1/launches/build", body: { action: "create", quote: "XLM", name: "", symbol: "ECAT" }, auth: true },
   { name: "media-upload-bad-type", method: "POST", path: "/v1/media/upload-url", body: { contentType: "text/plain", bytes: 10 }, auth: true },

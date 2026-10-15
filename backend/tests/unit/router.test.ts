@@ -46,8 +46,8 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/tx/:hash", `/v1/tx/${"ab".repeat(32)}`, false],
   ["POST /v1/swap/quote", "/v1/swap/quote", false],
   ["POST /v1/swap/build", "/v1/swap/build", false],
-  // Market data reads the reference cache and needs no session (§6.6). Economics (WP-14) and Earn's markets and
-  // history (WP-15) still sign in until those packages serve them without a session.
+  // Market data reads the reference cache and needs no session (§6.6), nor do the launchpad's economics (§6.9). Earn's
+  // markets and history (WP-15) still sign in until that package serves them without a session.
   ["GET /v1/markets", "/v1/markets", true],
   ["GET /v1/markets/:id", "/v1/markets/XLM", true],
   ["GET /v1/markets/:id/history", "/v1/markets/XLM/history", true],
@@ -57,7 +57,7 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/launches/:token/quote", `/v1/launches/${TOKEN}/quote`, false],
   ["POST /v1/launches/build", "/v1/launches/build", false],
   ["POST /v1/launches/metadata", "/v1/launches/metadata", false],
-  ["GET /v1/economics", "/v1/economics", false],
+  ["GET /v1/economics", "/v1/economics", true],
   ["GET /v1/launchpad/me", "/v1/launchpad/me", false],
   ["GET /v1/earn/markets", "/v1/earn/markets", false],
   ["GET /v1/earn/positions", "/v1/earn/positions", false],
@@ -82,12 +82,13 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
+/** Viewer routes whose handlers serve the public view (§6.0) and need no ?address=: what each answers with neither a
+ *  token nor ?address= (the route harness has no launch at TOKEN). */
+const PUBLIC_BOARDS: Record<string, number> = { "GET /v1/launches": 200, "GET /v1/launches/:token": 404 };
+
 /** Registered in their final place, answering 501 until written. */
 const NOT_WRITTEN = [
   "GET /v1/recipient/:address",
-  "POST /v1/launches/metadata",
-  "GET /v1/economics",
-  "GET /v1/launchpad/me",
   "GET /v1/earn/history",
   "GET /v1/moments/mine",
   "PUT /v1/local-media/upload/:token",
@@ -222,15 +223,25 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  // Viewer routes pass the guard without a header, but until their packages serve the public view (WP-10, WP-14,
-  // WP-15, WP-16, WP-18) their handlers still ask for a session, as before.
-  Deno.test("without a session, every route answers 401 but the open ones", async () => {
+  // Viewer routes pass the guard without a header. The launch board and a launch's page serve the public view
+  // (PUBLIC_BOARDS); until their packages serve it (WP-10, WP-15, WP-16, WP-18) the others still ask for a session.
+  Deno.test("without a session, every route answers 401 but the open ones and the public boards", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
       const text = await res.text();
-      if (open) assertNotEquals(res.status, 401, spec);
+      if (Object.hasOwn(PUBLIC_BOARDS, spec)) assertEquals(res.status, PUBLIC_BOARDS[spec], spec);
+      else if (open) assertNotEquals(res.status, 401, spec);
       else assertEquals([res.status, JSON.parse(text).error.message], [401, "Sign in on Stellar to continue."], spec);
     }
+  });
+
+  Deno.test("the launch board's public view: no token, with or without ?address=, cached 15 s; with a token, the owner's", async () => {
+    for (const query of ["", `?address=${OTHER.publicKey()}`]) {
+      const res = await quietly(() => handle(request("GET /v1/launches", `/v1/launches${query}`, null)));
+      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], query || "no query");
+    }
+    const owner = await quietly(() => handle(request("GET /v1/launches", "/v1/launches", token)));
+    assertEquals([owner.status, owner.headers.get("cache-control"), (await owner.json()).view], [200, "no-store", "owner"]);
   });
 
   Deno.test("the guard lets a viewer route through without an Authorization header, and checks one that is sent", async () => {
