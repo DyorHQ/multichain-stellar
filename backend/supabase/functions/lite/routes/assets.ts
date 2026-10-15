@@ -1,9 +1,10 @@
 // Asset search: GET /v1/assets?q= (§6.6), for the token picker and Home's search. A viewer route: `held` is about the
-// token's account, in the public view about ?address=, and false with neither. At most 30 results, each found once:
+// token's account, in the public view about ?address=, and false with neither, or when Horizon can't read the account
+// (the search still answers). At most 30 results, each found once:
 // - registry assets whose code or name contains q (case-insensitively), or whose id, contract or CODE:G… is q;
 // - listed DyorHQ launches (launchpad.ts launchSearch): the token id exactly, or the ticker or name containing q;
-// - the account's other trustlines whose code contains q, then an exact CODE:G…: unverified, named as their issuer
-//   publishes them (directory.ts) or not at all;
+// - the account's other trustlines whose code, or name as their issuer publishes it (directory.ts), contains q, then an
+//   exact CODE:G…: unverified, named as their issuer publishes them or not at all;
 // - an exact C… that is none of those: the token's own symbol(), name() and decimals(), read live, unverified. A launch
 //   the launchpad lists no more (a deployment's smoke launch) is never found (§9).
 // With no q: the registry, and the account's other trustlines.
@@ -31,6 +32,17 @@ function classicResult(asset: string, name: string | null, held: boolean): Asset
   return { id: info.id, kind: "classic", code: info.code, name, contract: info.contract, classic: info.classic, verified: false, held };
 }
 
+/** `account`'s balances and trustlines, or null when it doesn't exist or Horizon can't read it (logged): nothing is
+ *  held then. */
+async function balancesOf(account: string): Promise<ClassicAccount | null> {
+  try {
+    return await classicBalances(account);
+  } catch (err) {
+    console.warn("assets: the account couldn't be read", String((err as Error)?.message ?? err).slice(0, 200));
+    return null;
+  }
+}
+
 /** Whether `account` holds some of a token contract, read live; false when that read fails. */
 async function holdsToken(contract: string, account: string): Promise<boolean> {
   try {
@@ -45,7 +57,7 @@ export async function searchAssets(q: string, account: string | null): Promise<A
   const lower = q.toLowerCase();
   const contains = (s: string | null) => s !== null && s.toLowerCase().includes(lower);
   const [acct, launches, heldLaunches] = await Promise.all([
-    account ? classicBalances(account) : Promise.resolve(null as ClassicAccount | null),
+    account ? balancesOf(account) : Promise.resolve(null),
     launchSearch(q),
     account && q ? sql()`select token from lite.token_balances where address = ${account} and balance > 0` : Promise.resolve([]),
   ]);
@@ -61,14 +73,13 @@ export async function searchAssets(q: string, account: string | null): Promise<A
   const held = new Set(heldLaunches.map((t) => String(t.token)));
   for (const l of launches) add({ ...(l as Omit<AssetResult, "held">), held: held.has(String(l.id)) });
 
-  const lines = (acct?.balances ?? [])
-    .map((b) => b.asset)
-    .filter((asset) => asset !== "native" && !net.assets.some((a) => a.classic === asset) && (!q || contains(asset.split(":")[0])));
+  const lines = (acct?.balances ?? []).map((b) => b.asset).filter((asset) => asset !== "native" && !net.assets.some((a) => a.classic === asset));
   const exact = classicSpec(q) && !net.assets.some((a) => a.classic === q) ? [q] : [];
-  const classics = [...new Set([...lines, ...exact])];
-  if (classics.length) {
-    const names = await directory(classics, net);
-    for (const asset of classics) add(classicResult(asset, names.get(asset)?.name ?? null, balance(asset) > 0n));
+  if (lines.length || exact.length) {
+    const names = await directory([...lines, ...exact], net);
+    const name = (asset: string) => names.get(asset)?.name ?? null;
+    const found = lines.filter((asset) => !q || contains(asset.split(":")[0]) || contains(name(asset)));
+    for (const asset of new Set([...found, ...exact])) add(classicResult(asset, name(asset), balance(asset) > 0n));
   }
 
   if (isContractId(q) && !out.some((r) => r.contract === q)) {

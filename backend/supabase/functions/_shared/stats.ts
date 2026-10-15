@@ -34,7 +34,7 @@ export interface PriceBook {
 /** One of the account's logged transactions in the period (lite.tx_log). */
 export interface LoggedTx {
   kind: string;
-  /** Null on rows logged before migration 05. */
+  /** As logged (migration 10 gives every row its kind's); null for a kind no section counts. */
   section: Section | null;
   status: string;
   feePayer: string | null;

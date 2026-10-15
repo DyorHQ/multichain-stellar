@@ -10,6 +10,8 @@
 //   an unauthenticated caller. Each is valued at its launch's price (launchpad.ts).
 // - moments: the editions it holds (moments.ts), worth 0: an edition has no market (as Monad counts "no market yet").
 // Each part is read on its own: one that fails is "failed" in `parts`, its total null, and so is the account's total.
+// Whether the account exists is never a guess: Horizon's answer (the spot part's) or, when Horizon couldn't read it,
+// RPC's; when neither answers, the request fails (502) rather than say it doesn't.
 // change24h is Σ value × c / (1 + c) over the priced holdings with a 24-hour change c: the USD the account's value moved
 // by; pct is that over the value a day ago. It is complete when every part was read and every holding has both.
 // The public view leaves DyorHQ's history null (Earn's record, a launch's cost basis and P&L), answers every account
@@ -22,12 +24,13 @@ import { directory } from "./directory.ts";
 import { positions } from "./earn.ts";
 import { env } from "./env.ts";
 import { baseReserve, positionOf as xlmPositionOf } from "./fees.ts";
+import { ApiError } from "./http.ts";
 import { Fill, launchRowOf, positionOf, PriceContext, scaled, unitsText } from "./launchpad.ts";
 import { owned } from "./moments.ts";
 import { AssetInfo, assetById, NetworkConfig, PriceRef } from "./networks.ts";
 import { pricingOf, referencePrices, RefPrice, REFS } from "./refprices.ts";
 import { usd4 } from "./stats.ts";
-import { ClassicAccount, classicBalances, sv, view } from "./stellar.ts";
+import { ClassicAccount, classicBalances, Keypair, rpcServer, sv, view, xdr } from "./stellar.ts";
 
 type Row = postgres.Row;
 
@@ -226,6 +229,17 @@ async function part<T>(name: string, read: () => Promise<T>, empty: T): Promise<
   }
 }
 
+/** Whether `address` exists, from its ledger entry read through RPC (for when Horizon couldn't read it); 502 when RPC
+ *  can't tell either. The entry is read as is: the SDK's getAccount says "not found" for any failure. */
+async function existsOnRpc(address: string): Promise<boolean> {
+  const key = xdr.LedgerKey.account(new xdr.LedgerKeyAccount({ accountId: Keypair.fromPublicKey(address).xdrAccountId() }));
+  try {
+    return (await rpcServer().getLedgerEntries(key)).entries.length > 0;
+  } catch (err) {
+    throw new ApiError(502, "rpc_unavailable", "Stellar didn't answer. Try again.", { raw: String((err as Error)?.message ?? err).slice(0, 300) });
+  }
+}
+
 /** An Earn position's 24-hour change: its asset's reference price's. */
 function earnChange(p: EarnPosition, refs: Record<PriceRef, RefPrice>, net: NetworkConfig): number | null {
   const ref = assetById(net, p.asset)?.priceRef;
@@ -233,7 +247,7 @@ function earnChange(p: EarnPosition, refs: Record<PriceRef, RefPrice>, net: Netw
 }
 
 /** GET /v1/holdings (§6.5): the owner's view, or the public view (`scope` "public") from on-chain and indexed data
- *  only. `exists` is false when the account doesn't exist, and when the spot part couldn't read it. */
+ *  only. `exists` is Horizon's answer, or RPC's when the spot part couldn't read the account (then no XLM position). */
 export async function holdings(address: string, scope: View, now: number = Date.now(), net: NetworkConfig = env.network): Promise<Holdings> {
   const owner = scope === "owner";
   const [refs, reserve] = await Promise.all([referencePrices(now, net), baseReserve()]);
@@ -246,6 +260,7 @@ export async function holdings(address: string, scope: View, now: number = Date.
     part("launch", () => launchRows(address, owner, refs, net, now), [] as LaunchHolding[]),
     part("moments", () => owned(address), []),
   ]);
+  const exists = spot.ok ? spot.value.acct !== null : await existsOnRpc(address);
   const complete = spot.ok && earn.ok && launch.ok && moments.ok;
   const sum = (ok: boolean, values: Usd[]) => (ok ? usd4(values.reduce<number>((a, v) => a + (v ?? 0), 0)) : null);
   const totals = {
@@ -272,7 +287,7 @@ export async function holdings(address: string, scope: View, now: number = Date.
 
   return {
     address,
-    exists: spot.value.acct !== null,
+    exists,
     asOf: new Date(now).toISOString(),
     pricing: pricingOf(net),
     xlm: xlmPositionOf(spot.value.acct, reserve),

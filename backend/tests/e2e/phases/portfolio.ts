@@ -1,6 +1,7 @@
 // portfolio (docs/DESIGN-stellar-parity.md §6.7, §12.6), after the swap, launch and earn phases, over the last day:
-// - spot trades ≥ 1 (the swap phase's), launch volume > 0 (the launch phase's curve trades and pool swaps, when it ran),
-//   network fees > 0 in XLM, valued at XLM's price, and never part of `fees`;
+// - spot trades ≥ 1 (the swap phase's), network fees > 0 in XLM, valued at XLM's price, and never part of `fees`;
+// - launch volume > 0 with every curve trade and pool swap of the day counted, whenever the account traded a launch
+//   coin through DyorHQ today (a logged trade, indexed or not: the launch phase ran); the summary says when it didn't;
 // - the totals are the sections' sums; the period starts a day before asOf; the activity lists the day's settled items
 //   of the five sections, newest first; coverage starts at the account's first logged transaction;
 // - all time counts at least as much as the day; without a session, 401 (DyorHQ's history).
@@ -19,11 +20,16 @@ export default async function portfolio(t: E2E): Promise<string> {
 
   // The day's figures.
   if (!(sections.spot.trades >= 1) || sections.spot.fees !== 0) throw new Error(`spot: ${JSON.stringify(sections.spot)}`);
+  const [logged] = await t.db`
+    select count(*)::int as n from lite.tx_log
+     where address = ${me} and status = 'success' and created_at > ${new Date(p.since)}
+       and (kind in ('launch_buy', 'launch_sell') or (kind = 'swap' and section = 'launch'))`;
   const [fills] = await t.db`
     select count(*)::int as n from (
       select 1 from lite.launch_trades where trader = ${me} and ts > now() - interval '1 day'
       union all
       select 1 from lite.pool_swaps where trader = ${me} and ts > now() - interval '1 day') as f`;
+  if (logged.n > 0 && !(fills.n > 0)) throw new Error(`launch: ${logged.n} trade(s) logged today, none indexed`);
   if (fills.n > 0 && !(sections.launch.volume > 0 && sections.launch.trades === fills.n)) throw new Error(`launch: ${JSON.stringify(sections.launch)} for ${fills.n} trades`);
   if (!(BigInt(totals.networkFeesXlm) > 0n) || !(totals.networkFeesUsd > 0)) throw new Error(`network fees: ${totals.networkFeesXlm} (${totals.networkFeesUsd})`);
   const [paid] = await t.db`
@@ -53,7 +59,8 @@ export default async function portfolio(t: E2E): Promise<string> {
   if (anonymous.status !== 401) throw new Error(`/portfolio without a session → ${anonymous.status}`);
 
   const usd = (v: number) => `$${v.toFixed(2)}`;
-  return `last day: spot ${sections.spot.trades} trade(s) ${usd(sections.spot.volume)}, launch ${sections.launch.trades} ${usd(sections.launch.volume)}, ` +
+  const launch = logged.n > 0 ? `launch ${sections.launch.trades} ${usd(sections.launch.volume)}` : "no launch trade (the launch phase didn't run)";
+  return `last day: spot ${sections.spot.trades} trade(s) ${usd(sections.spot.volume)}, ${launch}, ` +
     `earn ${sections.earn.trades} ${usd(sections.earn.volume)}; volume ${usd(totals.volume)}, fees ${usd(totals.fees)}, P&L ${usd(totals.pnl)}` +
     `${totals.pnlComplete ? "" : "*"}; network fees ${Number(totals.networkFeesXlm) / 1e7} XLM, never in fees; ${items.length} item(s); 401 without a session`;
 }

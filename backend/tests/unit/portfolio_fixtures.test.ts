@@ -3,10 +3,12 @@
 // database data that carry the fixtures' figures:
 // - GET /v1/holdings as its owner (holdings.json, its launch balance read live), with the launch part unread
 //   (holdings.partial.json), and the public view for ?address= with no token (holdings.public.json): cached 15 s, the
-//   same for a member and anyone else, and no RPC call at all (a counting stand-in for RPC);
+//   same for a member and anyone else, with no balance() call (a counting stand-in for RPC) and, over RPC, only Earn's
+//   read of what the account supplies to each Blend pool (an on-chain fact §6.5 keeps; counted at Blend's stand-in);
 // - GET /v1/portfolio?period=week (portfolio.json): each section's figures come from rows worked back from the
 //   fixture's, and its activity from the period's items the fixture lists (the launch buy and the bridge transfer);
-// - GET /v1/activity (activity.json), which never names a token by a stand-in;
+// - GET /v1/activity (activity.json), which never names a token by a stand-in, nor do the rows an API before WP-10
+//   logged with one (their summary and display name the token);
 // - GET /v1/assets: each of assets.json's results is what a search for it finds (no one query finds all four).
 // Two of the fixtures' figures aren't what §6.5 gives for their own rows, and the comparisons put §6.5's in their place
 // (WP-03's fixtures to be corrected): AQUA's contract (the SAC of AQUA:GAX2… on testnet is CBWKQU57…, not CALSEG…),
@@ -52,6 +54,10 @@ const world = {
   usdcUsd: "0.9999",
   /** The account's AQUA, as Horizon writes it. */
   aqua: "25.0000000",
+  /** The name AQUA's issuer publishes (the asset directory's). */
+  aquaName: null as string | null,
+  /** Horizon can't read the account. */
+  horizonDown: false,
   /** What the account supplies to Blend's XLM market. */
   supplied: 1_000_012_340n,
   /** The holdings' launch read fails. */
@@ -60,8 +66,12 @@ const world = {
   member: true,
   /** RPC requests made. */
   rpcCalls: 0,
+  /** Blend's pools read for what the account supplies (an RPC read in Blend's SDK, which the stand-in replaces). */
+  poolReads: 0,
   /** GET /v1/activity's and Portfolio's rows. */
   activityTxs: [] as Record<string, unknown>[],
+  /** GET /v1/activity's last read of the log: its text and parameters. */
+  activityQuery: null as [string, unknown[]] | null,
   activityBridges: [] as Record<string, unknown>[],
   cash: [] as Record<string, unknown>[],
 };
@@ -119,7 +129,9 @@ function simulate(params: { transaction: string }) {
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const req = input instanceof Request ? input : new Request(String(input), init);
   const url = new URL(req.url);
-  if (url.host === "horizon-testnet.stellar.org" && url.pathname === `/accounts/${ME}`) return Response.json(horizonAccount());
+  if (url.host === "horizon-testnet.stellar.org" && url.pathname === `/accounts/${ME}`) {
+    return world.horizonDown ? new Response("down", { status: 503 }) : Response.json(horizonAccount());
+  }
   if (url.host === "horizon-testnet.stellar.org" && url.pathname === "/ledgers") {
     return Response.json({ _embedded: { records: [{ base_reserve_in_stroops: 5_000_000, base_fee_in_stroops: 100 }] }, _links: {} });
   }
@@ -135,7 +147,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 const reserves = () => new Map([[XLM.contract, { decimals: 7, supplyApy: 0.031, borrowApy: 0.054, utilization: 0.61, supplied: 182_345_671_200_000n, borrowed: 111_230_859_432_000n }]]);
 replacePools({
   read: () => Promise.resolve({ status: 0, reserves: reserves() }),
-  supplies: () => Promise.resolve({ state: { status: 0, reserves: reserves() }, supplied: new Map([[XLM.contract, { supply: world.supplied, collateral: 0n }]]) }),
+  supplies: () => {
+    world.poolReads++;
+    return Promise.resolve({ state: { status: 0, reserves: reserves() }, supplied: new Map([[XLM.contract, { supply: world.supplied, collateral: 0n }]]) });
+  },
 });
 
 /** ECAT on its curve at 0.0000415571 XLM ($0.0000079), 12% up on a day, 41.93% of the way to graduation. */
@@ -242,8 +257,8 @@ replaceSql(fakeSql((q, ps) => {
     ];
   }
   if (q.startsWith("select ref, lite.ref_usd_at(ref, ?) as usd from unnest(")) return [{ ref: "XLM", usd: "0.1901" }, { ref: "USDC", usd: "0.9999" }];
-  // AQUA's issuer publishes nothing about it.
-  if (q.startsWith("select asset, home_domain, name, image from lite.asset_directory")) return [{ asset: AQUA, home_domain: null, name: null, image: null }];
+  // AQUA's issuer publishes nothing about it, or a name.
+  if (q.startsWith("select asset, home_domain, name, image from lite.asset_directory")) return [{ asset: AQUA, home_domain: null, name: world.aquaName, image: null }];
   // Holdings: ECAT, its one buy, the editions.
   if (q.startsWith("select l.*, coalesce(tb.balance, 0) as indexed_balance")) {
     if (world.launchesFail) throw new Error("the launch read failed");
@@ -275,7 +290,10 @@ replaceSql(fakeSql((q, ps) => {
   if (q.startsWith("select direction, amount, message from lite.bridge_transfers b")) return [BRIDGE_IN("12501250")];
   if (q === "select min(created_at) as first from lite.tx_log where address = ?") return [{ first: at("2026-10-05T09:41:00.000Z") }];
   // GET /v1/activity's rows (Portfolio's: the period's settled ones).
-  if (q.startsWith("select hash, address, kind, intent, status, ledger, created_at, section, fee_charged, fee_payer, result from lite.tx_log t")) return world.activityTxs;
+  if (q.startsWith("select hash, address, kind, intent, status, ledger, created_at, section, fee_charged, fee_payer, result from lite.tx_log t")) {
+    world.activityQuery = [q, ps];
+    return world.activityTxs;
+  }
   if (q.startsWith("select id, direction, amount, status, source_tx, dest_tx, created_at from lite.bridge_transfers b")) return world.activityBridges;
   if (q.startsWith("select id, anchor, kind, asset, amount, status, created_at from lite.anchor_transfers c")) return world.cash;
   if (q.startsWith("select * from lite.launches where token = any(")) return (ps[0] as string[]).includes(ECAT) ? [ECAT_ROW] : [];
@@ -306,7 +324,7 @@ function asAnswered(f: Record<string, any>, asOf: string): Record<string, unknow
 }
 
 function reset(): void {
-  Object.assign(world, { xlmUsd: "0.1901", usdcUsd: "0.9999", aqua: "25.0000000", supplied: 1_000_012_340n, launchesFail: false, member: true, rpcCalls: 0 });
+  Object.assign(world, { xlmUsd: "0.1901", usdcUsd: "0.9999", aqua: "25.0000000", aquaName: null, horizonDown: false, supplied: 1_000_012_340n, launchesFail: false, member: true, rpcCalls: 0, poolReads: 0 });
   forgetReferencePrices();
   forgetPublicHoldings();
 }
@@ -338,20 +356,23 @@ Deno.test("GET /v1/holdings with the launch part unread is holdings.partial.json
   }
 });
 
-Deno.test("GET /v1/holdings?address= with no token is holdings.public.json, cached 15 s, with no RPC call, for anyone", async () => {
+Deno.test("GET /v1/holdings?address= with no token is holdings.public.json, cached 15 s, with no balance() call, for anyone", async () => {
   reset();
   const pub = await ask(`/holdings?address=${ME}`, null);
   assertEquals([pub.status, pub.cache], [200, "public, max-age=15"]);
   assertEquals(pub.body, asAnswered(fixture("holdings.public"), pub.body.asOf));
-  assertEquals(world.rpcCalls, 0);
-  // Kept 15 s: the same answer, byte for byte.
+  // No RPC call of its own; Earn's read of each pool is the one §6.5 keeps.
+  const pools = TESTNET.contracts.blendPools.length;
+  assertEquals([world.rpcCalls, world.poolReads], [0, pools]);
+  // Kept 15 s: the same answer, byte for byte, read from nothing.
   assertEquals((await ask(`/holdings?address=${ME}`, null)).text, pub.text);
+  assertEquals([world.rpcCalls, world.poolReads], [0, pools]);
   // The same for an account that isn't a tester: the public view never asks.
   forgetPublicHoldings();
   world.member = false;
   const anyone = await ask(`/holdings?address=${ME}`, null);
   assertEquals({ ...anyone.body, asOf: pub.body.asOf }, pub.body);
-  assertEquals(world.rpcCalls, 0);
+  assertEquals([world.rpcCalls, world.poolReads], [0, 2 * pools]);
 });
 
 // ------------------------------------------------------------------------------------------------ portfolio
@@ -409,6 +430,72 @@ Deno.test("GET /v1/activity is activity.json, and never names a token by a stand
   assertEquals((await ask("/activity", null)).status, 401);
 });
 
+Deno.test("GET /v1/activity names the tokens an API before WP-10 logged by a stand-in, in the section the migration gave", async () => {
+  reset();
+  // As migration 10 leaves them: the section its backfill gave; the sponsor paid; no result kept.
+  const legacy = (hash: string, kind: string, section: string, intent: Record<string, unknown>) => ({
+    hash: hash.repeat(64),
+    address: ME,
+    kind,
+    intent: { kind, ...intent },
+    status: "success",
+    ledger: 5_000_000,
+    // The first newest.
+    created_at: at(`2026-10-12T09:${50 - Number(hash)}:00.000Z`),
+    section,
+    fee_charged: "100",
+    fee_payer: "sponsor",
+    result: null,
+  });
+  world.activityTxs = [
+    legacy("1", "swap", "launch", {
+      summary: `Swap 10 XLM for at least 240000 ${PLACEHOLDER}`,
+      spend: { [XLM.contract]: "100000000" },
+      receive: { [ECAT]: "2400000000000" },
+      display: { venue: "soroswap", sell: "XLM", buy: PLACEHOLDER, amountIn: "100000000", minOut: "2400000000000" },
+    }),
+    legacy("2", "swap", "launch", {
+      summary: `Swap 1000 ${PLACEHOLDER} for at least 5 ${PLACEHOLDER}`,
+      spend: { [ECAT]: "10000000000" },
+      receive: { [WAVE]: "50000000" },
+      display: { venue: "soroswap", sell: PLACEHOLDER, buy: PLACEHOLDER, amountIn: "10000000000", minOut: "50000000" },
+    }),
+    legacy("3", "payment", "spot", {
+      summary: `Send 5 ${PLACEHOLDER}`,
+      spend: { [WAVE]: "50000000" },
+      display: { asset: PLACEHOLDER, amount: "5", to: AQUA_ISSUER, memo: null },
+    }),
+  ];
+  world.activityBridges = [];
+  world.cash = [];
+  const a = await ask("/activity");
+  assertEquals(a.status, 200);
+  assert(!new RegExp(`\\b${PLACEHOLDER}\\b|"Token"`).test(a.text), a.text.slice(0, 300));
+  const wave = `${WAVE.slice(0, 4)}…${WAVE.slice(-4)}`;
+  assertEquals(a.body.items.map((i: any) => [i.section, i.summary, i.display.sell ?? i.display.asset, i.display.buy ?? null, i.title, i.subtitle, i.symbol]), [
+    ["launch", "Swap 10 XLM for at least 240000 ECAT", "XLM", "ECAT", "Swapped", "XLM → ECAT", "ECAT"],
+    ["launch", `Swap 1000 ECAT for at least 5 ${wave}`, "ECAT", wave, "Swapped", `ECAT → ${wave}`, null],
+    ["spot", `Send 5 ${wave}`, wave, null, `Sent ${wave}`, `5 ${wave} to GAX2…L2LO`, null],
+  ]);
+  // The rest as logged.
+  assertEquals(a.body.items[0].display, { venue: "soroswap", sell: "XLM", buy: "ECAT", amountIn: "100000000", minOut: "2400000000000" });
+  assertEquals([a.body.items[0].feePayer, a.body.items[0].result, a.body.items[0].ref], ["sponsor", null, { token: ECAT }]);
+});
+
+Deno.test("GET /v1/activity?section= filters on the section the items carry: a row of a kind no section counts is the account's", async () => {
+  reset();
+  world.activityTxs = [{ ...LAUNCH_BUY, kind: "mystery", section: null, intent: { kind: "mystery", summary: "Something" } }];
+  world.activityBridges = [];
+  world.cash = [];
+  const a = await ask("/activity");
+  assertEquals(a.body.items.map((i: any) => [i.kind, i.section]), [["mystery", "account"]]);
+  // The filter reads the same section (portfolio_test.sql runs it).
+  await ask("/activity?section=account");
+  const [q, ps] = world.activityQuery!;
+  assert(q.includes("and coalesce(t.section, 'account') = ?"), q);
+  assert(ps.includes("account"));
+});
+
 // ------------------------------------------------------------------------------------------------ asset search
 
 Deno.test("GET /v1/assets finds each of assets.json's results, held as the owner holds them", async () => {
@@ -424,4 +511,30 @@ Deno.test("GET /v1/assets finds each of assets.json's results, held as the owner
   }
   const results = expected.results.map((r: Record<string, unknown>) => (r.id === AQUA ? { ...r, contract: AQUA_SAC } : r));
   assertEquals({ results: found, view: "owner" }, { ...expected, results });
+});
+
+Deno.test("GET /v1/assets finds the account's other trustlines by the name their issuer publishes, as well as by code", async () => {
+  reset();
+  world.aquaName = "Aquarius";
+  for (const q of ["aquarius", "AQU"]) {
+    const r = await ask(`/assets?q=${q}`);
+    assertEquals(r.body.results.map((x: { id: string; name: string | null; held: boolean }) => [x.id, x.name, x.held]), [[AQUA, "Aquarius", true]], q);
+  }
+  assertEquals((await ask("/assets?q=Neptune")).body.results, []);
+});
+
+Deno.test("GET /v1/assets still answers when Horizon can't read the account: nothing held but what the index holds", async () => {
+  reset();
+  world.horizonDown = true;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const usdc = await ask("/assets?q=USDC");
+    assertEquals([usdc.status, usdc.body.results.map((x: { id: string; held: boolean }) => [x.id, x.held])], [200, [["USDC", false], ["BUSDC", false]]]);
+    // A launch's held is the index's.
+    const ecat = await ask("/assets?q=ECAT");
+    assertEquals([ecat.status, ecat.body.results.map((x: { id: string; held: boolean }) => [x.id, x.held])], [200, [[ECAT, true]]]);
+  } finally {
+    console.warn = warn;
+  }
 });

@@ -2,8 +2,9 @@
 // network fees of each section (Spot, Earn, Launch, Moments, Bridge) and in total, at today's prices, and the period's
 // activity. A session route: it is DyorHQ's history. This reads the account's rows and today's prices; stats.ts adds
 // them up.
-// - The period's logged transactions (spot swaps; every section's network fees), the curve trades and pool swaps,
-//   creator claims, collects, the creator's proceeds from its own Moments and completed bridge transfers.
+// - The period's logged transactions (spot swaps; every section's network fees), each in the section it was logged
+//   with, as Recent Activity lists it (activity.ts), the curve trades and pool swaps, creator claims, collects, the
+//   creator's proceeds from its own Moments and completed bridge transfers.
 // - Earn: every recorded deposit and withdrawal (an earlier one decides whether a position's P&L is the period's) and
 //   what the account supplies now (earn.ts, read live); when the pools can't be read, the P&L says it is incomplete.
 // - Prices: the reference prices for registry assets; a launch token at its launch's price (launchpad.ts).

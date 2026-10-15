@@ -7,8 +7,10 @@
 //   "failed", its total null, the total null and complete false;
 // - change24h: Σ value × c / (1 + c), over the value a day ago, complete only with every holding priced;
 // - launch: the owner's balances read live, at most 50 at once, the indexed one (stale) when a read fails, a token
-//   whose live balance is 0 left out; the public view reads the indexed ones only, with no RPC call, and is kept 15 s.
-import { Address, nativeToScVal, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+//   whose live balance is 0 left out; the public view reads the indexed ones only, with no balance() call, and is kept
+//   15 s. Its one read over RPC is Earn's: what the account supplies to each Blend pool, an on-chain fact §6.5 keeps;
+// - exists: Horizon's answer, or RPC's when Horizon can't read the account, and a 502 when neither can tell.
+import { Address, Keypair, nativeToScVal, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fakeSql, OTHER, type Row, setTestEnv, USER } from "../fixtures/routes/harness.ts";
 
@@ -41,6 +43,8 @@ function token(n: number): string {
 
 const world = {
   horizonDown: false,
+  /** RPC answers no account read (the ledger-entry read getAccount makes). */
+  rpcDown: false,
   missing: false,
   poolsDown: false,
   launchesDown: false,
@@ -48,14 +52,17 @@ const world = {
   /** Launch tokens held: their count, and the live reads that fail (every tenth) or answer 0 (the second). */
   launches: 1,
   manyReads: false,
+  /** RPC requests: the launch tokens' balance() reads and, when Horizon is down, the account's. */
   rpcCalls: 0,
   inFlight: 0,
   mostInFlight: 0,
+  /** Blend's pools read for what the account supplies (each an RPC read in Blend's SDK, which the stand-in replaces). */
+  poolReads: 0,
   queries: 0,
 };
 
 function reset(): void {
-  Object.assign(world, { horizonDown: false, missing: false, poolsDown: false, launchesDown: false, momentsDown: false, launches: 1, manyReads: false, rpcCalls: 0, inFlight: 0, mostInFlight: 0, queries: 0 });
+  Object.assign(world, { horizonDown: false, rpcDown: false, missing: false, poolsDown: false, launchesDown: false, momentsDown: false, launches: 1, manyReads: false, rpcCalls: 0, inFlight: 0, mostInFlight: 0, poolReads: 0, queries: 0 });
   forgetReferencePrices();
   forgetPublicHoldings();
 }
@@ -80,6 +87,28 @@ function balanceRead(params: { transaction: string }) {
   const n = Array.from({ length: world.launches }, (_, i) => i).find((i) => token(i) === contract);
   if (n === undefined || (world.manyReads && n % 10 === 9)) return { latestLedger: 1, error: "HostError: Error(Storage, MissingValue)" };
   return answer(nativeToScVal(world.manyReads && n === 1 ? 0n : 10_000_000_000n, { type: "i128" }));
+}
+
+/** The account's ledger entry, as RPC's getLedgerEntries answers getAccount (none when it doesn't exist). */
+function accountRead(params: { keys: string[] }) {
+  if (world.missing) return { entries: [], latestLedger: 1 };
+  const key = xdr.LedgerKey.fromXDR(params.keys[0], "base64");
+  const id = Keypair.fromPublicKey(StrKey.encodeEd25519PublicKey(key.account().accountId().ed25519())).xdrAccountId();
+  const val = xdr.LedgerEntryData.account(
+    new xdr.AccountEntry({
+      accountId: id,
+      balance: xdr.Int64.fromString("1000000000"),
+      seqNum: xdr.Int64.fromString("1"),
+      numSubEntries: 3,
+      inflationDest: null,
+      flags: 0,
+      homeDomain: "",
+      thresholds: Buffer.from([1, 0, 0, 0]),
+      signers: [],
+      ext: new xdr.AccountEntryExt(0),
+    }),
+  );
+  return { entries: [{ key: params.keys[0], xdr: val.toXDR("base64"), lastModifiedLedgerSeq: 1 }], latestLedger: 1 };
 }
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -114,6 +143,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     try {
       const body = await req.json();
       await new Promise((r) => setTimeout(r, 2));
+      if (body.method === "getLedgerEntries") {
+        if (world.rpcDown) return new Response("down", { status: 503 });
+        return Response.json({ jsonrpc: "2.0", id: body.id, result: accountRead(body.params) });
+      }
       return Response.json({ jsonrpc: "2.0", id: body.id, result: balanceRead(body.params) });
     } finally {
       world.inFlight--;
@@ -125,7 +158,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 const reserves = () => new Map([[XLM.contract, { decimals: 7, supplyApy: 0.031, borrowApy: 0.054, utilization: 0.61, supplied: 10n ** 15n, borrowed: 10n ** 14n }]]);
 replacePools({
   read: () => Promise.resolve({ status: 0, reserves: reserves() }),
-  supplies: () => (world.poolsDown ? Promise.reject(new Error("RPC down")) : Promise.resolve({ state: { status: 0, reserves: reserves() }, supplied: new Map([[XLM.contract, { supply: 500_000_000n, collateral: 0n }]]) })),
+  supplies: () => {
+    world.poolReads++;
+    return world.poolsDown ? Promise.reject(new Error("RPC down")) : Promise.resolve({ state: { status: 0, reserves: reserves() }, supplied: new Map([[XLM.contract, { supply: 500_000_000n, collateral: 0n }]]) });
+  },
 });
 
 /** A launch on its curve at 0.025 XLM, 0.02 a day ago, made two days ago; the account holds 1,000 of it, indexed. */
@@ -233,11 +269,28 @@ Deno.test("totals.total is null and complete false when any part fails; the othe
     assertEquals(read, { spot: part !== "spot", earn: part !== "earn", launch: part !== "launch", moments: part !== "moments" }, part);
     for (const other of ["spot", "earn", "launch", "moments"] as const) if (other !== part) assertEquals(h.parts[other], "ok", `${part}: ${other}`);
   }
-  // A spot part that couldn't read the account can't say it exists.
+});
+
+Deno.test("exists: when Horizon can't read the account, RPC says whether it does; when neither can, 502, never false", async () => {
   reset();
   world.horizonDown = true;
-  const down = await quietly(() => holdings(ME, "owner", NOW));
-  assertEquals([down.exists, down.xlm], [false, null]);
+  const read = await quietly(() => holdings(ME, "owner", NOW));
+  // One RPC read for the account, one for the launch token's balance.
+  assertEquals([read.exists, read.xlm, read.parts.spot, world.rpcCalls], [true, null, "failed", 2]);
+  reset();
+  world.horizonDown = true;
+  world.missing = true;
+  const missing = await quietly(() => holdings(ME, "owner", NOW));
+  assertEquals([missing.exists, missing.parts.spot], [false, "failed"]);
+  reset();
+  world.horizonDown = true;
+  world.rpcDown = true;
+  const err = await quietly(() => holdings(ME, "owner", NOW)).then(() => null, (e) => e);
+  assertEquals([err?.status, err?.code], [502, "rpc_unavailable"]);
+  // Horizon answers: RPC isn't asked.
+  reset();
+  world.rpcDown = true;
+  assertEquals((await holdings(ME, "owner", NOW)).exists, true);
 });
 
 Deno.test("an account that doesn't exist: nothing in spot, no XLM position, but the parts are read", async () => {
@@ -260,18 +313,20 @@ Deno.test("launch: the owner's balances are read live, at most 50 at once; a fai
   assert(h.launch.every((l) => l.balance === "10000000000"));
 });
 
-Deno.test("the public view reads indexed balances only, with no RPC call, leaves DyorHQ's history out, and is kept 15 s", async () => {
+Deno.test("the public view reads indexed balances only, with no balance() call, leaves DyorHQ's history out, and is kept 15 s", async () => {
   reset();
   const h = await publicHoldings(ME, NOW);
-  assertEquals([world.rpcCalls, h.view, h.launch[0].stale, h.launch[0].costBasisUsd, h.launch[0].pnlUsd], [0, "public", false, null, null]);
+  // No launch balance() fan-out: RPC's only part is Earn's read of each Blend pool (what the account supplies).
+  assertEquals([world.rpcCalls, world.poolReads], [0, TESTNET.contracts.blendPools.length]);
+  assertEquals([h.view, h.launch[0].stale, h.launch[0].costBasisUsd, h.launch[0].pnlUsd], ["public", false, null, null]);
   assertEquals([h.earn[0].supplied, h.earn[0].deposited, h.earn[0].withdrawn, h.earn[0].earned, h.earn[0].earnedComplete], ["500000000", null, null, null, false]);
   // The owner's view of the same account: the record, and the live read.
   const owner = await holdings(ME, "owner", NOW);
   assertEquals([owner.earn[0].deposited, owner.earn[0].earned, owner.earn[0].earnedComplete, world.rpcCalls], ["490000000", "10000000", true, 1]);
   // Within 15 s: the same answer, read from nothing.
-  const queries = world.queries;
+  const [queries, rpcCalls, poolReads] = [world.queries, world.rpcCalls, world.poolReads];
   assertEquals(await publicHoldings(ME, NOW + 14_999), h);
-  assertEquals(world.queries, queries);
+  assertEquals([world.queries, world.rpcCalls, world.poolReads], [queries, rpcCalls, poolReads]);
   // After: read again.
   await publicHoldings(ME, NOW + 15_000);
   assert(world.queries > queries);

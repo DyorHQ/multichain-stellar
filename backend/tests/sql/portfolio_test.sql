@@ -4,7 +4,9 @@
 -- section, kind, period and market (an Earn market by its pool and asset, an asset by its contract), settled only for
 -- Portfolio; Portfolio's period rows, the account's curve trades and pool swaps joined to their quote, the creator's
 -- proceeds as the contract splits them, completed bridge transfers and the first logged transaction; holdings' launch
--- tokens, indexed as held or traded. One transaction, rolled back.
+-- tokens, indexed as held or traded. Every logged transaction has its section, by plans.ts sectionOf's rule: a row
+-- logged without one gets it as it is inserted, and the migration's backfill gives the rows before it theirs. One
+-- transaction, rolled back.
 begin;
 
 -- 1. The indexes, on the columns the reads go by.
@@ -63,7 +65,7 @@ begin
 
   -- activity.ts: the spot swaps of the week, any status; Portfolio's, settled ones only.
   select array_agg(t.hash order by t.created_at desc) into got from lite.tx_log t
-   where t.address = me and t.section = 'spot' and t.kind = 'swap' and t.created_at > week_ago;
+   where t.address = me and coalesce(t.section, 'account') = 'spot' and t.kind = 'swap' and t.created_at > week_ago;
   if got is distinct from array['s1', 's2'] then raise exception 'the week''s spot swaps: %', got; end if;
   select array_agg(t.hash order by t.created_at desc) into got from lite.tx_log t
    where t.address = me and t.created_at > week_ago and t.status = 'success';
@@ -147,6 +149,65 @@ begin
 
   execute 'reset role';
   raise notice 'ok: lite_api reads activity, Portfolio''s rows and holdings'' launch tokens';
+end $$;
+
+-- 3. The section of a row logged without one: by its kind and intent, as it is inserted (an API older than migration
+--    05's logs no section) and, for the rows before the migration, by its backfill; a section given stands.
+do $$
+declare
+  me constant text := 'G' || repeat('S', 55);
+  c_xlm constant text := 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+  c_usdc constant text := 'CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA';
+  c_fox constant text := 'CCFOX' || repeat('A', 51);
+  got text[];
+begin
+  insert into lite.launches (token, creator, quote, name, symbol, launch_index, supply, phantom, threshold, quote_reserve, token_reserve, created_ledger)
+  values (c_fox, me, c_xlm, 'Fox', 'FOX', 7, 10000000000000000, 300000000000, 50000000000, 300000000000, 10000000000000000, 1);
+
+  execute 'set local role lite_api';
+  insert into lite.tx_log (hash, inner_hash, address, kind, intent, status, max_fee) values
+    ('n01', 'n01', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_xlm, '10'), 'receive', jsonb_build_object(c_usdc, '1')), 'success', 1000),
+    ('n02', 'n02', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_xlm, '10'), 'receive', jsonb_build_object(c_fox, '1')), 'success', 1000),
+    ('n03', 'n03', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_fox, '10'), 'receive', '[]'::jsonb), 'success', 1000),
+    ('n04', 'n04', me, 'swap', '{}', 'success', 1000),
+    ('n05', 'n05', me, 'payment', jsonb_build_object('spend', jsonb_build_object(c_fox, '10')), 'success', 1000),
+    ('n06', 'n06', me, 'trust', '{}', 'success', 1000),
+    ('n07', 'n07', me, 'faucet', null, 'success', 1000),
+    ('n08', 'n08', me, 'earn_withdraw', '{}', 'success', 1000),
+    ('n09', 'n09', me, 'launch_create', '{}', 'success', 1000),
+    ('n10', 'n10', me, 'moment_collect', '{}', 'success', 1000),
+    ('n11', 'n11', me, 'bridge_out', '{}', 'success', 1000),
+    ('n12', 'n12', me, 'approve', '{}', 'success', 1000),
+    ('n13', 'n13', me, 'mystery', '{}', 'success', 1000);
+  insert into lite.tx_log (hash, inner_hash, address, kind, intent, status, max_fee, section) values
+    ('n14', 'n14', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_xlm, '10'), 'receive', jsonb_build_object(c_fox, '1')), 'success', 1000, 'spot');
+  select array_agg(hash || ' ' || coalesce(section, '-') order by hash) into got from lite.tx_log where address = me;
+  if got is distinct from array['n01 spot', 'n02 launch', 'n03 launch', 'n04 spot', 'n05 spot', 'n06 account', 'n07 account', 'n08 earn',
+                                'n09 launch', 'n10 moments', 'n11 bridge', 'n12 bridge', 'n13 -', 'n14 spot'] then
+    raise exception 'sections as logged: %', got;
+  end if;
+  -- activity.ts's section filter: a row of a kind no section counts is the account's, as its item says.
+  select array_agg(t.hash order by t.hash) into got from lite.tx_log t where t.address = me and coalesce(t.section, 'account') = 'account';
+  if got is distinct from array['n06', 'n07', 'n13'] then raise exception 'the account''s section: %', got; end if;
+  execute 'reset role';
+
+  -- Rows as migration 05 left them, before this one: the migration's backfill.
+  alter table lite.tx_log disable trigger tx_log_fill_section;
+  insert into lite.tx_log (hash, inner_hash, address, kind, intent, status, max_fee) values
+    ('b1', 'b1', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_xlm, '10'), 'receive', jsonb_build_object(c_usdc, '1')), 'success', 1000),
+    ('b2', 'b2', me, 'swap', jsonb_build_object('spend', jsonb_build_object(c_xlm, '10'), 'receive', jsonb_build_object(c_fox, '1')), 'success', 1000),
+    ('b3', 'b3', me, 'earn_deposit', '{}', 'success', 1000);
+  alter table lite.tx_log enable trigger tx_log_fill_section;
+  update lite.tx_log set section = lite.tx_section(kind, intent) where section is null;
+  select array_agg(hash || ' ' || coalesce(section, '-') order by hash) into got from lite.tx_log where address = me and hash like 'b%';
+  if got is distinct from array['b1 spot', 'b2 launch', 'b3 earn'] then raise exception 'the backfill: %', got; end if;
+
+  if has_function_privilege('public', 'lite.tx_section(text, jsonb)', 'execute')
+     or has_function_privilege('public', 'lite.fill_tx_log_section()', 'execute') then
+    raise exception 'PUBLIC can execute the section functions';
+  end if;
+  if not has_function_privilege('lite_api', 'lite.tx_section(text, jsonb)', 'execute') then raise exception 'lite_api cannot call lite.tx_section'; end if;
+  raise notice 'ok: every logged transaction has its section';
 end $$;
 
 rollback;

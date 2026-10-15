@@ -2,7 +2,8 @@
 // - every item carries its section and its words; a transaction its hash and payer, the user's settled ones their fee,
 //   a settled swap what it delivered and what it bought (by its real code, never a stand-in, §9), newest first;
 // - filters: section=spot&kind=swap&period=day gives the day's spot swaps only; section=earn&market=<pool>:<asset> that
-//   market's deposits and withdrawals only; market=<launch coin> the items about that coin;
+//   market's deposits and withdrawals only; market=<launch coin> the items about that coin. The Earn and launch checks
+//   run whenever the account logged a deposit or a launch trade (the earn and launch phases ran), indexed or not;
 // - a bad filter is 400, and without a session, 401 (DyorHQ's history).
 import type { E2E } from "../lite_e2e.ts";
 import { client, expectRefusal, setUp } from "./auth.ts";
@@ -48,10 +49,12 @@ export default async function activity(t: E2E): Promise<string> {
     earn = `${market.length} item(s) in the Earn market`;
   }
 
-  // A launch coin's items.
-  const [coin] = await t.db`select token from lite.launch_trades where trader = ${me} order by ts desc limit 1`;
+  // A launch coin's items: the coin of the account's latest logged trade.
+  const [coin] = await t.db`
+    select intent -> 'display' ->> 'token' as token from lite.tx_log
+     where address = ${me} and kind in ('launch_buy', 'launch_sell') and status = 'success' order by created_at desc limit 1`;
   let launch = "no launch coin (the launch phase didn't run)";
-  if (coin) {
+  if (coin?.token) {
     const about = (await call("GET", `/activity?market=${coin.token}`)).body.items as any[];
     if (!about.length || about.some((i) => i.ref?.token !== coin.token)) throw new Error(`the coin's items: ${JSON.stringify(about.slice(0, 3))}`);
     launch = `${about.length} item(s) about the launch coin`;

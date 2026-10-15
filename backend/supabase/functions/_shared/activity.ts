@@ -4,6 +4,10 @@
 // symbol and name (never a stand-in, §9), and the server's English title and subtitle with its USD value at today's
 // price, to the cent (the phone words the kinds it knows itself). Filters: section, kind, period and market (an Earn
 // market, `<pool>:<asset>` or the two ids run together as the phone keys it, or an asset's id or contract).
+// - A transaction counts in the section it was logged with (migration 10 gives every row one, by its kind): the
+//   section filter and the items read that one, and a row of a kind no section counts is the account's.
+// - An API before WP-10 logged a token it couldn't name by a stand-in (STAND_IN), in a swap's or a payment's summary
+//   and display: such a row is shown with the token's code, or its short contract id, in its place.
 import type postgres from "postgres";
 import type { ActivityItem, BridgeDirection, DisplayValue, FeePayer, Period, Section, Usd } from "./contract.ts";
 import { sql } from "./db.ts";
@@ -11,7 +15,6 @@ import { env } from "./env.ts";
 import { bad } from "./http.ts";
 import { amountText, priceOf, TOKEN_DECIMALS } from "./launchpad.ts";
 import { assetById, AssetInfo, NetworkConfig, PriceRef } from "./networks.ts";
-import { sectionOf } from "./plans.ts";
 import { referencePrices, RefPrice, usdOf } from "./refprices.ts";
 import { isContractId } from "./stellar.ts";
 import { Intent } from "./verify.ts";
@@ -78,7 +81,11 @@ export interface ActivityQuery {
 
 const iso = (v: unknown): string => new Date(v as string).toISOString();
 const known = (v: unknown): boolean => v !== null && v !== undefined;
-const text = (v: DisplayValue | undefined): string | null => (typeof v === "string" && v !== "" ? v : null);
+/** The name an API before WP-10 logged for a token it couldn't name (main's swap.ts and account.ts, §9). */
+const STAND_IN = /\bTOKEN\b/g;
+const isStandIn = (v: unknown): boolean => typeof v === "string" && /^TOKEN$/.test(v);
+/** A logged text, never the stand-in. */
+const text = (v: DisplayValue | undefined): string | null => (typeof v === "string" && v !== "" && !isStandIn(v) ? v : null);
 const units = (v: unknown): bigint | null => (typeof v === "string" && /^[0-9]{1,30}$/.test(v) ? BigInt(v) : null);
 /** A USD amount: to the cent. */
 const usdAmount = (v: number | null): Usd => (v === null ? null : Math.round(v * 100) / 100 || 0);
@@ -89,6 +96,9 @@ function sideOf(amounts: Record<string, string> | undefined): { asset: string; a
   const entries = Object.entries(amounts ?? {});
   return entries.length === 1 ? { asset: entries[0][0], amount: units(entries[0][1]) } : null;
 }
+
+/** A side's token by its short contract id, for one that has no name to show. */
+const shortOf = (side: { asset: string } | null): string | null => (side && isContractId(side.asset) ? short(side.asset) : null);
 
 /** An asset as an item names and values it. */
 interface Named {
@@ -191,12 +201,13 @@ function txWords(r: Row, intent: Partial<Intent>, out: bigint | null, n: Names):
     case "swap": {
       const sell = n.of(spend?.asset ?? null) ?? n.of(text(d.sell));
       const buy = n.of(receive?.asset ?? null) ?? n.of(text(d.buy));
-      const sellCode = sell?.code ?? text(d.sell);
-      const buyCode = buy?.code ?? text(d.buy);
+      const sellCode = sell?.code ?? text(d.sell) ?? shortOf(spend);
+      const buySymbol = buy?.code ?? text(d.buy);
+      const buyCode = buySymbol ?? shortOf(receive);
       const launch = sell?.launch ?? buy?.launch ?? null;
       return {
         ref: launch ? { token: String(launch.token) } : null,
-        symbol: buyCode,
+        symbol: buySymbol,
         name: buy?.name ?? null,
         title: "Swapped",
         subtitle: sellCode && buyCode ? `${sellCode} → ${buyCode}` : null,
@@ -205,11 +216,12 @@ function txWords(r: Row, intent: Partial<Intent>, out: bigint | null, n: Names):
     }
     case "payment": {
       const asset = n.of(spend?.asset ?? null);
-      const code = asset?.code ?? text(d.asset) ?? "";
+      const symbol = asset?.code ?? text(d.asset);
+      const code = symbol ?? shortOf(spend) ?? "";
       const to = text(intent.to) ?? text(d.to);
       return {
         ref: asset?.launch ? { token: asset.contract } : null,
-        symbol: code || null,
+        symbol,
         name: asset?.name ?? null,
         title: `Sent ${code}`.trim(),
         subtitle: spend?.amount != null ? `${amountText(spend.amount, asset?.decimals)} ${code}${to ? ` to ${short(to)}` : ""}` : null,
@@ -347,20 +359,40 @@ function cashItem(c: Row, n: Names): ActivityItem {
   };
 }
 
+/** A row's summary and display as logged, with each token an API before WP-10 logged by the stand-in named: by its
+ *  code, or its short contract id, in the summary's order (a swap's sold token, then its bought one). */
+function asLogged(kind: string, intent: Partial<Intent>, n: Names): { summary: string; display: Record<string, DisplayValue> | null } {
+  const summary = String(intent.summary ?? kind);
+  const display = (intent.display ?? null) as Record<string, DisplayValue> | null;
+  const fields: [string, { asset: string } | null][] = kind === "swap"
+    ? [["sell", sideOf(intent.spend)], ["buy", sideOf(intent.receive)]]
+    : kind === "payment"
+    ? [["asset", sideOf(intent.spend)]]
+    : [];
+  const stood = fields.filter(([field]) => isStandIn(display?.[field]));
+  if (stood.length === 0) return { summary, display };
+  const codes = stood.map(([, side]) => n.of(side?.asset ?? null)?.code ?? shortOf(side) ?? "a token");
+  let i = 0;
+  return {
+    summary: summary.replace(STAND_IN, () => codes[Math.min(i++, codes.length - 1)]),
+    display: { ...display, ...Object.fromEntries(stood.map(([field], k) => [field, codes[k]])) },
+  };
+}
+
 function txItem(r: Row, n: Names): ActivityItem {
   const intent = (r.intent ?? {}) as Partial<Intent>;
   const result = (r.result ?? null) as { amountOut?: unknown } | null;
   const out = typeof result?.amountOut === "string" ? result.amountOut : null;
-  const launchTokens = new Set(n.launches.keys());
+  const { summary, display } = asLogged(String(r.kind), intent, n);
   return {
     type: "tx",
     id: String(r.hash),
     kind: String(r.kind),
-    summary: String(intent.summary ?? r.kind),
+    summary,
     status: String(r.status),
     at: iso(r.created_at),
-    display: intent.display ?? null,
-    section: (r.section ?? sectionOf({ kind: String(r.kind), spend: intent.spend ?? {}, receive: intent.receive }, launchTokens) ?? "account") as Section,
+    display,
+    section: (r.section ?? "account") as Section,
     hash: String(r.hash),
     feeCharged: known(r.fee_charged) ? String(r.fee_charged) : null,
     feePayer: known(r.fee_payer) ? r.fee_payer as FeePayer : null,
@@ -380,7 +412,7 @@ function txFilters(user: string, q: ActivityQuery, since: Date | null): postgres
     : sql()`and (t.intent -> 'spend' ? ${m.asset} or t.intent -> 'receive' ? ${m.asset} or t.intent -> 'display' ->> 'token' = ${m.asset})`;
   return sql()`
     where t.address = ${user}
-      ${q.section ? sql()`and t.section = ${q.section}` : sql()``}
+      ${q.section ? sql()`and coalesce(t.section, 'account') = ${q.section}` : sql()``}
       ${q.kind ? sql()`and t.kind = ${q.kind}` : sql()``}
       ${since ? sql()`and t.created_at > ${since}` : sql()``}
       ${q.settled ? sql()`and t.status = 'success'` : sql()``}
