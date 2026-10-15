@@ -147,6 +147,9 @@ for c in "${CONFIGS[@]}"; do
     "${XCB_SIM[@]}" -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO build
 done
 if [ -n "${QUICK:-}" ]; then
+  # The Debug build rewrites DyorKit's Package.resolved (StellarKit's packages); put it back before the worktree check
+  # compares the app with build 23.
+  restore
   step V-APP "check-build23.py --worktree" "$IOS" python3 -I Internal/check-build23.py --worktree
 else
 step V-APP "xcodegen (App Store project)" "$IOS" xcodegen generate --spec project.local.yml
