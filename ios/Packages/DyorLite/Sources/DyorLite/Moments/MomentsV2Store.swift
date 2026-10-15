@@ -45,6 +45,11 @@ public struct StellarMomentUploadV2: Equatable, Sendable {
     /// A video's cover frame; nil for a photo.
     public let posterUrl: String?
 
+    public init(mediaUrl: String, posterUrl: String?) {
+        self.mediaUrl = mediaUrl
+        self.posterUrl = posterUrl
+    }
+
     public var isVideo: Bool { posterUrl != nil }
     /// The NFT's image: the photo, or the video's cover frame.
     public var imageUrl: String { posterUrl ?? mediaUrl }
