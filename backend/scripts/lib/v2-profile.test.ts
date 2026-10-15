@@ -78,7 +78,7 @@ Deno.test("QA durations, qa-exec-fail, the failing Moments stack, key generation
   assertThrows(() => guard(t, { qaExecFail: true }), Error, "qa-exec-fail is refused for testnet");
   assertThrows(() => guard(t, { failingMomentsStack: true }), Error, "the failing Moments stack is refused for testnet");
   assertThrows(() => guard(t, { keyGeneration: true }), Error, "key generation is refused for testnet");
-  assertThrows(() => guard(t, { smoke: true }), Error, "SMOKE=1 is refused for testnet");
+  assertThrows(() => guard(t, { smoke: true }), Error, "the smoke run (--smoke, SMOKE=1) is refused for testnet");
   assertEquals(guard(t, { durations: "production" }), t);
   const qa = profileFor("testnet-qa");
   assertEquals(guard(qa, { durations: "testnet-qa", qaExecFail: true, failingMomentsStack: true, keyGeneration: true, smoke: true }), qa);

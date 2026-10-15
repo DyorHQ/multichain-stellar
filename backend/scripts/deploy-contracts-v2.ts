@@ -2,7 +2,14 @@
 // backend/supabase/functions/_shared/deployments/<name>-v2.json.
 //
 //   deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts-v2.ts \
-//     --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius auto|off] [--fund-aqua-float] [--generation n]
+//     --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius off|auto] [--fund-aqua-float] [--generation n]
+//   ... --deployment testnet-qa --smoke [--dry-run [--offline]]
+//
+// --aquarius is off by default (owner decision O7, 2026-10-15: v2 launches on Soroswap only): no exec-aquarius is
+//   uploaded, deployed or required in the reviewed list, and there is no Aquarius venue. --aquarius auto brings the
+//   Aquarius path back (CT-03's gate, the AQUA float); --fund-aqua-float needs it.
+// --smoke (testnet-qa only, O3) runs lib/smoke-v2.ts against deployments/testnet-qa-v2.json with the QA keys: one
+//   launch through graduation, a harvest and both claims, one Moment through graduation and the first vest claims.
 //
 // --deployment testnet is the owner's (decision O5): roles from the roles file (lib/owner-files.ts), the deploy key is
 //   DEPLOYER_SECRET from the environment when it is set, else ADMIN_SECRET from the keys file, and it must be
@@ -17,6 +24,7 @@
 // instance and WASM (L-g); the deployment file; the next steps (L-h). A dry run prints the plan and sends nothing;
 // --offline also skips the read-only network checks. A run that failed halfway can be run again: what is already
 // on chain and matches the plan is skipped, and anything that differs is refused.
+import { Buffer } from "node:buffer";
 import { Address, Asset, Keypair, Operation, scValToNative } from "@stellar/stellar-sdk";
 import { TESTNET } from "../supabase/functions/_shared/networks.ts";
 import { keepAlive } from "../supabase/functions/_shared/ttl.ts";
@@ -100,21 +108,29 @@ import {
   type V2Roles,
 } from "./lib/v2-profile.ts";
 import { constructorGuard, type GuardResult } from "./lib/wasm-spec.ts";
+import { runSmoke, type SmokeDeployment, SmokeError } from "./lib/smoke-v2.ts";
 
 export const USAGE =
-  "usage: deploy-contracts-v2.ts --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius auto|off] [--fund-aqua-float] [--generation n]";
+  "usage: deploy-contracts-v2.ts --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius off|auto] [--fund-aqua-float] [--generation n]\n" +
+  "       deploy-contracts-v2.ts --deployment testnet-qa --smoke [--dry-run [--offline]]\n" +
+  "       --aquarius is off by default (owner decision O7: Soroswap only); --fund-aqua-float needs --aquarius auto";
 
 export interface DeployOptions {
   deployment: string;
   dryRun: boolean;
   offline: boolean;
+  /** off by default (O7). */
   aquarius: "auto" | "off";
   fundAquaFloat: boolean;
   generation: number;
+  /** testnet-qa's contract smoke instead of a deploy. */
+  smoke: boolean;
 }
 
 export function parseArgs(args: string[]): DeployOptions {
-  const o: DeployOptions = { deployment: "", dryRun: false, offline: false, aquarius: "auto", fundAquaFloat: false, generation: 1 };
+  const o: DeployOptions = { deployment: "", dryRun: false, offline: false, aquarius: "off", fundAquaFloat: false, generation: 1, smoke: false };
+  let aquariusGiven = false;
+  let generationGiven = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     const value = () => {
@@ -126,19 +142,27 @@ export function parseArgs(args: string[]): DeployOptions {
     else if (a === "--dry-run") o.dryRun = true;
     else if (a === "--offline") o.offline = true;
     else if (a === "--fund-aqua-float") o.fundAquaFloat = true;
+    else if (a === "--smoke") o.smoke = true;
     else if (a === "--aquarius") {
       const v = value();
-      if (v !== "auto" && v !== "off") throw new Error(`--aquarius is auto or off\n${USAGE}`);
+      if (v !== "auto" && v !== "off") throw new Error(`--aquarius is off or auto\n${USAGE}`);
       o.aquarius = v;
+      aquariusGiven = true;
     } else if (a === "--generation") {
       const v = value();
       if (!/^[1-9]\d{0,5}$/.test(v)) throw new Error(`--generation is a whole number from 1\n${USAGE}`);
       o.generation = Number(v);
+      generationGiven = true;
     } else throw new Error(`unknown argument ${a}\n${USAGE}`);
   }
   if (!o.deployment) throw new Error(USAGE);
   if (o.offline && !o.dryRun) throw new Error("--offline goes with --dry-run only");
-  if (o.fundAquaFloat && o.aquarius === "off") throw new Error("--fund-aqua-float and --aquarius off contradict each other");
+  if (o.smoke && (aquariusGiven || o.fundAquaFloat || generationGiven)) {
+    throw new Error("--smoke runs against the deployment file: it takes only --dry-run [--offline]");
+  }
+  if (o.fundAquaFloat && o.aquarius === "off") {
+    throw new Error(aquariusGiven ? "--fund-aqua-float and --aquarius off contradict each other" : "--fund-aqua-float needs --aquarius auto (the default is off, owner decision O7)");
+  }
   return o;
 }
 
@@ -155,6 +179,10 @@ export interface DeployCtx {
   /** Extends every given instance and WASM to 30 days, paid by `payer` (ttl.ts keepAlive). */
   keepAlive(contracts: string[], codeHashes: string[], payer: Keypair): Promise<{ extended: number; fee: string }>;
   now(): Date;
+  /** The smoke's waits; real time by default. */
+  sleep?(ms: number): Promise<void>;
+  /** The smoke's throwaway accounts; Keypair.random by default. */
+  newKey?(): Keypair;
 }
 
 export function realCtx(): DeployCtx {
@@ -509,15 +537,17 @@ export async function main(args: string[], ctx: DeployCtx): Promise<number> {
   try {
     const opts = parseArgs(args);
     const profile = profileFor(opts.deployment);
-    const smoke = ctx.env("SMOKE") === "1";
+    // SMOKE=1 asks for the smoke as --smoke does; both are testnet-qa only (O3).
+    const smoke = opts.smoke || ctx.env("SMOKE") === "1";
     guard(profile, { durations: profile.durationSet, qaExecFail: profile.qaExecFail, failingMomentsStack: profile.failingMomentsStack, keyGeneration: profile.keyGeneration, smoke });
-    if (smoke) throw new Error("SMOKE=1: the testnet-qa smoke run comes with CT-11's --smoke; unset SMOKE for this deploy");
+    if (smoke && !opts.smoke) throw new Error("SMOKE=1 is set: run the smoke with --smoke, or unset SMOKE for this deploy");
     const net = ctx.env("LITE_NETWORK");
     if (net && net !== "testnet") throw new Error(`LITE_NETWORK is ${net}: v2 deploys to testnet only (unset it)`);
     // The TTL step (_shared/ttl.ts) reads the functions' network settings: keep them on testnet's own deployment.
     const liteDeployment = ctx.env("LITE_DEPLOYMENT");
     if (liteDeployment && liteDeployment !== "testnet") throw new Error(`LITE_DEPLOYMENT is ${liteDeployment}: unset it for this script`);
-    if (opts.fundAquaFloat && profile.name !== "testnet") throw new Error("--fund-aqua-float is for the owner's testnet; testnet-qa acquires its float by default");
+    if (opts.fundAquaFloat && profile.name !== "testnet") throw new Error("--fund-aqua-float is for the owner's testnet; testnet-qa acquires its float with --aquarius auto");
+    if (opts.smoke) return await smokeMain(ctx, opts);
     const economics = parseEconomics(JSON.parse(await Deno.readTextFile(`${ctx.root}backend/scripts/economics/${profile.economicsFile}`)), profile);
     const fixtures = await loadAquariusFixtures(ctx.root);
     if (fixtures.router !== network().aquariusRouter) throw new Error("networks.ts and fixtures.json name different Aquarius routers");
@@ -575,6 +605,56 @@ export async function main(args: string[], ctx: DeployCtx): Promise<number> {
     io.err(`deploy-contracts-v2: ${(e as Error).message}`);
     return 1;
   }
+}
+
+// ------------------------------------------------------------------------------------------------ the smoke
+
+/** --smoke (testnet-qa only; main has run the guard): the contract smoke of lib/smoke-v2.ts against
+ *  deployments/testnet-qa-v2.json, with the QA keys the deploy generated. A dry run sends nothing. */
+async function smokeMain(ctx: DeployCtx, opts: DeployOptions): Promise<number> {
+  const io = ctx.io;
+  refuseRoleEnv(ctx.env);
+  if (ctx.env("DEPLOYER_SECRET")) throw new Error("the smoke uses testnet-qa's own throwaway keys: unset DEPLOYER_SECRET");
+  const qa = await loadQaKeys(ctx.secretsDir);
+  if (!qa) throw new Error(`no ${QA_KEYS_FILE} in the secrets directory: run deploy-contracts-v2.ts --deployment testnet-qa first`);
+  const path = `${ctx.deploymentsDir}/testnet-qa-v2.json`;
+  let deployment: SmokeDeployment;
+  try {
+    deployment = JSON.parse(await Deno.readTextFile(path));
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) throw new Error(`no ${path}: run deploy-contracts-v2.ts --deployment testnet-qa first`);
+    throw e;
+  }
+  if (opts.offline) {
+    io.out(`Smoke · testnet-qa · ${path}`);
+    io.out("Network checks: skipped (--offline). Dry run: nothing was sent.");
+    return 0;
+  }
+  if (!ctx.chain) throw new Error("no network: use --dry-run --offline");
+  const chain = opts.dryRun ? readOnlyChain(ctx.chain) : ctx.chain;
+  const net = network();
+  try {
+    await runSmoke({
+      io,
+      chain,
+      deployment,
+      qa,
+      network: { xlmSac: net.xlmSac, usdcSac: net.usdcSac, usdcClassic: net.usdcClassic, soroswapRouter: TESTNET.contracts.soroswapRouter },
+      newKey: ctx.newKey ?? (() => Keypair.random()),
+      nonce: () => BigInt.asUintN(64, BigInt(`0x${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}`)),
+      sleep: ctx.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
+      nowSecs: () => Math.floor(ctx.now().getTime() / 1000),
+      dryRun: opts.dryRun,
+    });
+  } catch (e) {
+    if (e instanceof SmokeError) {
+      io.err(`deploy-contracts-v2: the smoke stopped: ${e.message}`);
+      io.err("The transactions printed above were sent; run --smoke again for a fresh launch and Moment.");
+      return 1;
+    }
+    throw e;
+  }
+  return 0;
 }
 
 async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<number> {
