@@ -8,5 +8,14 @@
   "admin": "GAFMNWY5ZNQZ5QHVQW6JJO2L6XFC7ZHGGAAKEPLUCGBV7EQZELCITYSJ",
   "treasury": "GAYMY43ASKVRTMJGS55BD3B3HKMHY4FETF4HUDVXRGZHMUUWFCFEINBT",
   "deployLedger": 5169890,
-  "deployedAt": "2026-10-13T06:34:48.209Z"
+  "deployedAt": "2026-10-13T06:34:48.209Z",
+  "indexFromLedger": null,
+  "smoke": {
+    "launches": [
+      "CC2VJ4NJHOC2GZVUQN7ZIILOHYU3CA7EZ25GXFVUBWEV2QYF3AJG3UVX"
+    ],
+    "moments": [
+      1
+    ]
+  }
 }
