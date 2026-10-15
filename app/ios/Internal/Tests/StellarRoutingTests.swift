@@ -4,6 +4,7 @@
 import DyorKit
 import DyorLite
 import StellarKit
+import SwiftUI
 import XCTest
 
 @MainActor
@@ -12,12 +13,23 @@ final class StellarRoutingTests: XCTestCase {
     private let token = StrKey.contractID([UInt8](repeating: 7, count: 32))
     private let owner = Address(data: Data(repeating: 1, count: 20))!
 
-    /// A router on `network`, where the account can use Stellar unless `available` is false.
-    private func makeRouter(on network: AppNetwork = .stellar, available: Bool = true) -> Router {
+    /// A router on `network`, where the account can use Stellar unless `available` is false, and is set up on this iPhone
+    /// unless `setUp` is false.
+    private func makeRouter(on network: AppNetwork = .stellar, available: Bool = true, setUp: Bool = true) -> Router {
         let router = Router()
         router.network = network
         router.stellarAvailable = available
+        router.stellarIsSetUp = { available && setUp }
         return router
+    }
+
+    /// Waits up to `seconds` for `condition`, looking every 50 ms.
+    private func waitUntil(_ what: String, seconds: Double = 5, _ condition: () -> Bool) async throws {
+        let end = Date().addingTimeInterval(seconds)
+        while !condition() {
+            guard Date() < end else { return XCTFail("timed out: \(what)") }
+            try await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     // MARK: - Tabs and menu
@@ -132,6 +144,76 @@ final class StellarRoutingTests: XCTestCase {
         XCTAssertEqual(router.tab, .moments, "not Monad's Home either")
         XCTAssertNil(router.pendingStellar)
         XCTAssertEqual(router.linkNotice, "Stellar isn't available for this account.")
+    }
+
+    /// Not set up on this iPhone (or signed out of Stellar): Stellar would only show its tabs waiting, so the app stays on
+    /// Monad and the network sheet opens once the center has closed, its switch running the setup first.
+    func testAStellarReferenceForAnAccountNotSetUpHereOpensTheNetworkSheet() async throws {
+        let router = makeRouter(on: .monad, setUp: false)
+        router.tab = .launch
+        router.presented = .notifications
+        router.open(route: .home, reference: "stellar:swap/XLM,USDC")
+        XCTAssertEqual(router.network, .monad)
+        XCTAssertNil(router.presented)
+        XCTAssertNil(router.networkSheet, "not while the center is still closing")
+        XCTAssertNil(router.pendingStellar)
+        XCTAssertNil(router.linkNotice)
+        try await waitUntil("the network sheet") { router.networkSheet != nil }
+        XCTAssertEqual(router.networkSheet?.origin, .home)
+        XCTAssertEqual(router.networkSheet?.startAt, .select)
+        XCTAssertEqual(router.network, .monad)
+        XCTAssertEqual(router.tab, .launch, "Monad's tab is left as it was")
+    }
+
+    func testOnStellarWithoutItsSetupAReferenceGoesBackToMonadForTheSheet() async throws {
+        let router = makeRouter(on: .stellar, setUp: false)
+        router.menuOpen = true
+        XCTAssertTrue(router.openStellar(reference: "stellar:launch"))
+        XCTAssertEqual(router.network, .monad, "the sheet's Stellar row is the current network's otherwise, and off")
+        XCTAssertFalse(router.menuOpen)
+        try await waitUntil("the network sheet") { router.networkSheet != nil }
+    }
+
+    func testTheNetworkSheetDoesntOpenOverWhatOpenedMeanwhile() async throws {
+        let router = makeRouter(on: .monad, setUp: false)
+        router.open(route: .home, reference: "stellar:home")
+        router.presented = .profile
+        try await Task.sleep(for: Router.coverCloses + .milliseconds(300))
+        XCTAssertNil(router.networkSheet)
+        XCTAssertEqual(router.presented, .profile)
+    }
+
+    func testASetUpAccountsReferenceNeverOpensTheSheet() async throws {
+        let router = makeRouter(on: .monad)
+        router.open(route: .home, reference: "stellar:home")
+        XCTAssertEqual(router.network, .stellar)
+        try await Task.sleep(for: Router.coverCloses + .milliseconds(300))
+        XCTAssertNil(router.networkSheet)
+    }
+
+    /// `NetworkRoot.keep`'s wiring: the session's plan is read each time it is asked, so a setup or a Sign out of Stellar
+    /// counts at once.
+    func testTheRouterReadsTheSessionsPlanWhenAsked() {
+        let address = StrKey.accountID([UInt8](repeating: 9, count: 32))
+        let keys = [LiteSession.activatedKey(address), LiteSession.signedOutKey(address)]
+        keys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+        defer { keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        let router = Router()
+        XCTAssertFalse(router.stellarAvailable)
+        XCTAssertFalse(router.stellarIsSetUp())
+        let lite = LiteSession(env: LiteGate.environment, stellarAddress: address, monad: nil, keys: nil)
+        router.keepStellar(lite)
+        XCTAssertTrue(router.stellarAvailable)
+        XCTAssertFalse(router.stellarIsSetUp(), "not set up on this iPhone")
+        UserDefaults.standard.set(true, forKey: LiteSession.activatedKey(address))
+        XCTAssertTrue(router.stellarIsSetUp())
+        UserDefaults.standard.set(true, forKey: LiteSession.signedOutKey(address))
+        XCTAssertFalse(router.stellarIsSetUp(), "signed out of Stellar: the next switch signs in")
+        UserDefaults.standard.removeObject(forKey: LiteSession.signedOutKey(address))
+        XCTAssertTrue(router.stellarIsSetUp())
+        router.keepStellar(nil)
+        XCTAssertFalse(router.stellarAvailable)
+        XCTAssertFalse(router.stellarIsSetUp())
     }
 
     func testAMonadNotificationOnStellarSwitchesToMonad() {
@@ -387,5 +469,93 @@ final class StellarRoutingTests: XCTestCase {
         XCTAssertEqual(router.network, .stellar)
         XCTAssertEqual(router.stellarTab, .launch)
         XCTAssertEqual(router.pendingStellar, .launch(token: token))
+    }
+    // MARK: - The app's sign-out
+
+    private final class FakeStellarSession {
+        var signedOut = false
+    }
+
+    /// Session.swift's sign-out and erase wait for the Stellar sign-out before `LiteKeyBootstrap.forget`.
+    func testTheAppsSignOutWaitsForTheStellarSignOut() async {
+        defer { StellarLiveSession.hold(nil, owner: nil) }
+        let fake = FakeStellarSession()
+        StellarLiveSession.hold(fake, owner: owner) {
+            try? await Task.sleep(for: .milliseconds(100))
+            fake.signedOut = true
+        }
+        XCTAssertTrue(StellarLiveSession.holds(fake))
+        await StellarLiveSession.signOut(owner: owner)
+        XCTAssertTrue(fake.signedOut, "done before the caller goes on")
+        XCTAssertFalse(StellarLiveSession.holds(fake), "let go: its own sign-out hook leaves the network alone")
+    }
+
+    func testTheAppsSignOutWaitsAtMostItsLimit() async {
+        defer { StellarLiveSession.hold(nil, owner: nil) }
+        let fake = FakeStellarSession()
+        StellarLiveSession.hold(fake, owner: owner) {
+            try? await Task.sleep(for: .seconds(30))
+            fake.signedOut = true
+        }
+        let start = ContinuousClock.now
+        await StellarLiveSession.signOut(owner: owner, limit: .milliseconds(200))
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(3))
+        XCTAssertFalse(fake.signedOut, "still going on behind")
+        XCTAssertFalse(StellarLiveSession.holds(fake))
+    }
+
+    func testTheDefaultLimitIsThreeSeconds() async {
+        defer { StellarLiveSession.hold(nil, owner: nil) }
+        StellarLiveSession.hold(FakeStellarSession(), owner: owner) { try? await Task.sleep(for: .seconds(30)) }
+        let start = ContinuousClock.now
+        await StellarLiveSession.signOut(owner: owner)
+        let waited = ContinuousClock.now - start
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(2900))
+        XCTAssertLessThan(waited, .seconds(6))
+    }
+
+    func testAnotherAccountsSignOutLeavesTheSessionAlone() async {
+        defer { StellarLiveSession.hold(nil, owner: nil) }
+        let fake = FakeStellarSession()
+        StellarLiveSession.hold(fake, owner: owner) { fake.signedOut = true }
+        await StellarLiveSession.signOut(owner: Address(data: Data(repeating: 2, count: 20))!)
+        XCTAssertFalse(fake.signedOut)
+        XCTAssertTrue(StellarLiveSession.holds(fake))
+        // Dropped with the account (`NetworkRoot.keep(nil)`): nothing left to sign out.
+        StellarLiveSession.hold(nil, owner: nil)
+        XCTAssertFalse(StellarLiveSession.holds(fake))
+        await StellarLiveSession.signOut(owner: owner)
+        XCTAssertFalse(fake.signedOut)
+    }
+
+    // MARK: - Receive over a review
+
+    /// Closes itself with SwiftUI's `dismiss`, as Receive's Close does, a moment after it appears.
+    private struct DismissProbe: View {
+        @Environment(\.dismiss) private var dismiss
+        var body: some View {
+            Text(verbatim: "Receive").task {
+                try? await Task.sleep(for: .milliseconds(400))
+                dismiss()
+            }
+        }
+    }
+
+    /// `StellarActions.addFunds` from a review sheet: Receive opens over the sheet (SwiftUI would drop a sheet of the
+    /// root's), and its own Close takes it away, back to the sheet.
+    func testReceiveOpensOverWhatIsPresentedAndClosesWithItsDismiss() async throws {
+        let base = try XCTUnwrap(StellarPresenter.top, "the app's window")
+        let review = UIViewController()
+        base.present(review, animated: false)
+        try await waitUntil("the review") { base.presentedViewController === review }
+        XCTAssertTrue(StellarPresenter.top === review)
+        let receive = UIHostingController(rootView: DismissProbe())
+        StellarPresenter.present(receive)
+        try await waitUntil("Receive over the review") { review.presentedViewController === receive }
+        XCTAssertTrue(StellarPresenter.top === receive)
+        try await waitUntil("Receive closed by its dismiss") { review.presentedViewController == nil }
+        XCTAssertTrue(StellarPresenter.top === review, "the review is still there")
+        review.dismiss(animated: false)
+        try await waitUntil("the review closed") { base.presentedViewController == nil }
     }
 }

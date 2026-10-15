@@ -22,8 +22,6 @@ struct NetworkRoot: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The signed-in account's Stellar session, while the account can use Stellar.
     @State private var stellar: StellarAccount?
-    /// Receive, asked for by a Stellar screen's add-funds action (`StellarActions.addFunds`).
-    @State private var addingFunds = false
 
     /// A Stellar session and the account it belongs to: one per account, never handed to another.
     private struct StellarAccount {
@@ -61,7 +59,6 @@ struct NetworkRoot: View {
         }
         .modifier(AppCovers())
         .networkSheet($router.networkSheet) { swap(to: $0) }
-        .sheet(isPresented: $addingFunds) { StellarReceiveSheet() }
         .environment(\.stellarSession, stellarSession)
         .environment(\.networkSetupSession, stellarSession)
         .environment(\.stellarActions, actions(stellarSession))
@@ -108,8 +105,10 @@ struct NetworkRoot: View {
             return
         }
         if stellar?.owner != address { keep(StellarAccount(owner: address, session: makeSession(for: address))) }
-        // As the account left it, with no push; Monad for a new account (rule 1).
-        let remembered = AppNetwork.stored(for: address)
+        // As the account left it, with no push; Monad for a new account (rule 1), and for one that isn't set up on this
+        // iPhone or signed out of Stellar, whose Stellar tabs would only wait: its next switch runs the setup.
+        var remembered = AppNetwork.stored(for: address)
+        if remembered == .stellar, !router.stellarIsSetUp() { remembered = .monad }
         if router.network != remembered {
             withTransaction(\.disablesAnimations, true) { router.network = remembered }
         }
@@ -118,18 +117,20 @@ struct NetworkRoot: View {
         if remembered == .stellar, let stellarSession { await stellarSession.resumeAtLaunch() }
     }
 
-    /// Keeps `account`'s Stellar session (nil: none), and says whether a Stellar destination can open
-    /// (`Router.stellarAvailable`).
+    /// Keeps `account`'s Stellar session (nil: none), and tells the router whether a Stellar destination can open, and
+    /// whether at once (`Router.keepStellar`).
     private func keep(_ account: StellarAccount?) {
         stellar = account
-        router.stellarAvailable = account != nil
+        router.keepStellar(account?.session)
         StellarLiveSession.hold(account?.session, owner: account?.owner)
     }
 
     /// The account's Stellar session. Its provider signs the sign-in with no prompt (a seed account) and each confirmed
     /// action as Monad's Confirm does; a passkey account's setup ceremony (`setupKey`) derives its Stellar key with one
     /// prompt, the first time. Its settled actions post to the notification center, and Sign out of Stellar erases what
-    /// this iPhone saved for it.
+    /// this iPhone saved for it and goes back to Monad (§8.12.2), under Profile, where it was asked for: the next switch
+    /// signs in again. The app's own sign-out and erase sign the session out too (`StellarLiveSession`), and leave the
+    /// network to them.
     private func makeSession(for owner: Address) -> LiteSession {
         // Passkey accounts only: a seed account's key is in the Keychain, and its setup never needs a ceremony.
         var setupKey: (@Sendable (String) async throws -> LiteSession.UnlockResult)?
@@ -142,17 +143,43 @@ struct NetworkRoot: View {
                                keys: DyorHQLiteKeys.provider(session: session, settings: settings),
                                setupKey: setupKey)
         StellarActivityRecorder.install(on: lite, owner: owner)
-        lite.onSignOut = { _ in StellarSaved.shared.forget(owner) }
+        lite.onSignOut = { [router, weak lite] _ in
+            StellarSaved.shared.forget(owner)
+            guard let lite, StellarLiveSession.holds(lite), router.network == .stellar else { return }
+            router.network = .monad
+            router.tab = .home
+        }
         return lite
     }
 
-    /// What the shared Stellar pieces can ask of the screens around them (`StellarActions`). Receive opens over the
-    /// Stellar screens, so a sheet that asks for it closes first.
+    /// What the shared Stellar pieces can ask of the screens around them (`StellarActions`).
     private func actions(_ lite: LiteSession?) -> StellarActions {
-        StellarActions(addFunds: { addingFunds = true },
+        StellarActions(addFunds: { addFunds(lite) },
                        swap: { [router] sell, buy, starter in router.openStellarSwap(sell: sell, buy: buy, starter: starter) },
                        signIn: { try await lite?.signIn() },
                        switchToMonad: { swap(to: .monad) })
+    }
+
+    /// Receive, over whatever asked for it: a review sheet short of XLM stays under it, and is there again once Receive
+    /// closes. Presented by the screen presented last (a sheet, a cover, else the root; `StellarPresenter`): SwiftUI drops
+    /// a sheet asked of a view that is already presenting one, so a sheet of the root's own would never show above
+    /// theirs. It gets the app's environment, as a sheet of the root's would.
+    private func addFunds(_ lite: LiteSession?) {
+        guard let lite else { return }
+        let receive = StellarReceiveSheet()
+            .environment(env)
+            .environment(session)
+            .environment(settings)
+            .environment(env.language)
+            .environment(env.perplTrading)
+            .environment(env.social)
+            .environment(router)
+            .environment(\.locale, env.language.locale)
+            .environment(\.stellarSession, lite)
+            .environment(\.networkSetupSession, lite)
+            .environment(\.stellarActions, actions(lite))
+            .tint(.brand)
+        StellarPresenter.present(UIHostingController(rootView: receive))
     }
 
     /// A switch from either Home's chip once the sheet has slid down, or from a paused Stellar tab (§2.5): `network`'s
@@ -172,24 +199,51 @@ struct NetworkRoot: View {
 /// (Session.swift): they sign it out before `LiteKeyBootstrap.forget` erases what Stellar kept.
 @MainActor
 enum StellarLiveSession {
-    private static var held: (owner: Address, session: LiteSession)?
+    private static var held: (owner: Address, session: AnyObject, signOut: () async -> Void)?
 
     /// `NetworkRoot` keeps `session` for `owner`; nil when it keeps none.
     static func hold(_ session: LiteSession?, owner: Address?) {
         guard let session, let owner else { held = nil; return }
-        held = (owner, session)
+        hold(session, owner: owner) { await session.signOut() }
+    }
+
+    /// Keeps `session` for `owner`, signed out with `signOut` (`LiteSession.signOut()` in the app, a test's own in tests).
+    static func hold(_ session: AnyObject, owner: Address, signOut: @escaping () async -> Void) {
+        held = (owner, session, signOut)
+    }
+
+    /// Whether `session` is the one kept: false once the app's sign-out has taken it (`signOut(owner:)`).
+    static func holds(_ session: AnyObject) -> Bool {
+        held?.session === session
     }
 
     /// Signs `owner`'s Stellar session out: its refresh token family revoked, its saved session and figures erased
-    /// (`LiteSession.signOut()`). Waits at most `limit` for the server; the rest goes on behind.
+    /// (`LiteSession.signOut()`). Waits at most `limit` for the server; the rest goes on behind. Nothing for a session
+    /// kept for another account, or none.
     static func signOut(owner: Address, limit: Duration = .seconds(3)) async {
         guard let held, held.owner == owner else { return }
         self.held = nil
         let (ended, end) = AsyncStream<Void>.makeStream()
-        Task { await held.session.signOut(); end.finish() }
+        Task { await held.signOut(); end.finish() }
         let timer = Task { try? await Task.sleep(for: limit); end.finish() }
         for await _ in ended {}
         timer.cancel()
+    }
+}
+
+/// Presents a Stellar screen over whatever is on screen: the sheet or cover presented last, else the app's root.
+@MainActor
+enum StellarPresenter {
+    /// The screen presented last in the app's key window, which a new presentation goes over; nil without a window.
+    static var top: UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard var top = scenes.lazy.compactMap(\.keyWindow).first?.rootViewController else { return nil }
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        return top
+    }
+
+    static func present(_ controller: UIViewController) {
+        top?.present(controller, animated: true)
     }
 }
 

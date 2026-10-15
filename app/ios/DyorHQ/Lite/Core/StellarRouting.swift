@@ -2,6 +2,7 @@
 // router's Stellar half (docs/DESIGN-stellar-parity.md §3.7). Internal builds only (STELLAR_LITE).
 #if STELLAR_LITE
 import DyorKit
+import DyorLite
 import Foundation
 import StellarKit
 
@@ -120,12 +121,39 @@ enum StellarDestination: Hashable {
 }
 
 extension Router {
+    /// How long a cover takes to close: the network sheet is asked for only after it, since SwiftUI drops a presentation
+    /// asked for while another is still closing (the side menu waits the same).
+    static let coverCloses: Duration = .milliseconds(350)
+
+    /// The account's Stellar session as `NetworkRoot` keeps it (nil: none): whether a Stellar destination can open
+    /// (`stellarAvailable`), and whether at once (`stellarIsSetUp`, its plan read when asked: a setup or a Sign out of
+    /// Stellar changes it).
+    func keepStellar(_ session: LiteSession?) {
+        stellarAvailable = session != nil
+        stellarIsSetUp = { [weak session] in session?.plan() == .instant }
+    }
+
     /// To Stellar for a Stellar destination: at once, with no sheet and no prompt, as at a cold launch, where the account
-    /// can use Stellar on this iPhone (`stellarAvailable`, which `NetworkRoot` keeps). Otherwise the app stays where it is,
-    /// saying why, and this is false.
+    /// can use Stellar on this iPhone (`stellarAvailable`, which `NetworkRoot` keeps) and is set up on it
+    /// (`stellarIsSetUp`). An account that can but isn't set up here, or signed out of Stellar, stays on Monad and gets
+    /// the network sheet once what is presented has closed: its switch runs the setup first, as the chip's does, where
+    /// Stellar would only show its tabs waiting. Otherwise the app stays where it is, saying why. False unless Stellar is
+    /// on screen.
     func ensureStellar() -> Bool {
         guard stellarAvailable else {
             linkNotice = liteTr(LocalizedStringResource("Stellar isn't available for this account.", table: "StellarShell", comment: "A notice at the bottom of the screen: a Stellar notification or link was tapped, but this account can't use Stellar on this iPhone. Stellar is a network's name, never translated"))
+            return false
+        }
+        guard stellarIsSetUp() else {
+            ensureMonad()
+            presented = nil
+            menuOpen = false
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.coverCloses)
+                guard let self, self.stellarAvailable, !self.stellarIsSetUp(), self.network == .monad, self.presented == nil,
+                      !self.menuOpen, self.networkSheet == nil else { return }
+                self.networkSheet = NetworkSheetRequest(origin: .home)
+            }
             return false
         }
         network = .stellar

@@ -99,6 +99,10 @@ final class Router {
     /// Whether the account signed in can use Stellar on this iPhone: the network control offers it and its session exists
     /// (`NetworkRoot.follow`). A Stellar destination switches to Stellar only then (`ensureStellar`).
     var stellarAvailable = false
+    /// Whether that session shows at once, with no setup: the account is set up on this iPhone and not signed out of
+    /// Stellar (its plan is instant; `keepStellar` sets it). Otherwise a Stellar destination opens the network sheet,
+    /// whose switch runs the setup first (`ensureStellar`).
+    var stellarIsSetUp: () -> Bool = { false }
     /// The network sheet asked for with either Home's chip, which the root presents (origin `.home`). Profile presents its
     /// own, from its Network row.
     var networkSheet: NetworkSheetRequest?
