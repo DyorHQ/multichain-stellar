@@ -18,15 +18,15 @@
     }
   },
   "anonymous": {
-    "status": 401,
+    "status": 400,
     "headers": {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store"
     },
     "body": {
       "error": {
-        "code": "unauthorized",
-        "message": "Sign in on Stellar to continue.",
+        "code": "address_required",
+        "message": "Sign in, or name the account with ?address=G….",
         "detail": null
       }
     }
