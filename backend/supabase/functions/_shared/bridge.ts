@@ -1,25 +1,55 @@
-// Monad ↔ Stellar USDC.
+// Monad ↔ Stellar USDC (docs/DESIGN-stellar-parity.md §5.7, §6.10).
 // Testnet: Circle CCTP v2 (Monad testnet domain 15 ↔ Stellar testnet domain 27; both directions are registered on
 // both chains, checked 2026-10-11). Monad → Stellar mints to Circle's CctpForwarder, which forwards to the user's
-// G-address in the same call; the API relays `mint_and_forward` once Iris attests. Stellar → Monad burns on Stellar
-// and returns a "claim on Monad" step (receiveMessage) for the Pro wallet to sign.
+// G-address in the same call; DyorHQ's keeper relays `mint_and_forward` once Iris attests (protocol upkeep, §4.1), for
+// at least 1 USDC and at most 10 times a day per user. Stellar → Monad burns on Stellar and returns a "claim on Monad"
+// step (receiveMessage) for the Pro wallet to sign. A quote's fee is Circle's own, from Iris's fee API, and its time is
+// how long the last transfers that way took.
 // Mainnet: NEAR Intents 1Click (live Monad ↔ Stellar USDC routes; no testnet).
 import { keccak_256 } from "@noble/hashes/sha3";
 import { StrKey } from "@stellar/stellar-sdk";
-import { accountView, needsTrustline } from "./account.ts";
-import { sql } from "./db.ts";
+import type { BridgeDirection, BridgeQuote, BridgeStart, BridgeStatus, BridgeTransfer, EvmStep } from "./contract.ts";
+import { sql, tableExists } from "./db.ts";
 import { env } from "./env.ts";
 import { ApiError, bad, notFound } from "./http.ts";
 import { assetById } from "./networks.ts";
-import { createPlan, PlanView, registerBuilder } from "./plans.ts";
-import { Contract, fromStroops, invoke, Keypair, loadAccount, newTx, prepare, requireAccount, rpcServer, sendSigned, sponsor, sv } from "./stellar.ts";
+import { Builder, createPlan, registerBuilder, StepSpec } from "./plans.ts";
+import {
+  classicBalances,
+  Contract,
+  fromStroops,
+  invoke,
+  keeper,
+  Keypair,
+  loadAccount,
+  newTx,
+  prepare,
+  requireAccount,
+  rpcServer,
+  sendSigned,
+  sv,
+} from "./stellar.ts";
+
+/** The finality every transfer here waits for: Circle's standard transfer (1000 would be a fast one). The burns ask
+ *  for it, and quotes price it. */
+const STANDARD_FINALITY = 2000;
+
+/** The least a transfer from Monad moves, in Monad USDC's base units (6 decimals): 1 USDC. The keeper pays its relay. */
+export const MIN_INBOUND = 1_000_000n;
+
+/** The most transfers from Monad the keeper relays for one user in a UTC day. */
+export const RELAYS_PER_DAY = 10;
 
 // ------------------------------------------------------------------------------------------------ EVM encoding
 
+// Call data is written in lowercase hex, checksummed addresses included.
 const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 const selector = (sig: string) => hexOf(keccak_256(new TextEncoder().encode(sig)).subarray(0, 4));
-const word = (hex: string) => hex.replace(/^0x/, "").padStart(64, "0");
+const word = (hex: string) => hex.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 const uint = (n: bigint | number) => word(BigInt(n).toString(16));
+
+const APPROVE = selector("approve(address,uint256)");
+const DEPOSIT_FOR_BURN_WITH_HOOK = selector("depositForBurnWithHook(uint256,uint32,bytes32,address,bytes32,uint256,uint32,bytes)");
 
 function bytesTail(data: Uint8Array): string {
   const len = uint(data.length);
@@ -38,7 +68,8 @@ export function evmToBytes32(a: string): Uint8Array {
   return out;
 }
 
-/** CctpForwarder hook data: 24 zero bytes · uint32 version 0 · uint32 length · strkey bytes. */
+/** CctpForwarder hook data: 24 zero bytes · uint32 version 0 · uint32 length · strkey bytes
+ *  (developers.circle.com/cctp/references/stellar, "Hook format"). */
 export function forwarderHookData(recipient: string): Uint8Array {
   const r = new TextEncoder().encode(recipient);
   const out = new Uint8Array(32 + r.length);
@@ -49,7 +80,7 @@ export function forwarderHookData(recipient: string): Uint8Array {
 }
 
 export function encodeApprove(spender: string, amount: bigint): string {
-  return "0x" + selector("approve(address,uint256)") + word(spender.slice(2)) + uint(amount);
+  return "0x" + APPROVE + word(spender.slice(2)) + uint(amount);
 }
 
 export function encodeDepositForBurnWithHook(p: {
@@ -72,7 +103,7 @@ export function encodeDepositForBurnWithHook(p: {
     uint(p.minFinalityThreshold),
     uint(8 * 32), // offset of hookData
   ].join("");
-  return "0x" + selector("depositForBurnWithHook(uint256,uint32,bytes32,address,bytes32,uint256,uint32,bytes)") + head + bytesTail(p.hookData);
+  return "0x" + DEPOSIT_FOR_BURN_WITH_HOOK + head + bytesTail(p.hookData);
 }
 
 export function encodeReceiveMessage(message: Uint8Array, attestation: Uint8Array): string {
@@ -81,96 +112,292 @@ export function encodeReceiveMessage(message: Uint8Array, attestation: Uint8Arra
   return "0x" + selector("receiveMessage(bytes,bytes)") + uint(64) + uint(offsetA) + mTail + bytesTail(attestation);
 }
 
+/** The pinned Monad contracts and Stellar's CctpForwarder that a transfer to Stellar goes through. */
+export interface InboundPins {
+  chainId: number;
+  usdc: string;
+  tokenMessenger: string;
+  /** Stellar's CCTP domain. */
+  domain: number;
+  /** C… */
+  forwarder: string;
+}
+
+function inboundPins(): InboundPins {
+  const monad = env.network.bridge.monad!;
+  const cctp = env.network.contracts.cctp!;
+  return { chainId: monad.chainId, usdc: monad.usdc, tokenMessenger: monad.tokenMessenger, domain: cctp.domain, forwarder: cctp.forwarder };
+}
+
+/** What the Monad wallet signs for a transfer to Stellar: USDC's approve of TokenMessengerV2, then
+ *  depositForBurnWithHook to Stellar's domain, minted to and called by the CctpForwarder, with the user's G-address as
+ *  the hook data, so the forwarder pays it out to them. */
+export function inboundSteps(user: string, amount: bigint, pins: InboundPins): EvmStep[] {
+  const forwarder = StrKey.decodeContract(pins.forwarder);
+  return [
+    { kind: "evm", chainId: pins.chainId, label: "Allow USDC", to: pins.usdc, data: encodeApprove(pins.tokenMessenger, amount), value: "0" },
+    {
+      kind: "evm",
+      chainId: pins.chainId,
+      label: "Send to Stellar",
+      to: pins.tokenMessenger,
+      value: "0",
+      data: encodeDepositForBurnWithHook({
+        amount,
+        destinationDomain: pins.domain,
+        mintRecipient: forwarder,
+        burnToken: pins.usdc,
+        destinationCaller: forwarder,
+        maxFee: 0n,
+        minFinalityThreshold: STANDARD_FINALITY,
+        hookData: forwarderHookData(user),
+      }),
+    },
+  ];
+}
+
+/** The rules the phone checks a transfer's Monad steps by before it signs them (§5.7, StellarEvmStepCheck), checked
+ *  here first: a step goes to the pinned USDC or TokenMessengerV2 only, on the pinned chain, with no value; the
+ *  approve is TokenMessengerV2's, for at most the amount; the burn moves exactly the amount, of USDC, to Stellar's
+ *  domain, minted to and called by the CctpForwarder, with the user's address as the hook. The reason a step breaks
+ *  one, or null. */
+export function inboundStepsRefusal(steps: EvmStep[], user: string, amount: bigint, pins: InboundPins): string | null {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const addressWord = (w: string) => /^0{24}/.test(w) ? `0x${w.slice(24)}` : null;
+  if (steps.length !== 2) return "a transfer to Stellar is an approve, then a burn";
+  for (const s of steps) {
+    if (s.kind !== "evm" || s.chainId !== pins.chainId || s.value !== "0") return "a step leaves the pinned Monad chain or sends MON";
+    if (!(same(s.to, pins.usdc) || same(s.to, pins.tokenMessenger))) return "a step calls a contract other than USDC and TokenMessengerV2";
+    if (!/^0x[0-9a-f]{8}(?:[0-9a-f]{64})*$/i.test(s.data)) return "a step's call data is malformed";
+  }
+  const [approve, burn] = steps;
+  const a = callWords(approve.data, APPROVE);
+  if (!same(approve.to, pins.usdc) || a?.length !== 2) return "the first step isn't USDC's approve";
+  const spender = addressWord(a[0]);
+  if (spender === null || !same(spender, pins.tokenMessenger)) return "the approve is for another spender";
+  if (BigInt(`0x${a[1]}`) > amount) return "the approve is for more than the amount";
+  const b = callWords(burn.data, DEPOSIT_FOR_BURN_WITH_HOOK);
+  if (!same(burn.to, pins.tokenMessenger) || !b || b.length < 9) return "the second step isn't TokenMessengerV2's depositForBurnWithHook";
+  const forwarder = hexOf(StrKey.decodeContract(pins.forwarder));
+  const burnToken = addressWord(b[3]);
+  if (BigInt(`0x${b[0]}`) !== amount) return "the burn isn't for the amount";
+  if (BigInt(`0x${b[1]}`) !== BigInt(pins.domain)) return "the burn sends to another network";
+  if (b[2] !== forwarder || b[4] !== forwarder) return "the burn isn't minted to and called by the CctpForwarder";
+  if (burnToken === null || !same(burnToken, pins.usdc)) return "the burn isn't of USDC";
+  // The hook data: its offset (just after the eight head words), its length, then its bytes, zero-padded to a word.
+  const hook = hexOf(forwarderHookData(user));
+  const padded = hook.padEnd(Math.ceil(hook.length / 64) * 64, "0");
+  if (BigInt(`0x${b[7]}`) !== 256n || BigInt(`0x${b[8]}`) !== BigInt(hook.length / 2) || b.slice(9).join("") !== padded) {
+    return "the hook data isn't the user's address";
+  }
+  return null;
+}
+
+/** The 32-byte words of `data` after the selector `fn`, as hex; null for another function. */
+function callWords(data: string, fn: string): string[] | null {
+  if (data.slice(2, 10).toLowerCase() !== fn) return null;
+  return data.slice(10).toLowerCase().match(/.{64}/g) ?? [];
+}
+
+// ------------------------------------------------------------------------------------------------ quotes
+
+/** A fee in basis points, exactly: num / den (Iris writes decimals such as 1.4). */
+export interface Bps {
+  num: bigint;
+  den: bigint;
+}
+
+/** Iris's fee in basis points as it writes it, a JSON number (0, 1, 1.4), exactly; null for anything else, a
+ *  negative fee or one above 100%. */
+export function parseBps(v: unknown): Bps | null {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 10_000) return null;
+  const m = /^(\d+)(?:\.(\d+))?$/.exec(String(v));
+  if (!m) return null;
+  const frac = m[2] ?? "";
+  return { num: BigInt(m[1] + frac), den: 10n ** BigInt(frac.length) };
+}
+
+/** The bridge's fee on `amount` at `bps`: ceil(amount × bps / 10⁴), in the amount's own base units (§6.10). */
+export function bridgeFee(amount: bigint, bps: Bps): bigint {
+  const d = bps.den * 10_000n;
+  return (amount * bps.num + d - 1n) / d;
+}
+
+/** How long Iris's fee for a route is kept. */
+const IRIS_FEE_TTL_MS = 10 * 60_000;
+const irisFees = new Map<string, { bps: Bps; at: number }>();
+
+/** Forgets the Iris fees kept so far (tests). */
+export function forgetIrisFees(): void {
+  irisFees.clear();
+}
+
+/** Circle's fee for a standard transfer from CCTP domain `src` to `dst`: the finalityThreshold 2000 row of Iris's
+ *  GET /v2/burn/USDC/fees/{src}/{dst}, in basis points, kept 10 minutes per route. 502 bridge_quote_failed when Iris
+ *  doesn't answer with one. */
+export async function irisStandardFee(src: number, dst: number, now = Date.now()): Promise<Bps> {
+  const key = `${src}/${dst}`;
+  const kept = irisFees.get(key);
+  if (kept && now - kept.at < IRIS_FEE_TTL_MS) return kept.bps;
+  let rows: unknown = null;
+  try {
+    const res = await fetch(`${env.network.apis.iris}/v2/burn/USDC/fees/${src}/${dst}`, { signal: AbortSignal.timeout(8_000) });
+    if (res.ok) rows = await res.json();
+  } catch {
+    // unreachable: no fee
+  }
+  const row = Array.isArray(rows) ? rows.find((r) => r?.finalityThreshold === STANDARD_FINALITY) : undefined;
+  const bps = parseBps(row?.minimumFee);
+  if (!bps) throw new ApiError(502, "bridge_quote_failed", "The bridge fee isn't available right now. Try again in a minute.");
+  irisFees.set(key, { bps, at: now });
+  return bps;
+}
+
+/** A quote's time is the median of this many completed transfers that way, newest first... */
+const ETA_SAMPLE = 20;
+/** ...and none with fewer than this many. */
+const ETA_MIN = 3;
+
+/** The median of these durations in whole seconds, or null with fewer than ETA_MIN; etaBasis is how many it is over. */
+export function etaOf(seconds: number[]): { etaSeconds: number | null; etaBasis: number } {
+  const n = seconds.length;
+  if (n < ETA_MIN) return { etaSeconds: null, etaBasis: n };
+  const s = [...seconds].sort((a, b) => a - b);
+  const mid = Math.floor(n / 2);
+  return { etaSeconds: Math.round(n % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2), etaBasis: n };
+}
+
+/** How long the last ETA_SAMPLE completed CCTP transfers this way took, start to finish, in seconds. */
+async function recentDurations(direction: BridgeDirection): Promise<number[]> {
+  const rows = await sql()`
+    select extract(epoch from updated_at - created_at)::float8 as seconds from lite.bridge_transfers
+     where direction = ${direction} and route = 'cctp' and status = 'completed' order by updated_at desc limit ${ETA_SAMPLE}`;
+  return rows.map((r) => Number(r.seconds));
+}
+
+function directionArg(v: unknown): BridgeDirection {
+  if (v !== "monad_to_stellar" && v !== "stellar_to_monad") throw bad("bad_direction", "direction is monad_to_stellar or stellar_to_monad.");
+  return v;
+}
+
+/** The CCTP domains a transfer goes from and to. */
+function domains(direction: string): { src: number; dst: number } {
+  const monad = env.network.bridge.monad!.domain;
+  const stellar = env.network.contracts.cctp!.domain;
+  return direction === "monad_to_stellar" ? { src: monad, dst: stellar } : { src: stellar, dst: monad };
+}
+
+/** `amount` of the sending side's USDC in the receiving side's base units: 7 decimals on Stellar, 6 on Monad and in
+ *  every CCTP message, so a burn on Stellar moves whole micro-USDC only. */
+function received(direction: BridgeDirection, amount: bigint): bigint {
+  return direction === "monad_to_stellar" ? amount * 10n : amount / 10n;
+}
+
 // ------------------------------------------------------------------------------------------------ API
 
-export async function bridgeQuote(input: { direction: string; amount: string }) {
-  const amount = BigInt(input.amount);
-  if (env.network.name === "testnet") {
-    return {
-      route: "cctp",
-      direction: input.direction,
-      amountIn: amount.toString(),
-      amountOut: input.direction === "monad_to_stellar" ? (amount * 10n).toString() : (amount / 10n).toString(), // 6 ↔ 7 decimals
-      fee: "0",
-      etaSeconds: input.direction === "monad_to_stellar" ? 60 : 120,
-      note: "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar.",
-    };
-  }
-  return await oneClickQuote(input.direction, amount, true, "", "");
+/** What a transfer of `amount` (the sending side's base units) delivers, Circle's fee for it and how long the last
+ *  transfers that way took. */
+export async function bridgeQuote(input: { direction: string; amount: bigint }): Promise<BridgeQuote> {
+  const direction = directionArg(input.direction);
+  if (env.network.name !== "testnet") return await oneClickQuote(direction, input.amount, true, "", "");
+  const { src, dst } = domains(direction);
+  const fee = bridgeFee(input.amount, await irisStandardFee(src, dst));
+  return {
+    route: "cctp",
+    direction,
+    amountIn: input.amount.toString(),
+    amountOut: received(direction, input.amount - fee).toString(),
+    fee: fee.toString(),
+    feeSource: "circle-iris",
+    ...etaOf(await recentDurations(direction)),
+    note: "Testnet CCTP: Monad testnet USDC ↔ Circle test USDC on Stellar.",
+  };
 }
 
-export async function startBridge(user: string, input: { direction: string; amount: string; monadAddress: string }): Promise<{ transfer: Record<string, unknown>; plan?: PlanView; evmSteps?: unknown[] }> {
-  if (env.network.name !== "testnet") throw new ApiError(501, "mainnet_route", "Mainnet bridging uses NEAR Intents; enable it with the mainnet launch.");
+/** 429 bridge_relay_limit once RELAYS_PER_DAY of the user's transfers from Monad were reported today (relay_day,
+ *  migration 11): each one binds the keeper to relay it, so the cap is checked before the next transfer's Monad steps
+ *  are handed out, never after a burn. */
+async function assertRelayAllowed(user: string): Promise<void> {
+  const rows = await sql()`
+    select count(*)::int as relays from lite.bridge_transfers where address = ${user} and relay_day = (now() at time zone 'utc')::date`;
+  if (Number(rows[0]?.relays ?? 0) >= RELAYS_PER_DAY) {
+    throw new ApiError(429, "bridge_relay_limit", "You've bridged in many times today. Try again tomorrow.");
+  }
+}
+
+/** Records a transfer `user` started, awaiting its burn. */
+export async function newTransfer(user: string, direction: BridgeDirection, amount: bigint, recipient: string): Promise<BridgeTransfer> {
+  const rows = await sql()`
+    insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (${user}, ${direction}, 'cctp', ${amount.toString()}, ${recipient})
+    returning id, status`;
+  return { id: rows[0].id as string, status: rows[0].status as string, direction };
+}
+
+/** The labels and steps of a transfer to Monad: Circle's TokenMessengerMinter pulls with transfer_from, so the burn
+ *  needs an allowance first (two steps: a Soroban transaction holds one contract call). */
+export function outboundSteps(amount: bigint, monadAddress: string): { label: string; spec: StepSpec }[] {
   const cctp = env.network.contracts.cctp!;
-  const monad = env.network.bridge.monad!;
-  if (!isEvmAddress(input.monadAddress)) throw bad("bad_address", "Your Monad address is required.");
   const usdc = assetById(env.network, "USDC")!;
-
-  if (input.direction === "monad_to_stellar") {
-    const amount6 = BigInt(input.amount); // Monad USDC has 6 decimals
-    if (amount6 <= 0n) throw bad("bad_amount", "Amount must be positive.");
-    const acct = await accountView(user);
-    if (!acct.exists) throw new ApiError(409, "account_inactive", "Activate your Stellar account first.");
-    const trust = needsTrustline(acct.balances, "USDC");
-    if (trust) throw new ApiError(409, "needs_usdc", "Enable USDC on Stellar first, so the bridge can deliver it.");
-    const forwarder = StrKey.decodeContract(cctp.forwarder);
-    const rows = await sql()`
-      insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (${user}, 'monad_to_stellar', 'cctp', ${amount6.toString()}, ${user})
-      returning id, status, created_at`;
-    const evmSteps = [
-      { kind: "evm", chainId: monad.chainId, label: "Allow USDC", to: monad.usdc, data: encodeApprove(monad.tokenMessenger, amount6), value: "0" },
-      {
-        kind: "evm",
-        chainId: monad.chainId,
-        label: "Send to Stellar",
-        to: monad.tokenMessenger,
-        value: "0",
-        data: encodeDepositForBurnWithHook({
-          amount: amount6,
-          destinationDomain: cctp.domain,
-          mintRecipient: forwarder,
-          burnToken: monad.usdc,
-          destinationCaller: forwarder,
-          maxFee: 0n,
-          minFinalityThreshold: 2000,
-          hookData: forwarderHookData(user),
-        }),
-      },
-    ];
-    return { transfer: { id: rows[0].id, status: rows[0].status, direction: "monad_to_stellar" }, evmSteps };
-  }
-
-  if (input.direction === "stellar_to_monad") {
-    const amount7 = BigInt(input.amount);
-    if (amount7 <= 0n || amount7 % 10n !== 0n) throw bad("bad_amount", "Stellar → Monad moves whole micro-USDC (6 decimals).");
-    const rows = await sql()`
-      insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (${user}, 'stellar_to_monad', 'cctp', ${amount7.toString()}, ${input.monadAddress})
-      returning id, status`;
-    // Circle's TokenMessengerMinter pulls with transfer_from, so the burn needs an allowance first (two steps:
-    // a Soroban transaction holds one contract call).
-    const plan = await createPlan(user, "bridge_out", [
-      { label: "Allow the USDC transfer", spec: { kind: "token_approve", token: usdc.contract, spender: cctp.tokenMessengerMinter, amount: amount7.toString() } },
-      { label: "Send USDC to Monad", spec: { kind: "cctp_burn", amount: amount7.toString(), recipient: input.monadAddress, usdc: usdc.contract } },
-    ]);
-    return { transfer: { id: rows[0].id, status: rows[0].status, direction: "stellar_to_monad" }, plan };
-  }
-  throw bad("bad_direction", "direction is monad_to_stellar or stellar_to_monad.");
+  return [
+    { label: "Allow the USDC transfer", spec: { kind: "token_approve", token: usdc.contract, spender: cctp.tokenMessengerMinter, amount: amount.toString() } },
+    { label: "Send USDC to Monad", spec: { kind: "cctp_burn", amount: amount.toString(), recipient: monadAddress, usdc: usdc.contract } },
+  ];
 }
 
-export async function setSourceTx(user: string, id: string, txHash: string) {
+/** Starts a transfer (`amount` in the sending side's base units): to Stellar, the Monad steps for the Pro wallet; to
+ *  Monad, the plan the phone signs. */
+export async function startBridge(user: string, input: { direction: string; amount: bigint; monadAddress: string }): Promise<BridgeStart> {
+  if (env.network.name !== "testnet") throw new ApiError(501, "mainnet_route", "Mainnet bridging uses NEAR Intents; enable it with the mainnet launch.");
+  const direction = directionArg(input.direction);
+  if (!isEvmAddress(input.monadAddress)) throw bad("bad_address", "Your Monad address is required.");
+
+  if (direction === "monad_to_stellar") {
+    const amount6 = input.amount; // Monad USDC has 6 decimals
+    if (amount6 < MIN_INBOUND) throw bad("too_small", "Bridge at least 1 USDC from Monad.");
+    await assertRelayAllowed(user);
+    // The forwarder pays out to the account's USDC trustline: without one, the mint on Stellar would fail.
+    const classic = await classicBalances(user);
+    if (!classic) throw new ApiError(409, "account_inactive", "Activate your Stellar account first.");
+    const usdc = assetById(env.network, "USDC")!;
+    if (!classic.balances.some((b) => b.asset === usdc.classic)) throw new ApiError(409, "needs_usdc", "Enable USDC on Stellar first, so the bridge can deliver it.");
+    const pins = inboundPins();
+    const evmSteps = inboundSteps(user, amount6, pins);
+    const refusal = inboundStepsRefusal(evmSteps, user, amount6, pins);
+    if (refusal) {
+      // Steps the phone would refuse: never hand them out.
+      throw new ApiError(500, "self_check_failed", "We built a transaction that didn't pass our own checks. Nothing was sent.", { reason: refusal });
+    }
+    return { transfer: await newTransfer(user, direction, amount6, user), evmSteps };
+  }
+
+  const amount7 = input.amount;
+  if (amount7 <= 0n || amount7 % 10n !== 0n) throw bad("bad_amount", "Stellar → Monad moves whole micro-USDC (6 decimals).");
+  // The plan first: a transfer is recorded only once its first step is built.
+  const plan = await createPlan(user, "bridge_out", outboundSteps(amount7, input.monadAddress));
+  return { transfer: await newTransfer(user, direction, amount7, input.monadAddress), plan };
+}
+
+const TRANSFER_ID = /^[0-9a-f-]{36}$/;
+
+/** The burn's transaction hash, from the phone. A transfer to Stellar counts toward the user's relay cap from now on
+ *  (relay_day): its burn is on Monad, so the keeper relays it once Circle attests. */
+export async function setSourceTx(user: string, id: string, txHash: string): Promise<{ id: string; status: string }> {
   if (!/^(0x[0-9a-fA-F]{64}|[0-9a-f]{64})$/.test(txHash)) throw bad("bad_hash", "That isn't a transaction hash.");
-  const rows = await sql()`update lite.bridge_transfers set source_tx = ${txHash}, status = 'attesting', updated_at = now()
-                            where id = ${id} and address = ${user} and status = 'awaiting_source' returning id, status`;
+  if (!TRANSFER_ID.test(id)) throw notFound("Transfer");
+  const rows = await sql()`
+    update lite.bridge_transfers set source_tx = ${txHash}, status = 'attesting', updated_at = now(),
+           relay_day = case when direction = 'monad_to_stellar' and route = 'cctp' then (now() at time zone 'utc')::date end
+     where id = ${id} and address = ${user} and status = 'awaiting_source' returning id, status`;
   if (rows.length === 0) throw notFound("Transfer");
-  return rows[0];
+  return { id: rows[0].id as string, status: rows[0].status as string };
 }
 
-export async function transferStatus(user: string, id: string) {
-  if (!/^[0-9a-f-]{36}$/.test(id)) throw notFound("Transfer");
+export async function transferStatus(user: string, id: string): Promise<BridgeStatus> {
+  if (!TRANSFER_ID.test(id)) throw notFound("Transfer");
   const rows = await sql()`select * from lite.bridge_transfers where id = ${id} and address = ${user}`;
   if (rows.length === 0) throw notFound("Transfer");
   const t = rows[0];
-  const out: Record<string, unknown> = {
+  const out: BridgeStatus = {
     id: t.id, direction: t.direction, route: t.route, amount: String(t.amount), recipient: t.recipient, status: t.status, sourceTx: t.source_tx, destTx: t.dest_tx, error: t.error,
   };
   if (t.direction === "stellar_to_monad" && t.status === "relaying" && t.message && t.attestation) {
@@ -187,7 +414,8 @@ export async function transferStatus(user: string, id: string) {
   return out;
 }
 
-export async function markClaimed(user: string, id: string, txHash: string) {
+export async function markClaimed(user: string, id: string, txHash: string): Promise<{ id: string; status: "completed" }> {
+  if (!TRANSFER_ID.test(id)) throw notFound("Transfer");
   const rows = await sql()`update lite.bridge_transfers set dest_tx = ${txHash}, status = 'completed', updated_at = now()
                             where id = ${id} and address = ${user} and status = 'relaying' returning id`;
   if (rows.length === 0) throw notFound("Transfer");
@@ -199,25 +427,26 @@ function hexToBytes(h: string): Uint8Array {
   return Uint8Array.from(s.match(/../g) ?? [], (x) => parseInt(x, 16));
 }
 
-/** Indexer step: poll Iris for every transfer waiting on an attestation and finish what can be finished. */
+/** Indexer step: polls Iris for every transfer waiting on an attestation and finishes what can be finished: the keeper
+ *  relays a transfer to Stellar, and a transfer to Monad waits for its claim there. */
 export async function advanceBridges(): Promise<number> {
-  if (!env.network.apis.iris || !env.network.contracts.cctp) return 0;
-  const open = await sql()`select * from lite.bridge_transfers where status = 'attesting' and source_tx is not null and updated_at > now() - interval '2 days' limit 20`;
+  if (!env.network.apis.iris || !env.network.contracts.cctp || !env.network.bridge.monad) return 0;
+  const open = await sql()`select * from lite.bridge_transfers where status = 'attesting' and source_tx is not null and updated_at > now() - interval '2 days' order by updated_at limit 20`;
   let advanced = 0;
   for (const t of open) {
-    const srcDomain = t.direction === "monad_to_stellar" ? env.network.bridge.monad!.domain : env.network.contracts.cctp.domain;
+    const { src } = domains(t.direction as string);
     // Iris indexes an EVM burn by its 0x hash and a Stellar burn by the hash Horizon/RPC report for the
     // transaction (for a fee-bump, the outer hash), without 0x.
     const raw = String(t.source_tx);
     const hash = t.direction === "monad_to_stellar" ? (raw.startsWith("0x") ? raw : `0x${raw}`) : raw.replace(/^0x/, "");
-    const res = await fetch(`${env.network.apis.iris}/v2/messages/${srcDomain}?transactionHash=${hash}`, { signal: AbortSignal.timeout(8_000) });
+    const res = await fetch(`${env.network.apis.iris}/v2/messages/${src}?transactionHash=${hash}`, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) continue;
     const body = await res.json();
     const m = body?.messages?.[0];
     if (!m || m.status !== "complete" || !m.attestation || m.attestation === "PENDING") continue;
     if (t.direction === "monad_to_stellar") {
       try {
-        const destTx = await relayMintAndForward(hexToBytes(m.message), hexToBytes(m.attestation));
+        const destTx = await relayMintAndForward(t.id as string, hexToBytes(m.message), hexToBytes(m.attestation));
         await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, dest_tx = ${destTx}, status = 'completed', updated_at = now() where id = ${t.id}`;
       } catch (err) {
         await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, error = ${String((err as Error).message).slice(0, 300)}, updated_at = now() where id = ${t.id}`;
@@ -231,18 +460,34 @@ export async function advanceBridges(): Promise<number> {
   return advanced;
 }
 
-/** Calls CctpForwarder.mint_and_forward from the sponsor account (permissionless; the sponsor pays the fee). */
-export async function relayMintAndForward(message: Uint8Array, attestation: Uint8Array): Promise<string> {
+/** Calls CctpForwarder.mint_and_forward for transfer `id` from the keeper's account (permissionless; the keeper pays
+ *  the fee, §4.7) and records the transaction in lite.keeper_log. */
+export async function relayMintAndForward(id: string, message: Uint8Array, attestation: Uint8Array): Promise<string> {
   const cctp = env.network.contracts.cctp!;
-  const sp = sponsor();
-  const acct = (await loadAccount(sp.publicKey()))!;
+  const k = keeper();
+  const acct = await loadAccount(k.publicKey());
+  if (!acct) throw new Error("the keeper's account doesn't exist");
   const tx = await prepare(newTx(acct, 120).addOperation(new Contract(cctp.forwarder).call("mint_and_forward", sv.bytes(message), sv.bytes(attestation))).build());
-  tx.sign(sp);
-  return await sendSigned(tx);
+  tx.sign(k);
+  const hash = await sendSigned(tx);
+  await logRelay(hash, k.publicKey(), tx.fee, id);
+  return hash;
+}
+
+/** One row in lite.keeper_log for a relay, once migration 05 has created it. A row that can't be written is logged;
+ *  the relay stands. */
+async function logRelay(hash: string, keeperAddress: string, maxFee: string, transfer: string): Promise<void> {
+  try {
+    if (!(await tableExists("lite.keeper_log"))) return;
+    await sql()`insert into lite.keeper_log (hash, job, keeper, max_fee, detail)
+                values (${hash}, 'relay', ${keeperAddress}, ${maxFee}, ${sql().json({ transfer })}) on conflict (hash) do nothing`;
+  } catch (err) {
+    console.warn("keeper_log: relay not recorded", hash, String((err as Error).message ?? err).slice(0, 120));
+  }
 }
 
 /** An allowance for a pinned spender (the CCTP TokenMessengerMinter), valid for about 3 hours. */
-registerBuilder("token_approve", async (user, spec) => {
+export const approveForBridge: Builder = async (user, spec) => {
   const cctp = env.network.contracts.cctp!;
   const spender = String(spec.spender);
   if (spender !== cctp.tokenMessengerMinter) throw bad("bad_spender", "Unexpected spender.");
@@ -262,34 +507,41 @@ registerBuilder("token_approve", async (user, spec) => {
       display: { amount, spender: "Circle CCTP" },
     },
   };
-});
+};
+registerBuilder("token_approve", approveForBridge);
 
-registerBuilder("cctp_burn", async (user, spec) => {
+/** TokenMessengerMinter.deposit_for_burn(from, amount, destination_domain, mint_recipient, burn_token,
+ *  destination_caller, max_fee, min_finality_threshold): the user's USDC to their Monad address, which the intent
+ *  binds (`to`): both verifiers hold mint_recipient to it and the domain to Monad's (§5.2). */
+export const burnToMonad: Builder = async (user, spec) => {
   const cctp = env.network.contracts.cctp!;
   const monad = env.network.bridge.monad!;
   const acct = await requireAccount(user);
   const amount = String(spec.amount);
+  const recipient = String(spec.recipient);
   const tx = await invoke(acct, cctp.tokenMessengerMinter, "deposit_for_burn", [
     sv.addr(user),
     sv.i128(amount),
     sv.u32(monad.domain),
-    sv.bytes(evmToBytes32(String(spec.recipient))),
+    sv.bytes(evmToBytes32(recipient)),
     sv.addr(String(spec.usdc)),
     sv.bytes(new Uint8Array(32)),
     sv.i128(0),
-    sv.u32(2000),
+    sv.u32(STANDARD_FINALITY),
   ]);
   return {
     tx,
     intent: {
       kind: "bridge_out",
-      summary: `Send ${fromStroops(amount)} USDC to Monad ${String(spec.recipient).slice(0, 6)}…${String(spec.recipient).slice(-4)}`,
+      summary: `Send ${fromStroops(amount)} USDC to Monad ${recipient.slice(0, 6)}…${recipient.slice(-4)}`,
       spend: { [String(spec.usdc)]: amount },
       calls: [{ contract: cctp.tokenMessengerMinter, fn: "deposit_for_burn" }],
-      display: { amount, to: String(spec.recipient) },
+      display: { amount, to: recipient },
+      to: recipient,
     },
   };
-});
+};
+registerBuilder("cctp_burn", burnToMonad);
 
 // ------------------------------------------------------------------------------------------------ 1Click (mainnet)
 
@@ -298,7 +550,7 @@ const ONECLICK_ASSETS = {
   stellarUSDC: "nep245:v2_1.omni.hot.tg:1100_111bzQBB65GxAPAVoxqmMcgYo5oS3txhqs1Uh1cgahKQUeTUq1TJu",
 };
 
-export async function oneClickQuote(direction: string, amount: bigint, dry: boolean, recipient: string, refundTo: string) {
+export async function oneClickQuote(direction: BridgeDirection, amount: bigint, dry: boolean, recipient: string, refundTo: string): Promise<BridgeQuote> {
   const api = env.network.apis.oneClick ?? "https://1click.chaindefuser.com";
   const toStellar = direction === "monad_to_stellar";
   const body = {
