@@ -83,20 +83,22 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
-/** Viewer routes whose handlers serve the public view (§6.0). Earn's positions read Blend's pools, which the route
- *  harness can't reach: earn.test.ts covers their public view with a stand-in for the pool. */
-const PUBLIC_VIEWS = ["GET /v1/account", "GET /v1/earn/positions"];
+/** Viewer routes whose handlers serve the public view (§6.0) of the account ?address= names: 400 address_required
+ *  without it. Earn's positions read Blend's pools, which the route harness can't reach: earn.test.ts covers their
+ *  public view with a stand-in for the pool. */
+const PUBLIC_VIEWS = ["GET /v1/account", "GET /v1/earn/positions", "GET /v1/moments/owned"];
 
 /** Viewer routes whose handlers serve the public view (§6.0) and need no ?address=: what each answers with neither a
- *  token nor ?address= (the route harness has no launch at TOKEN). */
-const PUBLIC_BOARDS: Record<string, number> = { "GET /v1/launches": 200, "GET /v1/launches/:token": 404 };
+ *  token nor ?address= (the route harness has no launch at TOKEN and no Moment 7). */
+const PUBLIC_BOARDS: Record<string, number> = {
+  "GET /v1/launches": 200,
+  "GET /v1/launches/:token": 404,
+  "GET /v1/moments": 200,
+  "GET /v1/moments/:id": 404,
+};
 
 /** Registered in their final place, answering 501 until written. */
-const NOT_WRITTEN = [
-  "GET /v1/moments/mine",
-  "PUT /v1/local-media/upload/:token",
-  "GET /v1/local-media/lite-media/*path",
-];
+const NOT_WRITTEN: string[] = [];
 
 function request(spec: string, path: string, token: string | null): Request {
   const method = spec.split(" ")[0];
@@ -151,9 +153,9 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals(router.match("GET", "/v1/moments/owned")?.spec, "GET /v1/moments/owned");
     assertEquals(router.match("GET", "/v1/moments/mine")?.spec, "GET /v1/moments/mine");
     const owned = await handle(request("GET /v1/moments/owned", "/v1/moments/owned", token));
-    assertEquals([owned.status, await owned.json()], [200, { editions: [] }]);
+    assertEquals([owned.status, await owned.json()], [200, { editions: [], view: "owner" }]);
     const mine = await handle(request("GET /v1/moments/mine", "/v1/moments/mine", token));
-    assertEquals([mine.status, (await mine.json()).error.code], [501, "not_implemented"]);
+    assertEquals([mine.status, await mine.json()], [200, { created: [], collected: [], totals: { editions: 0, moments: 0, spentByQuote: {}, earnedByQuote: {} } }]);
   });
 
   Deno.test("public: sign-in, config, fees, market data, economics, Earn's markets and history; nothing else", () => {
@@ -227,8 +229,8 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
   });
 
   // Viewer routes pass the guard without a header. Those whose handlers serve the public view (PUBLIC_VIEWS) need
-  // ?address= there; the launch board and a launch's page (PUBLIC_BOARDS) need none. Until their packages serve it
-  // (WP-16, WP-18) the others still ask for a session.
+  // ?address= there; the launch and Moments boards and their pages (PUBLIC_BOARDS) need none. Until its package serves
+  // it (WP-18) the other still asks for a session.
   Deno.test("without a session, every route answers 401 but the open ones, the public views and the public boards", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
@@ -245,6 +247,22 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       const [, path] = ROUTES.find(([s]) => s === spec)!;
       const res = await quietly(() => handle(request(spec, `${path}?address=${OTHER.publicKey()}`, null)));
       assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], spec);
+    }
+  });
+
+  Deno.test("the Moments feed and an account's editions: the public view with no token, cached 15 s; with a token, the owner's", async () => {
+    for (const path of ["/v1/moments", `/v1/moments?address=${OTHER.publicKey()}`, `/v1/moments/owned?address=${OTHER.publicKey()}`]) {
+      const res = await quietly(() => handle(request("GET /v1/moments", path, null)));
+      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], path);
+    }
+    for (const path of ["/v1/moments", "/v1/moments/owned"]) {
+      const owner = await quietly(() => handle(request("GET /v1/moments", path, token)));
+      assertEquals([owner.status, owner.headers.get("cache-control"), (await owner.json()).view], [200, "no-store", "owner"], path);
+    }
+    // The local media stand-in answers only on a local testnet stack: here it isn't configured.
+    for (const [spec, path] of ROUTES.filter(([s]) => s.includes("local-media"))) {
+      const res = await quietly(() => handle(request(spec, path, null)));
+      assertEquals([res.status, (await res.json()).error.code], [404, "not_found"], spec);
     }
   });
 
