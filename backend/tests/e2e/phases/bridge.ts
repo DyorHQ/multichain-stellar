@@ -1,9 +1,11 @@
 // bridge (docs/DESIGN-stellar-parity.md §6.10, §12.6): a quote's fee is Circle's, as Iris states it for a standard
 // transfer, and its time is the median of the last completed transfers that way, or none with fewer than 3; a transfer
-// from Monad takes at least 1 USDC and hands out Monad steps for the pinned USDC and TokenMessengerV2 only, and once a
-// user's 10 relays of the day are reported the next one gets 429 (the 10 are seeded in the database and removed
-// after: relaying real ones needs Monad testnet USDC); a burn on Stellar for Monad binds the Monad address (the
-// driver's verifier holds it to the call, as the phone's does), goes through, and waits for Circle's attestation.
+// from Monad takes at least 1 USDC and hands out Monad steps for the pinned USDC and TokenMessengerV2 only; it holds
+// one of the user's 10 relays of the UTC day from its start, so the 11th start gets 429 with none of the 10 reported,
+// and a start of an earlier day reported then gets 429 too (the held relays are seeded in the database, and every
+// transfer from Monad the phase made is removed after: relaying real ones needs Monad testnet USDC); a burn on Stellar
+// for Monad binds the Monad address (the driver's verifier holds it to the call, as the phone's does), goes through,
+// and waits for Circle's attestation.
 import { TESTNET } from "../../../supabase/functions/_shared/networks.ts";
 import type { E2E } from "../lite_e2e.ts";
 
@@ -41,29 +43,37 @@ export default async function bridge({ api, bal, db, ONE, runPlan, user }: E2E):
     quotes.push(`${direction} fee ${q.fee} (Iris), eta ${q.etaSeconds ?? "none"} over ${q.etaBasis}`);
   }
 
-  // From Monad: at least 1 USDC, and the Monad steps go to the pinned contracts only.
-  const small = await refused(api("POST", "/bridge/start", { direction: "monad_to_stellar", amount: "999999", monadAddress: DEAD }));
-  if (!/→ 400 .*too_small/.test(small)) throw new Error(`under 1 USDC: ${small}`);
-  const start = await api("POST", "/bridge/start", { direction: "monad_to_stellar", amount: "1000000", monadAddress: DEAD });
-  const steps = start.evmSteps as { chainId: number; to: string; data: string }[];
-  const shape = steps.map((s) => [s.chainId, s.to.toLowerCase(), s.data.slice(0, 10)].join(" "));
-  const want = [`${monad.chainId} ${monad.usdc.toLowerCase()} 0x095ea7b3`, `${monad.chainId} ${monad.tokenMessenger.toLowerCase()} 0x779b432d`];
-  if (shape.join() !== want.join()) throw new Error(`Monad steps ${JSON.stringify(shape)}`);
-  if (!steps[1].data.includes(Buffer.from(me).toString("hex"))) throw new Error("the burn's hook doesn't carry the account");
-
-  // The relay cap: with the day's 10 reported, the 11th transfer from Monad is refused before any Monad step.
-  const [{ today }] = await db`select count(*)::int as today from lite.bridge_transfers where address = ${me} and relay_day = (now() at time zone 'utc')::date`;
-  const seeded = await db`
-    insert into lite.bridge_transfers (address, direction, route, amount, recipient, source_tx, status, relay_day)
-    select ${me}, 'monad_to_stellar', 'cctp', 1000000, ${me}, '0x' || lpad(to_hex(i), 64, '0'), 'failed', (now() at time zone 'utc')::date
-      from generate_series(1, ${10 - today}) i returning id`;
-  let capped: string;
+  const fromMonad = { direction: "monad_to_stellar", amount: "1000000", monadAddress: DEAD };
   try {
-    capped = await refused(api("POST", "/bridge/start", { direction: "monad_to_stellar", amount: "1000000", monadAddress: DEAD }));
+    // From Monad: at least 1 USDC, and the Monad steps go to the pinned contracts only.
+    const small = await refused(api("POST", "/bridge/start", { ...fromMonad, amount: "999999" }));
+    if (!/→ 400 .*too_small/.test(small)) throw new Error(`under 1 USDC: ${small}`);
+    const start = await api("POST", "/bridge/start", fromMonad);
+    const steps = start.evmSteps as { chainId: number; to: string; data: string }[];
+    const shape = steps.map((s) => [s.chainId, s.to.toLowerCase(), s.data.slice(0, 10)].join(" "));
+    const want = [`${monad.chainId} ${monad.usdc.toLowerCase()} 0x095ea7b3`, `${monad.chainId} ${monad.tokenMessenger.toLowerCase()} 0x779b432d`];
+    if (shape.join() !== want.join()) throw new Error(`Monad steps ${JSON.stringify(shape)}`);
+    if (!steps[1].data.includes(Buffer.from(me).toString("hex"))) throw new Error("the burn's hook doesn't carry the account");
+
+    // The relay cap: with 9 of the day's relays held (the start above and 8 seeded, none reported), the 10th start is
+    // handed its steps and the 11th is refused before any Monad step.
+    const [{ held }] = await db`select count(*)::int as held from lite.bridge_transfers where address = ${me} and relay_day = (now() at time zone 'utc')::date`;
+    await db`
+      insert into lite.bridge_transfers (address, direction, route, amount, recipient, relay_day)
+      select ${me}, 'monad_to_stellar', 'cctp', 1000000, ${me}, (now() at time zone 'utc')::date from generate_series(1, ${9 - held})`;
+    await api("POST", "/bridge/start", fromMonad);
+    const capped = await refused(api("POST", "/bridge/start", fromMonad));
+    if (!/→ 429 .*bridge_relay_limit/.test(capped)) throw new Error(`the 11th start of the day: ${capped}`);
+    // A transfer started yesterday takes one of today's relays when its burn is reported: refused while all are held.
+    const [late] = await db`
+      insert into lite.bridge_transfers (address, direction, route, amount, recipient, relay_day, created_at, updated_at)
+      values (${me}, 'monad_to_stellar', 'cctp', 1000000, ${me}, (now() at time zone 'utc')::date - 1, now() - interval '1 day', now() - interval '1 day')
+      returning id`;
+    const lateReport = await refused(api("POST", `/bridge/${late.id}/source`, { txHash: "0x" + "ab".repeat(32) }));
+    if (!/→ 429 .*bridge_relay_limit/.test(lateReport)) throw new Error(`yesterday's start reported today: ${lateReport}`);
   } finally {
-    await db`delete from lite.bridge_transfers where id = any(${seeded.map((r) => r.id as string)}::uuid[])`;
+    await db`delete from lite.bridge_transfers where address = ${me} and direction = 'monad_to_stellar'`;
   }
-  if (!/→ 429 .*bridge_relay_limit/.test(capped)) throw new Error(`the 11th relay: ${capped}`);
 
   // To Monad: 0.1 USDC, swapping some XLM first when the account holds less.
   const burn = ONE / 10n;
@@ -82,5 +92,5 @@ export default async function bridge({ api, bal, db, ONE, runPlan, user }: E2E):
   const [{ relay_day }] = await db`select relay_day from lite.bridge_transfers where id = ${out.transfer.id}`;
   if (status.status !== "attesting" || status.sourceTx !== hash || relay_day !== null) throw new Error(`after the burn: ${JSON.stringify(status)}, relay day ${relay_day}`);
 
-  return `${quotes.join("; ")}; under 1 USDC refused; Monad steps to USDC and TokenMessengerV2 only; the 11th relay of the day refused (429); burned 0.1 USDC on Stellar for ${DEAD.slice(0, 6)}… (tx ${hash.slice(0, 10)}…, attesting)`;
+  return `${quotes.join("; ")}; under 1 USDC refused; Monad steps to USDC and TokenMessengerV2 only; the 11th start of the day and a late report with the day's 10 held refused (429); burned 0.1 USDC on Stellar for ${DEAD.slice(0, 6)}… (tx ${hash.slice(0, 10)}…, attesting)`;
 }

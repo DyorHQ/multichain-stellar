@@ -5,14 +5,16 @@
 // Three parts are compared otherwise, each for its reason:
 // - bridge-start-out's plan is plans.ts's (WP-10): its envelopes, fees and payers. The bridge's own part is compared:
 //   the transfer, the steps' labels and kinds, and the allowance's intent.
-// - bridge-start-in's hook data: the fixture writes "cctp-forward" and the address; Circle's CctpForwarder reads 24
-//   zero bytes, a version and a length before the address (developers.circle.com/cctp/references/stellar, "Hook
-//   format"), which is what the API sends. The rest of the call equals the fixture.
-// - bridge-status's claim: the fixture puts the attestation's offset at 0xa0, past its length word; the ABI puts it at
-//   0x80 (the two offset words and the 32-byte message with its length), which is what the API sends and what Monad
-//   testnet's MessageTransmitterV2 accepted (docs/VERIFICATION.md). The rest of the answer equals the fixture.
+// - bridge-start-in's hook data: the API sends Circle's CctpForwarder layout (24 zero bytes, a version and a length
+//   before the address: developers.circle.com/cctp/references/stellar, "Hook format"). WP-03's fixture writes
+//   "cctp-forward" and the address instead. The fixture may hold either until it is corrected; the rest of the call
+//   equals it.
+// - bridge-status's claim: the API puts the attestation's offset at 0x80, as the ABI does (the two offset words and
+//   the 32-byte message with its length), which Monad testnet's MessageTransmitterV2 accepted (docs/VERIFICATION.md).
+//   WP-03's fixture puts it at 0xa0, past its length word. The fixture may hold either until it is corrected; the rest
+//   of the answer equals it.
 import { Keypair, SorobanDataBuilder, StrKey, xdr } from "@stellar/stellar-sdk";
-import { assertEquals, assertNotEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fakeSql, setTestEnv } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
@@ -117,15 +119,25 @@ const STATUS_ROW = {
 replaceSql(fakeSql((q, params) => {
   // Two transfers from Monad completed so far: too few for a time.
   if (q.startsWith("select extract(epoch from updated_at - created_at)::float8 as seconds")) return [{ seconds: 212.4 }, { seconds: 187.9 }];
+  // The user's relays of the day: none yet, under the lock or not.
+  if (q.startsWith("select pg_advisory_xact_lock(")) return [{ pg_advisory_xact_lock: "" }];
   if (q.startsWith("select count(*)::int as relays from lite.bridge_transfers")) return [{ relays: 0 }];
-  if (q.startsWith("insert into lite.bridge_transfers")) {
-    return [{ id: params[1] === "monad_to_stellar" ? "c69ef4a0-421e-418d-a93b-92081f4a0fcb" : "67904f04-179c-49db-a5b8-edeb7d2f64ed", status: "awaiting_source" }];
+  if (q.startsWith("insert into lite.bridge_transfers (address, direction, route, amount, recipient, relay_day) values (?, 'monad_to_stellar'")) {
+    return [{ id: "c69ef4a0-421e-418d-a93b-92081f4a0fcb", status: "awaiting_source" }];
   }
+  if (q.startsWith("insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (?, 'stellar_to_monad'")) {
+    return [{ id: "67904f04-179c-49db-a5b8-edeb7d2f64ed", status: "awaiting_source" }];
+  }
+  // bridge-source's transfer, started today.
+  if (q.startsWith("select relay_day < (now() at time zone 'utc')::date as late from lite.bridge_transfers")) return [{ late: false }];
   if (q.startsWith("update lite.bridge_transfers set source_tx")) return [{ id: params[1], status: "attesting" }];
   if (q.startsWith("update lite.bridge_transfers set dest_tx")) return [{ id: params[1] }];
   if (q === "select * from lite.bridge_transfers where id = ? and address = ?") return params[0] === STATUS_ROW.id ? [STATUS_ROW] : [];
   throw new Error(`unexpected query: ${q}`);
 }));
+
+const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const lengthWord = (n: number) => n.toString(16).padStart(64, "0");
 
 // ------------------------------------------------------------------------------------------------ the payloads
 
@@ -145,16 +157,18 @@ Deno.test("POST /v1/bridge/start from Monad equals bridge-start-in.json, with Ci
   // caller, no max fee, standard finality, the hook's offset), as the fixture has them.
   const head = 2 + 8 + 8 * 64;
   assertEquals(data.slice(0, head), fixtureData.slice(0, head));
-  assertEquals(data.slice(10 + 64 * 2, 10 + 64 * 3), Buffer.from(StrKey.decodeContract(CCTP.forwarder)).toString("hex"));
-  // Then the hook: its length and Circle's layout of the user's address (88 bytes, padded to 96), not the fixture's.
-  const hook = Buffer.from(bridge.forwarderHookData(ME)).toString("hex");
-  assertEquals(data.slice(head), (88).toString(16).padStart(64, "0") + hook.padEnd(192, "0"));
-  assertNotEquals(data.slice(head), fixtureData.slice(head));
+  assertEquals(data.slice(10 + 64 * 2, 10 + 64 * 3), hex(StrKey.decodeContract(CCTP.forwarder)));
+  // Then the hook: its length and Circle's layout of the user's address (88 bytes, padded to 96).
+  const circles = lengthWord(88) + hex(bridge.forwarderHookData(ME)).padEnd(192, "0");
+  assertEquals(data.slice(head), circles);
+  // The fixture's hook is Circle's layout once corrected; until then, WP-03's "cctp-forward" and the address (68 bytes).
+  const wp03 = lengthWord(68) + hex(new TextEncoder().encode(`cctp-forward${ME}`)).padEnd(192, "0");
+  assert([circles, wp03].includes(fixtureData.slice(head)), `bridge-start-in.json's hook: ${fixtureData.slice(head)}`);
 });
 
 Deno.test("POST /v1/bridge/start to Monad equals bridge-start-out.json: the transfer, the plan's steps and the allowance", async () => {
   const f = fixture("bridge-start-out");
-  assertEquals(await bridge.newTransfer(ME, "stellar_to_monad", 125_000_000n, MONAD_ADDRESS), f.transfer);
+  assertEquals(await bridge.newOutboundTransfer(ME, 125_000_000n, MONAD_ADDRESS), f.transfer);
   const steps = bridge.outboundSteps(125_000_000n, MONAD_ADDRESS);
   assertEquals(steps.map((s) => [s.label, s.spec.kind]), f.plan.steps.map((s: { label: string; stepKind: string }) => [s.label, s.stepKind]));
   const { tx, intent } = await bridge.approveForBridge(ME, steps[0].spec);
@@ -180,10 +194,10 @@ Deno.test("GET /v1/bridge/:id equals bridge-status.json, with the ABI's offset f
   const { data, ...claim } = status.claim!;
   const { data: fixtureData, ...fixtureClaim } = f.claim;
   assertEquals({ ...status, claim }, { ...f, claim: fixtureClaim });
-  // receiveMessage(message, attestation): the offsets 0x40 and 0x80, then each with its length. The fixture's second
-  // offset is 0xa0; every other word is the same.
+  // receiveMessage(message, attestation): the offsets 0x40 and 0x80, then each with its length.
   const words = (d: string) => d.slice(10).match(/.{64}/g)!;
-  assertEquals([data.slice(0, 10), words(data)[0], words(data)[1]], ["0x57ecfd28", "40".padStart(64, "0"), "80".padStart(64, "0")]);
-  assertEquals(words(fixtureData)[1], "a0".padStart(64, "0"));
-  assertEquals([words(data)[0], ...words(data).slice(2)], [words(fixtureData)[0], ...words(fixtureData).slice(2)]);
+  assertEquals([data.slice(0, 10), words(data)[0], words(data)[1]], ["0x57ecfd28", lengthWord(0x40), lengthWord(0x80)]);
+  // The fixture's attestation offset is the ABI's once corrected; until then, WP-03's 0xa0. Every other word is the same.
+  assert([lengthWord(0x80), lengthWord(0xa0)].includes(words(fixtureData)[1]), `bridge-status.json's second offset: ${words(fixtureData)[1]}`);
+  assertEquals([data.slice(0, 10), words(data)[0], ...words(data).slice(2)], [fixtureData.slice(0, 10), words(fixtureData)[0], ...words(fixtureData).slice(2)]);
 });

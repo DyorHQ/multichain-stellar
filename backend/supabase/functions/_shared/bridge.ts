@@ -1,13 +1,15 @@
 // Monad ↔ Stellar USDC (docs/DESIGN-stellar-parity.md §5.7, §6.10).
 // Testnet: Circle CCTP v2 (Monad testnet domain 15 ↔ Stellar testnet domain 27; both directions are registered on
 // both chains, checked 2026-10-11). Monad → Stellar mints to Circle's CctpForwarder, which forwards to the user's
-// G-address in the same call; DyorHQ's keeper relays `mint_and_forward` once Iris attests (protocol upkeep, §4.1), for
-// at least 1 USDC and at most 10 times a day per user. Stellar → Monad burns on Stellar and returns a "claim on Monad"
-// step (receiveMessage) for the Pro wallet to sign. A quote's fee is Circle's own, from Iris's fee API, and its time is
-// how long the last transfers that way took.
+// G-address in the same call; DyorHQ's keeper relays `mint_and_forward` once Iris attests (protocol upkeep, §4.1): at
+// most 10 transfers a user starts in a UTC day, and only a burn that is the transfer's own (its amount, at least 1
+// USDC, through the forwarder to the user's address), once. Stellar → Monad burns on Stellar and returns a "claim on
+// Monad" step (receiveMessage) for the Pro wallet to sign. A quote's fee is Circle's own, from Iris's fee API, and its
+// time is how long the last transfers that way took.
 // Mainnet: NEAR Intents 1Click (live Monad ↔ Stellar USDC routes; no testnet).
 import { keccak_256 } from "@noble/hashes/sha3";
 import { StrKey } from "@stellar/stellar-sdk";
+import type postgres from "postgres";
 import type { BridgeDirection, BridgeQuote, BridgeStart, BridgeStatus, BridgeTransfer, EvmStep } from "./contract.ts";
 import { sql, tableExists } from "./db.ts";
 import { env } from "./env.ts";
@@ -37,7 +39,7 @@ const STANDARD_FINALITY = 2000;
 /** The least a transfer from Monad moves, in Monad USDC's base units (6 decimals): 1 USDC. The keeper pays its relay. */
 export const MIN_INBOUND = 1_000_000n;
 
-/** The most transfers from Monad the keeper relays for one user in a UTC day. */
+/** The most transfers from Monad one user starts, and so the keeper relays, in a UTC day. */
 export const RELAYS_PER_DAY = 10;
 
 // ------------------------------------------------------------------------------------------------ EVM encoding
@@ -47,6 +49,8 @@ const hexOf = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2,
 const selector = (sig: string) => hexOf(keccak_256(new TextEncoder().encode(sig)).subarray(0, 4));
 const word = (hex: string) => hex.replace(/^0x/, "").toLowerCase().padStart(64, "0");
 const uint = (n: bigint | number) => word(BigInt(n).toString(16));
+/** A Stellar contract (C…) as CCTP's bytes32: its 32-byte id. */
+const contractWord = (c: string) => hexOf(StrKey.decodeContract(c));
 
 const APPROVE = selector("approve(address,uint256)");
 const DEPOSIT_FOR_BURN_WITH_HOOK = selector("depositForBurnWithHook(uint256,uint32,bytes32,address,bytes32,uint256,uint32,bytes)");
@@ -112,13 +116,18 @@ export function encodeReceiveMessage(message: Uint8Array, attestation: Uint8Arra
   return "0x" + selector("receiveMessage(bytes,bytes)") + uint(64) + uint(offsetA) + mTail + bytesTail(attestation);
 }
 
-/** The pinned Monad contracts and Stellar's CctpForwarder that a transfer to Stellar goes through. */
+/** The pinned contracts a transfer to Stellar goes through: Monad's USDC and TokenMessengerV2, then Stellar's
+ *  TokenMessengerMinter, which mints, and CctpForwarder, which pays out. */
 export interface InboundPins {
   chainId: number;
   usdc: string;
   tokenMessenger: string;
+  /** Monad's CCTP domain. */
+  monadDomain: number;
   /** Stellar's CCTP domain. */
   domain: number;
+  /** C… */
+  tokenMessengerMinter: string;
   /** C… */
   forwarder: string;
 }
@@ -126,7 +135,15 @@ export interface InboundPins {
 function inboundPins(): InboundPins {
   const monad = env.network.bridge.monad!;
   const cctp = env.network.contracts.cctp!;
-  return { chainId: monad.chainId, usdc: monad.usdc, tokenMessenger: monad.tokenMessenger, domain: cctp.domain, forwarder: cctp.forwarder };
+  return {
+    chainId: monad.chainId,
+    usdc: monad.usdc,
+    tokenMessenger: monad.tokenMessenger,
+    monadDomain: monad.domain,
+    domain: cctp.domain,
+    tokenMessengerMinter: cctp.tokenMessengerMinter,
+    forwarder: cctp.forwarder,
+  };
 }
 
 /** What the Monad wallet signs for a transfer to Stellar: USDC's approve of TokenMessengerV2, then
@@ -178,7 +195,7 @@ export function inboundStepsRefusal(steps: EvmStep[], user: string, amount: bigi
   if (BigInt(`0x${a[1]}`) > amount) return "the approve is for more than the amount";
   const b = callWords(burn.data, DEPOSIT_FOR_BURN_WITH_HOOK);
   if (!same(burn.to, pins.tokenMessenger) || !b || b.length < 9) return "the second step isn't TokenMessengerV2's depositForBurnWithHook";
-  const forwarder = hexOf(StrKey.decodeContract(pins.forwarder));
+  const forwarder = contractWord(pins.forwarder);
   const burnToken = addressWord(b[3]);
   if (BigInt(`0x${b[0]}`) !== amount) return "the burn isn't for the amount";
   if (BigInt(`0x${b[1]}`) !== BigInt(pins.domain)) return "the burn sends to another network";
@@ -197,6 +214,72 @@ export function inboundStepsRefusal(steps: EvmStep[], user: string, amount: bigi
 function callWords(data: string, fn: string): string[] | null {
   if (data.slice(2, 10).toLowerCase() !== fn) return null;
   return data.slice(10).toLowerCase().match(/.{64}/g) ?? [];
+}
+
+// ------------------------------------------------------------------------------------------------ burn messages
+
+/** The fields of a CCTP v2 burn message the keeper's relay checks: MessageV2's header, then BurnMessageV2's body
+ *  (Circle's evm-cctp-contracts, src/messages/v2), as Iris returns it. Every bytes32 is lowercase hex: an EVM address
+ *  is left-padded with zeros, a Stellar contract is its 32-byte id. */
+export interface BurnMessage {
+  version: number;
+  sourceDomain: number;
+  destinationDomain: number;
+  /** The sending TokenMessenger. */
+  sender: string;
+  /** The receiving TokenMessenger. */
+  recipient: string;
+  destinationCaller: string;
+  bodyVersion: number;
+  burnToken: string;
+  mintRecipient: string;
+  amount: bigint;
+  hookData: string;
+}
+
+/** MessageV2's header is 148 bytes; BurnMessageV2's body is 228 bytes before its hook data. */
+const MESSAGE_HEADER = 148;
+const BURN_BODY = 228;
+
+/** `message`'s fields, or null when it is too short to be a burn. */
+export function decodeBurnMessage(message: Uint8Array): BurnMessage | null {
+  if (message.length < MESSAGE_HEADER + BURN_BODY) return null;
+  const view = new DataView(message.buffer, message.byteOffset, message.byteLength);
+  const bytes32 = (at: number) => hexOf(message.subarray(at, at + 32));
+  const body = MESSAGE_HEADER;
+  return {
+    version: view.getUint32(0),
+    sourceDomain: view.getUint32(4),
+    destinationDomain: view.getUint32(8),
+    sender: bytes32(44),
+    recipient: bytes32(76),
+    destinationCaller: bytes32(108),
+    bodyVersion: view.getUint32(body),
+    burnToken: bytes32(body + 4),
+    mintRecipient: bytes32(body + 36),
+    amount: BigInt(`0x${bytes32(body + 68)}`),
+    hookData: hexOf(message.subarray(body + BURN_BODY)),
+  };
+}
+
+/** Why the keeper doesn't relay `message` for a transfer from Monad, or null when it does. The keeper pays for each
+ *  relay, so it relays only the burn its Monad steps describe (inboundSteps): a CCTP v2 burn of Monad's USDC from
+ *  Monad's TokenMessengerV2 to Stellar's TokenMessengerMinter, minted to and called by the CctpForwarder, of exactly
+ *  the transfer's amount (at least 1 USDC), with the transfer's address as the hook, so the forwarder pays it out to
+ *  them. A burn the user signed otherwise (smaller, or for someone else) isn't relayed. */
+export function inboundMessageRefusal(message: Uint8Array, transfer: { address: string; amount: bigint }, pins: InboundPins): string | null {
+  const m = decodeBurnMessage(message);
+  if (!m || m.version !== 1 || m.bodyVersion !== 1) return "it isn't a CCTP v2 burn";
+  if (m.sourceDomain !== pins.monadDomain || m.destinationDomain !== pins.domain) return "it isn't a burn from Monad to Stellar";
+  if (m.sender !== word(pins.tokenMessenger) || m.recipient !== contractWord(pins.tokenMessengerMinter)) {
+    return "it isn't between the pinned TokenMessengerV2 and TokenMessengerMinter";
+  }
+  const forwarder = contractWord(pins.forwarder);
+  if (m.mintRecipient !== forwarder || m.destinationCaller !== forwarder) return "it isn't minted to and called by the CctpForwarder";
+  if (m.burnToken !== word(pins.usdc)) return "it isn't a burn of USDC";
+  if (m.amount !== transfer.amount || m.amount < MIN_INBOUND) return "it isn't for the transfer's amount";
+  if (m.hookData !== hexOf(forwarderHookData(transfer.address))) return "its hook data isn't the transfer's address";
+  return null;
 }
 
 // ------------------------------------------------------------------------------------------------ quotes
@@ -314,23 +397,49 @@ export async function bridgeQuote(input: { direction: string; amount: bigint }):
   };
 }
 
-/** 429 bridge_relay_limit once RELAYS_PER_DAY of the user's transfers from Monad were reported today (relay_day,
- *  migration 11): each one binds the keeper to relay it, so the cap is checked before the next transfer's Monad steps
- *  are handed out, never after a burn. */
-async function assertRelayAllowed(user: string): Promise<void> {
-  const rows = await sql()`
+// The relay cap (§6.10). A transfer from Monad holds one of its user's RELAYS_PER_DAY relays for a UTC day
+// (relay_day, migration 11) from the moment its Monad steps are handed out, reported or not, so the 11th start of a
+// day is refused however many of the 10 were reported. One started on an earlier day takes one of today's when its
+// burn is reported. Both run under the user's relay lock, so requests sent together can't pass the cap together.
+
+const relayLimit = () => new ApiError(429, "bridge_relay_limit", "You've bridged in many times today. Try again tomorrow.");
+
+/** How many of `user`'s transfers from Monad hold one of today's relays. */
+async function relaysToday(q: postgres.Sql, user: string): Promise<number> {
+  const rows = await q`
     select count(*)::int as relays from lite.bridge_transfers where address = ${user} and relay_day = (now() at time zone 'utc')::date`;
-  if (Number(rows[0]?.relays ?? 0) >= RELAYS_PER_DAY) {
-    throw new ApiError(429, "bridge_relay_limit", "You've bridged in many times today. Try again tomorrow.");
-  }
+  return Number(rows[0]?.relays ?? 0);
 }
 
-/** Records a transfer `user` started, awaiting its burn. */
-export async function newTransfer(user: string, direction: BridgeDirection, amount: bigint, recipient: string): Promise<BridgeTransfer> {
+/** Runs `fn` in one transaction that holds `user`'s relay lock, with the relays their day already holds: what `fn`
+ *  decides from that count still holds when it commits. */
+async function withRelays<T>(user: string, fn: (tx: postgres.Sql, relays: number) => Promise<T>): Promise<T> {
+  return await sql().begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtextextended(${`lite.bridge_relays:${user}`}, 0))`;
+    return await fn(tx, await relaysToday(tx, user));
+  }) as T;
+}
+
+/** Records a transfer from Monad `user` started, awaiting its burn: it takes one of today's relays, or 429
+ *  bridge_relay_limit when they are all taken. */
+async function newInboundTransfer(user: string, amount: bigint): Promise<BridgeTransfer> {
+  return await withRelays(user, async (tx, relays) => {
+    if (relays >= RELAYS_PER_DAY) throw relayLimit();
+    const rows = await tx`
+      insert into lite.bridge_transfers (address, direction, route, amount, recipient, relay_day)
+      values (${user}, 'monad_to_stellar', 'cctp', ${amount.toString()}, ${user}, (now() at time zone 'utc')::date)
+      returning id, status`;
+    return { id: rows[0].id as string, status: rows[0].status as string, direction: "monad_to_stellar" };
+  });
+}
+
+/** Records a transfer to Monad `user` started, awaiting its burn. */
+export async function newOutboundTransfer(user: string, amount: bigint, monadAddress: string): Promise<BridgeTransfer> {
   const rows = await sql()`
-    insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (${user}, ${direction}, 'cctp', ${amount.toString()}, ${recipient})
+    insert into lite.bridge_transfers (address, direction, route, amount, recipient)
+    values (${user}, 'stellar_to_monad', 'cctp', ${amount.toString()}, ${monadAddress})
     returning id, status`;
-  return { id: rows[0].id as string, status: rows[0].status as string, direction };
+  return { id: rows[0].id as string, status: rows[0].status as string, direction: "stellar_to_monad" };
 }
 
 /** The labels and steps of a transfer to Monad: Circle's TokenMessengerMinter pulls with transfer_from, so the burn
@@ -354,7 +463,8 @@ export async function startBridge(user: string, input: { direction: string; amou
   if (direction === "monad_to_stellar") {
     const amount6 = input.amount; // Monad USDC has 6 decimals
     if (amount6 < MIN_INBOUND) throw bad("too_small", "Bridge at least 1 USDC from Monad.");
-    await assertRelayAllowed(user);
+    // Refused before Horizon is asked; recording the transfer checks again, under the lock.
+    if ((await relaysToday(sql(), user)) >= RELAYS_PER_DAY) throw relayLimit();
     // The forwarder pays out to the account's USDC trustline: without one, the mint on Stellar would fail.
     const classic = await classicBalances(user);
     if (!classic) throw new ApiError(409, "account_inactive", "Activate your Stellar account first.");
@@ -367,29 +477,36 @@ export async function startBridge(user: string, input: { direction: string; amou
       // Steps the phone would refuse: never hand them out.
       throw new ApiError(500, "self_check_failed", "We built a transaction that didn't pass our own checks. Nothing was sent.", { reason: refusal });
     }
-    return { transfer: await newTransfer(user, direction, amount6, user), evmSteps };
+    return { transfer: await newInboundTransfer(user, amount6), evmSteps };
   }
 
   const amount7 = input.amount;
   if (amount7 <= 0n || amount7 % 10n !== 0n) throw bad("bad_amount", "Stellar → Monad moves whole micro-USDC (6 decimals).");
   // The plan first: a transfer is recorded only once its first step is built.
   const plan = await createPlan(user, "bridge_out", outboundSteps(amount7, input.monadAddress));
-  return { transfer: await newTransfer(user, direction, amount7, input.monadAddress), plan };
+  return { transfer: await newOutboundTransfer(user, amount7, input.monadAddress), plan };
 }
 
 const TRANSFER_ID = /^[0-9a-f-]{36}$/;
 
-/** The burn's transaction hash, from the phone. A transfer to Stellar counts toward the user's relay cap from now on
- *  (relay_day): its burn is on Monad, so the keeper relays it once Circle attests. */
+/** The burn's transaction hash, from the phone; the indexer follows it from now on. A transfer from Monad started on
+ *  an earlier UTC day takes one of today's relays now (429 bridge_relay_limit while they are all taken: it can be
+ *  reported again tomorrow), so the keeper relays at most RELAYS_PER_DAY of a user's transfers for any one day. */
 export async function setSourceTx(user: string, id: string, txHash: string): Promise<{ id: string; status: string }> {
   if (!/^(0x[0-9a-fA-F]{64}|[0-9a-f]{64})$/.test(txHash)) throw bad("bad_hash", "That isn't a transaction hash.");
   if (!TRANSFER_ID.test(id)) throw notFound("Transfer");
-  const rows = await sql()`
-    update lite.bridge_transfers set source_tx = ${txHash}, status = 'attesting', updated_at = now(),
-           relay_day = case when direction = 'monad_to_stellar' and route = 'cctp' then (now() at time zone 'utc')::date end
-     where id = ${id} and address = ${user} and status = 'awaiting_source' returning id, status`;
-  if (rows.length === 0) throw notFound("Transfer");
-  return { id: rows[0].id as string, status: rows[0].status as string };
+  return await withRelays(user, async (tx, relays) => {
+    const rows = await tx`
+      select relay_day < (now() at time zone 'utc')::date as late from lite.bridge_transfers
+       where id = ${id} and address = ${user} and status = 'awaiting_source'`;
+    if (rows.length === 0) throw notFound("Transfer");
+    if (rows[0].late && relays >= RELAYS_PER_DAY) throw relayLimit();
+    const reported = await tx`
+      update lite.bridge_transfers set source_tx = ${txHash}, status = 'attesting', updated_at = now(),
+             relay_day = case when relay_day is not null then (now() at time zone 'utc')::date end
+       where id = ${id} returning id, status`;
+    return { id: reported[0].id as string, status: reported[0].status as string };
+  });
 }
 
 export async function transferStatus(user: string, id: string): Promise<BridgeStatus> {
@@ -427,8 +544,21 @@ function hexToBytes(h: string): Uint8Array {
   return Uint8Array.from(s.match(/../g) ?? [], (x) => parseInt(x, 16));
 }
 
+/** One of Iris's messages for a burn (GET /v2/messages/{domain}?transactionHash=). */
+interface IrisMessage {
+  status?: unknown;
+  message?: unknown;
+  attestation?: unknown;
+}
+
+/** Complete, with its message and Circle's attestation. */
+function attested(m: IrisMessage): m is IrisMessage & { message: string; attestation: string } {
+  return m?.status === "complete" && typeof m.message === "string" && typeof m.attestation === "string" && m.attestation !== "PENDING";
+}
+
 /** Indexer step: polls Iris for every transfer waiting on an attestation and finishes what can be finished: the keeper
- *  relays a transfer to Stellar, and a transfer to Monad waits for its claim there. */
+ *  relays a transfer to Stellar whose burn checks out (relayInbound), and a transfer to Monad waits for its claim
+ *  there. */
 export async function advanceBridges(): Promise<number> {
   if (!env.network.apis.iris || !env.network.contracts.cctp || !env.network.bridge.monad) return 0;
   const open = await sql()`select * from lite.bridge_transfers where status = 'attesting' and source_tx is not null and updated_at > now() - interval '2 days' order by updated_at limit 20`;
@@ -442,26 +572,51 @@ export async function advanceBridges(): Promise<number> {
     const res = await fetch(`${env.network.apis.iris}/v2/messages/${src}?transactionHash=${hash}`, { signal: AbortSignal.timeout(8_000) });
     if (!res.ok) continue;
     const body = await res.json();
-    const m = body?.messages?.[0];
-    if (!m || m.status !== "complete" || !m.attestation || m.attestation === "PENDING") continue;
+    const messages: IrisMessage[] = Array.isArray(body?.messages) ? body.messages : [];
     if (t.direction === "monad_to_stellar") {
-      try {
-        const destTx = await relayMintAndForward(t.id as string, hexToBytes(m.message), hexToBytes(m.attestation));
-        await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, dest_tx = ${destTx}, status = 'completed', updated_at = now() where id = ${t.id}`;
-      } catch (err) {
-        await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, error = ${String((err as Error).message).slice(0, 300)}, updated_at = now() where id = ${t.id}`;
-        continue;
-      }
-    } else {
-      await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, status = 'relaying', updated_at = now() where id = ${t.id}`;
+      if (await relayInbound(t, messages)) advanced++;
+      continue;
     }
+    const m = messages[0];
+    if (!m || !attested(m)) continue;
+    await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, status = 'relaying', updated_at = now() where id = ${t.id}`;
     advanced++;
   }
   return advanced;
 }
 
+/** A transfer from Monad once Circle has attested every message of its burn's transaction: the keeper relays the one
+ *  that is this transfer's (inboundMessageRefusal), unless it was relayed for another transfer already (the same burn
+ *  reported twice), and the transfer completes. Otherwise the transfer fails, and nothing is relayed. True when the
+ *  keeper relayed it. */
+async function relayInbound(t: postgres.Row, messages: IrisMessage[]): Promise<boolean> {
+  const ready = messages.filter(attested);
+  if (ready.length === 0 || ready.length < messages.length) return false;
+  const transfer = { address: String(t.address), amount: BigInt(String(t.amount)) };
+  const refusals = ready.map((m) => inboundMessageRefusal(hexToBytes(m.message), transfer, inboundPins()));
+  const m = ready.find((_, i) => refusals[i] === null);
+  if (!m) {
+    await sql()`update lite.bridge_transfers set message = ${ready[0].message}, error = ${`Not relayed: ${refusals[0]}.`}, status = 'failed', updated_at = now() where id = ${t.id}`;
+    return false;
+  }
+  const done = await sql()`
+    select 1 from lite.bridge_transfers where message = ${m.message} and direction = 'monad_to_stellar' and status = 'completed' and id <> ${t.id}`;
+  if (done.length > 0) {
+    await sql()`update lite.bridge_transfers set error = 'Not relayed: its burn was relayed for another transfer.', status = 'failed', updated_at = now() where id = ${t.id}`;
+    return false;
+  }
+  try {
+    const destTx = await relayMintAndForward(t.id as string, hexToBytes(m.message), hexToBytes(m.attestation));
+    await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, dest_tx = ${destTx}, status = 'completed', updated_at = now() where id = ${t.id}`;
+  } catch (err) {
+    await sql()`update lite.bridge_transfers set message = ${m.message}, attestation = ${m.attestation}, error = ${String((err as Error).message).slice(0, 300)}, updated_at = now() where id = ${t.id}`;
+    return false;
+  }
+  return true;
+}
+
 /** Calls CctpForwarder.mint_and_forward for transfer `id` from the keeper's account (permissionless; the keeper pays
- *  the fee, §4.7) and records the transaction in lite.keeper_log. */
+ *  the fee, §4.7) and records the transaction in lite.keeper_log. Only for a message relayInbound checked. */
 export async function relayMintAndForward(id: string, message: Uint8Array, attestation: Uint8Array): Promise<string> {
   const cctp = env.network.contracts.cctp!;
   const k = keeper();

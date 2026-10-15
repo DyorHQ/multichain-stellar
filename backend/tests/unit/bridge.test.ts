@@ -1,13 +1,16 @@
 // The bridge (docs/DESIGN-stellar-parity.md §5.7, §6.10; §12.5): the CCTP encoders; a quote's fee from Iris's fee
 // table (answers captured from Iris), exact to the base unit, priced at the standard transfer's row and kept 10
 // minutes; its time, the median of the last transfers that way or none with fewer than 3; the relay's limits (at least
-// 1 USDC from Monad, and the 11th relayed transfer of a UTC day gets 429); the Monad steps, handed out only as the
-// phone would sign them; the burn to Monad, bound to the address the user confirmed as WP-11's verifier holds it; the
-// keeper's relay, recorded in lite.keeper_log once that table exists; and mainnet's 501.
+// 1 USDC from Monad, and the 11th transfer from Monad a user starts in a UTC day gets 429, reported or not, sent
+// together or not; a late report takes one of today's relays); the Monad steps, handed out only as the phone would
+// sign them; the burn to Monad, bound to the address the user confirmed as WP-11's verifier holds it; the keeper's
+// relay: only of a burn that is the transfer's own (decoded as Circle writes it, checked on a real attested message),
+// once, recorded in lite.keeper_log once that table exists; and mainnet's 501.
 //
 // The network is a stand-in: Iris, Horizon and Stellar RPC answer from here, and RPC's latest ledger is set on the
 // client (its answer carries a whole ledger's metadata). The database is the route harness's, answering
-// _shared/bridge.ts's own statements, which run on Postgres in backend/tests/sql/bridge_test.sql.
+// _shared/bridge.ts's own statements, which run on Postgres in backend/tests/sql/bridge_test.sql; it records where
+// each transaction begins and ends.
 import { Address, Keypair, SorobanDataBuilder, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { fakeSql, type Row, setTestEnv, SPONSOR, USER } from "../fixtures/routes/harness.ts";
@@ -29,6 +32,7 @@ const MONAD = TESTNET.bridge.monad!;
 const ME = USER.publicKey();
 const RECIPIENT = "0x663b5d4f0412dbf5b0fb0773e7f0602d11a80dda";
 const TRANSFER = "c69ef4a0-421e-418d-a93b-92081f4a0fcb";
+const OUTBOUND = "67904f04-179c-49db-a5b8-edeb7d2f64ed";
 const MINUTE = 60_000;
 
 /** Iris's fee tables (GET /v2/burn/USDC/fees/{src}/{dst}) as captured on 2026-10-15: testnet (iris-api-sandbox)
@@ -41,6 +45,77 @@ const IRIS = {
 };
 /** The same table where a standard transfer costs something too (a route with Circle's fee switch on). */
 const CHARGED = [{ finalityThreshold: 1000, minimumFee: 9 }, { finalityThreshold: 2000, minimumFee: 1.3 }];
+
+/** A real attested burn as Iris returned it on 2026-10-15 (GET /v2/messages/27?transactionHash=40abd915…, the testnet
+ *  burn of docs/VERIFICATION.md): 0.1 USDC from Stellar to 0x…dEaD on Monad, so Circle's own layout and its bytes32
+ *  for Stellar contracts. */
+const IRIS_STELLAR_BURN = "0x" +
+  "000000010000001b0000000f761deb7dba8f7c95486b249f8713b969179dc2eed1b5d2ae7db47bcff146d5afda6f9ee0" +
+  "786c812344d82817ef19b648b4af120f8bd10bf658e6b99eacff24b80000000000000000000000008fe6b999dc680ccf" +
+  "dd5bf7eb0974218be2542daa0000000000000000000000000000000000000000000000000000000000000000000007d0" +
+  "000007d0000000015045cd5ec0729a768fd5ad02505852df4f028dce830e5ac52209ba48483b2f010000000000000000" +
+  "00000000000000000000000000000000000000000000dead000000000000000000000000000000000000000000000000" +
+  "00000000000186a0c014e0780b10d16c0594d940ed6dd1373111b4f504287909597bdaffc0f8f2970000000000000000" +
+  "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" +
+  "00000000000000000000000000000000000000000000000000000000000000000000000000000000";
+
+// ------------------------------------------------------------------------------------------------ burn messages
+
+const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+const bytes = (h: string) => new Uint8Array(Buffer.from(h.replace(/^0x/, ""), "hex"));
+const u32 = (n: number) => n.toString(16).padStart(8, "0");
+const b32 = (h: string) => h.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+const FORWARDER = hex(StrKey.decodeContract(CCTP.forwarder));
+const MINTER = hex(StrKey.decodeContract(CCTP.tokenMessengerMinter));
+
+/** A burn message from Monad to Stellar as Iris returns it once attested (MessageV2 then BurnMessageV2): the burn
+ *  inboundSteps describes for `address` and `amount`, with any field changed by `edit`. */
+function burnMessage(address: string, amount: bigint, edit: Partial<Record<string, string | number | bigint>> = {}): string {
+  const f = {
+    version: 1,
+    sourceDomain: MONAD.domain,
+    destinationDomain: CCTP.domain,
+    nonce: "5a".repeat(32),
+    sender: b32(MONAD.tokenMessenger),
+    recipient: MINTER,
+    destinationCaller: FORWARDER,
+    minFinalityThreshold: 2000,
+    finalityThresholdExecuted: 2000,
+    bodyVersion: 1,
+    burnToken: b32(MONAD.usdc),
+    mintRecipient: FORWARDER,
+    amount,
+    messageSender: b32(RECIPIENT),
+    maxFee: 0n,
+    feeExecuted: 0n,
+    expirationBlock: 0n,
+    hookData: hex(bridge.forwarderHookData(address)),
+    ...edit,
+  };
+  const uint = (n: unknown) => b32(BigInt(n as bigint).toString(16));
+  return "0x" + [
+    u32(f.version as number),
+    u32(f.sourceDomain as number),
+    u32(f.destinationDomain as number),
+    f.nonce,
+    f.sender,
+    f.recipient,
+    f.destinationCaller,
+    u32(f.minFinalityThreshold as number),
+    u32(f.finalityThresholdExecuted as number),
+    u32(f.bodyVersion as number),
+    f.burnToken,
+    f.mintRecipient,
+    uint(f.amount),
+    f.messageSender,
+    uint(f.maxFee),
+    uint(f.feeExecuted),
+    uint(f.expirationBlock),
+    f.hookData,
+  ].join("");
+}
+
+const ATTESTATION = "0x" + "82".repeat(65);
 
 // ------------------------------------------------------------------------------------------------ the stand-in network
 
@@ -157,54 +232,117 @@ rpcServer().getLatestLedger = () => Promise.resolve({ id: "ab".repeat(32), proto
 
 // ------------------------------------------------------------------------------------------------ the stand-in database
 
+// _shared/bridge.ts's statements, as the stand-in sees them (whitespace collapsed, parameters as "?").
+const LOCK = "select pg_advisory_xact_lock(hashtextextended(?, 0))";
+const RELAYS = "select count(*)::int as relays from lite.bridge_transfers where address = ? and relay_day = (now() at time zone 'utc')::date";
+const START_IN = "insert into lite.bridge_transfers (address, direction, route, amount, recipient, relay_day) values (?, 'monad_to_stellar', 'cctp', ?, ?, (now() at time zone 'utc')::date) returning id, status";
+const START_OUT = "insert into lite.bridge_transfers (address, direction, route, amount, recipient) values (?, 'stellar_to_monad', 'cctp', ?, ?) returning id, status";
+const LATE = "select relay_day < (now() at time zone 'utc')::date as late from lite.bridge_transfers where id = ? and address = ? and status = 'awaiting_source'";
+const REPORT = "update lite.bridge_transfers set source_tx = ?, status = 'attesting', updated_at = now(), relay_day = case when relay_day is not null then (now() at time zone 'utc')::date end where id = ? returning id, status";
+const RELAYED = "select 1 from lite.bridge_transfers where message = ? and direction = 'monad_to_stellar' and status = 'completed' and id <> ?";
+const COMPLETED = "update lite.bridge_transfers set message = ?, attestation = ?, dest_tx = ?, status = 'completed', updated_at = now() where id = ?";
+const RELAY_ERROR = "update lite.bridge_transfers set message = ?, attestation = ?, error = ?, updated_at = now() where id = ?";
+const REFUSED = "update lite.bridge_transfers set message = ?, error = ?, status = 'failed', updated_at = now() where id = ?";
+const RELAYED_ALREADY = "update lite.bridge_transfers set error = 'Not relayed: its burn was relayed for another transfer.', status = 'failed', updated_at = now() where id = ?";
+const RELAYING = "update lite.bridge_transfers set message = ?, attestation = ?, status = 'relaying', updated_at = now() where id = ?";
+
 const db = {
   /** Seconds each completed transfer took, newest first, by direction. */
   durations: { monad_to_stellar: [] as number[], stellar_to_monad: [] as number[] },
-  /** The user's transfers from Monad reported today. */
+  /** The user's transfers from Monad that hold one of today's relays: each start and each late report adds one. */
   relaysToday: 0,
+  /** Starts another request commits right after the next count of the day's relays (a request sent alongside). */
+  alongside: 0,
+  /** Transfers awaiting their burn: whose, and whether they started on an earlier day. */
+  awaiting: new Map<string, { address: string; late: boolean }>(),
+  /** Messages already relayed for a completed transfer. */
+  relayed: new Set<string>(),
   /** Whether migration 05 created lite.keeper_log ("fails": it refuses the row). */
   keeperLog: true as boolean | "fails",
   /** Transfers waiting on Iris (advanceBridges). */
   open: [] as Row[],
+  /** Every statement, and "begin", "commit" and "rollback". */
   statements: [] as { q: string; params: unknown[] }[],
 };
 
 function resetDb(): void {
   db.durations = { monad_to_stellar: [], stellar_to_monad: [] };
   db.relaysToday = 0;
+  db.alongside = 0;
+  db.awaiting.clear();
+  db.relayed.clear();
   db.keeperLog = true;
   db.open = [];
   db.statements.length = 0;
 }
 
 const ran = (prefix: string) => db.statements.filter((s) => s.q.startsWith(prefix));
+const said = () => db.statements.map((s) => s.q);
 
-replaceSql(fakeSql((q, params) => {
+const standIn = fakeSql((q, params) => {
   db.statements.push({ q, params });
   if (q.startsWith("select extract(epoch from updated_at - created_at)::float8 as seconds from lite.bridge_transfers")) {
     assertEquals(q.slice(q.indexOf(" where ")), " where direction = ? and route = 'cctp' and status = 'completed' order by updated_at desc limit ?");
     return db.durations[params[0] as "monad_to_stellar" | "stellar_to_monad"].map((seconds) => ({ seconds }));
   }
-  if (q === "select count(*)::int as relays from lite.bridge_transfers where address = ? and relay_day = (now() at time zone 'utc')::date") {
-    return [{ relays: db.relaysToday }];
+  if (q === LOCK) return [{ pg_advisory_xact_lock: "" }];
+  if (q === RELAYS) {
+    const relays = db.relaysToday;
+    db.relaysToday += db.alongside;
+    db.alongside = 0;
+    return [{ relays }];
   }
-  if (q.startsWith("insert into lite.bridge_transfers")) return [{ id: TRANSFER, status: "awaiting_source" }];
-  if (q.startsWith("update lite.bridge_transfers set source_tx")) return params[1] === TRANSFER && params[2] === ME ? [{ id: TRANSFER, status: "attesting" }] : [];
+  if (q === START_IN) {
+    db.relaysToday++;
+    db.awaiting.set(TRANSFER, { address: params[0] as string, late: false });
+    return [{ id: TRANSFER, status: "awaiting_source" }];
+  }
+  if (q === START_OUT) return [{ id: OUTBOUND, status: "awaiting_source" }];
+  if (q === LATE) {
+    const t = db.awaiting.get(params[0] as string);
+    return t && t.address === params[1] ? [{ late: t.late }] : [];
+  }
+  if (q === REPORT) {
+    if (db.awaiting.get(params[1] as string)?.late) db.relaysToday++;
+    db.awaiting.delete(params[1] as string);
+    return [{ id: params[1], status: "attesting" }];
+  }
+  if (q === RELAYED) return db.relayed.has(params[0] as string) ? [{ "?column?": 1 }] : [];
   if (q === "select to_regclass(?) is not null as present") return [{ present: db.keeperLog !== false }];
   if (q.startsWith("insert into lite.keeper_log")) {
     if (db.keeperLog === "fails") throw new Error("permission denied for table keeper_log");
     return [];
   }
   if (q.startsWith("select * from lite.bridge_transfers where status = 'attesting'")) return db.open;
-  if (q.startsWith("update lite.bridge_transfers set message")) return [];
+  if (q === COMPLETED) {
+    db.relayed.add(params[0] as string);
+    return [];
+  }
+  if ([RELAY_ERROR, REFUSED, RELAYED_ALREADY, RELAYING].includes(q)) return [];
   throw new Error(`unexpected query: ${q}`);
-}));
+});
+// Transactions as postgres.js runs them, marked in the statements.
+const runIn = standIn.begin;
+(standIn as any).begin = async (fn: (tx: unknown) => unknown) => {
+  db.statements.push({ q: "begin", params: [] });
+  try {
+    const out = await runIn(fn as any);
+    db.statements.push({ q: "commit", params: [] });
+    return out;
+  } catch (err) {
+    db.statements.push({ q: "rollback", params: [] });
+    throw err;
+  }
+};
+replaceSql(standIn);
 
 async function refusal(p: Promise<unknown>): Promise<{ status: number; code: string; message: string }> {
   const err = await p.then(() => null, (e) => e);
   assert(err && typeof err.status === "number", `expected a refusal, got ${err ? err.message : "an answer"}`);
   return { status: err.status, code: err.code, message: err.message };
 }
+
+const RELAY_LIMIT = { status: 429, code: "bridge_relay_limit", message: "You've bridged in many times today. Try again tomorrow." };
 
 function fresh(): void {
   resetNet();
@@ -370,47 +508,66 @@ Deno.test("a quote for another direction is refused before Iris is asked", async
 
 // ------------------------------------------------------------------------------------------------ the relay's limits
 
+const startIn = (amount = 1_000_000n) => bridge.startBridge(ME, { direction: "monad_to_stellar", amount, monadAddress: RECIPIENT });
+
 Deno.test("from Monad: at least 1 USDC, refused before anything is read", async () => {
   fresh();
   net.horizon.set(ME, horizonAccount(ME));
-  assertEquals(await refusal(bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 999_999n, monadAddress: RECIPIENT })), {
-    status: 400,
-    code: "too_small",
-    message: "Bridge at least 1 USDC from Monad.",
-  });
+  assertEquals(await refusal(startIn(999_999n)), { status: 400, code: "too_small", message: "Bridge at least 1 USDC from Monad." });
   assertEquals([net.asked, db.statements], [[], []]);
-  const start = await bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 1_000_000n, monadAddress: RECIPIENT });
+  const start = await startIn(1_000_000n);
   assertEquals(start.transfer, { id: TRANSFER, status: "awaiting_source", direction: "monad_to_stellar" });
-  assertEquals(ran("insert into lite.bridge_transfers")[0].params, [ME, "monad_to_stellar", "1000000", ME]);
+  assertEquals(ran(START_IN)[0].params, [ME, "1000000", ME]);
 });
 
-Deno.test("from Monad: 10 relayed transfers a UTC day; the 11th gets 429 before any step is handed out", async () => {
+Deno.test("from Monad: a start takes one of today's 10 relays as it is recorded, under the user's lock", async () => {
   fresh();
   net.horizon.set(ME, horizonAccount(ME));
   db.relaysToday = 9;
-  const tenth = await bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 1_000_000n, monadAddress: RECIPIENT });
+  const tenth = await startIn();
   assertEquals(tenth.evmSteps?.length, 2);
-  assertEquals(ran("select count(*)::int as relays")[0].params, [ME]);
+  // A first count refuses a full day before Horizon is asked; then one transaction takes the user's lock, counts
+  // again and records the transfer with today's relay day.
+  assertEquals(said(), [RELAYS, "begin", LOCK, RELAYS, START_IN, "commit"]);
+  assertEquals(ran(LOCK)[0].params, [`lite.bridge_relays:${ME}`]);
+  assertEquals(ran(RELAYS).map((s) => s.params), [[ME], [ME]]);
+  assertEquals(db.relaysToday, 10);
 
-  fresh();
-  net.horizon.set(ME, horizonAccount(ME));
-  db.relaysToday = 10;
-  assertEquals(await refusal(bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 5_000_000n, monadAddress: RECIPIENT })), {
-    status: 429,
-    code: "bridge_relay_limit",
-    message: "You've bridged in many times today. Try again tomorrow.",
-  });
-  assertEquals(ran("insert into lite.bridge_transfers"), [], "no transfer recorded");
+  db.statements.length = 0;
+  net.asked.length = 0;
+  assertEquals(await refusal(startIn(5_000_000n)), RELAY_LIMIT);
+  assertEquals(said(), [RELAYS], "no transfer recorded");
   assertEquals(net.asked, [], "Horizon isn't asked");
   assertEquals(bridge.RELAYS_PER_DAY, 10);
+});
+
+Deno.test("from Monad: ten starts with none reported, and the 11th gets 429 before any Monad step", async () => {
+  fresh();
+  net.horizon.set(ME, horizonAccount(ME));
+  for (let i = 1; i <= 10; i++) assertEquals((await startIn()).evmSteps?.length, 2, `start ${i}`);
+  assertEquals(ran(REPORT), [], "no burn was reported");
+  assertEquals(await refusal(startIn()), RELAY_LIMIT);
+  assertEquals(ran(START_IN).length, 10);
+});
+
+Deno.test("from Monad: starts sent together can't pass the cap together", async () => {
+  fresh();
+  net.horizon.set(ME, horizonAccount(ME));
+  // The first count sees 9; another start commits the day's 10th before this one takes the lock.
+  db.relaysToday = 9;
+  db.alongside = 1;
+  assertEquals(await refusal(startIn()), RELAY_LIMIT);
+  assertEquals(said(), [RELAYS, "begin", LOCK, RELAYS, "rollback"]);
+  assertEquals(db.relaysToday, 10);
 });
 
 Deno.test("from Monad: USDC must be enabled on Stellar first", async () => {
   fresh();
   net.horizon.set(ME, horizonAccount(ME, false));
-  assertEquals((await refusal(bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 1_000_000n, monadAddress: RECIPIENT }))).code, "needs_usdc");
+  assertEquals((await refusal(startIn())).code, "needs_usdc");
   fresh();
-  assertEquals((await refusal(bridge.startBridge(ME, { direction: "monad_to_stellar", amount: 1_000_000n, monadAddress: RECIPIENT }))).code, "account_inactive");
+  assertEquals((await refusal(startIn())).code, "account_inactive");
+  assertEquals(ran(START_IN), []);
 });
 
 Deno.test("a start is refused for another direction, a Monad address that isn't one, or Stellar amounts CCTP can't burn", async () => {
@@ -424,14 +581,41 @@ Deno.test("a start is refused for another direction, a Monad address that isn't 
   assertEquals([net.asked, db.statements], [[], []]);
 });
 
-Deno.test("reporting a burn counts a transfer from Monad toward the day's relays (relay_day)", async () => {
+Deno.test("reporting a burn: a start of today's keeps its relay, whatever the day holds", async () => {
   fresh();
   const hash = "0x" + "cd".repeat(32);
+  db.awaiting.set(TRANSFER, { address: ME, late: false });
+  db.relaysToday = 10;
   assertEquals(await bridge.setSourceTx(ME, TRANSFER, hash), { id: TRANSFER, status: "attesting" });
-  const [update] = ran("update lite.bridge_transfers set source_tx");
-  assertEquals(update.q, "update lite.bridge_transfers set source_tx = ?, status = 'attesting', updated_at = now(), relay_day = case when direction = 'monad_to_stellar' and route = 'cctp' then (now() at time zone 'utc')::date end where id = ? and address = ? and status = 'awaiting_source' returning id, status");
-  assertEquals(update.params, [hash, TRANSFER, ME]);
-  assertEquals(await refusal(bridge.setSourceTx(USER.publicKey(), "3f1c2a9e-0000-4000-8000-000000000002", hash)), { status: 404, code: "not_found", message: "Transfer not found." });
+  assertEquals(said(), ["begin", LOCK, RELAYS, LATE, REPORT, "commit"]);
+  assertEquals(ran(LATE)[0].params, [TRANSFER, ME]);
+  assertEquals(ran(REPORT)[0].params, [hash, TRANSFER]);
+  assertEquals(db.relaysToday, 10);
+});
+
+Deno.test("reporting a burn: a start of an earlier day takes one of today's relays, or gets 429 while they are taken", async () => {
+  fresh();
+  const hash = "0x" + "cd".repeat(32);
+  db.awaiting.set(TRANSFER, { address: ME, late: true });
+  db.relaysToday = 10;
+  assertEquals(await refusal(bridge.setSourceTx(ME, TRANSFER, hash)), RELAY_LIMIT);
+  assertEquals(said(), ["begin", LOCK, RELAYS, LATE, "rollback"], "not reported: it can be, tomorrow");
+  assert(db.awaiting.has(TRANSFER));
+
+  db.statements.length = 0;
+  db.relaysToday = 9;
+  assertEquals(await bridge.setSourceTx(ME, TRANSFER, hash), { id: TRANSFER, status: "attesting" });
+  assertEquals(said(), ["begin", LOCK, RELAYS, LATE, REPORT, "commit"]);
+  assertEquals(db.relaysToday, 10, "it holds one of today's now");
+});
+
+Deno.test("reporting a burn: another user's transfer, an unknown one, a bad id or hash", async () => {
+  fresh();
+  const hash = "0x" + "cd".repeat(32);
+  db.awaiting.set(TRANSFER, { address: SPONSOR.publicKey(), late: false });
+  assertEquals(await refusal(bridge.setSourceTx(ME, TRANSFER, hash)), { status: 404, code: "not_found", message: "Transfer not found." });
+  assertEquals(await refusal(bridge.setSourceTx(ME, "3f1c2a9e-0000-4000-8000-000000000002", hash)), { status: 404, code: "not_found", message: "Transfer not found." });
+  assertEquals(ran(REPORT), []);
   db.statements.length = 0;
   assertEquals((await refusal(bridge.setSourceTx(ME, "not-a-transfer", hash))).code, "not_found");
   assertEquals((await refusal(bridge.setSourceTx(ME, TRANSFER, "nope"))).code, "bad_hash");
@@ -440,7 +624,15 @@ Deno.test("reporting a burn counts a transfer from Monad toward the day's relays
 
 // ------------------------------------------------------------------------------------------------ the Monad steps
 
-const PINS = { chainId: MONAD.chainId, usdc: MONAD.usdc, tokenMessenger: MONAD.tokenMessenger, domain: CCTP.domain, forwarder: CCTP.forwarder };
+const PINS = {
+  chainId: MONAD.chainId,
+  usdc: MONAD.usdc,
+  tokenMessenger: MONAD.tokenMessenger,
+  monadDomain: MONAD.domain,
+  domain: CCTP.domain,
+  tokenMessengerMinter: CCTP.tokenMessengerMinter,
+  forwarder: CCTP.forwarder,
+};
 
 Deno.test("the Monad steps: USDC's approve, then the burn, only to the pinned USDC and TokenMessengerV2 (§5.7)", () => {
   const steps = bridge.inboundSteps(ME, 12_500_000n, PINS);
@@ -485,6 +677,59 @@ Deno.test("the Monad steps: anything the phone would refuse is refused here firs
   ];
   for (const [what, steps, reason] of cases) assertEquals(bridge.inboundStepsRefusal(steps, ME, amount, PINS), reason, what);
   assertEquals(word(good()[1].data, 1), "1b".padStart(64, "0"), "Stellar's domain, 27");
+});
+
+// ------------------------------------------------------------------------------------------------ the burn's message
+
+Deno.test("a burn's message, decoded as Circle writes it: a real attested burn from Stellar to Monad", () => {
+  const m = bridge.decodeBurnMessage(bytes(IRIS_STELLAR_BURN))!;
+  assertEquals(m, {
+    version: 1,
+    sourceDomain: CCTP.domain,
+    destinationDomain: MONAD.domain,
+    // Stellar's TokenMessengerMinter sent it, as its 32-byte contract id; Monad's TokenMessengerV2 receives it.
+    sender: MINTER,
+    recipient: b32(MONAD.tokenMessenger),
+    destinationCaller: "0".repeat(64),
+    bodyVersion: 1,
+    burnToken: hex(StrKey.decodeContract(USDC.contract)),
+    mintRecipient: b32("0x000000000000000000000000000000000000dEaD"),
+    amount: 100_000n,
+    hookData: "",
+  });
+  assertEquals(bridge.decodeBurnMessage(bytes("28".repeat(32))), null, "too short");
+  // The way it goes is the first thing the relay checks.
+  assertEquals(bridge.inboundMessageRefusal(bytes(IRIS_STELLAR_BURN), { address: ME, amount: 100_000n }, PINS), "it isn't a burn from Monad to Stellar");
+});
+
+Deno.test("the relay checks the burn's message: only the transfer's own burn, as its Monad steps describe it", () => {
+  const amount = 12_500_000n;
+  const transfer = { address: ME, amount };
+  const refused = (h: string, t = transfer) => bridge.inboundMessageRefusal(bytes(h), t, PINS);
+  // The burn inboundSteps hands out, once attested, is relayed.
+  assertEquals(refused(burnMessage(ME, amount)), null);
+  const other = b32("0x0000000000000000000000000000000000000bad");
+  const cases: [string, string, string][] = [
+    ["not a burn message", "0x" + "28".repeat(32), "it isn't a CCTP v2 burn"],
+    ["CCTP v1", burnMessage(ME, amount, { version: 0 }), "it isn't a CCTP v2 burn"],
+    ["another body", burnMessage(ME, amount, { bodyVersion: 0 }), "it isn't a CCTP v2 burn"],
+    ["from another chain", burnMessage(ME, amount, { sourceDomain: 0 }), "it isn't a burn from Monad to Stellar"],
+    ["to another chain", burnMessage(ME, amount, { destinationDomain: 6 }), "it isn't a burn from Monad to Stellar"],
+    ["another sender", burnMessage(ME, amount, { sender: other }), "it isn't between the pinned TokenMessengerV2 and TokenMessengerMinter"],
+    ["another recipient", burnMessage(ME, amount, { recipient: FORWARDER }), "it isn't between the pinned TokenMessengerV2 and TokenMessengerMinter"],
+    ["minted to the user", burnMessage(ME, amount, { mintRecipient: hex(StrKey.decodeEd25519PublicKey(ME)) }), "it isn't minted to and called by the CctpForwarder"],
+    ["called by anyone", burnMessage(ME, amount, { destinationCaller: "0".repeat(64) }), "it isn't minted to and called by the CctpForwarder"],
+    ["another token", burnMessage(ME, amount, { burnToken: other }), "it isn't a burn of USDC"],
+    ["1 base unit", burnMessage(ME, 1n), "it isn't for the transfer's amount"],
+    ["less", burnMessage(ME, amount - 1n), "it isn't for the transfer's amount"],
+    ["more", burnMessage(ME, amount + 1n), "it isn't for the transfer's amount"],
+    ["someone else's hook", burnMessage(SPONSOR.publicKey(), amount), "its hook data isn't the transfer's address"],
+    ["no hook", burnMessage(ME, amount, { hookData: "" }), "its hook data isn't the transfer's address"],
+    ["a hook with more", burnMessage(ME, amount, { hookData: hex(bridge.forwarderHookData(ME)) + "01" }), "its hook data isn't the transfer's address"],
+  ];
+  for (const [what, message, reason] of cases) assertEquals(refused(message), reason, what);
+  // A transfer recorded under 1 USDC (before the minimum) isn't relayed, its burn matching or not.
+  assertEquals(refused(burnMessage(ME, 999_999n), { address: ME, amount: 999_999n }), "it isn't for the transfer's amount");
 });
 
 // ------------------------------------------------------------------------------------------------ the burn to Monad
@@ -533,20 +778,19 @@ Deno.test("the allowance before the burn is for Circle's TokenMessengerMinter on
 
 // ------------------------------------------------------------------------------------------------ the keeper's relay
 
-const MESSAGE = new Uint8Array(32).fill(0x28);
-const ATTESTATION = new Uint8Array(65).fill(0x82);
+const MESSAGE = burnMessage(ME, 12_500_000n);
 
 Deno.test("the keeper relays mint_and_forward, and lite.keeper_log records it", async () => {
   fresh();
   net.rpcAccounts.add(KEEPER.publicKey());
-  const hash = await bridge.relayMintAndForward(TRANSFER, MESSAGE, ATTESTATION);
+  const hash = await bridge.relayMintAndForward(TRANSFER, bytes(MESSAGE), bytes(ATTESTATION));
   const [tx] = net.sent;
   assertEquals([tx.hash().toString("hex"), tx.source], [hash, KEEPER.publicKey()]);
   assert(KEEPER.verify(tx.hash(), tx.signatures[0].signature()) && tx.signatures.length === 1, "signed by the keeper alone");
   assert(KEEPER.publicKey() !== SPONSOR.publicKey(), "the keeper isn't the sponsor here");
   const call = (tx.operations[0] as any).func.invokeContract();
   assertEquals([Address.fromScAddress(call.contractAddress()).toString(), call.functionName().toString()], [CCTP.forwarder, "mint_and_forward"]);
-  assertEquals(call.args().map((a: xdr.ScVal) => Buffer.from(a.bytes()).toString("hex")), [Buffer.from(MESSAGE).toString("hex"), Buffer.from(ATTESTATION).toString("hex")]);
+  assertEquals(call.args().map((a: xdr.ScVal) => "0x" + Buffer.from(a.bytes()).toString("hex")), [MESSAGE, ATTESTATION]);
   const [row] = ran("insert into lite.keeper_log");
   assertEquals(row.q, "insert into lite.keeper_log (hash, job, keeper, max_fee, detail) values (?, 'relay', ?, ?, ?) on conflict (hash) do nothing");
   assertEquals(row.params, [hash, KEEPER.publicKey(), tx.fee, { transfer: TRANSFER }]);
@@ -562,7 +806,7 @@ Deno.test("before migration 05, or when keeper_log refuses the row, the relay st
     const warnings: string[] = [];
     console.warn = (...args: unknown[]) => void warnings.push(args.join(" "));
     try {
-      const hash = await bridge.relayMintAndForward(TRANSFER, MESSAGE, ATTESTATION);
+      const hash = await bridge.relayMintAndForward(TRANSFER, bytes(MESSAGE), bytes(ATTESTATION));
       assertEquals(net.sent.map((t) => t.hash().toString("hex")), [hash], String(keeperLog));
     } finally {
       console.warn = warn;
@@ -571,24 +815,98 @@ Deno.test("before migration 05, or when keeper_log refuses the row, the relay st
   }
 });
 
+// The indexer's view of transfers waiting on Iris, and Iris's answers for their burns.
+const inbound = (id: string, burn: string, amount = 12_500_000n) => ({ id, address: ME, direction: "monad_to_stellar", amount: amount.toString(), source_tx: burn });
+const irisMessages = (domain: number, burn: string, messages: { status: string; message: string }[]) =>
+  net.iris.set(
+    `/v2/messages/${domain}?transactionHash=${burn}`,
+    () => Response.json({ messages: messages.map((m) => ({ ...m, attestation: m.status === "complete" ? ATTESTATION : "PENDING" })) }),
+  );
+const updates = () => db.statements.filter((s) => s.q.startsWith("update lite.bridge_transfers"));
+
 Deno.test("the indexer: an attested transfer from Monad is relayed by the keeper and completes; one to Monad waits for its claim", async () => {
   fresh();
   net.rpcAccounts.add(KEEPER.publicKey());
-  const inbound = { id: TRANSFER, direction: "monad_to_stellar", source_tx: "ab".repeat(32) };
-  const outbound = { id: "67904f04-179c-49db-a5b8-edeb7d2f64ed", direction: "stellar_to_monad", source_tx: "cd".repeat(32) };
-  const waiting = { id: "5d0c1b7e-0000-4000-8000-000000000003", direction: "monad_to_stellar", source_tx: "0x" + "ef".repeat(32) };
-  db.open = [inbound, outbound, waiting];
-  const message = (status: string) => () => Response.json({ messages: [{ status, message: "0x" + "28".repeat(32), attestation: status === "complete" ? "0x" + "82".repeat(65) : "PENDING" }] });
-  net.iris.set(`/v2/messages/${MONAD.domain}?transactionHash=0x${"ab".repeat(32)}`, message("complete"));
-  net.iris.set(`/v2/messages/${CCTP.domain}?transactionHash=${"cd".repeat(32)}`, message("complete"));
-  net.iris.set(`/v2/messages/${MONAD.domain}?transactionHash=0x${"ef".repeat(32)}`, message("pending_confirmations"));
+  const outbound = { id: OUTBOUND, address: ME, direction: "stellar_to_monad", amount: "125000000", source_tx: "cd".repeat(32) };
+  const waiting = inbound("5d0c1b7e-0000-4000-8000-000000000003", "0x" + "ef".repeat(32));
+  // Reported without its 0x: Iris is asked with it.
+  db.open = [inbound(TRANSFER, "ab".repeat(32)), outbound, waiting];
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: MESSAGE }]);
+  irisMessages(CCTP.domain, "cd".repeat(32), [{ status: "complete", message: IRIS_STELLAR_BURN }]);
+  irisMessages(MONAD.domain, "0x" + "ef".repeat(32), [{ status: "pending_confirmations", message: MESSAGE }]);
   assertEquals(await bridge.advanceBridges(), 2);
   const [relay] = net.sent;
-  assertEquals(relay.source, KEEPER.publicKey());
-  const updates = ran("update lite.bridge_transfers set message");
-  assertEquals(updates.map((u) => [u.q.match(/status = '(\w+)'/)?.[1], u.params.at(-1)]), [["completed", TRANSFER], ["relaying", outbound.id]]);
-  assertEquals(updates[0].params[2], relay.hash().toString("hex"), "dest_tx is the relay");
+  assertEquals([net.sent.length, relay.source], [1, KEEPER.publicKey()]);
+  const call = (relay.operations[0] as any).func.invokeContract();
+  assertEquals("0x" + Buffer.from(call.args()[0].bytes()).toString("hex"), MESSAGE, "the burn's own message");
+  assertEquals(updates().map((u) => [u.q, u.params.at(-1)]), [[COMPLETED, TRANSFER], [RELAYING, OUTBOUND]]);
+  assertEquals(updates()[0].params, [MESSAGE, ATTESTATION, relay.hash().toString("hex"), TRANSFER], "dest_tx is the relay");
+  assertEquals(ran(RELAYED)[0].params, [MESSAGE, TRANSFER]);
   assertEquals(ran("insert into lite.keeper_log")[0].params[3], { transfer: TRANSFER });
+});
+
+Deno.test("the indexer: a burn that isn't the transfer's own fails it, and the keeper relays nothing", async () => {
+  // The reviewer's case first: a 1 USDC transfer started, then a burn of 1 base unit through the forwarder reported.
+  const burns: [string, string, string][] = [
+    ["1 base unit", burnMessage(ME, 1n), "Not relayed: it isn't for the transfer's amount."],
+    ["someone else's", burnMessage(SPONSOR.publicKey(), 1_000_000n), "Not relayed: its hook data isn't the transfer's address."],
+    ["callable by anyone", burnMessage(ME, 1_000_000n, { destinationCaller: "0".repeat(64) }), "Not relayed: it isn't minted to and called by the CctpForwarder."],
+    ["to another chain", burnMessage(ME, 1_000_000n, { destinationDomain: 0 }), "Not relayed: it isn't a burn from Monad to Stellar."],
+    ["not a burn", "0x" + "28".repeat(32), "Not relayed: it isn't a CCTP v2 burn."],
+  ];
+  for (const [what, message, error] of burns) {
+    fresh();
+    net.rpcAccounts.add(KEEPER.publicKey());
+    db.open = [inbound(TRANSFER, "0x" + "ab".repeat(32), 1_000_000n)];
+    irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message }]);
+    assertEquals(await bridge.advanceBridges(), 0, what);
+    assertEquals([net.sent, net.simulated], [[], []], `${what}: nothing relayed, nor simulated`);
+    assertEquals(updates().map((u) => [u.q, u.params]), [[REFUSED, [message, error, TRANSFER]]], what);
+  }
+});
+
+Deno.test("the indexer: one burn, one relay; and the transfer's own message among several", async () => {
+  // The same burn reported for a second transfer, after the first completed with it: refused, unrelayed.
+  fresh();
+  net.rpcAccounts.add(KEEPER.publicKey());
+  db.relayed.add(MESSAGE);
+  db.open = [inbound(TRANSFER, "0x" + "ab".repeat(32))];
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: MESSAGE }]);
+  assertEquals(await bridge.advanceBridges(), 0);
+  assertEquals(net.sent, []);
+  assertEquals(updates().map((u) => [u.q, u.params]), [[RELAYED_ALREADY, [TRANSFER]]]);
+
+  // Two transfers with the same burn in one run: the first is relayed, the second sees it.
+  fresh();
+  net.rpcAccounts.add(KEEPER.publicKey());
+  const twin = "5d0c1b7e-0000-4000-8000-000000000003";
+  db.open = [inbound(TRANSFER, "0x" + "ab".repeat(32)), inbound(twin, "0x" + "ab".repeat(32))];
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: MESSAGE }]);
+  assertEquals(await bridge.advanceBridges(), 1);
+  assertEquals(net.sent.length, 1);
+  assertEquals(updates().map((u) => [u.q, u.params.at(-1)]), [[COMPLETED, TRANSFER], [RELAYED_ALREADY, twin]]);
+
+  // A transaction with two burns: the transfer's is the second; relayed once all of them are attested.
+  fresh();
+  net.rpcAccounts.add(KEEPER.publicKey());
+  const another = burnMessage(SPONSOR.publicKey(), 12_500_000n);
+  db.open = [inbound(TRANSFER, "0x" + "ab".repeat(32))];
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: another }, { status: "pending_confirmations", message: MESSAGE }]);
+  assertEquals(await bridge.advanceBridges(), 0);
+  assertEquals([net.sent, updates()], [[], []], "waits while one is pending");
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: another }, { status: "complete", message: MESSAGE }]);
+  assertEquals(await bridge.advanceBridges(), 1);
+  const call = (net.sent[0].operations[0] as any).func.invokeContract();
+  assertEquals("0x" + Buffer.from(call.args()[0].bytes()).toString("hex"), MESSAGE);
+});
+
+Deno.test("the indexer: a relay that fails is recorded and tried again next run", async () => {
+  fresh();
+  // The keeper's account doesn't exist: the relay throws before anything is sent.
+  db.open = [inbound(TRANSFER, "0x" + "ab".repeat(32))];
+  irisMessages(MONAD.domain, "0x" + "ab".repeat(32), [{ status: "complete", message: MESSAGE }]);
+  assertEquals(await bridge.advanceBridges(), 0);
+  assertEquals(updates().map((u) => [u.q, u.params]), [[RELAY_ERROR, [MESSAGE, ATTESTATION, "the keeper's account doesn't exist", TRANSFER]]]);
 });
 
 // ------------------------------------------------------------------------------------------------ mainnet
