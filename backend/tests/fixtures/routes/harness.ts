@@ -183,6 +183,13 @@ export const routeRows: Responder = (q) => {
   if (q.startsWith("select token, quote, last_price from lite.launches where last_price is not null")) {
     return [{ token: TOKEN, quote: XLM_SAC, last_price: "0.0000333" }];
   }
+  // The reference cache (migration 06), quoted a moment ago so that every price is current.
+  if (q === "select ref, usd, source, market, change_24h, volume_24h_usd, quoted_at from lite.ref_quotes") {
+    return [
+      { ref: "XLM", usd: "0.1901", source: "kraken", market: "Kraken XLM/USD", change_24h: "-0.0123", volume_24h_usd: "3712345.2", quoted_at: new Date() },
+      { ref: "USDC", usd: "0.9999", source: "kraken", market: "Kraken USDC/USD", change_24h: "0.0001", volume_24h_usd: "912003.5", quoted_at: new Date() },
+    ];
+  }
   throw new Error(`unexpected query: ${q}`);
 };
 
@@ -240,7 +247,7 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "cash-anchors", method: "GET", path: "/v1/cash/anchors?country=gh", auth: true },
   { name: "cash-track-unknown-anchor", method: "POST", path: "/v1/cash/track", body: { anchor: "example.com", kind: "deposit", asset: "USDC", anchorTxId: "1" }, auth: true },
   { name: "activity", method: "GET", path: "/v1/activity", auth: true },
-  { name: "prices", method: "GET", path: "/v1/prices", auth: true, volatile: ["at"] },
+  { name: "prices", method: "GET", path: "/v1/prices", auth: false, volatile: ["at"] },
   { name: "no-route", method: "GET", path: "/v1/nope", auth: false },
 ];
 
