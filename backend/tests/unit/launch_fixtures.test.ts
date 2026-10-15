@@ -2,7 +2,8 @@
 // §6.9, §12.5): the board (launches, and the older clients' launches.legacy), a launch's page in the owner's and the
 // public view (launch, launch.public, launch.legacy), My Launchpad, the economics, a coin's metadata URI, quotes, a
 // contract's refusal and the launch row of the markets (markets.json), produced by the routes' own code from seeded
-// rows and a fake RPC that carry the fixtures' figures.
+// rows and a fake RPC that carry the fixtures' figures. Through the API's router: the board and a launch's page answer
+// without a token (the public view, cached 15 s) and with one, and My Launchpad only with one.
 //
 // ERRATA: figures the fixtures state that no consistent server could answer, and what this one answers instead. Each
 // payload is compared with its fixture with these corrected, and with nothing else changed (they are WP-03's to fix):
@@ -15,7 +16,7 @@
 // - error-contract.json's raw is an example; the API passes on the simulation's own text.
 import { Address, nativeToScVal, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { fakeSql, type Row, setTestEnv } from "../fixtures/routes/harness.ts";
+import { fakeSql, type Row, setTestEnv, userToken } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
 const STORAGE = "https://example.supabase.co";
@@ -205,6 +206,8 @@ function database(board: Row[] = [FULL_ROW, ECAT_ROW, GRAD_ROW]): void {
     }
     if (q.startsWith("select token, symbol, name, quote from lite.launches where token = any(")) return [{ token: ECAT, symbol: "ECAT", name: "E2E Cat", quote: XLM }];
     if (q.startsWith("insert into lite.launch_metadata")) return [];
+    // A session's tester check (auth.ts requireUser), for the routes' own test.
+    if (q === "select 1 from lite.testers where address = ? and revoked_at is null") return [{ "?column?": 1 }];
     throw new Error(`unexpected query: ${q}`);
   }));
 }
@@ -429,4 +432,39 @@ Deno.test("launchMarketRows() feeds /v1/markets: ECAT's row is markets.json's la
   const markets = fixture("markets");
   assertEquals(row, corrected(markets.rows[2], [["priceUsd", ECAT_PRICE_USD]]));
   assertEquals(m.popular(markets.rows.slice(0, 2), [row]).map((r) => r.id), ["XLM", "USDC", ECAT]);
+});
+
+// ------------------------------------------------------------------------------------------------ the routes
+
+Deno.test("the routes: the board and a launch's page answer without a token (the public view, cached 15 s) and with one (the owner's); My Launchpad needs one", async () => {
+  const { handle } = await import("../../supabase/functions/lite/index.ts");
+  const token = await userToken();
+  const get = async (path: string, auth: string | null) => {
+    const res = await handle(new Request(`http://127.0.0.1/functions/v1/lite${path}`, { headers: auth ? { authorization: `Bearer ${auth}` } : {} }));
+    return { status: res.status, cache: res.headers.get("cache-control"), body: await res.json() };
+  };
+  for (const query of ["", `&address=${ME}`]) {
+    database();
+    const board = await get(`/v1/launches?section=explore${query}`, null);
+    assertEquals([board.status, board.cache, board.body.view, board.body.launches.length], [200, "public, max-age=15", "public", 3], query || "no ?address=");
+  }
+  database();
+  const ownerBoard = await get("/v1/launches?section=explore", token);
+  assertEquals([ownerBoard.status, ownerBoard.cache, ownerBoard.body.view], [200, "no-store", "owner"]);
+
+  // A launch's page: on-chain facts only in the public view (launch.public.json's `you`), none without ?address=.
+  database();
+  const anyone = await get(`/v1/launches/${ECAT}?address=${ME}`, null);
+  assertEquals([anyone.status, anyone.cache, anyone.body.view, anyone.body.you], [200, "public, max-age=15", "public", fixture("launch.public").you]);
+  database();
+  assertEquals((await get(`/v1/launches/${ECAT}`, null)).body.you, null);
+  database();
+  const owner = await get(`/v1/launches/${ECAT}`, token);
+  assertEquals([owner.status, owner.cache, owner.body.view, owner.body.you.costBasisQuote !== null], [200, "no-store", "owner", true]);
+
+  // My Launchpad is DyorHQ's history: a session's only.
+  database();
+  assertEquals((await get("/v1/launchpad/me", null)).status, 401);
+  database();
+  assertEquals((await get("/v1/launchpad/me", token)).status, 200);
 });

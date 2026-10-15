@@ -235,15 +235,6 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  Deno.test("the launch board's public view: no token, with or without ?address=, cached 15 s; with a token, the owner's", async () => {
-    for (const query of ["", `?address=${OTHER.publicKey()}`]) {
-      const res = await quietly(() => handle(request("GET /v1/launches", `/v1/launches${query}`, null)));
-      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], query || "no query");
-    }
-    const owner = await quietly(() => handle(request("GET /v1/launches", "/v1/launches", token)));
-    assertEquals([owner.status, owner.headers.get("cache-control"), (await owner.json()).view], [200, "no-store", "owner"]);
-  });
-
   Deno.test("the guard lets a viewer route through without an Authorization header, and checks one that is sent", async () => {
     const expired = await signJwt({ sub: USER.publicKey(), net: "testnet", aud: "dyorhq-lite", iss: "dyorhq-lite", exp: 1_760_400_060, iat: 1_760_400_000 });
     for (const spec of ROUTES.map(([s]) => s).filter(isViewer)) {
