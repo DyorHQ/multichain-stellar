@@ -64,7 +64,7 @@ pub const MOMENT_HARVEST_BPS: u32 = 6_667;
 /// The creator's share of a harvest's USDC side; the platform gets the rest (Monad's 0.2 : 0.3, §9.1).
 pub const MOMENT_HARVEST_CREATOR_BPS: u32 = 4_000;
 
-/// Publish string limits, in bytes (§9.2).
+/// Publish string limits, in bytes (§9.2). A symbol's bytes must also be ASCII letters or digits ([`symbol_ok`]).
 const NAME_LEN: (u32, u32) = (1, 32);
 const SYMBOL_LEN: (u32, u32) = (2, 10);
 const URI_LEN: (u32, u32) = (1, 256);
@@ -88,7 +88,7 @@ pub enum Error {
     AllocTooHigh = 10_705,
     /// The collect window is outside the durations' `min_window` to `max_window`.
     InvalidWindow = 10_706,
-    /// A name, symbol, URI, place or date outside its length limits.
+    /// A name, symbol, URI, place or date outside its length limits, or a symbol that isn't all ASCII letters or digits.
     InvalidString = 10_707,
     UnknownMoment = 10_708,
     /// `collect` on a Moment that isn't Collecting.
@@ -180,7 +180,8 @@ dyor_common::assert_err_codes!(TAG_MOMENTS_V2;
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublishParams {
-    /// The Moment's name and symbol, which its NFT and later its coin carry.
+    /// The Moment's name and symbol, which its NFT and later its coin carry. The name is free-form; the symbol is 2 to
+    /// 10 ASCII letters or digits.
     pub name: String,
     pub symbol: String,
     /// Every edition's `token_uri`: the Moment's metadata JSON (off chain, §10).
@@ -239,10 +240,26 @@ pub(crate) fn bundle_rate(threshold: i128, reserve_bps: u32, alloc_bps: u32) -> 
 fn strings_ok(p: &PublishParams) -> bool {
     let within = |s: &String, (lo, hi): (u32, u32)| (lo..=hi).contains(&s.len());
     within(&p.name, NAME_LEN)
-        && within(&p.symbol, SYMBOL_LEN)
+        && symbol_ok(&p.symbol)
         && within(&p.metadata_uri, URI_LEN)
         && p.place.len() <= MAX_PLACE_LEN
         && p.date.len() <= MAX_DATE_LEN
+}
+
+/// A symbol is 2 to 10 ASCII letters or digits ([A-Za-z0-9]). The coin takes the Moment's symbol at graduation, and
+/// Soroswap's pair names its LP token from the first 6 bytes of each token's symbol, decoded as UTF-8 with an
+/// unwrap: a symbol cut inside a multi-byte character there would make every graduation fail, a recorded failure
+/// each time, until the creator could expire the Moment and take 70% of its reserve while collectors get no coins.
+/// The name is free-form: the pair doesn't read it.
+fn symbol_ok(symbol: &String) -> bool {
+    let len = symbol.len();
+    if !(SYMBOL_LEN.0..=SYMBOL_LEN.1).contains(&len) {
+        return false;
+    }
+    let mut buf = [0u8; SYMBOL_LEN.1 as usize];
+    let bytes = &mut buf[..len as usize];
+    symbol.copy_into_slice(bytes);
+    bytes.iter().all(u8::is_ascii_alphanumeric)
 }
 
 #[contract]
