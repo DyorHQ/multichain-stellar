@@ -3,7 +3,7 @@
 //
 // Why not _shared/ttl.ts keepAlive, which the functions' keeper uses: it extends up to 20 entries in one transaction,
 // and a transaction's fee is a uint32, at most 429.4967295 XLM. Testnet's rent on 2026-10-15 is about 0.08 XLM per KB
-// of WASM a day (launchpad-v2's 90 KB: about 7.4 XLM a day), so v2's WASMs together (about 24 XLM a day) can't gain
+// of WASM a day (launchpad-v2's 90 KB: about 7.4 XLM a day), so v2's WASMs together (about 26 XLM a day) can't gain
 // even 30 days in one transaction, and launchpad-v2 alone can't gain the deploy's 75 days in one either (about 500
 // XLM, 650 with prepare's headroom). So here instances go together (a few hundred bytes each) and each WASM goes
 // alone, CODE_STEP_DAYS more per transaction until it has the days asked for. Each step pays only the rent of the days

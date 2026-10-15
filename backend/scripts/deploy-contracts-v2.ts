@@ -114,7 +114,16 @@ import {
 import { constructorGuard, type GuardResult } from "./lib/wasm-spec.ts";
 import { runSmoke, type SmokeDeployment, SmokeError } from "./lib/smoke-v2.ts";
 import { CODE_STEP_DAYS, extendTtl } from "./lib/ttl-extend.ts";
-import { describeWiringCheck, readBackWiring, renderWiringRow, wiringChecks, type WiringPlan, wiringProblems } from "./lib/wiring-v2.ts";
+import {
+  describeWiringCheck,
+  readBackWiring,
+  renderWiringRow,
+  routerFactoryCheck,
+  wiringChecks,
+  type WiringPlan,
+  wiringProblems,
+  wiringVerdict,
+} from "./lib/wiring-v2.ts";
 
 export const USAGE =
   "usage: deploy-contracts-v2.ts --deployment testnet|testnet-qa [--dry-run [--offline]] [--aquarius off|auto] [--fund-aqua-float] [--generation n]\n" +
@@ -298,8 +307,8 @@ async function qaKeys(ctx: DeployCtx, dryRun: boolean): Promise<Keys> {
  *  skipped). Testnet resets on 2026-12-16 (docs/ARCHITECTURE.md), 62 days after 2026-10-15: longer buys nothing.
  *  Testnet's max_entry_ttl (CONFIG_SETTING_STATE_ARCHIVAL, read 2026-10-15) is 3,110,400 ledgers, 180 days. A
  *  transaction's fee is at most 429 XLM, so each WASM goes alone in steps of CODE_STEP_DAYS (lib/ttl-extend.ts). The
- *  rent is paid by the deployer: at most 24 XLM a day for testnet's ~320 KB of v2 WASM at the 2026-10-15 rates, so
- *  about 1,630 XLM on the first run (MIN_DEPLOYER_XLM covers it with the uploads). Per-launch tokens, Moment NFTs and
+ *  rent is paid by the deployer: about 26 XLM a day for testnet's ~318 KB of v2 WASM at the 2026-10-15 rates, so
+ *  about 2,000 XLM on the first run with the uploads, the instances and the admin calls (MIN_DEPLOYER_XLM covers it). Per-launch tokens, Moment NFTs and
  *  coins start at the network minimum (7 days): the keeper's TTL upkeep keeps them alive. */
 export const TTL_EXTEND_DAYS = 75;
 export const TTL_THRESHOLD_DAYS = 75;
@@ -549,15 +558,16 @@ function printPlan(io: Io, plan: Plan) {
   say("After the constructors, before anything else is sent: the wiring read-back (views by simulation, no transaction)");
   say("  every planned contract must be at its planned id with the planned configuration (the re-run check), then:");
   for (const c of wiringChecks(wiringPlan(plan))) say(`    ${describeWiringCheck(c)}`);
-  say("  any mismatch stops the run there: no admin call, no TTL step and no deployment file");
+  say("  any mismatch stops the run there: no admin call, no TTL step and no deployment file. Before anything is sent, the");
+  say("  Soroswap router's get_factory() must be the factory above (read-only; skipped with --offline)");
   say();
   say("After the constructors, signed by the admin");
   say(`  set_quote for ${lp.quotes.map((q) => q.asset).join(", ")}, with venue ids read back from venues() (F8)`);
   say("  set_launch_fee, set_fees and set_venue_enabled only where the chain differs from the economics file (the");
   say("  constructor already takes the launch fee, starts at §14.1's fees and enables every initial venue)");
   say(`  then every v2 instance and WASM, and the Soroswap factory's instance and its factory and pair WASMs, are extended`);
-  say(`  to ${TTL_EXTEND_DAYS} days (past the 2026-12-16 testnet reset) where they have less, paid by the deployer: about 1,650 XLM`);
-  say(`  of rent on the first run, each WASM alone in ${CODE_STEP_DAYS}-day steps (a transaction's fee is at most 429 XLM): 25 to 30`);
+  say(`  to ${TTL_EXTEND_DAYS} days (past the 2026-12-16 testnet reset) where they have less, paid by the deployer (about 26 XLM`);
+  say(`  a day; about 2,000 XLM for the whole first run), each WASM alone in ${CODE_STEP_DAYS}-day steps (a transaction's fee is at most 429 XLM): 25 to 30`);
   say("  transactions");
   say(`  and backend/supabase/functions/_shared/deployments/${profile.deploymentFile} is written`);
 }
@@ -698,8 +708,12 @@ async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<n
   if (!plan.keys.deployKey) blockers.push("no deploy key");
   say();
   if (!reader) {
-    say("Network checks: skipped (--offline): the preflight, what is already on chain and the wiring read-back");
+    say("Network checks: skipped (--offline): the Soroswap router's factory, the preflight, what is already on chain and the wiring read-back");
   } else {
+    say("Soroswap factory (read-only)");
+    const router = await routerFactoryCheck((id, fn, args) => reader.view(id, fn, args), TESTNET.contracts.soroswapRouter, network().soroswapFactory);
+    say(`  ${router.line}`);
+    if (!router.ok) blockers.push("the Soroswap router's factory");
     say("Preflight (read-only)");
     const lines = plan.keys.qaEphemeral ? [] : await preflight({
       chain: reader,
@@ -742,6 +756,7 @@ async function dryRunChecks(io: Io, plan: Plan, reader: Chain | null): Promise<n
       if (rec.every((r) => r.state === "deployed")) {
         say("Wiring read-back (views, no transaction)");
         const rows = await readBackWiring(wiringPlan(plan), (id, fn, args) => reader.view(id, fn, args));
+        if (wiringVerdict(rows) === "unreadable") say("  (a view couldn't be read; nothing differs so far: run it again)");
         for (const r of rows) say(`  ${renderWiringRow(r)}`);
         if (wiringProblems(rows).length) blockers.push("the wiring read-back");
       } else {
@@ -819,6 +834,9 @@ async function deploy(
     return states;
   };
   let states = await reconcileOrRefuse(plan);
+  // The factory the plan wires everything to, as the Soroswap router names it (read-only), before anything is sent.
+  const router = await routerFactoryCheck((id, fn, args) => chain.view(id, fn, args), TESTNET.contracts.soroswapRouter, network().soroswapFactory, { sleep: ctx.sleep });
+  if (!router.ok) throw new Error(`${router.line.slice(2)}: networks.ts must name the router's factory; nothing was sent`);
   say();
   say("Deploying");
 
@@ -916,7 +934,7 @@ async function deploy(
   //    configuration (the re-run check again), then the executors, the factory and the locker read back with views
   //    (simulation, no transaction; lib/wiring-v2.ts). Any mismatch stops the run here: no float, no admin call, no
   //    TTL step and no deployment file. A re-run skips the deployed contracts and reads the wiring again.
-  await requireWiring(plan, chain, reconcileOrRefuse, say);
+  await requireWiring(plan, chain, reconcileOrRefuse, say, ctx.sleep);
 
   // 7. The float, now that exec-aquarius exists.
   if (plan.aqua.enabled) {
@@ -997,6 +1015,7 @@ async function requireWiring(
   chain: Chain,
   reconcileOrRefuse: (p: Plan, sentAlready?: boolean) => Promise<Reconciled[]>,
   say: (l?: string) => void,
+  sleep?: (ms: number) => Promise<void>,
 ): Promise<void> {
   const stop = "the run stopped after the constructors: no admin call, no TTL step and no deployment file";
   const after = await reconcileOrRefuse(plan, true);
@@ -1005,9 +1024,12 @@ async function requireWiring(
     throw new Error(`${notThere.map((s) => `${s.name} ${s.id}`).join(", ")} not at the planned id after the constructors; ${stop}. Run the same command again.`);
   }
   say("  Wiring read-back (views, no transaction)");
-  const rows = await readBackWiring(wiringPlan(plan), (id, fn, args) => chain.view(id, fn, args));
+  const rows = await readBackWiring(wiringPlan(plan), (id, fn, args) => chain.view(id, fn, args), { sleep });
   for (const r of rows) say(`    ${renderWiringRow(r)}`);
   const problems = wiringProblems(rows);
+  if (wiringVerdict(rows) === "unreadable") {
+    throw new Error(`${stop}:\n  ${problems.join("\n  ")}\nA view couldn't be read; nothing differs so far: run the same command again.`);
+  }
   if (problems.length) {
     throw new Error(
       `the wiring read back from the chain differs from the plan; ${stop}:\n  ${problems.join("\n  ")}\n` +

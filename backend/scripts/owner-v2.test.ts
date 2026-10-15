@@ -140,6 +140,8 @@ class Ledger implements Chain {
     // Testnet's Soroswap factory with one pair, about 94 days left on each (as read on 2026-10-15).
     this.addContract(SOROSWAP_FACTORY, { kind: "soroswap-factory", wasm: SOROSWAP_FACTORY_CODE, fns: { all_pairs_length: () => 1, all_pairs: () => SOROSWAP_PAIR } });
     this.addContract(SOROSWAP_PAIR, { kind: "soroswap-pair", wasm: SOROSWAP_PAIR_CODE, fns: {} });
+    // The router names its factory (the deploy checks networks.ts against it).
+    this.addContract(TESTNET.contracts.soroswapRouter, { kind: "soroswap-router", wasm: "soroswap-router", fns: { get_factory: () => SOROSWAP_FACTORY } });
     for (const k of [SOROSWAP_FACTORY, SOROSWAP_FACTORY_CODE, SOROSWAP_PAIR_CODE]) this.ttl.set(k, this.ledger + 94 * 17_280);
   }
 
@@ -840,7 +842,7 @@ Deno.test("deploy: the owner's testnet end to end, then an idempotent re-run, th
     assertStringIncludes(r.out, "(75 days)");
     assertStringIncludes(r.out, "3. The v2 contracts and WASMs now live 75 days, past the 2026-12-16 testnet reset; the keeper's TTL upkeep (lite-indexer)");
     assertStringIncludes(r.out, "must still run before testers are invited");
-    assertStringIncludes(r.out, "✓ exec-soroswap callers() contains launchpad-v2 and moments-graduator");
+    assertStringIncludes(r.out, "✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
     assertStringIncludes(r.out, "✓ launchpad-v2 venues() Soroswap venue executor is exec-soroswap");
     const roles = await rolesOf(k);
     assertEquals(keptAlive[0].payer, roles.ADMIN_PUBLIC, "the deployer (the admin) pays the TTL");
@@ -1839,6 +1841,8 @@ Deno.test("wiring read-back: a mis-wired executor stops the run after the constr
       assertEquals(r.code, 1, `${kind}.${fn}: ${r.out}`);
       assertStringIncludes(r.out, "the wiring read back from the chain differs from the plan; the run stopped after the constructors: no admin call, no TTL step and no deployment file");
       assertStringIncludes(r.out, message);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+      assertFalse(r.out.includes("nothing differs so far"));
       // Everything was deployed, and nothing was sent after the constructors.
       const sent = k.ledger.log.filter((l) => l.startsWith("invoke") || l.startsWith("create "));
       assertEquals(sent.filter((l) => l.startsWith("invoke")), [], `${kind}.${fn}: no admin call`);
@@ -1869,7 +1873,7 @@ Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, an
     for (
       const s of [
         "After the constructors, before anything else is sent: the wiring read-back (views by simulation, no transaction)",
-        "    exec-soroswap callers() contains launchpad-v2 and moments-graduator",
+        "    exec-soroswap callers() is exactly launchpad-v2 and moments-graduator",
         "    exec-soroswap factory() is the Soroswap factory",
         "    launchpad-v2 config().soroswap_factory is the Soroswap factory",
         "    lp-locker soroswap_factory() is the Soroswap factory",
@@ -1877,7 +1881,7 @@ Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, an
         "    moments-graduator executor() is exec-soroswap",
         "    moments-v2 config().executor is exec-soroswap",
         "    launchpad-v2 venues() Soroswap venue executor is exec-soroswap",
-        "    qa-exec-fail callers() contains launchpad-v2 and moments-graduator-qa-fail",
+        "    qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail",
         "    launchpad-v2 venues() QaFail venue executor is qa-exec-fail",
         "    moments-graduator-qa-fail executor() is qa-exec-fail",
         "    moments-v2-qa-fail config().executor is qa-exec-fail",
@@ -1893,11 +1897,11 @@ Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, an
     const section = after.slice(0, after.findIndex((l) => !l.startsWith("    ")));
     assertEquals(section.length, 25, section.join("\n"));
     assert(section.every((l) => l.startsWith("    ✓ ")), "25 wiring checks pass");
-    assertStringIncludes(r.out, "✓ qa-exec-fail callers() contains launchpad-v2 and moments-graduator-qa-fail");
+    assertStringIncludes(r.out, "✓ qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail");
     // A re-run's dry run reads the wiring back too, now that every contract is there.
     const again = await deployDefault(k, ["--deployment", "testnet-qa", "--dry-run"]);
     assertEquals(again.code, 0, again.out);
-    assertStringIncludes(again.out, "Wiring read-back (views, no transaction)\n  ✓ exec-soroswap callers() contains launchpad-v2 and moments-graduator");
+    assertStringIncludes(again.out, "Wiring read-back (views, no transaction)\n  ✓ exec-soroswap callers() is exactly launchpad-v2 and moments-graduator");
     assertStringIncludes(again.out, "A real deploy would go ahead.");
     // The failing stack's own wiring: its executor, mis-wired, is refused like the main one.
     const k2 = await kit();
@@ -1906,12 +1910,96 @@ Deno.test("wiring read-back: testnet-qa checks the failing Moments stack too, an
       const bad = await deployDefault(k2, ["--deployment", "testnet-qa"]);
       assertEquals(bad.code, 1, bad.out);
       assertStringIncludes(bad.out, "qa-exec-fail callers() is [");
-      assertStringIncludes(bad.out, "it must contain launchpad-v2 C");
+      assertStringIncludes(bad.out, "the plan has exactly launchpad-v2 C");
       assertFalse(await Deno.stat(`${k2.deployments}/testnet-qa-v2.json`).then(() => true, () => false));
     } finally {
       await cleanup(k2);
     }
     await assertNoSecrets(k);
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: a view that can't be read (twice) stops the run as unreadable, not as a mis-wiring; a re-run goes on", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    // exec-soroswap's factory() is rate-limited from its second read on: the re-run check reads it once, the
+    // read-back's read and its one retry both fail.
+    let reads = 0;
+    const restore = miswire(k.ledger, "exec-soroswap", "factory", () => {
+      reads++;
+      throw new Error("rate limited (HTTP 429)");
+    });
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertEquals(reads, 2, "the read-back tried the view twice");
+    assertStringIncludes(r.out, "exec-soroswap factory(): can't read it (rate limited (HTTP 429))");
+    assertStringIncludes(r.out, "A view couldn't be read; nothing differs so far: run the same command again.");
+    assertFalse(r.out.includes("new --generation"), "an unreadable view isn't a mis-wiring");
+    assertEquals(k.ledger.log.filter((l) => l.startsWith("invoke")), [], "no admin call");
+    restore();
+    const again = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(again.code, 0, again.out);
+    assertStringIncludes(again.out, "✓ exec-soroswap factory() is the Soroswap factory");
+    // A read that fails once and then answers passes on its retry.
+    const k2 = await kit();
+    try {
+      await readyOwner(k2);
+      let n = 0;
+      miswire(k2.ledger, "lp-locker", "owners", (right) => {
+        if (++n === 1) throw new Error("timeout");
+        return right;
+      });
+      const once = await deployDefault(k2, ["--deployment", "testnet"]);
+      assertEquals(once.code, 0, once.out);
+      assertStringIncludes(once.out, "✓ lp-locker owners() is exactly launchpad-v2 and moments-v2");
+    } finally {
+      await cleanup(k2);
+    }
+  } finally {
+    await cleanup(k);
+  }
+});
+
+Deno.test("wiring read-back: an extra caller or owner is a mis-wiring (exact sets)", async () => {
+  for (const [kind, fn, label] of [["exec-soroswap", "callers", "exec-soroswap callers()"], ["lp-locker", "owners", "lp-locker owners()"]]) {
+    const k = await kit();
+    try {
+      await readyOwner(k);
+      miswire(k.ledger, kind, fn, (right) => [...(right as string[]), ATTACKER]);
+      const r = await deployDefault(k, ["--deployment", "testnet"]);
+      assertEquals(r.code, 1, r.out);
+      assertStringIncludes(r.out, `${label} is [`);
+      assertStringIncludes(r.out, `"${ATTACKER}"] on chain; the plan has exactly launchpad-v2 C`);
+      assertStringIncludes(r.out, "a fix needs a new --generation");
+    } finally {
+      await cleanup(k);
+    }
+  }
+});
+
+Deno.test("the Soroswap router's get_factory() must be networks.ts's factory: refused before anything is sent; --offline skips it", async () => {
+  const k = await kit();
+  try {
+    await readyOwner(k);
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => XLM_SAC;
+    const dry = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertEquals(dry.code, 0, dry.out);
+    assertStringIncludes(dry.out, `✗ the Soroswap router ${TESTNET.contracts.soroswapRouter} get_factory() is ${XLM_SAC}; networks.ts has ${SOROSWAP_FACTORY}`);
+    assertStringIncludes(dry.out, "A real deploy would stop at: the Soroswap router's factory.");
+    const offline = await deployDefault(k, ["--deployment", "testnet", "--dry-run", "--offline"]);
+    assertEquals(offline.code, 0, offline.out);
+    assertFalse(offline.out.includes("get_factory() is"), "not read offline");
+    const mark = k.ledger.log.length;
+    const r = await deployDefault(k, ["--deployment", "testnet"]);
+    assertEquals(r.code, 1, r.out);
+    assertStringIncludes(r.out, "networks.ts must name the router's factory; nothing was sent");
+    assertEquals(k.ledger.log.slice(mark).filter((l) => !l.startsWith("view")), [], "nothing sent");
+    k.ledger.contracts.get(TESTNET.contracts.soroswapRouter)!.fns.get_factory = () => SOROSWAP_FACTORY;
+    const ok = await deployDefault(k, ["--deployment", "testnet", "--dry-run"]);
+    assertStringIncludes(ok.out, `✓ the Soroswap router's get_factory() is networks.ts's Soroswap factory ${SOROSWAP_FACTORY}`);
   } finally {
     await cleanup(k);
   }

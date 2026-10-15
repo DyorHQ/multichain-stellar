@@ -7,7 +7,16 @@ import { Address, hash, nativeToScVal, StrKey, xdr } from "@stellar/stellar-sdk"
 import type { SingletonName } from "./v2-profile.ts";
 import { WASMS, type WasmKey } from "./v2-constructors.ts";
 import { functionNames, readSpec, udtDefinitions } from "./wasm-spec.ts";
-import { describeWiringCheck, readBackWiring, renderWiringRow, wiringChecks, type WiringPlan, wiringProblems } from "./wiring-v2.ts";
+import {
+  describeWiringCheck,
+  readBackWiring,
+  renderWiringRow,
+  routerFactoryCheck,
+  wiringChecks,
+  type WiringPlan,
+  wiringProblems,
+  wiringVerdict,
+} from "./wiring-v2.ts";
 
 const cid = (label: string) => StrKey.encodeContract(hash(Buffer.from(label)));
 const FACTORY = "CDP3HMUH6SMS3S7NPGNDJLULCOXXEPSHY4JKUKMBNQMATHDHWXRRJTBY";
@@ -70,7 +79,7 @@ Deno.test("wiring: testnet reads the executor, the factory everywhere, the locke
   const checks = wiringChecks(p).map(describeWiringCheck);
   for (
     const c of [
-      "exec-soroswap callers() contains launchpad-v2 and moments-graduator",
+      "exec-soroswap callers() is exactly launchpad-v2 and moments-graduator",
       "exec-soroswap factory() is the Soroswap factory",
       "launchpad-v2 config().soroswap_factory is the Soroswap factory",
       "moments-graduator soroswap_factory() is the Soroswap factory",
@@ -83,7 +92,7 @@ Deno.test("wiring: testnet reads the executor, the factory everywhere, the locke
   assertEquals(checks.length, 15);
   assert(!checks.some((c) => c.includes("qa-") || c.includes("Aquarius")), "no testnet-qa or Aquarius check on a Soroswap-only testnet");
   const reads: string[] = [];
-  const rows = await readBackWiring(p, viewOf(wired(p), reads));
+  const rows = await readBackWiring(p, viewOf(wired(p), reads), NO_WAIT);
   assertEquals(wiringProblems(rows), []);
   assert(rows.every((r) => r.ok && renderWiringRow(r).startsWith("✓ ")));
   assertEquals(reads.length, new Set(reads).size, "each view is read once");
@@ -98,7 +107,10 @@ Deno.test("wiring: each mismatch is named with the field and both values", async
   const mo = p.ids["moments-v2"]!;
   const lock = p.ids["lp-locker"]!;
   const cases: [string, unknown, string][] = [
-    [`${exec} callers`, [pad], `exec-soroswap callers() is ["${pad}"] on chain; it must contain launchpad-v2 ${pad} and moments-graduator ${grad}`],
+    [`${exec} callers`, [pad], `exec-soroswap callers() is ["${pad}"] on chain; the plan has exactly launchpad-v2 ${pad} and moments-graduator ${grad}`],
+    // Exact sets: an extra caller or owner is refused too.
+    [`${exec} callers`, [OTHER, grad, pad], `exec-soroswap callers() is ["${OTHER}","${grad}","${pad}"] on chain; the plan has exactly launchpad-v2 ${pad} and moments-graduator ${grad}`],
+    [`${lock} owners`, [pad, mo, OTHER], `lp-locker owners() is ["${pad}","${mo}","${OTHER}"] on chain; the plan has exactly launchpad-v2 ${pad} and moments-v2 ${mo}`],
     [`${exec} factory`, OTHER, `exec-soroswap factory() is ${OTHER} on chain; the plan has the Soroswap factory ${FACTORY}`],
     [`${pad} config`, { locker: lock, soroswap_factory: OTHER }, `launchpad-v2 config().soroswap_factory is ${OTHER} on chain; the plan has the Soroswap factory ${FACTORY}`],
     [`${lock} soroswap_factory`, OTHER, `lp-locker soroswap_factory() is ${OTHER} on chain; the plan has the Soroswap factory ${FACTORY}`],
@@ -117,16 +129,65 @@ Deno.test("wiring: each mismatch is named with the field and both values", async
   for (const [key, value, message] of cases) {
     const table = wired(p);
     table.set(key, value);
-    const problems = wiringProblems(await readBackWiring(p, viewOf(table)));
+    const rows = await readBackWiring(p, viewOf(table), NO_WAIT);
+    const problems = wiringProblems(rows);
     assertEquals(problems.length, 1, `${key}: ${problems.join(" | ")}`);
     assertStringIncludes(problems[0], message);
+    assertEquals(wiringVerdict(rows), "mismatch");
   }
-  // Extra callers are allowed (contains, not equals); a view that can't be read fails its rows.
+  // In any order, the planned callers pass.
   const table = wired(p);
-  table.set(`${exec} callers`, [OTHER, grad, pad]);
-  table.delete(`${lock} owners`);
-  const problems = wiringProblems(await readBackWiring(p, viewOf(table)));
-  assertEquals(problems, [`lp-locker owners(): can't read it (no owners on ${lock}); the plan has launchpad-v2 ${pad} and moments-v2 ${mo}`]);
+  table.set(`${exec} callers`, [grad, pad]);
+  assertEquals(wiringVerdict(await readBackWiring(p, viewOf(table), NO_WAIT)), "ok");
+});
+
+const NO_WAIT = { retryMs: 0, sleep: () => Promise.resolve() };
+
+Deno.test("wiring: a failed read is tried once more; one that still fails is unreadable, not a mismatch, unless a value differs too", async () => {
+  const p: WiringPlan = { ids: ids(NAMES), soroswapFactory: FACTORY };
+  const lock = p.ids["lp-locker"]!;
+  const pad = p.ids["launchpad-v2"]!;
+  const mo = p.ids["moments-v2"]!;
+  const exec = p.ids["exec-soroswap"]!;
+  // Fails once (a rate limit), then answers: passes, read twice.
+  const table = wired(p);
+  const reads: string[] = [];
+  const flaky = viewOf(table, reads);
+  let failed = false;
+  const view = (c: string, fn: string, args: xdr.ScVal[]) => {
+    if (c === lock && fn === "owners" && !failed) {
+      failed = true;
+      reads.push(`${c} ${fn}`);
+      return Promise.reject(new Error("rate limited"));
+    }
+    return flaky(c, fn, args);
+  };
+  const waits: number[] = [];
+  const ok = await readBackWiring(p, view, { retryMs: 1_500, sleep: (ms) => (waits.push(ms), Promise.resolve()) });
+  assertEquals(wiringVerdict(ok), "ok");
+  assertEquals(reads.filter((r) => r === `${lock} owners`).length, 2);
+  assertEquals(waits, [1_500]);
+  // Fails twice: one row with the error, and the verdict says to run it again.
+  const down = wired(p);
+  down.delete(`${lock} owners`);
+  const rows = await readBackWiring(p, viewOf(down), NO_WAIT);
+  assertEquals(wiringProblems(rows), [`lp-locker owners(): can't read it (no owners on ${lock}); the plan has exactly launchpad-v2 ${pad} and moments-v2 ${mo}`]);
+  assertEquals(wiringVerdict(rows), "unreadable");
+  // An unreadable view and a value that differs: a mismatch.
+  down.set(`${exec} factory`, OTHER);
+  assertEquals(wiringVerdict(await readBackWiring(p, viewOf(down), NO_WAIT)), "mismatch");
+});
+
+Deno.test("wiring: the Soroswap router's get_factory() is checked against networks.ts", async () => {
+  const ROUTER = cid("router");
+  const answer = (v: unknown) => () => Promise.resolve(sv(v));
+  assertEquals(await routerFactoryCheck(answer(FACTORY), ROUTER, FACTORY, NO_WAIT), { ok: true, line: `✓ the Soroswap router's get_factory() is networks.ts's Soroswap factory ${FACTORY}` });
+  assertEquals(await routerFactoryCheck(answer(OTHER), ROUTER, FACTORY, NO_WAIT), { ok: false, line: `✗ the Soroswap router ${ROUTER} get_factory() is ${OTHER}; networks.ts has ${FACTORY}` });
+  const fail = () => Promise.reject(new Error("timeout"));
+  assertEquals((await routerFactoryCheck(fail, ROUTER, FACTORY, NO_WAIT)).ok, false);
+  let n = 0;
+  const flaky = () => (++n === 1 ? Promise.reject(new Error("timeout")) : Promise.resolve(sv(FACTORY)));
+  assertEquals((await routerFactoryCheck(flaky, ROUTER, FACTORY, NO_WAIT)).ok, true);
 });
 
 Deno.test("wiring: testnet-qa checks the failing Moments stack's own wiring, and the Aquarius venue when it is planned", async () => {
@@ -134,7 +195,7 @@ Deno.test("wiring: testnet-qa checks the failing Moments stack's own wiring, and
   const checks = wiringChecks(p).map(describeWiringCheck);
   for (
     const c of [
-      "qa-exec-fail callers() contains launchpad-v2 and moments-graduator-qa-fail",
+      "qa-exec-fail callers() is exactly launchpad-v2 and moments-graduator-qa-fail",
       "launchpad-v2 venues() QaFail venue executor is qa-exec-fail",
       "launchpad-v2 venues() Aquarius venue executor is exec-aquarius",
       "moments-graduator-qa-fail moments() is moments-v2-qa-fail",
