@@ -174,21 +174,17 @@ private struct LiteLegacyActivity: View {
 
     var body: some View {
         List {
-            switch store.status(.activity) {
-            case .needsSignIn:
-                Text(tr("Sign in on Stellar to continue.")).foregroundStyle(.secondary)
-            default:
-                if store.activity.isEmpty {
-                    if store.failed.contains(.activity) {
-                        LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
-                    } else if store.loaded.contains(.activity) {
-                        Text(tr("Nothing yet. Add cash or swap to get started.")).foregroundStyle(.secondary)
-                    } else {
-                        ProgressView().frame(maxWidth: .infinity)
-                    }
-                } else {
-                    ForEach(store.activity) { LiteActivityRow(item: $0) }
-                }
+            switch LiteHomeView.activityCard(store) {
+            case .signIn:
+                LiteSignInRow(session: store.session) { await store.refreshActivity() }
+            case .empty:
+                Text(tr("Nothing yet. Add cash or swap to get started.")).foregroundStyle(.secondary)
+            case .list:
+                ForEach(store.activity) { LiteActivityRow(item: $0) }
+            case .failed:
+                LiteInlineError(message: store.lastError ?? tr("No connection. Check your network and try again."))
+            case .reading:
+                ProgressView().frame(maxWidth: .infinity)
             }
         }
         .navigationTitle(tr("Activity"))

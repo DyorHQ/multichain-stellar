@@ -54,8 +54,8 @@ final class KeyProviderTests: XCTestCase {
     func testASeedProviderSignsTheSignInSilentlyAndAsksAppLockOncePerActionOnlyWhenItApplies() async throws {
         let tally = Tally()
         let seed = TestAccount.seed
-        var appLock = true
-        let p = StoredSeedKeyProvider(address: TestAccount.seedSigner.address, methodLabel: "Test", network: "testnet", appLock: { [appLock] in appLock },
+        let appLock = Setting(true)
+        let p = StoredSeedKeyProvider(address: TestAccount.seedSigner.address, methodLabel: "Test", network: "testnet", appLock: { appLock.value },
                                       seed: { tally.add("seedRead"); return seed }, authenticate: { _ in tally.add("appLock") })
         XCTAssertTrue(p.signsInSilently)
         let signature = try await p.signInSignature(for: challenge)
@@ -71,15 +71,19 @@ final class KeyProviderTests: XCTestCase {
         XCTAssertEqual(tally("seedRead"), 3, "each step reads the seed for itself")
         run.end()
 
-        appLock = false
-        let off = StoredSeedKeyProvider(address: TestAccount.seedSigner.address, methodLabel: "Test", network: "testnet", appLock: { [appLock] in appLock },
-                                        seed: { seed }, authenticate: { _ in tally.add("appLock") })
-        _ = try await off.beginSigning(reason: "Confirm Swap").signer(reason: "Swap")
+        // The setting is read when Confirm is tapped: turned off in Profile › Security, the same provider asks nothing at
+        // the next action, and asks again once it is back on.
+        appLock.value = false
+        _ = try await p.beginSigning(reason: "Confirm Swap").signer(reason: "Swap")
         XCTAssertEqual(tally("appLock"), 1, "App Lock off: no prompt")
+        appLock.value = true
+        _ = try await p.beginSigning(reason: "Confirm Swap").signer(reason: "Swap")
+        XCTAssertEqual(tally("appLock"), 2, "App Lock on again: one prompt at the next Confirm")
 
-        let secret = try await off.revealSecret(reason: "Show your Stellar secret key")
+        appLock.value = false
+        let secret = try await p.revealSecret(reason: "Show your Stellar secret key")
         XCTAssertEqual(secret, TestAccount.seedSigner.secret)
-        XCTAssertEqual(tally("appLock"), 2, "showing the secret always asks, App Lock or not")
+        XCTAssertEqual(tally("appLock"), 3, "showing the secret always asks, App Lock or not")
     }
 
     func testASeedProviderWithoutItsSeedSignsNothing() async throws {
@@ -127,6 +131,18 @@ final class KeyProviderTests: XCTestCase {
         let env = LiteEnvironment(apiURL: URL(string: "http://127.0.0.1:9/lite")!, buildNumber: 1)
         XCTAssertEqual(env.mediaBase.absoluteString, "https://fmnjqrguvopusfufmirs.supabase.co/storage/v1/object/public/lite-media/")
         XCTAssertNil(env.renderBase)
+    }
+
+    /// The host's activity recorder takes settled actions; its tests make their own (§12.2).
+    func testAHostCanMakeASettledAction() {
+        let at = Date(timeIntervalSince1970: 1_791_970_860)
+        let settled = LiteSettledAction(planId: "plan-1", kind: "swap", title: "Swap complete", body: "Swapped 10 XLM → 1.89 USDC", section: .spot,
+                                        reference: "stellar:swap", hashes: [String(repeating: "a", count: 64)], at: at)
+        XCTAssertEqual(settled.planId, "plan-1")
+        XCTAssertEqual(settled.kind, "swap")
+        XCTAssertEqual(settled.section, .spot)
+        XCTAssertEqual(settled.reference, "stellar:swap")
+        XCTAssertEqual(settled.at, at)
     }
 
     /// A Monad wallet written before previews prices nothing: the bridge review shows no Monad fee.

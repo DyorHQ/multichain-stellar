@@ -3,9 +3,9 @@ import StellarKit
 
 /// Every error as a person reads it, in the current language (docs/DESIGN-stellar-parity.md §6.13, §4.6): the API's
 /// codes and the contracts' refusals, with the facts they carry (`LiteAPIError.detail`); the phone's own checks before
-/// it signs (`PlanRunner.Failure`); the connection; the session's failures; an anchor's. The server's own message is
-/// shown only for a transaction Stellar rejected for a reason the app has no words for, and for codes this build
-/// doesn't know.
+/// it signs and Stellar's result for a step it sent (`PlanRunner.Failure`); the connection; the session's failures; an
+/// anchor's. The server's own message is shown only for a transaction Stellar rejected for a reason the app has no
+/// words for, and for codes this build doesn't know.
 public enum LiteErrorText {
     public static func describe(_ error: Error) -> String {
         switch error {
@@ -14,6 +14,16 @@ public enum LiteErrorText {
         case let anchor as AnchorClient.Failure: return describe(anchor)
         default: return LiteSession.failure(for: error).errorDescription ?? error.localizedDescription
         }
+    }
+
+    /// `describe(_:)` for what `action`'s run threw, with what the review knew about it: a step the network failed for
+    /// want of funds (`op_underfunded`) names the asset the action spends ("Not enough XLM.").
+    public static func describe(_ error: Error, for action: PreparedAction) -> String {
+        if case let .failedOnChain(_, _, code?)? = error as? PlanRunner.Failure, code == "op_underfunded",
+           action.spends.count == 1, let spent = action.spends.first {
+            return spent == "XLM" ? tr("Not enough XLM.") : tr("Not enough \(spent).")
+        }
+        return describe(error)
     }
 
     private static func describe(_ error: LiteAPIError) -> String {
@@ -33,26 +43,21 @@ public enum LiteErrorText {
         case "not_enough_xlm_for_fee": return notEnoughForFee
         case "not_enough_xlm_for_reserve": return notEnoughForReserve
         case "not_enough_xlm": return notEnoughXLM(detail)
-        case "fee_too_high":
-            guard let fee = xlm(detail["fee"]) else { return tr("Not signed: the network fee is unusually high right now. Nothing was sent. Try again in a minute.") }
-            return tr("Not signed: the network fee is unusually high right now (\(fee) XLM). Nothing was sent. Try again in a minute.")
+        case "fee_too_high": return feeTooHigh(detail["fee"])
         case "tx_rejected":
             // Stellar's own result code: the fee and reserve ones have words of their own; any other is the server's.
-            switch detail["code"] {
-            case "tx_insufficient_balance", "tx_insufficient_fee": return notEnoughForFee
-            case "op_low_reserve", "CHANGE_TRUST_LOW_RESERVE": return notEnoughForReserve
-            case "op_underfunded": return notEnoughXLM(detail)
-            default: return message
-            }
+            return detail["code"].flatMap(resultCode) ?? message
         case "sponsor_limit": return tr("DyorHQ's free setup is busy today. Try again tomorrow.")
         case "already_set_up": return tr("Your account is already set up.")
         case "unsupported_asset": return tr("DyorHQ doesn't support that token on Stellar.")
         case "look_alike_symbol": return tr("That ticker looks like another token's. Choose another.")
         case "muxed_unsupported": return tr("Muxed (M…) addresses aren't supported. Use the G… address and the memo you were given.")
         case "recipient_missing":
-            return tr("This account doesn't exist yet, so it can't receive \(assetCode(detail)).")
+            guard let code = assetCode(detail) else { return tr("This account doesn't exist yet, so it can't receive this token.") }
+            return tr("This account doesn't exist yet, so it can't receive \(code).")
         case "recipient_no_trust":
-            return tr("This account hasn't enabled \(assetCode(detail)), so it can't receive it.")
+            guard let code = assetCode(detail) else { return tr("This account hasn't enabled this token, so it can't receive it.") }
+            return tr("This account hasn't enabled \(code), so it can't receive it.")
         case "launch.slippage": return tr("The price moved past your 1% limit. Nothing was sent. Review again for a new price.")
         case "launch.closed": return tr("This curve isn't taking trades now.")
         case "launch.disabled": return tr("New launches are paused.")
@@ -62,7 +67,9 @@ public enum LiteErrorText {
         case "moment.price_too_low":
             guard let price = units(detail["minPrice"]), let quote = detail["quoteCode"] else { return tr("The price is below the Moment's minimum.") }
             return tr("The price is below the minimum (\("\(price) \(quote)")).")
-        case "trust.missing": return tr("Enable \(assetCode(detail)) first.")
+        case "trust.missing":
+            guard let code = assetCode(detail) else { return tr("Enable this token first.") }
+            return tr("Enable \(code) first.")
         case "upload_budget": return tr("You've uploaded a lot today. Try again tomorrow.")
         case "bridge_relay_limit": return tr("You've bridged in many times today. Try again tomorrow.")
         case "access_revoked": return LiteSession.Failure.accessRevoked.errorDescription ?? message
@@ -76,13 +83,41 @@ public enum LiteErrorText {
 
     private static func describe(_ failure: PlanRunner.Failure) -> String {
         switch failure {
+        case let .refused(_, reason) where capRefusals.contains(reason): return feeTooHigh(nil)
         case let .refused(step, reason): return tr("Not signed: \(step) didn't pass the checks (\(reason)). Nothing was sent.")
         case .overLimit: return tr("Not signed: this would spend more than you confirmed. Nothing was sent.")
         case let .feeAboveConfirmed(step): return tr("Not signed: the network fee for \(step) went up since you confirmed. Nothing was sent.")
-        case let .failedOnChain(step, _, error?): return tr("\(step) failed on the network (\(error)).")
+        // Stellar's result code once it applied the transaction (Horizon's names, WP-10's `TxStatus.error`): an operation's
+        // code exists only then.
+        case let .failedOnChain(step, _, code?): return resultCode(code) ?? tr("\(step) failed on the network (\(code)).")
         case let .failedOnChain(step, _, nil): return tr("\(step) failed on the network.")
         case let .timedOut(step, _): return tr("\(step) was sent; confirmation not seen yet.")
         }
+    }
+
+    /// Stellar's result codes that have words of their own (§4.6, §6.13), whether the network refused the transaction as
+    /// it was sent (`tx_rejected`'s `detail.code`) or failed it as it applied it: not enough XLM for the fee or for the
+    /// minimum balance, or not enough of what was sent (which asset, only the run knows: `describe(_:for:)`). Nil for any
+    /// other.
+    private static func resultCode(_ code: String) -> String? {
+        switch code {
+        case "tx_insufficient_balance", "tx_insufficient_fee": return notEnoughForFee
+        case "op_low_reserve", "CHANGE_TRUST_LOW_RESERVE": return notEnoughForReserve
+        case "op_underfunded": return tr("Not enough funds for this.")
+        default: return nil
+        }
+    }
+
+    /// The reasons StellarKit refuses a fee above the pinned caps with (`TxVerifier`, `PlanFees`, §4.4): §4.6 words a cap
+    /// refusal as a fee that is unusually high right now. StellarKit says them only in its own English and with no fee,
+    /// so they are matched here until it has a failure of their own (a test runs PlanFees over the cap to keep them in step).
+    static let capRefusals: Set<String> = ["The network fee is above the limit.", "The inclusion fee is above the limit.",
+                                           "The sponsored step's network fee is above the limit."]
+
+    /// "Not signed: the network fee is unusually high right now (3.1 XLM)…", with the fee when it is known.
+    private static func feeTooHigh(_ stroops: String?) -> String {
+        guard let fee = xlm(stroops) else { return tr("Not signed: the network fee is unusually high right now. Nothing was sent. Try again in a minute.") }
+        return tr("Not signed: the network fee is unusually high right now (\(fee) XLM). Nothing was sent. Try again in a minute.")
     }
 
     private static func describe(_ failure: AnchorClient.Failure) -> String {
@@ -102,9 +137,11 @@ public enum LiteErrorText {
         return tr("Not enough XLM. \(stays) XLM stays in your account.")
     }
 
-    /// The asset a refusal names, by its code (never translated); its id when the server sent no code.
-    private static func assetCode(_ detail: [String: String]) -> String {
-        detail["assetCode"] ?? detail["asset"] ?? "XLM"
+    /// The asset a refusal names, by its code (never translated), else by its id (a contract shortened); nil when the
+    /// server named none, and the copy then says "this token".
+    private static func assetCode(_ detail: [String: String]) -> String? {
+        if let code = LiteFormat.name(detail["assetCode"]) { return code }
+        return LiteFormat.name(detail["asset"]).map { StrKey.isValid(.contract, $0) ? LiteFormat.short($0) : $0 }
     }
 
     /// Stroops as XLM, in the current language's digits ("1.5", "0.0154").
@@ -127,6 +164,14 @@ enum LiteFormat {
     static func name(_ text: String?) -> String? {
         guard let text = text?.trimmingCharacters(in: .whitespaces), !text.isEmpty, !standIns.contains(text) else { return nil }
         return text
+    }
+
+    /// A server's sentence worth showing as it is: not empty, and no word of it a stand-in ("Buy TOKEN with 2 XLM" isn't).
+    static func sentence(_ text: String?) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
+        let marks = CharacterSet.punctuationCharacters.union(.symbols)
+        let words = text.split(whereSeparator: \.isWhitespace).map { $0.trimmingCharacters(in: marks) }
+        return words.contains(where: standIns.contains) ? nil : text
     }
 
     static func units(_ value: Int64, decimals: Int = 7) -> String {

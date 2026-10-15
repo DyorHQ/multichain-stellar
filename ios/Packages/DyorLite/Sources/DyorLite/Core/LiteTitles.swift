@@ -64,8 +64,9 @@ enum LiteTitles {
             guard let amount = units(d["amount"]) else { return nil }
             return tr("Send \(amount) USDC to Monad")
         case "faucet":
-            // The testnet faucet's amount is the server's (`config.faucet`), written out in XLM.
-            guard let amount = written(d["amount"]) else { return nil }
+            // The testnet faucet's amount is the server's (`config.faucet`), written out in XLM. Its log row carries no
+            // intent, so none: then no number at all, never one made up.
+            guard let amount = written(d["amount"]) else { return tr("Get test XLM") }
             return tr("Get \(amount) test XLM")
         default:
             return nil

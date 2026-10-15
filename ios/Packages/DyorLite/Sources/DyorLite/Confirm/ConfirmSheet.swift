@@ -136,7 +136,7 @@ struct ConfirmSheet: View {
             finished = true
             onDone(results)
         } catch {
-            self.error = LiteErrorText.describe(error)
+            self.error = LiteErrorText.describe(error, for: action)
         }
         running = false
     }

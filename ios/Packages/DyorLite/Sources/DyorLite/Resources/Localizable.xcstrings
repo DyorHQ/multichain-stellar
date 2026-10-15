@@ -2517,6 +2517,35 @@
         }
       }
     },
+    "Enable this token first." : {
+      "comment" : "An error: the asset must be enabled on the account first (a Stellar trustline; the server didn't say which).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activa este token primero."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activez d'abord ce jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 이 토큰 사용을 설정하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "先启用此代币。"
+          }
+        }
+      }
+    },
     "Enabled %@" : {
       "comment" : "A notification's title: an asset was enabled on the Stellar account; %@ is its code.",
       "localizations" : {
@@ -2716,6 +2745,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "获取价格"
+          }
+        }
+      }
+    },
+    "Get test XLM" : {
+      "comment" : "An Activity row: the testnet faucet gave the account test XLM, amount not known. XLM is Stellar's coin.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtener XLM de prueba"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenir des XLM de test"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트 XLM 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取测试 XLM"
           }
         }
       }
@@ -4025,6 +4083,35 @@
         }
       }
     },
+    "Not enough %@." : {
+      "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of the asset it sends; %@ is the asset's code (USDC).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@이(가) 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 不足。"
+          }
+        }
+      }
+    },
     "Not enough XLM for Stellar's minimum balance." : {
       "comment" : "An error: the account would fall below the XLM Stellar keeps in every account. XLM is Stellar's coin.",
       "localizations" : {
@@ -4137,6 +4224,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "XLM 不足。%@ XLM 需留在你的账户中。"
+          }
+        }
+      }
+    },
+    "Not enough funds for this." : {
+      "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of what it sends.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay fondos suficientes para esto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fonds insuffisants pour cette opération."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 작업에 필요한 잔액이 부족합니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "余额不足，无法完成此操作。"
           }
         }
       }
@@ -5981,6 +6097,64 @@
         }
       }
     },
+    "Sign in" : {
+      "comment" : "A button under Stellar Activity with no session: signs in to DyorHQ on Stellar again (a passkey account asks for its passkey).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciar sesión"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "로그인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "登录"
+          }
+        }
+      }
+    },
+    "Sign in again to see your Stellar history." : {
+      "comment" : "Stellar Home's Activity with no session (the account's sign-in ended and couldn't renew by itself): what signing in again brings back.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuelve a iniciar sesión para ver tu historial de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnectez-vous pour voir votre historique Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 내역을 보려면 다시 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新登录以查看你的 Stellar 记录。"
+          }
+        }
+      }
+    },
     "Sign in on Stellar to continue." : {
       "comment" : "An error: the Stellar session ended.",
       "localizations" : {
@@ -7205,6 +7379,35 @@
         }
       }
     },
+    "This account doesn't exist yet, so it can't receive this token." : {
+      "comment" : "An error before a send: the recipient's account doesn't exist yet (the server didn't say which asset).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta aún no existe, así que no puede recibir este token."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'existe pas encore, il ne peut donc pas recevoir ce jeton."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 아직 없어서 이 토큰을 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户尚不存在，因此无法接收此代币。"
+          }
+        }
+      }
+    },
     "This account hasn't enabled %@, so it can't receive it." : {
       "comment" : "An error before a send: the recipient hasn't enabled the asset (a Stellar trustline); %@ is its code.",
       "localizations" : {
@@ -7230,6 +7433,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "该账户未启用 %@，因此无法接收。"
+          }
+        }
+      }
+    },
+    "This account hasn't enabled this token, so it can't receive it." : {
+      "comment" : "An error before a send: the recipient hasn't enabled the asset (a Stellar trustline; the server didn't say which).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta cuenta no ha activado este token, así que no puede recibirlo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce compte n'a pas activé ce jeton, il ne peut donc pas le recevoir."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 계정은 이 토큰 사용을 설정하지 않아 받을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该账户未启用此代币，因此无法接收。"
           }
         }
       }
@@ -7549,6 +7781,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在 Soroswap 交易。流动性已永久锁定。"
+          }
+        }
+      }
+    },
+    "Transaction" : {
+      "comment" : "An Activity row's title for a Stellar transaction the app has no words for.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transacción"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transaction"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "거래"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "交易"
           }
         }
       }
@@ -8154,6 +8415,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "由你的 Monad 钱包发送 USDC，约一分钟后到达 Stellar。"
+          }
+        }
+      }
+    },
+    "Your Stellar account isn't ready yet. Try again in a moment." : {
+      "comment" : "An error at the end of the Stellar account's setup: its transaction was sent, but the account doesn't read as set up yet.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tu cuenta de Stellar aún no está lista. Vuelve a intentarlo en un momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Votre compte Stellar n'est pas encore prêt. Réessayez dans un instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 계정이 아직 준비되지 않았습니다. 잠시 후 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Stellar 账户尚未就绪。请稍后重试。"
           }
         }
       }

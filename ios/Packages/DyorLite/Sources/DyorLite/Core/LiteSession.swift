@@ -153,6 +153,9 @@ public final class LiteSession {
     @ObservationIgnored private(set) var fees: StellarFees?
     /// When the session's access token ends, once one is held.
     @ObservationIgnored private var expiry: Date?
+    /// When that token was issued, for one this session got itself (a sign-in or a refresh): its lifetime bounds how
+    /// long before its end it renews (`lead`). Nil for one a past launch saved.
+    @ObservationIgnored private var issuedAt: Date?
     /// Whether a refresh token is held: the session can come back without the user, even for a passkey account.
     @ObservationIgnored private var refreshHeld = false
     /// Bumped by every run, `cancel()` and `signOut()`: work that comes back to an older one changes nothing.
@@ -170,10 +173,14 @@ public final class LiteSession {
 
     private enum Action { case run, join(String), setUp(String?) }
 
-    /// The session renews this long before its access token ends, while the app is in front (§6.18).
+    /// The session renews this long before its access token ends, while the app is in front (§6.18); a token that lasts
+    /// less than twice as long renews half-way through instead (`lead`).
     static let renewalLead: TimeInterval = 10 * 60
     /// After a renewal that couldn't reach the server, the next try, while the app is in front.
     static let renewalRetry: TimeInterval = 60
+    /// The soonest the timer renews again after a renewal went through, whatever the new token says: one renewal never
+    /// starts the next at once.
+    static let renewalFloor: TimeInterval = 30
     /// Reads made while someone watches the checklist: offline after this long (spec §4).
     static let readTimeout: TimeInterval = 10
     /// A sign-in or a refresh: a little longer, they are two requests or one that rotates.
@@ -319,8 +326,7 @@ public final class LiteSession {
         if !wasPaused { settleReady() }
         guard await check(gen, quietly: true) else { return }
         if state != .ready { settleReady() }
-        if needsRenewal { try? await renew() }
-        scheduleRenewal()
+        await renewIfDue()
     }
 
     /// Signs in: a seed account silently (§5.8), a passkey account with one ceremony used for the sign-in only. Called
@@ -342,18 +348,12 @@ public final class LiteSession {
     }
 
     /// The app came to the front (the host calls this on `scenePhase == .active`): the session renews if it is gone or
-    /// ends within 10 minutes, and the renewal timer runs again. Never a prompt.
+    /// ends within 10 minutes (half a token's lifetime, for a token that lasts less than 20), and the renewal timer runs
+    /// again. Never a prompt.
     public func appDidBecomeActive() {
         isActive = true
         guard home == .ready else { return }
-        if needsRenewal || (access == .publicView && canRenewSilently) {
-            Task {
-                try? await renew()
-                scheduleRenewal()
-            }
-        } else {
-            scheduleRenewal()
-        }
+        Task { await renewIfDue() }
     }
 
     /// The app went to the background (the host calls this on `scenePhase == .background`): the renewal timer stops,
@@ -409,22 +409,27 @@ public final class LiteSession {
         isSending = false
         renewalTimer?.cancel()
         renewalTimer = nil
-        let saved = address.flatMap { vault.load(account: $0, network: network) }
-        let refresh = await api.refreshToken ?? saved?.refreshToken
-        await api.signOut()
-        if let refresh { await api.revoke(refreshToken: refresh) }
-        if let address {
-            vault.erase(account: address, network: network)
-            defaults.set(true, forKey: Self.signedOutKey(address))
-        }
+        // Signed out from here on: no renewal starts for the account (`performRenewal`), and one under way keeps nothing
+        // it brings back.
+        if let address { defaults.set(true, forKey: Self.signedOutKey(address)) }
         expiry = nil
+        issuedAt = nil
         refreshHeld = false
         access = .publicView
         store = nil
         steps = []
         state = .idle
         home = .loading
-        if let address { onSignOut?(address) }
+        // That renewal ends before the API's session goes, so whatever it rotated or signed in goes with it.
+        if let renewal { _ = await renewal.result }
+        let saved = address.flatMap { vault.load(account: $0, network: network) }
+        let refresh = await api.refreshToken ?? saved?.refreshToken
+        await api.signOut()
+        if let refresh { await api.revoke(refreshToken: refresh) }
+        if let address {
+            vault.erase(account: address, network: network)
+            onSignOut?(address)
+        }
     }
 
     // MARK: - Steps
@@ -550,13 +555,15 @@ public final class LiteSession {
     }
 
     /// A passkey account's run: one ceremony, whose signer signs the sign-in and, when the account isn't set up yet,
-    /// its setup, with no wait on the user in between; then the signer is dropped.
+    /// its setup, with no wait on the user in between; then the signer is dropped. The prompt says which it is: an
+    /// account set up on this iPhone (signed out of Stellar since) only signs in.
     private func passkeyRun(invite: String?, _ gen: Int) async {
         replace(.invite, with: .signIn)
         set(.signIn, .running)
+        let signsInOnly = address.map(isActivated) ?? false
         let box: SignerBox
         do {
-            box = try await ceremony(reason: tr("Set up your Stellar account"))
+            box = try await ceremony(reason: signsInOnly ? tr("Sign in to DyorHQ on Stellar") : tr("Set up your Stellar account"))
         } catch {
             guard gen == generation else { return }
             fail(.signIn, Self.failure(for: error))
@@ -606,6 +613,7 @@ public final class LiteSession {
         isSending = true
         defer { isSending = false }
         let confirmed = setupFee
+        let sent = SentFlag()
         do {
             // Friendbot can take 20 s on testnet: the activation keeps the API's long timeout.
             let result = try await api.activate()
@@ -615,7 +623,9 @@ public final class LiteSession {
                 guard gen == generation else { return }
                 // The step's own figure once it exists (its decoded fee when built), never above the one shown.
                 setupFee = fees
-                _ = try await backend.run(plan, user: address, limits: [:], fees: fees, signer: signer, onEvent: { _ in })
+                _ = try await backend.run(plan, user: address, limits: [:], fees: fees, signer: signer, onEvent: { event in
+                    if case .submitted = event { sent.mark() }
+                })
             }
             let account = try await api.account(timeout: Self.readTimeout)
             guard gen == generation else { return }
@@ -624,7 +634,7 @@ public final class LiteSession {
             completeSetUp()
         } catch {
             guard gen == generation else { return }
-            fail(.setUp, Self.setUpFailure(for: error))
+            fail(.setUp, Self.setUpFailure(for: error, sent: sent.value))
         }
     }
 
@@ -658,15 +668,15 @@ public final class LiteSession {
 
     // MARK: - Signing in
 
-    /// A seed account's silent sign-in: the provider signs only the sign-in challenge, with no prompt (§5.8).
-    private func silentSignIn(invite: String?) async throws {
+    /// A seed account's silent sign-in: the provider signs only the sign-in challenge, with no prompt (§5.8). `epoch`:
+    /// the session it belongs to (a renewal's, which a sign-out may have ended meanwhile); the current one by default.
+    private func silentSignIn(invite: String?, epoch: Int? = nil) async throws {
         guard let keys, let address else { throw Failure.keyNotOnDevice }
-        let epoch = sessionEpoch
+        let epoch = epoch ?? sessionEpoch
         let result = try await api.signIn(address: address, inviteCode: invite, timeout: Self.authTimeout) { message in
             try await keys.signInSignature(for: message)
         }
-        remember(result, for: address, epoch: epoch)
-        await api.setViewer(address: address)
+        try await keep(result, for: address, epoch: epoch)
     }
 
     /// The passkey ceremony (`setupKey`): its signer, in a box the run drops when it ends or the app leaves.
@@ -694,8 +704,20 @@ public final class LiteSession {
         let result = try await api.signIn(address: signer.address, inviteCode: invite, timeout: Self.authTimeout) { message in
             try box.signer().signMessage(message)
         }
-        remember(result, for: signer.address, epoch: epoch)
-        await api.setViewer(address: signer.address)
+        try await keep(result, for: signer.address, epoch: epoch)
+    }
+
+    /// A sign-in's session, kept for `address`. One that came back after Sign out of Stellar ended the session it was for
+    /// (`epoch`) is revoked instead, and the API forgets it unless a newer one replaced it: the sign-in then didn't happen
+    /// (`.cancelled`).
+    private func keep(_ result: AuthResult, for address: String, epoch: Int) async throws {
+        guard epoch == sessionEpoch else {
+            if await api.token == result.token { await api.signOut() }
+            if let refresh = result.refreshToken { await api.revoke(refreshToken: refresh) }
+            throw Failure.cancelled
+        }
+        remember(result, for: address, epoch: epoch)
+        await api.setViewer(address: address)
     }
 
     /// The run is over: its signer goes.
@@ -752,10 +774,27 @@ public final class LiteSession {
 
     private var signsInSilently: Bool { keys?.signsInSilently ?? false }
 
-    /// No session, or one that ends within 10 minutes.
+    /// How long before its access token ends the session renews: 10 minutes, or half the token's lifetime when it lasts
+    /// less than 20 (QA's 120-second tokens, §6.14), so that a fresh token is never due at once. A token a past launch
+    /// saved has no known lifetime: 10 minutes.
+    var lead: TimeInterval {
+        guard let expiry, let issuedAt else { return Self.renewalLead }
+        return min(Self.renewalLead, max(0, expiry.timeIntervalSince(issuedAt)) / 2)
+    }
+
+    /// No session, or one that ends within `lead`.
     private var needsRenewal: Bool {
         guard let expiry else { return true }
-        return expiry < now().addingTimeInterval(Self.renewalLead)
+        return expiry < now().addingTimeInterval(lead)
+    }
+
+    /// At launch and on becoming active: a renewal now when one is due and can be had (a refresh token, a seed account's
+    /// silent sign-in, or a session to keep), else the timer for the one that will be. A renewal's outcome times the
+    /// next itself: the new token's (`remember`), a retry after one that couldn't reach the server, or none when it found
+    /// no way back. Never a prompt.
+    private func renewIfDue() async {
+        guard needsRenewal, canRenewSilently || access == .session else { return scheduleRenewal() }
+        _ = try? await renew()
     }
 
     /// Renews the session, never with a prompt: the refresh token first, then a seed account's silent sign-in; with
@@ -768,8 +807,11 @@ public final class LiteSession {
         try await task.value
     }
 
+    /// The renewal. An account signed out of Stellar has none: only its next sign-in brings a session back. One that
+    /// was under way when it signed out (`sessionEpoch` moved on) keeps nothing it brings back, starts no sign-in in its
+    /// refresh's place and changes nothing else.
     private func performRenewal() async throws {
-        guard let address else { throw LiteAPIError.notSignedIn }
+        guard let address, !isSignedOut(address) else { throw LiteAPIError.notSignedIn }
         let epoch = sessionEpoch
         // The refresh token the API holds now, not a copy: a refresh rotates it.
         if let refresh = await api.refreshToken {
@@ -778,6 +820,7 @@ public final class LiteSession {
                 remember(result, for: address, epoch: epoch)
                 return
             } catch let error as LiteAPIError where Self.isRefusedRefresh(error) {
+                guard epoch == sessionEpoch else { throw error }
                 refreshHeld = false
                 if error.code == "access_revoked" {
                     lostAccess()
@@ -785,23 +828,22 @@ public final class LiteSession {
                 }
             } catch {
                 // Offline: what is saved stays, and the next try comes soon.
-                keepAfterFailedRenewal()
+                if epoch == sessionEpoch { keepAfterFailedRenewal() }
                 throw error
             }
         }
+        guard epoch == sessionEpoch else { throw LiteAPIError.notSignedIn }
         if signsInSilently {
             do {
-                try await silentSignIn(invite: nil)
+                try await silentSignIn(invite: nil, epoch: epoch)
                 return
-            } catch let error as LiteAPIError {
-                if case .transport = error {
+            } catch {
+                guard epoch == sessionEpoch else { throw error }
+                if case LiteAPIError.transport = error {
                     keepAfterFailedRenewal()
                     throw error
                 }
-                if error.code == "access_revoked" { lostAccess() }
-                await goPublic()
-                throw error
-            } catch {
+                if (error as? LiteAPIError)?.code == "access_revoked" { lostAccess() }
                 await goPublic()
                 throw error
             }
@@ -825,6 +867,7 @@ public final class LiteSession {
     private func goPublic() async {
         access = .publicView
         expiry = nil
+        issuedAt = nil
         refreshHeld = false
         if let address { vault.erase(account: address, network: network) }
         await api.signOut()
@@ -836,18 +879,20 @@ public final class LiteSession {
         scheduleRenewal(after: Self.renewalRetry)
     }
 
-    /// While the app is in front: a renewal 10 minutes before the access token ends (or `after` seconds from now, to
-    /// try again). Without a session there is nothing to renew ahead of its end.
-    private func scheduleRenewal(after delay: TimeInterval? = nil) {
+    /// While the app is in front: a renewal `lead` before the access token ends, but no sooner than `soonest` seconds
+    /// from now (`renewalFloor` after a renewal went through); or exactly `after` seconds from now, to try again after
+    /// one that couldn't reach the server. Without a session there is nothing to renew ahead of its end.
+    private func scheduleRenewal(after delay: TimeInterval? = nil, soonest: TimeInterval = 0) {
         renewalTimer?.cancel()
         renewalTimer = nil
         guard isActive, home == .ready, canRenewSilently || access == .session, delay != nil || expiry != nil else { return }
-        let wait = delay ?? max(0, (expiry ?? now()).addingTimeInterval(-Self.renewalLead).timeIntervalSince(now()))
+        let due = (expiry ?? now()).addingTimeInterval(-lead).timeIntervalSince(now())
+        let wait = delay ?? max(soonest, due)
         let gen = generation
         renewalTimer = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(wait))
+            try? await Task.sleep(for: .seconds(max(0, wait)))
             guard !Task.isCancelled, let self, gen == self.generation, self.isActive else { return }
-            if (try? await self.renew()) != nil { self.scheduleRenewal() }
+            if (try? await self.renew()) != nil { self.scheduleRenewal(soonest: Self.renewalFloor) }
         }
     }
 
@@ -934,12 +979,15 @@ public final class LiteSession {
     private func remember(_ result: AuthResult, for address: String, epoch: Int) {
         guard epoch == sessionEpoch, let end = result.expiresAt.liteDate else { return }
         expiry = end
+        issuedAt = now()
         let refreshEnd = result.refreshExpiresAt?.liteDate
         refreshHeld = result.refreshToken != nil
         access = .session
         defaults.removeObject(forKey: Self.signedOutKey(address))
         vault.save(LiteSavedSession(token: result.token, expiresAt: end, refreshToken: result.refreshToken, refreshExpiresAt: refreshEnd),
                    account: address, network: network)
+        // The timer follows the token in hand, whichever renewal brought it (the timer's, a 401's, an action's).
+        scheduleRenewal(soonest: Self.renewalFloor)
     }
 
     /// The session this iPhone saved, handed to the API with its refresh token; the account is the viewer either way.
@@ -948,6 +996,7 @@ public final class LiteSession {
         if let saved = vault.load(account: address, network: network) {
             await api.restore(token: saved.token, expiresAt: saved.expiresAt, refreshToken: saved.refreshToken, refreshExpiresAt: saved.refreshExpiresAt)
             expiry = saved.expiresAt
+            issuedAt = nil
             refreshHeld = saved.refreshToken != nil
             access = saved.expiresAt > now() ? .session : .publicView
         } else {
@@ -1074,11 +1123,24 @@ public final class LiteSession {
     }
 
     /// A setup that didn't go through: the connection and the server's refusals as such, its own messages (Friendbot
-    /// being slow) as they are, and anything about the transaction itself as "Couldn't set up…".
-    nonisolated static func setUpFailure(for error: Error) -> Failure {
-        if error is PlanRunner.Failure { return .setUpFailed }
-        if case LiteAPIError.decoding = error { return .setUpFailed }
-        return failure(for: error)
+    /// being slow) as they are. Before anything was sent (`sent`), a refusal of the transaction itself is "Couldn't set
+    /// up… Nothing was spent." Once a step reached the network that is never said: the user pays the Enable USDC step's
+    /// fee (§4.1), and a step not confirmed yet may still land. Then it is what Stellar said about the step, or that the
+    /// account doesn't read as set up yet.
+    nonisolated static func setUpFailure(for error: Error, sent: Bool = false) -> Failure {
+        switch error {
+        case let runner as PlanRunner.Failure:
+            switch runner {
+            case .failedOnChain, .timedOut: return .server(LiteErrorText.describe(runner))
+            case .refused, .overLimit, .feeAboveConfirmed: return sent ? .server(LiteErrorText.describe(runner)) : .setUpFailed
+            }
+        case LiteAPIError.decoding:
+            return sent ? .server(LiteErrorText.describe(error)) : .setUpFailed
+        case Failure.setUpFailed where sent:
+            return .server(tr("Your Stellar account isn't ready yet. Try again in a moment."))
+        default:
+            return failure(for: error)
+        }
     }
 }
 
@@ -1108,6 +1170,15 @@ final class SignerBox: @unchecked Sendable {
     }
 
     func drop() { lock.withLock { held = nil } }
+}
+
+/// Whether a run sent a step (`PlanRunner.Event.submitted`): from then on its fee may be spent.
+private final class SentFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent = false
+
+    var value: Bool { lock.withLock { sent } }
+    func mark() { lock.withLock { sent = true } }
 }
 
 /// A run for a provider written before signing runs: the host's setup ceremony once per signature (transitional).

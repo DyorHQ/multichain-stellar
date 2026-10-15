@@ -4,7 +4,8 @@ import StellarKit
 /// How Recent Activity, Portfolio and My Launchpad word a Stellar activity item (docs/DESIGN-stellar-parity.md §8.12.3):
 /// a symbol, a title and a subtitle, past tense, as keys with their arguments for the app's tables (most of them
 /// Monad's own keys) rather than the server's English. An asset whose code isn't known is named by its short contract,
-/// never by an old server's stand-in (`LiteFormat.standIns`).
+/// never by an old server's stand-in (`LiteFormat.standIns`); an item that names nothing it needs (no coin, no asset, no
+/// Moment) gets the server's own words, or "Transaction", never a title with an empty name.
 public struct StellarActivityPresentation: Equatable, Sendable {
     /// An SF Symbol.
     public let symbol: String
@@ -50,7 +51,8 @@ public struct StellarActivityPresentation: Equatable, Sendable {
         case gotTestXLM(amount: StellarActivityAmount?)
         /// "Cash added" / "Cash out" with an anchor.
         case cash(deposit: Bool)
-        /// A kind this build has no words for: the server's own title, as it is.
+        /// A kind this build has no words for, or an item that doesn't name what its words need: the server's own
+        /// title or summary when none of its words is a stand-in, else "Transaction", in the current language.
         case other(String)
     }
 
@@ -99,7 +101,9 @@ public enum StellarActivityPresenter {
                                            feeStroops: sponsored ? nil : fee, paidByDyorHQ: sponsored)
     }
 
-    private static func wording(_ item: StellarActivityItem) -> (symbol: String, title: StellarActivityPresentation.Title, subtitle: StellarActivityPresentation.Subtitle?) {
+    private typealias Wording = (symbol: String, title: StellarActivityPresentation.Title, subtitle: StellarActivityPresentation.Subtitle?)
+
+    private static func wording(_ item: StellarActivityItem) -> Wording {
         let d = item.display ?? [:]
         switch item.type {
         case "bridge":
@@ -113,48 +117,36 @@ public enum StellarActivityPresenter {
         default:
             break
         }
-        let symbol = coin(item, d)
         switch item.kind {
-        case "launch_create":
-            return ("flame.fill", .launched(symbol: symbol), (clean(text(d["name"])) ?? clean(item.name)).map { .name($0) })
-        case "launch_buy":
-            let paid = amount(d["amount"], code: quote(item, d))
-            let got = units(item.result?.amountOut.map(StellarJSON.string)).map { StellarActivityAmount(units: $0, code: symbol) }
-            return ("arrow.down", .bought(symbol: symbol), trade(got, for: paid))
-        case "launch_sell":
-            let sold = amount(d["amount"], code: symbol)
-            let got = units(item.result?.amountOut.map(StellarJSON.string)).map { StellarActivityAmount(units: $0, code: quote(item, d)) }
-            return ("arrow.up", .sold(symbol: symbol), trade(sold, for: got))
-        case "launch_claim":
-            return ("dollarsign.circle.fill", .collectedCreatorFees(symbol: symbol), amount(d["amount"], code: quote(item, d)).map { .amount($0) })
-        case "launch_graduate":
-            return ("checkmark.seal.fill", .graduated(symbol: symbol), .venue("Soroswap"))
-        case "moment_publish":
-            let price = amount(d["price"], code: quote(item, d))
-            return ("camera.aperture", .published(title: momentTitle(item, d)), price.map { .perEdition($0) })
-        case "moment_collect":
+        case "launch_create", "launch_buy", "launch_sell", "launch_claim", "launch_graduate":
+            guard let symbol = coin(item, d) else { return fallback(item) }
+            return launch(item, d, symbol: symbol)
+        case "moment_publish", "moment_collect":
+            guard let title = momentTitle(item, d) else { return fallback(item) }
+            if item.kind == "moment_publish" {
+                return ("camera.aperture", .published(title: title), amount(d["price"], code: quote(item, d)).map { .perEdition($0) })
+            }
             let quantity = count(d["quantity"]) ?? 1
-            return ("camera.aperture", .collected(title: momentTitle(item, d)), .editions(quantity, total: amount(d["total"], code: quote(item, d))))
+            return ("camera.aperture", .collected(title: title), .editions(quantity, total: amount(d["total"], code: quote(item, d))))
         case "swap":
-            let sell = asset(d["sell"], item: item)
             let buy = asset(d["buy"], item: item)
-            let spent = amount(d["amountIn"], code: sell)
-            let got = units(item.result?.amountOut.map(StellarJSON.string)).map { StellarActivityAmount(units: $0, code: buy) }
-                ?? amount(d["minOut"], code: buy)
+            let spent = amount(d["amountIn"], code: asset(d["sell"], item: item))
+            let got = amount(item.result?.amountOut.map(StellarJSON.string), code: buy) ?? amount(d["minOut"], code: buy)
             let subtitle: StellarActivityPresentation.Subtitle? = spent.flatMap { s in got.map { .swap(s, to: $0) } }
             return ("arrow.left.arrow.right", .swapped, subtitle)
         case "payment":
-            let code = asset(d["asset"], item: item)
+            guard let code = asset(d["asset"], item: item, own: true) else { return fallback(item) }
             let sent = written(d["amount"]).map { StellarActivityAmount(units: $0, code: code) }
             return ("arrow.up", .sent(code: code), text(d["to"]).map { .to(address: $0, amount: sent) } ?? sent.map { .amount($0) })
         case "earn_deposit", "earn_withdraw":
-            let code = asset(d["asset"], item: item)
+            guard let code = asset(d["asset"], item: item, own: true) else { return fallback(item) }
             let pool = text(d["pool"]).map(StellarActivityPresentation.Subtitle.pool)
             return ("leaf", item.kind == "earn_deposit" ? .supplied(code: code) : .withdrew(code: code), pool ?? amount(d["amount"], code: code).map { .amount($0) })
         case "bridge_out", "approve":
             return ("point.3.connected.trianglepath.dotted", .bridged(code: "USDC"), .route(from: "Stellar", to: "Monad"))
         case "trust":
-            return ("checkmark.circle", .enabled(code: asset(d["asset"], item: item)), nil)
+            guard let code = asset(d["asset"], item: item, own: true) else { return fallback(item) }
+            return ("checkmark.circle", .enabled(code: code), nil)
         case "activate":
             return ("checkmark.circle", .setUpAccount, nil)
         case "restore":
@@ -163,31 +155,61 @@ public enum StellarActivityPresenter {
             let amount = (written(d["amount"]) ?? written(item.amount.map(StellarJSON.string))).map { StellarActivityAmount(units: $0, code: "XLM") }
             return ("checkmark.circle", .gotTestXLM(amount: amount), nil)
         default:
-            return ("circle", .other(clean(item.title) ?? item.summary), clean(item.subtitle).map { .name($0) })
+            return fallback(item)
         }
     }
 
-    // MARK: Names, never a stand-in
+    /// A launch item, about the coin `symbol`.
+    private static func launch(_ item: StellarActivityItem, _ d: [String: StellarJSON], symbol: String) -> Wording {
+        let got = item.result?.amountOut.map(StellarJSON.string)
+        switch item.kind {
+        case "launch_create":
+            return ("flame.fill", .launched(symbol: symbol), (clean(text(d["name"])) ?? clean(item.name)).map { .name($0) })
+        case "launch_buy":
+            return ("arrow.down", .bought(symbol: symbol), trade(amount(got, code: symbol), for: amount(d["amount"], code: quote(item, d))))
+        case "launch_sell":
+            return ("arrow.up", .sold(symbol: symbol), trade(amount(d["amount"], code: symbol), for: amount(got, code: quote(item, d))))
+        case "launch_claim":
+            return ("dollarsign.circle.fill", .collectedCreatorFees(symbol: symbol), amount(d["amount"], code: quote(item, d)).map { .amount($0) })
+        default:
+            return ("checkmark.seal.fill", .graduated(symbol: symbol), .venue("Soroswap"))
+        }
+    }
+
+    /// An item this build has no words for, or one that doesn't name what its words need: the server's own title or
+    /// summary while no word of it is a stand-in, else "Transaction".
+    private static func fallback(_ item: StellarActivityItem) -> Wording {
+        let title = LiteFormat.sentence(item.title) ?? LiteFormat.sentence(item.summary) ?? tr("Transaction")
+        return ("circle", .other(title), LiteFormat.sentence(item.subtitle).map { .name($0) })
+    }
+
+    // MARK: Names, never a stand-in, never empty
 
     /// The coin a launch item is about: its symbol from the item, else the server's resolved one, else its short
-    /// contract.
-    private static func coin(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String {
-        clean(text(d["symbol"])) ?? clean(item.symbol) ?? (item.ref?.token ?? text(d["token"])).map(LiteFormat.short) ?? ""
+    /// contract; nil when the item names none.
+    private static func coin(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String? {
+        clean(text(d["symbol"])) ?? clean(item.symbol) ?? (item.ref?.token ?? text(d["token"])).map(LiteFormat.short)
     }
 
-    /// An asset field of the display ("XLM", "USDC", a coin's symbol, or an id), as a code.
-    private static func asset(_ value: StellarJSON?, item: StellarActivityItem) -> String {
-        guard let raw = clean(text(value)) else { return clean(item.symbol) ?? item.ref?.token.map(LiteFormat.short) ?? "" }
+    /// An asset field of the display ("XLM", "USDC", a coin's symbol, or a contract) as a code; nil when it names none.
+    /// `own`: the field names the item's own asset (a payment's, an Earn deposit's, a trustline's), the one the server
+    /// resolved for the item (`symbol`): a missing field, or a contract, reads as that. Any other field (a swap's side, a
+    /// trade's quote) never borrows it: a contract there reads short.
+    private static func asset(_ value: StellarJSON?, item: StellarActivityItem, own: Bool = false) -> String? {
+        let resolved = own ? clean(item.symbol) : nil
+        guard let raw = clean(text(value)) else { return own ? resolved ?? item.ref?.token.map(LiteFormat.short) : nil }
         if raw == "native" { return "XLM" }
-        return StrKey.isValid(.contract, raw) ? clean(item.symbol) ?? LiteFormat.short(raw) : raw
+        return StrKey.isValid(.contract, raw) ? resolved ?? LiteFormat.short(raw) : raw
     }
 
-    private static func quote(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String {
-        asset(d["quote"] ?? d["quoteCode"], item: item)
+    /// The quote asset of a trade, a claim or a Moment's price; nil when the item names none.
+    private static func quote(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String? {
+        asset(d["quote"], item: item) ?? asset(d["quoteCode"], item: item)
     }
 
-    private static func momentTitle(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String {
-        clean(text(d["title"])) ?? clean(item.name) ?? (count(d["momentId"]) ?? item.ref?.momentId).map { "#\($0)" } ?? ""
+    /// A Moment's title, else its number; nil when the item names neither.
+    private static func momentTitle(_ item: StellarActivityItem, _ d: [String: StellarJSON]) -> String? {
+        clean(text(d["title"])) ?? clean(item.name) ?? (count(d["momentId"]) ?? item.ref?.momentId).map { "#\($0)" }
     }
 
     /// A name worth showing (`LiteFormat.name`).
@@ -200,8 +222,10 @@ public enum StellarActivityPresenter {
         return .trade(got, for: paid)
     }
 
-    private static func amount(_ value: StellarJSON?, code: String) -> StellarActivityAmount? {
-        units(value).map { StellarActivityAmount(units: $0, code: code) }
+    /// An amount in base units with its asset's code; nil without either.
+    private static func amount(_ value: StellarJSON?, code: String?) -> StellarActivityAmount? {
+        guard let code, let units = units(value) else { return nil }
+        return StellarActivityAmount(units: units, code: code)
     }
 
     private static func text(_ value: StellarJSON?) -> String? {

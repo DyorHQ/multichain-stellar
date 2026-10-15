@@ -13,6 +13,8 @@ final class LiteSessionTests: XCTestCase {
     private var backend: TestBackend!
     private var vault: MemoryVault!
     private var defaults: UserDefaults!
+    /// The test's own defaults, removed after it.
+    private var suite = ""
     private var tally: Tally!
 
     override func setUp() async throws {
@@ -21,12 +23,14 @@ final class LiteSessionTests: XCTestCase {
         backend = TestBackend(api: server.api())
         backend.afterRun = { [server] plan in if plan.planId == "setup" { server?.update { $0.usdc = true } } }
         vault = MemoryVault()
-        defaults = UserDefaults(suiteName: "lite.session.tests.\(UUID().uuidString)")
+        suite = "lite.session.tests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
         tally = Tally()
     }
 
     override func tearDown() async throws {
         server.stop()
+        defaults.removePersistentDomain(forName: suite)
     }
 
     private var seedAddress: String { TestAccount.seedSigner.address }
@@ -47,6 +51,8 @@ final class LiteSessionTests: XCTestCase {
     private var env: LiteEnvironment { LiteEnvironment(apiURL: server.base, pinned: .testnet, buildNumber: 23) }
 
     private func activate(_ address: String) { defaults.set(true, forKey: LiteSession.activatedKey(address)) }
+    private var refreshes: Int { server.paths.filter { $0 == "POST /v1/auth/refresh" }.count }
+    private var authCalls: [String] { server.paths.filter { $0.contains("/v1/auth/") } }
     private func steps(_ s: LiteSession) -> [LiteSession.Step] { s.steps.map(\.step) }
     private func status(_ s: LiteSession, _ step: LiteSession.Step) -> LiteSession.StepStatus? { s.steps.first { $0.step == step }?.status }
 
@@ -157,6 +163,7 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(s.methodLabel, "Passkey")
         XCTAssertFalse(s.holdsSigner, "dropped once the run ended")
         XCTAssertEqual(tally("appLock"), 0, "a passkey account never gets App Lock")
+        XCTAssertEqual(tally("reason:\(tr("Set up your Stellar account"))"), 1)
     }
 
     func testAPasskeyAccountAskedForAnInviteRunsANewCeremonyWithTheCode() async throws {
@@ -332,6 +339,81 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(tally.prompts, 0)
     }
 
+    /// QA's short sessions (`local-stack.sh --short-sessions`: 120-second tokens, §6.14): a token renews half-way
+    /// through, never at once after a renewal, and an action or becoming active doesn't renew one that isn't due.
+    func testShortLivedTokensRenewHalfWayAndNeverBackToBack() async throws {
+        server.update { $0.tokenLifetime = 120 }
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 120), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        // A saved token's lifetime isn't known: within 10 minutes of its end, it renews once at launch.
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(s.lead, 60, accuracy: 1, "half of the new token's 120 seconds")
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertEqual(refreshes, 1, "one renewal never starts the next")
+        try await s.ensureSession()
+        s.appDidBecomeActive()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(refreshes, 1, "an action and becoming active leave a token that isn't due")
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh"])
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// Even a token shorter than the floor: the timer renews again no sooner than `renewalFloor`.
+    func testATokenShorterThanTheFloorIsNotRenewedBackToBack() async throws {
+        server.update { $0.tokenLifetime = 4 }
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 4), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertGreaterThanOrEqual(LiteSession.renewalFloor, 30)
+    }
+
+    func testBecomingActiveRenewsOnlyWhenUnderTenMinutesAreLeft() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 3600), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        s.appDidEnterBackground()
+        s.appDidBecomeActive()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(refreshes, 0, "most of the hour is left: nothing to do")
+
+        // Back from the background 51 minutes later: under 10 minutes are left.
+        s.appDidEnterBackground()
+        s.now = { Date().addingTimeInterval(51 * 60) }
+        s.appDidBecomeActive()
+        await waitUntil { self.refreshes == 1 }
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh"], "the refresh token is enough")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
+    }
+
+    /// A 401 while the timer's renewal is under way waits for that renewal: one refresh between them.
+    func testA401SharesTheTimersRenewalUnderWay() async throws {
+        activate(seedAddress)
+        // Due half a second after launch (10 minutes and half a second before its end).
+        let saved = server.issueSession(lifetime: LiteSession.renewalLead + 0.5)
+        vault.save(saved, account: seedAddress, network: "testnet")
+        server.update { $0.slow["/v1/auth/refresh"] = 1.5 }
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        let store = try XCTUnwrap(s.store)
+        await waitUntil { self.refreshes == 1 }
+        // The timer's refresh is under way; the server refuses the old token meanwhile.
+        server.update { $0.tokens[saved.token] = nil }
+        await store.refreshHoldings()
+        XCTAssertEqual(refreshes, 1, "the timer's renewal served the 401 too")
+        XCTAssertEqual(store.holdings?.view, "owner", "the read went through with the renewed session")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
     func testNoLockedStateIsReachable() async throws {
         activate(seedAddress)
         let s = seedSession()
@@ -416,6 +498,31 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(tally("appLock"), 2, "each Set Up is its own confirmed action")
     }
 
+    /// Enable USDC is user-paid (§4.1): once its transaction reached the network the setup never says nothing was spent.
+    func testASetupStepThatReachedTheNetworkNeverSaysNothingWasSpent() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        backend.failureAfterSending = PlanRunner.Failure.failedOnChain(step: "Enable USDC", hash: "h", error: "op_low_reserve")
+        let s = seedSession(appLock: false)
+        await s.run()
+        await s.setUp()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(tr("Not enough XLM for Stellar's minimum balance."))))
+
+        let timedOut = PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")
+        backend.failureAfterSending = timedOut
+        await s.retry()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(LiteErrorText.describe(timedOut))), "sent and not seen yet: it may still land")
+
+        // Sent and confirmed, but the account doesn't read as set up yet.
+        backend.failureAfterSending = nil
+        backend.afterRun = nil
+        await s.retry()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(tr("Your Stellar account isn't ready yet. Try again in a moment."))))
+        XCTAssertEqual(backend.plans, ["setup", "setup", "setup"])
+    }
+
     func testTheSetupRunsAtNoMoreThanTheFeeShownBeforeTheTap() async throws {
         server.update {
             $0.exists = false
@@ -458,6 +565,54 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(tally.prompts, 0)
     }
 
+    /// Sign out of Stellar while a renewal is under way: the renewal keeps nothing it brings back, and the token it rotated
+    /// in is revoked with the rest; nothing renews the account afterwards.
+    func testSigningOutDuringARenewalStaysSignedOut() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        server.forget()
+        server.update { $0.slow["/v1/auth/refresh"] = 0.6 }
+        let renewing = Task { try? await s.renew() }
+        await waitUntil { self.refreshes == 1 }
+        await s.signOut()
+        await renewing.value
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh", "POST /v1/auth/signout"], "no sign-in in the refresh's place")
+        XCTAssertTrue(defaults.bool(forKey: LiteSession.signedOutKey(seedAddress)))
+        XCTAssertNil(vault.load(account: seedAddress, network: "testnet"))
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertNil(s.store)
+        XCTAssertTrue(server.current.refreshTokens.isEmpty, "the refresh token the renewal rotated in is revoked")
+        let held = await s.api.token
+        XCTAssertNil(held, "the API keeps no session")
+
+        try? await s.renew()
+        XCTAssertEqual(authCalls.count, 2, "a signed-out account doesn't renew")
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// The same while the server refuses the refresh: a seed account would then sign in silently, but not once it signed
+    /// out.
+    func testARefusedRefreshDuringSignOutStartsNoSignIn() async throws {
+        activate(seedAddress)
+        let saved = server.issueSession(lifetime: -60)
+        vault.save(LiteSavedSession(token: saved.token, expiresAt: saved.expiresAt, refreshToken: "lrt_gone"), account: seedAddress, network: "testnet")
+        server.update { $0.slow["/v1/auth/refresh"] = 0.6 }
+        let s = seedSession()
+        let launching = Task { await s.resumeAtLaunch() }
+        await waitUntil { self.refreshes == 1 }
+        await s.signOut()
+        await launching.value
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh", "POST /v1/auth/signout"])
+        XCTAssertTrue(defaults.bool(forKey: LiteSession.signedOutKey(seedAddress)))
+        XCTAssertNil(vault.load(account: seedAddress, network: "testnet"))
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertEqual(tally("seedRead"), 0, "nothing was signed")
+    }
+
     func testAPasskeyAccountSignedOutSignsInWithOnePromptAndSpendsNothing() async throws {
         activate(TestAccount.passkeyAddress)
         defaults.set(true, forKey: LiteSession.signedOutKey(TestAccount.passkeyAddress))
@@ -468,6 +623,8 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(tally.prompts, 1)
         XCTAssertEqual(backend.plans, [], "already set up: nothing is sent")
         XCTAssertFalse(s.holdsSigner)
+        XCTAssertEqual(tally("reason:\(tr("Sign in to DyorHQ on Stellar"))"), 1, "the prompt says it only signs in")
+        XCTAssertEqual(tally("reason:\(tr("Set up your Stellar account"))"), 0)
     }
 
     // MARK: - Errors
@@ -480,7 +637,15 @@ final class LiteSessionTests: XCTestCase {
         XCTAssertEqual(LiteSession.failure(for: LiteAPIError.server(status: 400, code: "friendbot_slow", message: "Testnet is slow to create the account. Try again in a minute.")),
                        .server("Testnet is slow to create the account. Try again in a minute."))
         XCTAssertEqual(LiteSession.failure(for: NSError(domain: "com.apple.LocalAuthentication", code: -2)), .cancelled)
-        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")), .setUpFailed)
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.refused(step: "Enable USDC", reason: "test")), .setUpFailed, "refused before it was sent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: LiteAPIError.decoding("an answer")), .setUpFailed)
+        let timedOut = PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")
+        XCTAssertEqual(LiteSession.setUpFailure(for: timedOut), .server(LiteErrorText.describe(timedOut)), "sent: it may still land, its fee is spent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.failedOnChain(step: "Enable USDC", hash: "h", error: "tx_insufficient_balance")),
+                       .server(tr("Not enough XLM for the network fee.")))
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.overLimit(asset: "C"), sent: true),
+                       .server(LiteErrorText.describe(PlanRunner.Failure.overLimit(asset: "C"))), "an earlier step was sent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: LiteSession.Failure.setUpFailed, sent: true), .server(tr("Your Stellar account isn't ready yet. Try again in a moment.")))
         XCTAssertEqual(LiteSession.setUpFailure(for: LiteAPIError.transport("x")), .offline)
         for failure in [LiteSession.Failure.paused, .updateRequired, .accessRevoked, .keyNotOnDevice] { XCTAssertFalse(failure.canRetry) }
         for failure in [LiteSession.Failure.offline, .cancelled, .otherAccountsKey, .inviteRejected, .rateLimited, .setUpFailed, .server("x")] {

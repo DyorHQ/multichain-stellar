@@ -12,6 +12,8 @@ final class LiteStoreTests: XCTestCase {
     private var backend: TestBackend!
     private var vault: MemoryVault!
     private var defaults: UserDefaults!
+    /// The test's own defaults, removed after it.
+    private var suite = ""
     private var tally: Tally!
     /// The sessions the tests made, kept alive as the app keeps its own (a store only holds its session weakly).
     private var sessions: [LiteSession] = []
@@ -21,12 +23,14 @@ final class LiteStoreTests: XCTestCase {
         server.serve()
         backend = TestBackend(api: server.api())
         vault = MemoryVault()
-        defaults = UserDefaults(suiteName: "lite.store.tests.\(UUID().uuidString)")
+        suite = "lite.store.tests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
         tally = Tally()
     }
 
     override func tearDown() async throws {
         server.stop()
+        defaults.removePersistentDomain(forName: suite)
         sessions = []
     }
 
@@ -144,6 +148,7 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(StellarFeeSummary(action.fees).value, .pricedAsSigned)
         XCTAssertEqual(action.section, .spot)
         XCTAssertEqual(action.title(of: action.plan.steps[1]), action.titles["s2"])
+        XCTAssertEqual(action.spends, ["XLM"], "what a shortfall on the network names")
     }
 
     func testAStepAboveThePinnedCapIsRefusedBeforeTheReview() async throws {
@@ -202,6 +207,26 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(seedStore.status(.activity), .read)
         XCTAssertFalse(seedStore.activity.isEmpty)
         XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// Today's screens, hosted by the app's seams, in the public view: Home's Activity card offers the sign-in instead of
+    /// reading forever, asks nothing until it is tapped, and lists the history once signed in.
+    func testTheActivityCardOffersTheSignInInThePublicView() async throws {
+        let (session, store) = try await readySession(keys: TestAccount.passkeyKeys(tally: tally), setupKey: TestAccount.setupKey(tally: tally),
+                                                      saved: false)
+        XCTAssertEqual(LiteHomeView.activityCard(store), .reading, "before the first read")
+        XCTAssertEqual(session.home, .ready)
+        XCTAssertEqual(session.access, .publicView)
+        await store.refreshActivity()
+        XCTAssertEqual(store.status(.activity), .needsSignIn)
+        XCTAssertEqual(LiteHomeView.activityCard(store), .signIn, "never “Reading your activity…” for good")
+        XCTAssertEqual(tally.prompts, 0)
+
+        try await session.signIn()
+        await store.refreshActivity()
+        XCTAssertEqual(LiteHomeView.activityCard(store), .list)
+        XCTAssertEqual(tally.prompts, 1, "the one passkey sign-in")
+        XCTAssertEqual(tally("reason:\(tr("Sign in to DyorHQ on Stellar"))"), 1)
     }
 
     func testAPasskeyAccountWithNoSessionSignsInOnceWhenItStartsAnAction() async throws {

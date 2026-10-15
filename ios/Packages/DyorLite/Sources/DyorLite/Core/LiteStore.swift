@@ -610,7 +610,9 @@ public final class LiteStore {
     func prepare(_ plan: PlanView, limits: [String: Int64], title: String, titles: [String: String] = [:], section: LiteSection,
                  reference: String?, summary: LiteActionSummary) throws -> PreparedAction {
         let fees = try PlanFees(plan: plan, pinned: env.pinned, estimates: fees)
-        return PreparedAction(plan: plan, limits: limits, title: title, titles: titles, section: section, reference: reference, fees: fees, summary: summary)
+        let spends = limits.keys.sorted().map { isXLM($0) ? "XLM" : code($0) }
+        return PreparedAction(plan: plan, limits: limits, title: title, titles: titles, section: section, reference: reference, fees: fees, summary: summary,
+                              spends: spends)
     }
 
     // MARK: - Running

@@ -20,10 +20,13 @@ public struct PreparedAction: Identifiable, Equatable {
     public let sponsorVerified: Bool
     /// What the action does, for its notification once it settles.
     let summary: LiteActionSummary
+    /// The codes of the assets in `limits` ("XLM", "USDC", a coin's symbol): what a step that failed for want of funds
+    /// ran short of, when there is one (`LiteErrorText.describe(_:for:)`).
+    let spends: [String]
     public var id: String { plan.planId }
 
     init(plan: PlanView, limits: [String: Int64], title: String, titles: [String: String], section: LiteSection, reference: String?,
-         fees: PlanFees, summary: LiteActionSummary) {
+         fees: PlanFees, summary: LiteActionSummary, spends: [String] = []) {
         self.plan = plan
         self.limits = limits
         self.title = title
@@ -33,6 +36,7 @@ public struct PreparedAction: Identifiable, Equatable {
         self.fees = fees
         sponsorVerified = fees.sponsorVerified
         self.summary = summary
+        self.spends = spends
     }
 
     /// A step's title, the same one Activity gives the transaction once it is sent: from its intent; for a step the
@@ -63,6 +67,20 @@ public struct LiteSettledAction: Equatable, Sendable {
     /// Every step's transaction hash, in order.
     public let hashes: [String]
     public let at: Date
+
+    /// The store makes these as plans settle; a host makes its own to test what it does with them (the activity
+    /// recorder).
+    public init(planId: String, kind: String, title: String, body: String, section: LiteSection, reference: String?, hashes: [String],
+                at: Date) {
+        self.planId = planId
+        self.kind = kind
+        self.title = title
+        self.body = body
+        self.section = section
+        self.reference = reference
+        self.hashes = hashes
+        self.at = at
+    }
 }
 
 /// A part of the account's figures a screen shows on its own (§7.2): the four holdings parts, and DyorHQ's history.

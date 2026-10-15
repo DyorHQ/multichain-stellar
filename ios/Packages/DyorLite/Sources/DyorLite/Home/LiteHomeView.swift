@@ -237,29 +237,43 @@ struct LiteHomeView: View {
     private func activity(_ store: LiteStore) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(tr("Activity")).font(.headline)
-            if store.loaded.contains(.activity) {
-                if store.activity.isEmpty {
-                    LiteParagraph(tr("Nothing yet. Add cash or swap to get started."))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 0) {
-                        let items = Array(store.activity.prefix(12))
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            LiteActivityRow(item: item)
-                            if index < items.count - 1 { Divider() }
-                        }
+            switch Self.activityCard(store) {
+            case .signIn:
+                LiteSignInRow(session: session) { await store.refreshActivity() }
+            case .empty:
+                LiteParagraph(tr("Nothing yet. Add cash or swap to get started."))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            case .list:
+                VStack(spacing: 0) {
+                    let items = Array(store.activity.prefix(12))
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        LiteActivityRow(item: item)
+                        if index < items.count - 1 { Divider() }
                     }
                 }
-            } else if store.failed.contains(.activity) {
+            case .failed:
                 retryRow(store.lastError ?? "", store)
-            } else {
+            case .reading:
                 readingRow(tr("Reading your activity…"))
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .liteCardBackground()
+    }
+
+    /// What an Activity card shows (Home's, and the activity page's).
+    enum ActivityCard: Equatable { case reading, signIn, empty, list, failed }
+
+    /// From the store's last reads: DyorHQ's history with no session (an account reading in the public view) is the
+    /// sign-in row, whatever a past session read; then the last list read, even after a read that failed; then the
+    /// failure; then an empty list; else the read under way.
+    static func activityCard(_ store: LiteStore) -> ActivityCard {
+        if store.status(.activity) == .needsSignIn { return .signIn }
+        if store.loaded.contains(.activity), !store.activity.isEmpty { return .list }
+        if store.failed.contains(.activity) { return .failed }
+        return store.loaded.contains(.activity) ? .empty : .reading
     }
 
     private func readingRow(_ text: String) -> some View {
@@ -350,15 +364,61 @@ struct LiteHoldingRow: View {
     }
 }
 
+/// DyorHQ's history with no session (an account reading in the public view, §8): why, and the one button that signs in.
+/// Nothing asks until it is tapped (`LiteSession.signIn()`: a passkey account's one ceremony); `then` reads the part
+/// again once signed in.
+struct LiteSignInRow: View {
+    let session: LiteSession?
+    let then: () async -> Void
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LiteParagraph(tr("Sign in again to see your Stellar history."))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await signIn() }
+            } label: {
+                if busy { ProgressView() } else { Text(tr("Sign in")) }
+            }
+            .buttonStyle(.bordered)
+            .disabled(busy || session == nil)
+            if let error { LiteInlineError(message: error) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+
+    private func signIn() async {
+        guard let session else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await session.signIn()
+            error = nil
+            await then()
+        } catch {
+            self.error = LiteErrorText.describe(error)
+        }
+    }
+}
+
 /// An activity row: what happened, when, and its status as a word with a symbol.
 struct LiteActivityRow: View {
     let item: StellarActivityItem
     @Environment(\.liteStyle) private var style
 
+    /// The phone's own words for the item; else the server's, while none of its words is a stand-in; else "Transaction".
+    static func title(_ item: StellarActivityItem) -> String {
+        LiteTitles.activity(item) ?? LiteFormat.sentence(item.summary) ?? tr("Transaction")
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: LiteTitles.activity(item) ?? item.summary).font(.subheadline).lineLimit(2)
+                Text(verbatim: Self.title(item)).font(.subheadline).lineLimit(2)
                 Text(verbatim: time).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)

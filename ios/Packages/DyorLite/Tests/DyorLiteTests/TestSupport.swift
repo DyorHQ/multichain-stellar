@@ -43,14 +43,28 @@ enum TestAccount {
         }
     }
 
-    /// A passkey account's setup ceremony: one passkey prompt.
+    /// A passkey account's setup ceremony: one passkey prompt, its reason counted as "reason:<the reason>".
     static func setupKey(tally: Tally, failing: Error? = nil) -> @Sendable (String) async throws -> LiteSession.UnlockResult {
-        { _ in
+        { reason in
             tally.add("passkey")
             tally.add("ceremony")
+            tally.add("reason:\(reason)")
             if let failing { throw failing }
             return .init(keys: passkeyKeys(tally: tally), signer: try StellarDerivation.sep5(mnemonic: phrase))
         }
+    }
+}
+
+/// A setting the code under test reads when it needs it (App Lock's), changed by the test meanwhile.
+final class Setting: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Bool
+
+    init(_ value: Bool) { current = value }
+
+    var value: Bool {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
     }
 }
 
@@ -362,7 +376,10 @@ final class TestBackend: LiteBackend, @unchecked Sendable {
     var afterRun: (@Sendable (PlanView) -> Void)?
     /// A pause before each step's signature, to catch a run in the middle.
     var stepPause: TimeInterval = 0
+    /// Thrown before anything is signed.
     var failure: Error?
+    /// Thrown once the first step was sent (`.submitted`): what Stellar answered about it.
+    var failureAfterSending: Error?
 
     init(api: LiteAPI) {
         self.api = api
@@ -390,6 +407,7 @@ final class TestBackend: LiteBackend, @unchecked Sendable {
             lock.withLock { signed += 1 }
             let hash = String(repeating: String(index), count: 64)
             onEvent(.submitted(stepId: step.id, hash: hash))
+            if let failureAfterSending { throw failureAfterSending }
             onEvent(.confirmed(stepId: step.id, hash: hash))
             results.append(try JSONDecoder().decode(TxStatus.self, from: Data(#"{"hash":"\#(hash)","status":"success"}"#.utf8)))
         }

@@ -184,13 +184,50 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(StellarActivityPresenter.present(cash).title, .cash(deposit: false))
         XCTAssertEqual(StellarActivityPresenter.present(cash).subtitle, .amount(StellarActivityAmount(units: 500_000_000, code: "XLM")))
 
-        // Whatever an item holds, no word of the presentation is an old server's stand-in.
+        // Whatever an item holds, no word of the presentation is an old server's stand-in, and no name is empty.
+        let kinds = ["launch_buy", "launch_sell", "launch_create", "launch_claim", "launch_graduate", "moment_publish", "moment_collect", "swap",
+                     "payment", "trust", "earn_deposit", "earn_withdraw", "blend_borrow"]
         for raw in LiteFormat.standIns.sorted() + [""] {
-            for kind in ["launch_buy", "launch_sell", "launch_create", "launch_claim", "swap", "payment", "trust", "earn_deposit"] {
-                let shown = StellarActivityPresenter.present(try item(#"{"type":"tx","id":"t","kind":"\#(kind)","summary":"\#(raw)","status":"success","at":"2026-10-14T09:41:00.000Z","symbol":"\#(raw)","name":"\#(raw)","display":{"symbol":"\#(raw)","asset":"\#(raw)","sell":"\#(raw)","buy":"\#(raw)","quote":"\#(raw)","amount":"1","amountIn":"1","name":"\#(raw)"}}"#))
-                for standIn in LiteFormat.standIns { XCTAssertFalse("\(shown)".contains("\"\(standIn)\""), "\(kind): \(shown)") }
+            for kind in kinds {
+                let shown = StellarActivityPresenter.present(try item(#"{"type":"tx","id":"t","kind":"\#(kind)","summary":"Buy \#(raw) with 2 XLM","status":"success","at":"2026-10-14T09:41:00.000Z","title":"Bought \#(raw)","subtitle":"\#(raw)","symbol":"\#(raw)","name":"\#(raw)","display":{"symbol":"\#(raw)","asset":"\#(raw)","sell":"\#(raw)","buy":"\#(raw)","quote":"\#(raw)","amount":"1","amountIn":"1","price":"1","total":"1","name":"\#(raw)","title":"\#(raw)"},"result":{"amountOut":"3"}}"#))
+                let words = "\(shown)"
+                for standIn in LiteFormat.standIns { XCTAssertFalse(words.contains(standIn), "\(kind): \(shown)") }
+                XCTAssertFalse(words.contains("\"\""), "an empty name: \(kind): \(shown)")
             }
         }
+    }
+
+    /// An item a newer server words in a way this build doesn't know, or one that doesn't name what its words need: the
+    /// server's own words while none of them is a stand-in, else "Transaction". Amounts carry a code or aren't shown.
+    func testActivityFallsBackToCleanWords() throws {
+        func shown(_ fields: String) throws -> StellarActivityPresentation {
+            StellarActivityPresenter.present(try item(#"{"type":"tx","id":"x","status":"success","at":"2026-10-14T09:41:00.000Z",\#(fields)}"#))
+        }
+        XCTAssertEqual(try shown(#""kind":"blend_borrow","summary":"Borrow 5 USDC""#).title, .other("Borrow 5 USDC"))
+        XCTAssertEqual(try shown(#""kind":"blend_borrow","summary":"Buy TOKEN with 2 XLM""#).title, .other("Transaction"), "an old server's stand-in in a sentence")
+        XCTAssertEqual(try shown(#""kind":"blend_borrow","title":"Bought $TOKEN","summary":"Borrow 5 USDC""#).title, .other("Borrow 5 USDC"))
+        XCTAssertNil(try shown(#""kind":"blend_borrow","summary":"s","subtitle":"for TOKEN""#).subtitle)
+
+        // Known kinds that don't name their coin, Moment or asset.
+        XCTAssertEqual(try shown(#""kind":"launch_buy","summary":"Buy with 2 XLM","display":{"amount":"20000000","quote":"XLM"}"#).title, .other("Buy with 2 XLM"))
+        XCTAssertEqual(try shown(#""kind":"moment_publish","summary":"Publish TOKEN","display":{"price":"1","quote":"XLM"}"#).title, .other("Transaction"))
+        XCTAssertEqual(try shown(#""kind":"payment","summary":"","display":{"amount":"1"}"#).title, .other("Transaction"))
+        XCTAssertEqual(try shown(#""kind":"trust","summary":"Enable""#).title, .other("Enable"))
+
+        // A swap's or a trade's amount whose asset isn't named isn't shown with an empty code.
+        let swap = try shown(#""kind":"swap","summary":"Swap","display":{"amountIn":"100000000","minOut":"1"},"result":{"amountOut":"5"}"#)
+        XCTAssertEqual(swap.title, .swapped)
+        XCTAssertNil(swap.subtitle)
+        let buy = try shown(#""kind":"launch_buy","summary":"Buy","display":{"symbol":"ECAT","amount":"20000000"},"result":{"amountOut":"5000000000"}"#)
+        XCTAssertEqual(buy.title, .bought(symbol: "ECAT"))
+        XCTAssertEqual(buy.subtitle, .amount(StellarActivityAmount(units: 5_000_000_000, code: "ECAT")), "what it cost has no quote named: only what it brought")
+        // A swap never borrows the item's own symbol for a side it doesn't name.
+        let oneSided = try shown(#""kind":"swap","summary":"Swap","symbol":"ECAT","display":{"sell":"XLM","amountIn":"10"},"result":{"amountOut":"5"}"#)
+        XCTAssertNil(oneSided.subtitle)
+        // A payment names its asset by the server's resolved symbol when the display has its contract.
+        let token = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+        XCTAssertEqual(try shown(#""kind":"payment","summary":"Send","symbol":"ECAT","display":{"asset":"\#(token)","amount":"1"}"#).title, .sent(code: "ECAT"))
+        XCTAssertEqual(try shown(#""kind":"payment","summary":"Send","display":{"asset":"\#(token)","amount":"1"}"#).title, .sent(code: "CDLZ…CYSC"))
     }
 
     // MARK: - StellarFeeSummary
@@ -351,7 +388,7 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(copy("tx_rejected", ["code": "op_low_reserve"]), "Not enough XLM for Stellar's minimum balance.")
         XCTAssertEqual(copy("tx_rejected", ["code": "CHANGE_TRUST_LOW_RESERVE"]), "Not enough XLM for Stellar's minimum balance.")
         XCTAssertEqual(copy("not_enough_xlm", ["minBalance": "15000000"]), "Not enough XLM. 1.5 XLM stays in your account.")
-        XCTAssertEqual(copy("tx_rejected", ["code": "op_underfunded", "minBalance": "15000000"]), "Not enough XLM. 1.5 XLM stays in your account.")
+        XCTAssertEqual(copy("tx_rejected", ["code": "op_underfunded", "minBalance": "15000000"]), "Not enough funds for this.", "which asset, only the run knows")
         XCTAssertEqual(copy("not_enough_xlm"), "Not enough XLM.")
         XCTAssertEqual(copy("fee_too_high", ["fee": "31000000", "max": "30000000"], status: 422),
                        "Not signed: the network fee is unusually high right now (3.1 XLM). Nothing was sent. Try again in a minute.")
@@ -361,6 +398,12 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(copy("look_alike_symbol", status: 400), "That ticker looks like another token's. Choose another.")
         XCTAssertEqual(copy("muxed_unsupported", status: 400), "Muxed (M…) addresses aren't supported. Use the G… address and the memo you were given.")
         XCTAssertEqual(copy("recipient_missing", ["assetCode": "USDC"]), "This account doesn't exist yet, so it can't receive USDC.")
+        XCTAssertEqual(copy("recipient_missing"), "This account doesn't exist yet, so it can't receive this token.", "never a made-up asset")
+        for standIn in LiteFormat.standIns {
+            XCTAssertEqual(copy("recipient_missing", ["assetCode": standIn]), "This account doesn't exist yet, so it can't receive this token.", "never a stand-in")
+        }
+        XCTAssertEqual(copy("recipient_no_trust", ["asset": "EURC"]), "This account hasn't enabled EURC, so it can't receive it.", "the id when there's no code")
+        XCTAssertEqual(copy("recipient_no_trust"), "This account hasn't enabled this token, so it can't receive it.")
         XCTAssertEqual(copy("recipient_no_trust", ["assetCode": "EURC"]), "This account hasn't enabled EURC, so it can't receive it.")
         XCTAssertEqual(copy("launch.slippage", status: 422), "The price moved past your 1% limit. Nothing was sent. Review again for a new price.")
         XCTAssertEqual(copy("launch.closed", status: 422), "This curve isn't taking trades now.")
@@ -370,6 +413,8 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(copy("moment.sold_out", status: 422), "This Moment is sold out.")
         XCTAssertEqual(copy("moment.price_too_low", ["minPrice": "10000000", "quoteCode": "XLM"], status: 422), "The price is below the minimum (1 XLM).")
         XCTAssertEqual(copy("trust.missing", ["assetCode": "USDC"], status: 422), "Enable USDC first.")
+        XCTAssertEqual(copy("trust.missing", status: 422), "Enable this token first.", "XLM needs no trustline: never \"Enable XLM first.\"")
+        XCTAssertEqual(copy("trust.missing", ["asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"], status: 422), "Enable CDLZ…CYSC first.")
         XCTAssertEqual(copy("upload_budget", status: 429), "You've uploaded a lot today. Try again tomorrow.")
         XCTAssertEqual(copy("bridge_relay_limit", status: 429), "You've bridged in many times today. Try again tomorrow.")
         XCTAssertEqual(copy("tx_rejected", ["code": "op_no_destination"], status: 422), "the server's words", "Stellar's other refusals: the server's words")
@@ -383,11 +428,59 @@ final class LiteHelpersTests: XCTestCase {
         XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.overLimit(asset: "C")), "Not signed: this would spend more than you confirmed. Nothing was sent.")
         XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.refused(step: "Swap", reason: "The memo is not the one you confirmed.")),
                        "Not signed: Swap didn't pass the checks (The memo is not the one you confirmed.). Nothing was sent.")
-        XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.failedOnChain(step: "Swap", hash: "h", error: "op_underfunded")), "Swap failed on the network (op_underfunded).")
+        // Stellar's result once it applied a step (WP-10's TxStatus.error): an operation's code exists only then.
+        func onChain(_ code: String?) -> String { LiteErrorText.describe(PlanRunner.Failure.failedOnChain(step: "Swap", hash: "h", error: code)) }
+        XCTAssertEqual(onChain("op_low_reserve"), "Not enough XLM for Stellar's minimum balance.")
+        XCTAssertEqual(onChain("CHANGE_TRUST_LOW_RESERVE"), "Not enough XLM for Stellar's minimum balance.")
+        XCTAssertEqual(onChain("tx_insufficient_balance"), "Not enough XLM for the network fee.")
+        XCTAssertEqual(onChain("tx_insufficient_fee"), "Not enough XLM for the network fee.")
+        XCTAssertEqual(onChain("op_underfunded"), "Not enough funds for this.")
+        XCTAssertEqual(onChain("op_no_trust"), "Swap failed on the network (op_no_trust).", "a code with no words of its own")
+        XCTAssertEqual(onChain(nil), "Swap failed on the network.")
         XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.timedOut(step: "Swap", hash: "h")), "Swap was sent; confirmation not seen yet.")
         XCTAssertEqual(LiteErrorText.describe(LiteSession.Failure.cancelled), "Not finished. Try again.")
         XCTAssertEqual(LiteErrorText.describe(CancellationError()), "Not finished. Try again.")
         XCTAssertEqual(LiteErrorText.describe(AnchorClient.Failure.toml("SIGNING_KEY")), "This provider's setup file is missing SIGNING_KEY.")
+    }
+
+    /// A step that failed on the network for want of funds names what the run spends: XLM's own words (§6.13), another
+    /// asset by its code, and neither when the run spends several.
+    func testAShortfallOnTheNetworkNamesWhatTheRunSpends() throws {
+        let plan = try decode(PlanView.self, FakeLite.plan(id: "p", steps: [("s1", "payment", "Send", 10_000)]))
+        let fees = try PlanFees(plan: plan, pinned: .testnet)
+        func action(spending codes: [String]) -> PreparedAction {
+            PreparedAction(plan: plan, limits: [:], title: "Send", titles: [:], section: .spot, reference: nil, fees: fees,
+                           summary: .send(amount: 1, code: "XLM", to: "G"), spends: codes)
+        }
+        let underfunded = PlanRunner.Failure.failedOnChain(step: "Send", hash: "h", error: "op_underfunded")
+        XCTAssertEqual(LiteErrorText.describe(underfunded, for: action(spending: ["XLM"])), "Not enough XLM.")
+        XCTAssertEqual(LiteErrorText.describe(underfunded, for: action(spending: ["USDC"])), "Not enough USDC.")
+        XCTAssertEqual(LiteErrorText.describe(underfunded, for: action(spending: ["USDC", "XLM"])), "Not enough funds for this.")
+        XCTAssertEqual(LiteErrorText.describe(PlanRunner.Failure.failedOnChain(step: "Send", hash: "h", error: "op_low_reserve"), for: action(spending: ["USDC"])),
+                       "Not enough XLM for Stellar's minimum balance.", "the reserve is always XLM")
+        XCTAssertEqual(LiteErrorText.describe(LiteAPIError.transport("x"), for: action(spending: ["XLM"])), "No connection. Check your network and try again.")
+    }
+
+    /// StellarKit refuses a fee above the pinned caps with its own English and no fee; §4.6 words every such refusal as a
+    /// fee that is unusually high right now, without the step's server label. Run through StellarKit's own checks (the
+    /// shared vectors), so the words matched stay StellarKit's.
+    func testAFeeAboveTheCapsIsUnusuallyHigh() throws {
+        let unusual = "Not signed: the network fee is unusually high right now. Nothing was sent. Try again in a minute."
+        for name in ["soroban fee over the cap", "inclusion over the cap", "soroban inclusion over the cap", "starter step with an inner fee above the cap"] {
+            let (step, pinned) = try Self.vector(name)
+            XCTAssertThrowsError(try fees([step], pinned: pinned), name) { error in
+                XCTAssertEqual(LiteErrorText.describe(error), unusual, "\(name): \(error)")
+            }
+        }
+        // A step not built yet, whose ceiling is above the pinned cap.
+        XCTAssertThrowsError(try fees([#"{"id":"u","label":"Swap","status":"pending","stepKind":"swap_soroswap","maxFee":"40000000"}"#], pinned: .testnet)) { error in
+            XCTAssertEqual(LiteErrorText.describe(error), unusual)
+        }
+        // Any other check keeps its own words.
+        let (other, otherPinned) = try Self.vector("resource fee above fee")
+        XCTAssertThrowsError(try fees([other], pinned: otherPinned)) { error in
+            XCTAssertNotEqual(LiteErrorText.describe(error), unusual)
+        }
     }
 
     /// The copy in every language the package ships (the catalog compiled into the bundle by Xcode's build).

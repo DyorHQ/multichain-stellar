@@ -43,6 +43,7 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(title("approve", ["amount": .string("50000000"), "spender": .string("Circle CCTP")]), "Allow Circle's bridge to move 5 USDC")
         XCTAssertEqual(title("bridge_out", ["amount": .string("50000000"), "to": .string("0x1234")]), "Send 5 USDC to Monad")
         XCTAssertEqual(title("faucet", ["amount": .string("5000")]), "Get 5,000 test XLM", "the server's amount, in the language's digits")
+        XCTAssertEqual(title("faucet"), "Get test XLM", "the faucet's row carries no intent: no number made up, and never the bare kind")
     }
 
     func testAnUnknownKindOrAMissingFieldKeepsTheServersWords() {
@@ -53,7 +54,6 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertNil(title("moment_publish", ["price": .string("10000000"), "quote": .string("")]), "an empty code is missing")
         XCTAssertNil(title("approve", ["amount": .string("1"), "spender": .string("someone else")]), "only Circle's bridge moves USDC alone")
         XCTAssertNil(title("moment_collect", ["quantity": .number(0), "total": .string("1"), "quote": .string("USDC")]))
-        XCTAssertNil(title("faucet"), "no amount, no number made up")
     }
 
     func testActivityRowsWordBridgeAndCashTransfersThemselves() throws {
@@ -79,6 +79,22 @@ final class LiteTitlesTests: XCTestCase {
         XCTAssertEqual(LiteTitles.activity(older), "Add cash")
         let unknown = try item(#"{"type":"airdrop","id":"x","kind":"drop","summary":"Got a drop","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
         XCTAssertNil(LiteTitles.activity(unknown), "Activity shows the server's summary")
+    }
+
+    /// Today's Activity row: the phone's words, else the server's summary while none of its words is a stand-in, else
+    /// "Transaction"; a faucet row (no intent) never shows its bare kind.
+    @MainActor
+    func testTheActivityRowNeverShowsAStandInOrABareKind() throws {
+        func item(_ json: String) throws -> StellarActivityItem { try JSONDecoder().decode(StellarActivityItem.self, from: Data(json.utf8)) }
+        let faucet = try item(#"{"type":"tx","id":"f","kind":"faucet","summary":"faucet","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(faucet), "Get test XLM")
+        let unknown = try item(#"{"type":"tx","id":"u","kind":"blend_borrow","summary":"Borrow 5 USDC","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(unknown), "Borrow 5 USDC")
+        let old = try item(#"{"type":"tx","id":"o","kind":"blend_borrow","summary":"Buy TOKEN with 2 XLM","status":"success","at":"2026-10-13T09:41:00.000Z"}"#)
+        XCTAssertEqual(LiteActivityRow.title(old), "Transaction")
+        XCTAssertNil(LiteFormat.sentence("Swap 1 XLM for $TOKEN."), "a stand-in with marks around it is still one")
+        XCTAssertNil(LiteFormat.sentence("  "))
+        XCTAssertEqual(LiteFormat.sentence("Tokenomics update"), "Tokenomics update", "only whole words")
     }
 
     /// The new field never costs the list: an older payload decodes without it, and a display the app can't read only
