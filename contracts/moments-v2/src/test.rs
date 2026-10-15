@@ -839,6 +839,92 @@ fn publish_validates_price_allocation_window_and_strings() {
 }
 
 #[test]
+fn publish_accepts_only_ascii_letters_and_digits_as_a_symbol() {
+    // The coin takes the symbol, and Soroswap's pair decodes the first 6 bytes of it as UTF-8 with an unwrap, so
+    // anything but ASCII letters and digits is refused at publish: emoji and other multi-byte characters, spaces,
+    // punctuation and control characters. Every one of these is within the length limits.
+    let t = setup();
+    let publish = |symbol: &str| t.try_publish(&PublishParams { symbol: t.s(symbol), ..t.params() }).map(|_| ());
+    let refused = [
+        "😀😀",
+        "ABCDE€",
+        "ÄBCD",
+        "MÜNZE",
+        "€€",
+        "ＡＢＣ",
+        "AB CD",
+        " ABC",
+        "AB-CD",
+        "AB.CD",
+        "AB_CD",
+        "AB$",
+        "AB\tCD",
+        "AB\nCD",
+        "AB\u{0}CD",
+        "AB\u{7f}",
+    ];
+    for symbol in refused {
+        assert_eq!(publish(symbol), Err(err(Error::InvalidString)), "{symbol:?}");
+    }
+    for symbol in ["AB", "ab", "A1", "SUNSET", "Labadi26", "ABCDEFGH12", "0123456789"] {
+        assert_eq!(publish(symbol), Ok(()), "{symbol}");
+    }
+}
+
+#[test]
+fn the_soroswap_pair_reads_the_first_6_bytes_of_a_symbol_as_utf_8() {
+    // Why publish restricts symbols, against the real factory and pair: a coin whose symbol's first 6 bytes end
+    // inside a multi-byte character can't get a pair at all, so its Moment could never graduate. ASCII symbols of
+    // every length publish allows, shorter and longer than 6, can.
+    let t = setup();
+    let factory = soroswap_factory::Client::new(&t.e, &t.factory);
+    let coin = |symbol: &str| {
+        t.e.register(moment_coin::WASM, (t.id.clone(), t.s("Coin"), t.s(symbol), SUPPLY, t.id.clone(), 0i128))
+    };
+    for symbol in ["ABCDE€", "😀😀", "ÄBCDÉ€"] {
+        assert!(factory.try_create_pair(&coin(symbol), &t.usdc).is_err(), "{symbol}");
+    }
+    for len in 2..=10 {
+        let symbol = &"ABCDEFGH12"[..len];
+        assert!(factory.try_create_pair(&coin(symbol), &t.usdc).is_ok(), "{symbol}");
+    }
+}
+
+/// Publishes a Moment with `name` and `symbol`, completes it and graduates it through the real Soroswap pair.
+/// Returns the pair.
+fn graduate_named(t: &T, name: &str, symbol: &str) -> Address {
+    let nft = t.publish_with(&PublishParams { name: t.s(name), symbol: t.s(symbol), ..t.params() });
+    t.complete(&nft);
+    let coin = t.m().get_moment(&nft).coin;
+    let pair = match t.graduate(&nft) {
+        GraduationOutcome::Graduated(pool) => pool,
+        other => panic!("{name} / {symbol}: {other:?}"),
+    };
+    assert_eq!(pair, soroswap_factory::Client::new(&t.e, &t.factory).get_pair(&coin, &t.usdc));
+    let c = t.coin(&coin);
+    assert_eq!((c.name(), c.symbol()), (t.s(name), t.s(symbol)));
+    assert_eq!((t.nft(&nft).name(), t.nft(&nft).symbol()), (t.s(name), t.s(symbol)));
+    pair
+}
+
+#[test]
+fn a_ten_character_ascii_symbol_and_a_non_ascii_name_graduate_through_the_real_pair() {
+    // The longest symbol publish allows, with a name of accented letters and an emoji: the pair reads the symbol and
+    // never the name, so names stay free-form.
+    let t = setup();
+    let name = "Lever du soleil à Accra 🌅";
+    assert!(name.len() <= 32 && !name.is_ascii());
+    let pair = graduate_named(&t, name, "ABCDEFGH12");
+    // The LP token's symbol is built from the coin symbol's first 6 bytes.
+    let lp_symbol = soroswap_pair::Client::new(&t.e, &pair).symbol();
+    let mut bytes = std::vec![0u8; lp_symbol.len() as usize];
+    lp_symbol.copy_into_slice(&mut bytes);
+    assert!(bytes.windows(6).any(|w| w == b"ABCDEF"), "{}", std::string::String::from_utf8_lossy(&bytes));
+    // The shortest symbol graduates too.
+    graduate_named(&t, "Ẹ̀kọ́ ní Èkó", "EK");
+}
+
+#[test]
 fn policy_changes_apply_to_moments_published_after_them_only() {
     let t = setup();
     // A window longer than the policy timelock, so the Moment is still collecting after the change.

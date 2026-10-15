@@ -10,9 +10,9 @@ rust-version.workspace = true
 [lib]
 doctest = false
 
+# The library is the shared harness of the tests in tests/ (the deployment of §3.4 over the dist WASMs). It is host-only:
+# build.sh never builds this crate, and no contract crate depends on it.
 [dependencies]
-
-[dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 dyor-common = { workspace = true }
 proptest = { workspace = true }

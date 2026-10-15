@@ -10,9 +10,10 @@
 //   trust   Adds the Circle testnet USDC trustline to TREASURY_PUBLIC and PLATFORM_PUBLIC (once when they are one
 //           account). Signs with TREASURY_SECRET from the keys file, or for an account you brought yourself with
 //           TREASURY_SECRET / PLATFORM_SECRET from the environment (type it with `read -rs NAME && export NAME`).
-//   check   [--fund-aqua-float] [--aquarius off]: the read-only preflight, one ✓ or ✗ line each. Exit 0 only when
-//           everything the deploy needs passes.
-//   sign    <file> --as admin|governance|guardian|treasury|v1-admin [--decode-only]: shows an envelope written by
+//   check   [--aquarius off|auto] [--fund-aqua-float]: the read-only preflight, one ✓ or ✗ line each. Exit 0 only
+//           when everything the deploy needs passes. --aquarius is off by default (owner decision O7: Soroswap only),
+//           as for deploy-contracts-v2.ts; auto also checks the live Aquarius router and expects exec-aquarius.
+//   sign    <file> --as admin|governance|guardian|v1-admin [--decode-only]: shows an envelope written by
 //           admin-v2.ts, then asks "Sign and submit? [y/N]" in a terminal, signs, submits and waits. It accepts only
 //           the calls admin-v2.ts writes (its ADMIN_FNS), shows the description it derives from the decoded call, and
 //           escapes every character from the file or the chain that isn't printable ASCII.
@@ -54,6 +55,8 @@ import {
   fmtUnits,
   fmtXlm,
   line,
+  MIN_DEPLOYER_XLM,
+  MIN_DEPLOYER_XLM_FLOAT,
   parseEnvelope,
   preflight,
   readOnlyChain,
@@ -72,8 +75,8 @@ import { roleRuleErrors, ROLE_NAMES, type V2Roles } from "./lib/v2-profile.ts";
 export const USAGE = [
   "usage: owner-v2.ts keys",
   "       owner-v2.ts trust",
-  "       owner-v2.ts check [--fund-aqua-float] [--aquarius off]",
-  "       owner-v2.ts sign <file> --as admin|governance|guardian|treasury|v1-admin [--decode-only]",
+  "       owner-v2.ts check [--aquarius off|auto] [--fund-aqua-float]   (--aquarius is off by default, O7)",
+  "       owner-v2.ts sign <file> --as admin|governance|guardian|v1-admin [--decode-only]",
   "Testnet only. The secrets directory is $DYOR_SECRETS_DIR, else .secrets/ in the repository.",
 ].join("\n");
 
@@ -251,7 +254,8 @@ async function trust(ctx: OwnerCtx, args: string[]): Promise<number> {
 
 async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
   let fundAquaFloat = false;
-  let aquarius: "auto" | "off" = "auto";
+  // Off by default, as for deploy-contracts-v2.ts (O7).
+  let aquarius: "auto" | "off" = "off";
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--fund-aqua-float") fundAquaFloat = true;
     else if (args[i] === "--aquarius" && (args[i + 1] === "off" || args[i + 1] === "auto")) aquarius = args[++i] as "auto" | "off";
@@ -317,13 +321,14 @@ async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
         deployer: roles.ADMIN_PUBLIC,
         treasuryAssets: [u.classic],
         platformAssets: [u.classic],
-        minDeployerXlm: (fundAquaFloat ? 2_500n : 1_000n) * STROOPS_PER_XLM,
+        minDeployerXlm: (fundAquaFloat ? MIN_DEPLOYER_XLM_FLOAT : MIN_DEPLOYER_XLM) * STROOPS_PER_XLM,
         assetNames: new Map([[u.classic, "USDC"]]),
       })
     ) add(l);
   }
 
-  // The reviewed WASMs: reported, not fatal before CT-19 writes the file.
+  // The reviewed WASMs: needed, as in the deploy's own gate (F13), which refuses a missing list, a WASM absent from
+  // dist, one the list doesn't name and one whose hash differs.
   const keysOf: WasmKey[] = (Object.keys(WASMS) as WasmKey[]).filter((k) => k !== "qa-exec-fail" && (aquarius === "auto" || k !== "exec-aquarius"));
   const wasms = [];
   for (const k of keysOf) {
@@ -332,10 +337,10 @@ async function check(ctx: OwnerCtx, args: string[]): Promise<number> {
   }
   const reviewedText = await readIfExists(`${ctx.root}${REVIEWED_FILE}`);
   const rev = checkReviewed("testnet", reviewedText, wasms);
-  add(line(rev.ok, "reviewed WASMs", rev.ok ? `contracts/dist matches ${REVIEWED_FILE}` : rev.problems.slice(0, 3).join("; ") + (rev.problems.length > 3 ? `; and ${rev.problems.length - 3} more` : ""), false));
+  add(line(rev.ok, "reviewed WASMs", rev.ok ? `contracts/dist matches ${REVIEWED_FILE}` : rev.problems.slice(0, 3).join("; ") + (rev.problems.length > 3 ? `; and ${rev.problems.length - 3} more` : "")));
 
   // The live Aquarius router against CT-03's fixtures (ruling a).
-  if (aquarius === "off") add(line(true, "Aquarius", "--aquarius off: not checked", false));
+  if (aquarius === "off") add(line(true, "Aquarius", "off (owner decision O7: Soroswap only), not checked", false));
   else {
     try {
       const live = await aquariusLiveCheck(chain, await loadAquariusFixtures(ctx.root));
