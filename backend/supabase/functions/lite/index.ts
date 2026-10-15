@@ -18,6 +18,7 @@ import {
   buildLaunchV2,
   LAUNCH_V2_BUILDERS,
   LAUNCH_V2_STEPS,
+  LaunchpadV2Economics,
   LaunchV2BuildInput,
   launchpadV2Economics,
   launchPreviewV2,
@@ -92,7 +93,7 @@ const LAUNCH_V1_ACTIONS = new Set(["create", "buy", "sell", "graduate", "claim"]
 
 /** The generation of the launch `token`. The indexer's row says; a launch it hasn't indexed yet is asked of launchpad-v2,
  *  and one that launchpad-v2 doesn't know is v1's (whose routes answer 404 for a token that is no launch). */
-async function launchGeneration(net: NetworkConfig, token: string): Promise<1 | 2> {
+export async function launchGeneration(net: NetworkConfig, token: string): Promise<1 | 2> {
   if (!net.contracts.launchpadV2 || !isContractId(token)) return 1;
   const [row] = await sql()`select generation from lite.launches where token = ${token}`;
   if (row) return Number(row.generation) === 2 ? 2 : 1;
@@ -107,18 +108,23 @@ async function launchGeneration(net: NetworkConfig, token: string): Promise<1 | 
 }
 
 /** Whether a POST /v1/launches/build body is v2's (LaunchRequestV2): create (new launches are v2's), an action only v2
- *  has, or a shared action on a v2 launch. Anything else, an unknown action included, is v1's to answer. */
-async function isLaunchV2Request(net: NetworkConfig, b: Record<string, unknown>): Promise<boolean> {
+ *  has, or a shared action on a v2 launch. Anything else, an unknown action included, is v1's to answer.
+ *  `generationOf` is launchGeneration's answer for a token (tests answer it themselves). */
+export async function isLaunchV2Request(
+  net: NetworkConfig,
+  b: Record<string, unknown>,
+  generationOf: (token: string) => Promise<1 | 2> = (token) => launchGeneration(net, token),
+): Promise<boolean> {
   const action = b.action;
   if (typeof action !== "string" || action === "harvest" || !Object.hasOwn(LAUNCH_V2_STEPS, action)) return false;
   if (action === "create" || !LAUNCH_V1_ACTIONS.has(action)) return true;
   // v1's claim without a token claims every launch the creator made; v2's names its launch.
-  return typeof b.token === "string" && (await launchGeneration(net, b.token)) === 2;
+  return typeof b.token === "string" && (await generationOf(b.token)) === 2;
 }
 
 /** Whether a POST /v1/moments/build body is v2's (MomentRequestV2): every v2 action, keyed by the NFT address, but a
  *  collect of a v1 Moment, which names its number (momentId). */
-function isMomentV2Request(b: Record<string, unknown>): boolean {
+export function isMomentV2Request(b: Record<string, unknown>): boolean {
   const action = b.action;
   if (typeof action !== "string" || !Object.hasOwn(MOMENT_V2_PLAN_KINDS, action)) return false;
   return !(action === "collect" && b.momentId !== undefined);
@@ -161,16 +167,21 @@ function momentsV1Names(m: MomentsV2Economics, net: NetworkConfig) {
   };
 }
 
-/** GET /v1/economics where v2 is deployed (§20.2): v2's blocks, each with generation 2, read live and kept 5 minutes.
- *  The phone's v2 model reads them (StellarEconomicsV2); its v1 model still decodes them, because the launchpad block
- *  holds every field of v1's and the Moments block gains v1's names for the same terms. */
-async function economicsV2(net: NetworkConfig) {
-  const [launchpad, moments] = await Promise.all([launchpadV2Economics(net), momentsEconomicsV2(net)]);
+/** GET /v1/economics' body where v2 is deployed (§20.2), from v2's blocks, each with generation 2. The phone's v2 model
+ *  reads them (StellarEconomicsV2); its v1 model still decodes them, because the launchpad block holds every field of
+ *  v1's and the Moments block gains v1's names for the same terms, none of which is a v2 field. */
+export function economicsBodyV2(launchpad: LaunchpadV2Economics | null, moments: MomentsV2Economics, net: NetworkConfig) {
   return { launchpad, moments: { ...moments, ...momentsV1Names(moments, net) } };
 }
 
+/** v2's blocks, read live and kept 5 minutes. */
+async function economicsV2(net: NetworkConfig) {
+  const [launchpad, moments] = await Promise.all([launchpadV2Economics(net), momentsEconomicsV2(net)]);
+  return economicsBodyV2(launchpad, moments, net);
+}
+
 /** The routes both generations share, each wrapped around its route module's own (v1) handler. */
-const SHARED_ROUTES: Record<string, (v1: Handler) => Handler> = {
+export const SHARED_ROUTES: Record<string, (v1: Handler) => Handler> = {
   "GET /v1/economics": (v1) => async (ctx) => {
     const net = env.network;
     return net.deploymentV2 ? json(await economicsV2(net), 200, PUBLIC_CACHE) : await v1(ctx);
@@ -234,7 +245,7 @@ const contractsV2 = {
 
 /** A router whose shared routes answer both generations: each is registered as its module gives it, behind its v2
  *  wrapper (SHARED_ROUTES). */
-class LiteRouter extends Router {
+export class LiteRouter extends Router {
   override on(spec: string, handler: Handler): this {
     return super.on(spec, Object.hasOwn(SHARED_ROUTES, spec) ? SHARED_ROUTES[spec](handler) : handler);
   }

@@ -9,13 +9,15 @@
 //   deno test --config backend/supabase/functions/deno.json backend/tests/e2e/lite_e2e_v2.ts      (its unit tests)
 //
 // CT-20b runs it after the CT-19 gate (decision L16); nothing else does. What it holds to:
-// - testnet-qa only. It refuses any LITE_DEPLOYMENT but testnet-qa, an API that isn't a local stack on this machine,
-//   and a stack that serves another deployment than deployments/testnet-qa-v2.json.
+// - testnet-qa only. It refuses any LITE_DEPLOYMENT but testnet-qa, an API or a database (LITE_DB_URL, where it writes
+//   invites and keeper_skip rows) that isn't a local stack's on this machine, and a stack that serves another deployment
+//   than deployments/testnet-qa-v2.json.
 // - No contract id or venue id is written here (finding F8): the v2 contracts, the failing stack, the QA asset and the
 //   roles come from deployments/testnet-qa-v2.json; the quote assets, the venue table and the treasury from
 //   /v1/economics, checked against the file; Soroswap's router, a registry contract, from /v1/config.
-// - Hybrid fees: every phone step is the user's to pay (feePayer user, the user the source), Friendbot pays only an
-//   account's activation, and a direct call is paid by the key that signs it (the QA deployer pays the keeper's).
+// - Hybrid fees: every phone step is the user's to pay (feePayer user, the user the source), its activation's Enable USDC
+//   included; Friendbot funds a new account server-side (testnet activates no other way), and a direct call is paid by
+//   the key that signs it (the QA deployer pays the keeper's).
 // - The keeper is itself "anyone" (finding V5). Before each step the stack's keeper could race, the run inserts a
 //   lite.keeper_skip row (honoured on testnet-qa only), and it deletes its rows when it ends: jobs fallback and rescue
 //   for both rescue launches, graduate and expire for the Moment that must not be expirable, expire for every Moment
@@ -30,7 +32,9 @@
 // - The Aquarius journey runs only when the deployment file says aquarius.enabled (finding V8; off under O7).
 // - For each state only testnet-qa reaches, the API's answer is held to the shape the phone decodes (finding F4;
 //   StellarKit's LaunchpadV2.swift and MomentsV2.swift). The failing Moments stack never reaches the API (finding F5):
-//   those journeys are direct calls, the chain's views and the indexer's rows.
+//   those journeys are direct calls, the chain's views and the indexer's rows, and their states (a recorded or simulated
+//   failure, its stuck expiry, the backstop) are held to that shape as the API's own status read makes them, pointed at
+//   the failing stack (moments_v2.ts momentStatusV2, the code behind GET /v1/moments/:nft/status).
 // - Journeys run side by side, each with its own accounts; a key that several journeys sign with sends one transaction
 //   at a time. With the QA durations the full run takes about an hour (the Moment's vesting: 5 periods of 10 minutes).
 import { Address, Asset, hash, Keypair, Operation, scValToNative, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
@@ -43,7 +47,8 @@ import { ModeT, VenueKindT, VenueParamsT } from "../../scripts/lib/v2-constructo
 import { T, toScVal } from "../../scripts/lib/wasm-spec.ts";
 import { hex, SEP53_PREFIX, sha256 } from "../../supabase/functions/_shared/auth.ts";
 import { type DeploymentV2, deploymentV2ByName } from "../../supabase/functions/_shared/deployments/index.ts";
-import { TESTNET } from "../../supabase/functions/_shared/networks.ts";
+import { momentStatusV2 } from "../../supabase/functions/_shared/moments_v2.ts";
+import { TESTNET, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
 import { type NamedError, V2_ERRORS } from "../../supabase/functions/_shared/v2_errors.ts";
 import { type V2Pins, v2Pins, verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
 
@@ -181,7 +186,12 @@ export function afterDepth(journeys: readonly Journey[], depth: Depth): { run: J
   };
 }
 
-/** Why the run won't start against this environment, or null: testnet-qa only, through a local stack on this machine. */
+/** The hosts of this machine. */
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/** Why the run won't start against this environment, or null: testnet-qa only, through a local stack on this machine,
+ *  whose database (LITE_DB_URL when set, else the stack's own) takes the run's invites and keeper_skip rows. LITE_DB_URL
+ *  is never printed: it may hold a password. */
 export function deploymentRefusal(read: (name: string) => string | undefined): string | null {
   const deployment = read("LITE_DEPLOYMENT");
   if (deployment !== QA) {
@@ -196,7 +206,19 @@ export function deploymentRefusal(read: (name: string) => string | undefined): s
   } catch {
     return `LITE_API isn't a URL: ${api}`;
   }
-  if (host !== "127.0.0.1" && host !== "localhost") return `lite_e2e_v2 runs against a local stack only: LITE_API is on ${host}`;
+  if (!LOOPBACK.has(host)) return `lite_e2e_v2 runs against a local stack only: LITE_API is on ${host}`;
+  const db = read("LITE_DB_URL");
+  if (db) {
+    let dbHost: string;
+    try {
+      dbHost = new URL(db).hostname;
+    } catch {
+      return "LITE_DB_URL isn't a URL";
+    }
+    if (!LOOPBACK.has(dbHost)) {
+      return `lite_e2e_v2 writes invites and keeper_skip rows to the local stack's database only: LITE_DB_URL is on ${dbHost || "no host"}`;
+    }
+  }
   return null;
 }
 
@@ -388,7 +410,8 @@ function refusedNamed(a: Answer, source: string, name: string, what: string): vo
 const signIns = { last: 0 };
 
 /** A new account as the phone makes one: signed in (an invite written first where the stack needs one), then
- *  activated by Friendbot, with USDC enabled at the user's cost. */
+ *  activated: Friendbot funds it server-side, and enabling USDC is a plan the user pays, held to hybrid fees like every
+ *  other. */
 async function phone(r: Run, label: string): Promise<Phone> {
   const kp = Keypair.random();
   await serial("sign-in", async () => {
@@ -406,7 +429,10 @@ async function phone(r: Run, label: string): Promise<Phone> {
   const v = await api(r, null, "POST", "/auth/verify", { address: kp.publicKey(), nonce: ch.nonce, signature, ...(inviteCode ? { inviteCode } : {}) });
   const p: Phone = { label, kp, address: kp.publicKey(), token: v.token };
   const act = await api(r, p.token, "POST", "/account/activate");
-  if (act.planId) await runPlan(r, p, act, [], { activation: true });
+  if (act.planId) {
+    if (act.kind !== "trust") throw new Error(`${label}: activation answered a ${act.kind} plan; testnet-qa activates with Friendbot, leaving the user's Enable USDC`);
+    await runPlan(r, p, act);
+  }
   say(`  ${label}: ${p.address}`);
   return p;
 }
@@ -434,15 +460,15 @@ function contractsIn(tx: Transaction): Set<string> {
 /** The phone's loop as `p`: for each step, build it if needed; hold it to hybrid fees; verify it against the pinned
  *  allowlist and v2's pins, a contract made at runtime counting only by its WASM hash (PlanRunner); sign, submit, and
  *  wait for it to settle. `extra` adds contracts the deployment owns that the app never pins (testnet-qa's QA asset). */
-async function runPlan(r: Run, p: Actor & { token: string }, plan: any, extra: string[] = [], o: { activation?: boolean } = {}): Promise<{ status: any; step: any }[]> {
+async function runPlan(r: Run, p: Actor & { token: string }, plan: any, extra: string[] = []): Promise<{ status: any; step: any }[]> {
   return await serial(p.address, async () => {
     const outs: { status: any; step: any }[] = [];
     for (let i = 0; i < plan.steps.length; i++) {
       let step = plan.steps[i];
       if (!step.xdr) step = (await api(r, p.token, "POST", `/plans/${plan.planId}/steps/${step.id}/build`)).steps[i];
-      if (!o.activation && step.feePayer !== "user") throw new Error(`${step.label}: paid by ${step.feePayer}, not the user (hybrid fees)`);
+      if (step.feePayer !== "user") throw new Error(`${step.label}: paid by ${step.feePayer}, not the user (hybrid fees)`);
       const tx = TransactionBuilder.fromXDR(step.xdr, r.config.passphrase) as Transaction;
-      if (!o.activation && tx.source !== p.address) throw new Error(`${step.label}: the transaction's source is ${tx.source}, not the user`);
+      if (tx.source !== p.address) throw new Error(`${step.label}: the transaction's source is ${tx.source}, not the user`);
       const allowed = new Set<string>([...Object.values(r.config.allowlist as Record<string, string[]>).flat(), ...extra]);
       const runtime: Record<string, string> = {};
       for (const c of contractsIn(tx)) {
@@ -466,7 +492,7 @@ async function runPlan(r: Run, p: Actor & { token: string }, plan: any, extra: s
         status = await api(r, p.token, "GET", `/tx/${sent.hash}`);
       }
       if (status.status !== "success") throw new Error(`step ${step.id} (${step.label}) ${status.status} ${status.error ?? ""}`);
-      if (!o.activation && status.feePayer !== "user") throw new Error(`${step.label}: settled as paid by ${status.feePayer}`);
+      if (status.feePayer !== "user") throw new Error(`${step.label}: settled as paid by ${status.feePayer}`);
       r.fees.phone += BigInt(status.feeCharged ?? "0");
       say(`    ✓ ${p.label}: ${step.label} ${sent.hash}`);
       outs.push({ status, step });
@@ -810,6 +836,7 @@ const SHAPES = {
     maxEditions: "number",
     quotes: "array",
   },
+  economicsMomentsQuoteV1: { asset: "string", minPrice: "string", enabled: "boolean" },
 } satisfies Record<string, Shape>;
 
 /** Throws unless every field of `shape` is in `v` with its JSON type (F4: what the phone's model decodes). */
@@ -1593,9 +1620,71 @@ async function ledgerOf(r: Run, fm: FailingMoment): Promise<any> {
   return await view(r, r.ids.momentsFail, "ledger", [sc.addr(fm.nft)]);
 }
 
+/** A recorded graduation failure as the indexer's row has it, which the status route passes on (V10). */
+interface Recorded {
+  origin: number;
+  code: number;
+}
+
+/** A failing-stack Moment's status as the API's own read makes it (moments_v2.ts momentStatusV2, the code behind
+ *  GET /v1/moments/:nft/status), pointed at the failing stack the API never serves (F5), through JSON and held to the
+ *  shape the phone decodes (F4). `recorded` is the indexer's grad_fail, as the route passes it; without one, a Moment
+ *  stuck after a failure gets the failure a graduation attempt records now (`simulated`). */
+async function failingStatus(r: Run, fm: FailingMoment, what: string, recorded: Recorded | null = null): Promise<any> {
+  const net = withDeploymentV2(TESTNET, { ...r.d, contracts: { ...r.d.contracts, momentsV2: r.ids.momentsFail } });
+  const s = JSON.parse(JSON.stringify(await momentStatusV2(fm.nft, { net, recorded })));
+  momentStatusShaped(what, s);
+  return s;
+}
+
+/** Throws unless the ISO time `iso` is the unix second `secs` (null with null). */
+function sameTime(what: string, iso: string | null, secs: number | null): void {
+  const ok = iso === null || secs === null ? iso === secs : Date.parse(iso) === secs * 1000;
+  if (!ok) throw new Error(`${what}: ${iso}, expected ${secs === null ? null : new Date(secs * 1000).toISOString()}`);
+}
+
+/** Holds a pending failing-stack Moment's status to the expiry moments-v2's expire applies (V11), restated from the
+ *  chain: the later of its deadline and the first of the failure's clock (stuck_since + stuck_expiry, only after a
+ *  recorded failure) and the backstop (completed_at + pending_backstop), the failure's on a tie. */
+function heldToExpiry(r: Run, fm: FailingMoment, s: any, stuckSince: number, what: string): void {
+  const d = r.d.durations.moments;
+  const backstopAt = fm.completedAt + d.pending_backstop;
+  const failureAt = stuckSince !== 0 ? stuckSince + d.stuck_expiry : null;
+  const clock = failureAt !== null && failureAt <= backstopAt ? { at: failureAt, by: "failure" } : { at: backstopAt, by: "backstop" };
+  const e = fm.deadline > clock.at ? { at: fm.deadline, by: "deadline" } : clock;
+  if (s.state !== "graduation_pending" || !s.graduatable) throw new Error(`${what}: ${s.state}, graduatable ${s.graduatable}`);
+  if (s.expiresBy !== e.by) throw new Error(`${what}: expires by ${s.expiresBy}, expected ${e.by}`);
+  sameTime(`${what}.expiresAt`, s.expiresAt, e.at);
+  sameTime(`${what}.backstopAt`, s.backstopAt, backstopAt);
+  sameTime(`${what}.failureExpiresAt`, s.failureExpiresAt, failureAt);
+  sameTime(`${what}.stuckSince`, s.stuckSince, stuckSince === 0 ? null : stuckSince);
+  sameTime(`${what}.completedAt`, s.completedAt, fm.completedAt);
+  // The read answered a moment ago: at the expiry itself either answer stands.
+  const now = nowSecs();
+  if (Math.abs(now - e.at) > 5 && s.expirable !== now >= e.at) throw new Error(`${what}: expirable ${s.expirable} at ${new Date(now * 1000).toISOString()}`);
+  say(`    ✓ ${what}: expires by ${e.by} at ${s.expiresAt}`);
+}
+
+/** Holds a failing-stack Moment's status failure to the named error, seen as `seen`. */
+function failureIs(s: any, source: string, name: string, seen: "recorded" | "simulated", what: string): void {
+  const e = named(source, name);
+  const f = s.failure;
+  if (f?.origin !== e.origin || f?.code !== e.code || f?.name !== name || f?.seen !== seen || !String(f?.source ?? "").split(" or ").includes(source)) {
+    throw new Error(`${what}: failure ${JSON.stringify(f)}, expected ${source} ${name} (origin ${e.origin}, code ${e.code}), ${seen}`);
+  }
+}
+
+/** Holds an expired failing-stack Moment's status: ended, with no expiry left. */
+async function expiredStatus(r: Run, fm: FailingMoment, what: string): Promise<void> {
+  const s = await failingStatus(r, fm, what);
+  if (s.state !== "expired" || s.expirable || s.graduatable || s.expiresBy !== null || s.expiresAt !== null || !s.endedAt || s.failure !== null) {
+    throw new Error(`${what}: ${JSON.stringify(s)}`);
+  }
+}
+
 /** A failing-stack Moment's recorded graduation failure (V10): the indexer's grad_fail on its row, and what a graduation
  *  attempt records now, held to the namespaced origin and code. */
-async function recordedMomentFailure(r: Run, fm: FailingMoment, source: string, name: string): Promise<void> {
+async function recordedMomentFailure(r: Run, fm: FailingMoment, source: string, name: string): Promise<Recorded> {
   const e = named(source, name);
   expectFailed(await view(r, r.ids.momentsFail, "graduate", [sc.addr(fm.nft)]), source, name, "a graduation attempt now");
   const row = await until("the indexer's grad_fail", WAIT.indexer, async () => {
@@ -1606,6 +1695,7 @@ async function recordedMomentFailure(r: Run, fm: FailingMoment, source: string, 
     throw new Error(`the recorded failure: ${JSON.stringify(row)}, expected ${source} ${name} (origin ${e.origin}, code ${e.code})`);
   }
   say(`    ✓ grad_fail recorded as origin ${e.origin} code ${e.code} (${source} ${name})`);
+  return { origin: e.origin, code: e.code };
 }
 
 /** Expires a failing-stack Moment the run holds the expiry of: refused before `opens`, done after it. */
@@ -1631,8 +1721,12 @@ async function keeperGradFail(r: Run, fm: FailingMoment): Promise<{ stuckSince: 
 async function journeyFailingMode0(r: Run): Promise<string> {
   const fm = await failingMoment(r, "failingMode0", "Fail", ["expire"]);
   const { stuckSince, by } = await keeperGradFail(r, fm);
-  await recordedMomentFailure(r, fm, "qa-exec-fail", "ForcedFailure");
+  const recorded = await recordedMomentFailure(r, fm, "qa-exec-fail", "ForcedFailure");
+  const stuck = await failingStatus(r, fm, "a stuck Moment with a recorded failure", recorded);
+  failureIs(stuck, "qa-exec-fail", "ForcedFailure", "recorded", "a stuck Moment with a recorded failure");
+  heldToExpiry(r, fm, stuck, stuckSince, "a stuck Moment with a recorded failure");
   await expiredAt(r, fm, Math.max(fm.deadline, stuckSince + r.d.durations.moments.stuck_expiry), "stuck_expiry");
+  await expiredStatus(r, fm, "a Moment expired after stuck_expiry");
   return `${fm.nft}: ForcedFailure recorded by the ${by}; expired after stuck_expiry`;
 }
 
@@ -1640,8 +1734,12 @@ async function journeyFailingMode0(r: Run): Promise<string> {
 async function journeyFailingMode2(r: Run): Promise<string> {
   const fm = await failingMoment(r, "failingMode2", "BogusSuccess", ["expire"]);
   const { stuckSince, by } = await keeperGradFail(r, fm);
-  await recordedMomentFailure(r, fm, "moments-graduator", "GraduationInvalid");
+  const recorded = await recordedMomentFailure(r, fm, "moments-graduator", "GraduationInvalid");
+  const stuck = await failingStatus(r, fm, "a Moment stuck on GraduationInvalid", recorded);
+  failureIs(stuck, "moments-graduator", "GraduationInvalid", "recorded", "a Moment stuck on GraduationInvalid");
+  heldToExpiry(r, fm, stuck, stuckSince, "a Moment stuck on GraduationInvalid");
   await expiredAt(r, fm, Math.max(fm.deadline, stuckSince + r.d.durations.moments.stuck_expiry), "stuck_expiry");
+  await expiredStatus(r, fm, "a Moment expired after GraduationInvalid");
   return `${fm.nft}: the graduator's GraduationInvalid recorded by the ${by}; expired after stuck_expiry`;
 }
 
@@ -1653,12 +1751,20 @@ async function journeyNotExpirable(r: Run): Promise<string> {
   const d = r.d.durations.moments;
   await sleepUntil(Math.max(fm.deadline, fm.completedAt + d.stuck_expiry), "the deadline and stuck_expiry");
   if (Number((await ledgerOf(r, fm)).stuck_since) !== 0) throw new Error("a failure was recorded: the keeper didn't hold off");
+  const waiting = await failingStatus(r, fm, "a completed Moment with no recorded failure");
+  if (waiting.failure !== null) throw new Error(`with no recorded failure: ${JSON.stringify(waiting.failure)}`);
+  heldToExpiry(r, fm, waiting, 0, "a completed Moment with no recorded failure");
   await refusedBy("expire with no recorded failure", "moments-v2", "NotExpirable", () => r.chain.view(r.ids.momentsFail, "expire", [sc.addr(fm.nft)]));
   const g = await direct(r, "graduate (the run)", fm.collector.kp, r.ids.momentsFail, "graduate", [sc.addr(fm.nft)]);
   expectFailed(g.value, "qa-exec-fail", "ForcedFailure", "the run's graduate");
   const stuckSince = Number((await ledgerOf(r, fm)).stuck_since);
   if (stuckSince === 0) throw new Error("the run's graduate recorded no failure");
+  // Before the indexer passes the grad_fail on, the status names the failure a graduation attempt records now.
+  const stuck = await failingStatus(r, fm, "a Moment stuck after the run's graduate");
+  failureIs(stuck, "qa-exec-fail", "ForcedFailure", "simulated", "a Moment stuck after the run's graduate");
+  heldToExpiry(r, fm, stuck, stuckSince, "a Moment stuck after the run's graduate");
   await expiredAt(r, fm, stuckSince + d.stuck_expiry, "stuck_expiry after the recorded failure");
+  await expiredStatus(r, fm, "a Moment expired after the run's recorded failure");
   return `${fm.nft}: NotExpirable with no recorded failure; ForcedFailure recorded by the run; expired after stuck_expiry`;
 }
 
@@ -1676,7 +1782,11 @@ async function journeyBackstop(r: Run): Promise<string> {
   if (!aborted) throw new Error("mode 1's graduation didn't abort in simulation");
   await sleepUntil(fm.deadline + 5, "the deadline");
   if (Number((await ledgerOf(r, fm)).stuck_since) !== 0) throw new Error("mode 1 recorded a failure: an abort records none");
+  const pending = await failingStatus(r, fm, "a Moment only the backstop ends");
+  if (pending.failure !== null) throw new Error(`mode 1's Moment shows a failure: ${JSON.stringify(pending.failure)}`);
+  heldToExpiry(r, fm, pending, 0, "a Moment only the backstop ends");
   await expiredAt(r, fm, fm.completedAt + d.pending_backstop, "completed_at + pending_backstop");
+  await expiredStatus(r, fm, "a Moment expired by the backstop");
   const row = await until("the indexer's expiry", WAIT.indexer, async () => {
     const [row] = await r.db`select expired_backstop from lite.moments where nft = ${fm.nft}`;
     return row?.expired_backstop === null || row?.expired_backstop === undefined ? null : row;
@@ -1850,6 +1960,9 @@ async function main(): Promise<number> {
     console.error(`the stack at ${apiBase} serves ${config.deployment?.id ?? "another deployment"}, not deployments/testnet-qa-v2.json`);
     return 2;
   }
+  // The API's own reads this process makes (failingStatus) go through the stack's RPC, as the run's chain does, so that
+  // neither trails the other by a ledger.
+  Deno.env.set("STELLAR_RPC_URL", config.rpcUrl);
   const econ = await api(bare, null, "GET", "/economics");
   if (econ.launchpad?.generation !== 2 || econ.moments?.generation !== 2) {
     console.error(`the stack at ${apiBase} doesn't serve v2's economics (generation 2): it isn't wired for contracts v2`);
@@ -1858,6 +1971,7 @@ async function main(): Promise<number> {
   shaped("/v1/economics' launchpad block", econ.launchpad, SHAPES.economicsLaunchpad);
   shaped("/v1/economics' Moments block", econ.moments, SHAPES.economicsMoments);
   for (const q of econ.launchpad.quotes) shaped(`/v1/economics' ${q.asset} quote`, q, SHAPES.economicsQuote);
+  for (const q of econ.moments.quotes) shaped("/v1/economics' Moments quote (v1's name)", q, SHAPES.economicsMomentsQuoteV1);
   for (const v of econ.launchpad.venues) shaped("/v1/economics' venue", v, SHAPES.venue);
 
   const r: Run = {
@@ -1980,6 +2094,25 @@ Deno.test("the run refuses every deployment but testnet-qa, and any API but a lo
   for (const api of ["https://xyz.supabase.co/functions/v1/lite", "not a url", ""]) {
     assertTest(deploymentRefusal(env({ LITE_DEPLOYMENT: "testnet-qa", LITE_API: api })) !== null, `LITE_API=${api} is refused`);
   }
+});
+
+Deno.test("the run writes invites and keeper_skip rows to a local stack's database only, and never prints LITE_DB_URL", () => {
+  const env = (vars: Record<string, string>) => (n: string) => vars[n];
+  const run = (db?: string) => deploymentRefusal(env({ LITE_DEPLOYMENT: "testnet-qa", LITE_API: "http://127.0.0.1:8200/lite", ...(db === undefined ? {} : { LITE_DB_URL: db }) }));
+  assertTest(run() === null, "without LITE_DB_URL the stack's own database (on loopback) is used");
+  assertTest(run("") === null, "an empty LITE_DB_URL is unset");
+  for (const db of ["postgresql://lite_api@127.0.0.1:8202/lite", "postgresql://postgres:pw@localhost:8202/postgres", "postgres://u@[::1]:8202/lite"]) {
+    assertTest(run(db) === null, `${db.replace(/:[^:@/]*@/, ":…@")} is local`);
+  }
+  const secret = "s3cr3t-pa55";
+  for (const db of [`postgresql://postgres.abcdefghij:${secret}@aws-0-eu-central-1.pooler.supabase.com:6543/postgres`, `postgresql://postgres:${secret}@db.abcdefghij.supabase.co:5432/postgres`]) {
+    const why = run(db);
+    assertTest(why !== null && why.includes("local stack's database only"), `a hosted database is refused: ${why}`);
+    assertTest(!why!.includes(secret), "the refusal doesn't print the URL's password");
+  }
+  const garbled = run(`not a url ${secret}`);
+  assertTest(garbled === "LITE_DB_URL isn't a URL", `a LITE_DB_URL that isn't a URL is refused without printing it: ${garbled}`);
+  assertTest(run("postgresql:///lite?host=/tmp") !== null, "a URL without a host is refused");
 });
 
 Deno.test("no contract id is written in this script: every one comes from the deployment file, /v1/economics or /v1/config (F8)", async () => {
