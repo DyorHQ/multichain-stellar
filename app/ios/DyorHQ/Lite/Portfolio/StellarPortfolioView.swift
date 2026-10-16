@@ -9,10 +9,11 @@ import DyorLite
 import StellarKit
 import SwiftUI
 
-/// The Portfolio for DyorHQ on Stellar, laid out as Monad's: cumulative volume across Spot, Earn, Launch, Moments and
-/// Bridge for the chosen period, then fees paid, P&L, fees received and trade counts, in total and per section, with the
-/// network fees paid in XLM apart, the account's holdings and the activity behind the numbers. Opened over the Stellar
-/// tabs from the side menu, Earn's menu, a Stellar notification or Home's Total Volume, which share the period.
+/// The Portfolio for DyorHQ on Stellar, laid out as Monad's but with no Bridge, which Stellar doesn't have for now:
+/// cumulative volume across Spot, Earn, Launch and Moments for the chosen period, then fees paid, P&L, fees received and
+/// trade counts, in total and per section, with the network fees paid in XLM apart, the account's holdings and the
+/// activity behind the numbers. Opened over the Stellar tabs from the side menu, Earn's menu, a Stellar notification or
+/// Home's Total Volume, which share the period.
 ///
 /// The figures are DyorHQ's history (`/v1/portfolio`): a passkey account whose session is gone sees them unread, with
 /// "Sign in with your passkey" under the hero, and nothing prompts until it is tapped; the holdings fill in either way.
@@ -150,7 +151,7 @@ struct StellarPortfolioView: View {
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .contentTransition(.numericText(value: totals.volume))
                     .unreadFigure(unread)
-                Paragraph(LocalizedStringResource("Across Spot, Earn, Launch, Moments and Bridge", table: "StellarPortfolio", comment: "Stellar Portfolio, under the cumulative volume: the five sections it adds up, as the cards below name them"))
+                Paragraph(LocalizedStringResource("Across Spot, Earn, Launch and Moments", table: "StellarPortfolio", comment: "Stellar Portfolio, under the cumulative volume: the four sections it adds up, as the cards below name them"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             // DyorHQ's history with no session (a passkey account whose session is gone): the figures wait for a sign-in
@@ -264,7 +265,6 @@ struct StellarPortfolioView: View {
         case .earn: return .allocationPerps
         case .launch: return .allocationLaunchpad
         case .moments: return .allocationMoments
-        case .bridge: return .brand
         }
     }
 

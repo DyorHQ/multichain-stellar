@@ -1,31 +1,31 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "Across Spot, Earn, Launch, Moments and Bridge" : {
-      "comment" : "Stellar Portfolio, under the cumulative volume: the five sections it adds up, as the cards below name them",
+    "Across Spot, Earn, Launch and Moments" : {
+      "comment" : "Stellar Portfolio, under the cumulative volume: the four sections it adds up, as the cards below name them",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "En Spot, Rendimientos, Lanzamientos, Moments y Puente"
+            "value" : "En Spot, Rendimientos, Lanzamientos y Moments"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sur Spot, Rendement, Lancement, Moments et Bridge"
+            "value" : "Sur Spot, Rendement, Lancement et Moments"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "현물, 예치, 런칭, Moments, 브리지 전체 기준"
+            "value" : "현물, 예치, 런칭, Moments 전체 기준"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "涵盖现货、理财、发射、Moments 和跨链桥"
+            "value" : "涵盖现货、理财、发射和 Moments"
           }
         }
       }
