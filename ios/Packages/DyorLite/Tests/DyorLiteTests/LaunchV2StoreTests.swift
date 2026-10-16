@@ -133,6 +133,8 @@ final class LaunchV2StoreTests: XCTestCase {
                              receive: [String: String]? = nil, to: String? = nil, before: [[String: Any]] = [],
                              backlog: [String: Any]? = nil) -> [String: Any] {
         var intent: [String: Any] = ["kind": kind, "summary": "The server's English", "spend": spend, "display": display]
+        // A create calls the pinned launchpad-v2's launch: its bindings hold the call to that contract.
+        if kind == "launch_create" { intent["calls"] = [["contract": launchpad, "fn": "launch"]] }
         if let terms { intent["terms"] = terms }
         if let receive { intent["receive"] = receive }
         if let to { intent["to"] = to }

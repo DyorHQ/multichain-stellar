@@ -66,7 +66,15 @@ public struct PlanBindings: Equatable, Sendable {
     /// field → value. Every step that matches, built for the review or during the run, must show exactly these values,
     /// and one that doesn't state a field is refused; the plan's last step must match. Keyed by the function too, so a
     /// step can't escape them under another kind: the verifier holds every call a transaction makes to `intent.calls`.
+    /// A step matching a launch's or a publish's entry must also call only the pinned launchpad-v2 or moments-v2
+    /// (`shownContracts`): another generation's launch or publish binds none of these settings, so showing them would
+    /// prove nothing.
     public var shown: [String: [String: StellarJSON]]
+
+    /// The pinned contract (by role) a step matching a `shown` entry must call, by the entry's key.
+    public static let shownContracts: [String: String] = [
+        "launch_create": "launchpadV2", "launch": "launchpadV2", "moment_publish": "momentsV2", "publish": "momentsV2",
+    ]
 
     public init(minimums: [String: Int64] = [:], destination: Destination = .own, shown: [String: [String: StellarJSON]] = [:]) {
         self.minimums = minimums
@@ -89,12 +97,16 @@ public struct PlanBindings: Equatable, Sendable {
     public struct Check: Sendable {
         public let bindings: PlanBindings
         public let user: String
+        /// The build's pins, which name the contracts a launch or a publish must call (`shownContracts`). Without them a
+        /// step that matches such an entry is refused.
+        public let pinned: PinnedContracts?
         /// Minimums no step has named yet.
         public private(set) var outstanding: Set<String>
 
-        public init(_ bindings: PlanBindings, user: String) {
+        public init(_ bindings: PlanBindings, user: String, pinned: PinnedContracts? = nil) {
             self.bindings = bindings
             self.user = user
+            self.pinned = pinned
             outstanding = Set(bindings.minimums.keys)
         }
 
@@ -108,14 +120,21 @@ public struct PlanBindings: Equatable, Sendable {
 
         private func settings(_ intent: Intent, last: Bool) throws {
             guard !bindings.shown.isEmpty else { return }
-            let entries = ([intent.kind] + (intent.calls ?? []).map(\.fn)).compactMap { bindings.shown[$0] }
-            guard !entries.isEmpty else {
+            let keys = ([intent.kind] + (intent.calls ?? []).map(\.fn)).filter { bindings.shown[$0] != nil }
+            guard !keys.isEmpty else {
                 if last { throw Refusal.settings(reason: "the transaction isn't the action you reviewed") }
                 return
             }
             let display = intent.display ?? [:]
-            for entry in entries {
-                for (key, value) in entry {
+            for name in keys {
+                // A launch or a publish of the pinned v2 contract only: the one whose call the verifiers bind to these.
+                if let role = PlanBindings.shownContracts[name] {
+                    let calls = intent.calls ?? []
+                    guard let contract = pinned?.contracts(role).first, !calls.isEmpty, calls.allSatisfy({ $0.contract == contract }) else {
+                        throw Refusal.settings(reason: "the transaction calls another contract than the one you reviewed")
+                    }
+                }
+                for (key, value) in bindings.shown[name] ?? [:] {
                     guard let actual = display[key], Self.same(actual, value) else {
                         throw Refusal.settings(reason: "the settings are not the ones you chose")
                     }
@@ -264,7 +283,7 @@ public struct PlanRunner: Sendable {
     ) async throws -> [TxStatus] {
         var spent: [String: Int64] = [:]
         var results: [TxStatus] = []
-        var check = PlanBindings.Check(bindings, user: user)
+        var check = PlanBindings.Check(bindings, user: user, pinned: pinned)
         for (index, reviewed) in plan.steps.enumerated() {
             var step = reviewed
             if step.xdr == nil {

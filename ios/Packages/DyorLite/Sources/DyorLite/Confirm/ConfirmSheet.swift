@@ -98,7 +98,7 @@ struct ConfirmSheet: View {
     /// refuse it; the sheet says so instead of offering Confirm.
     private var refusal: String? {
         do {
-            try LiteStore.checkBuilt(action.plan, bindings: action.bindings, user: store.address)
+            try LiteStore.checkBuilt(action.plan, bindings: action.bindings, user: store.address, pinned: store.env.pinned)
             return nil
         } catch {
             return LiteErrorText.describe(error, for: action)

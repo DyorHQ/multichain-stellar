@@ -214,14 +214,14 @@ final class LiteStoreTests: XCTestCase {
             return try JSONDecoder().decode(PlanView.self, from: Data(json.utf8))
         }
         let typed = PlanBindings(destination: .confirmed(to: friend, memo: Intent.Memo(type: "id", value: "42")))
-        XCTAssertNoThrow(try LiteStore.checkBuilt(plan(to: friend, memo: "42"), bindings: typed, user: me))
+        XCTAssertNoThrow(try LiteStore.checkBuilt(plan(to: friend, memo: "42"), bindings: typed, user: me, pinned: .testnet))
         for (other, memo) in [(lookalike, "42"), (friend, "43"), (friend, nil)] as [(String, String?)] {
-            XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: other, memo: memo), bindings: typed, user: me)) { error in
+            XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: other, memo: memo), bindings: typed, user: me, pinned: .testnet)) { error in
                 XCTAssertEqual(error as? PlanRunner.Failure, .destinationNotConfirmed(step: "Send"))
             }
         }
         // Nothing typed: a step may pay only the user.
-        XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: friend, memo: nil), bindings: .none, user: me))
+        XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: friend, memo: nil), bindings: .none, user: me, pinned: .testnet))
     }
 
     func testAStepAboveThePinnedCapIsRefusedBeforeTheReview() async throws {

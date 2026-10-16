@@ -503,7 +503,8 @@ final class MomentsV2StoreTests: XCTestCase {
     nonisolated static let nft = "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5"
     nonisolated static let publishedNft = "CACB5AH45XMW4BHBYUUPEEZDMXGX5LBBBMSZRBS7YUUXGGQLZVM7FN7Z"
     nonisolated static let usdc = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
-    nonisolated static let contract = "CACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQLC2U"
+    /// testnet's pinned moments-v2: a publish's bindings hold its call to this contract.
+    nonisolated static let contract = "CDABBNTQD2IOJMAFH75MKP4OKZJSGTFILZUBG4X5VSL4LMOX3HLPDOQL"
 
     nonisolated static let policy = """
     {"threshold":"100000000","minPrice":"1000000","creatorBps":2000,"platformBps":500,"reserveBps":7500,"maxCreatorAllocBps":1000,

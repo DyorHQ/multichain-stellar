@@ -445,6 +445,10 @@ final class VerifierVectorTests: XCTestCase {
             ("v2 moments publish with another allocation", "The Moment's price, allocation or window is not the one shown."),
             ("v2 moments publish with another window", "The Moment's price, allocation or window is not the one shown."),
             ("v2 moments publish without its settings shown", "The Moment's price, allocation or window is not the one shown."),
+            ("v1 launch create with v2 pinned", "This generation no longer takes new launches or Moments."),
+            ("v1 moments publish with v2 pinned", "This generation no longer takes new launches or Moments."),
+            ("launch create ok without v2 pins", nil),
+            ("moments publish ok without v2 pins", nil),
         ]
         for (name, reason) in cases {
             let v = try XCTUnwrap(byName[name], name)

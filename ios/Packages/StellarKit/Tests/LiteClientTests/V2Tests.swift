@@ -798,10 +798,10 @@ final class V2MidRunSettingsTests: XCTestCase {
     private let publishShown: [String: StellarJSON] = ["price": .string("10000000"), "allocationBps": .number(500), "windowSecs": .number(86400)]
 
     /// The plan [restore (built for the review), main (built by the server during the run)], run with `bindings`.
-    private func runBehindRestore(_ main: V2Vector, intent: Intent? = nil, bindings: PlanBindings) async throws -> (backend: FakePlanBackend, error: Error?) {
+    private func runBehindRestore(_ main: V2Vector, intent: Intent? = nil, bindings: PlanBindings, pins: PinnedContracts? = nil) async throws -> (backend: FakePlanBackend, error: Error?) {
         let restore = try V2Vector.named("v2 restore of a launch token's data and code ok")
         let restored = try XCTUnwrap(restore.runtime?.keys.first)
-        let pinned = try main.pinned()
+        let pinned = try pins ?? main.pinned()
         let nftHash = try XCTUnwrap(pinned.runtimeWasmHashes["momentNft"])
         let built = intent ?? main.intent
         let plan = TestPlan.view([
@@ -845,6 +845,31 @@ final class V2MidRunSettingsTests: XCTestCase {
                                 display: i.display, to: i.to, memo: i.memo)
         let disguised = try await runBehindRestore(publish, intent: relabelled, bindings: PlanBindings(shown: ["moment_publish": chosen, "publish": chosen]))
         XCTAssertEqual(disguised.error as? PlanRunner.Failure, .settingsNotConfirmed(step: "Main"))
+    }
+
+    /// A v1 publish or launch built during the run in place of the v2 one, showing the form's settings: refused before
+    /// it is signed (v1's rules bind none of them), and the bindings name moments-v2 and launchpad-v2 besides.
+    func testAV1PublishOrLaunchBuiltDuringTheRunIsRefused() async throws {
+        let pins = try V2Vector.named("v2 moments publish ok").pinned()
+        let cases: [(String, String, [String: StellarJSON])] = [
+            ("moments publish ok without v2 pins", "moment_publish", publishShown),
+            ("launch create ok without v2 pins", "launch_create", ["creatorFeeBps": .number(100)]),
+        ]
+        for (name, kind, fields) in cases {
+            let v1 = try V2Vector.named(name, v2: false)
+            let i = v1.intent
+            let shown = Intent(kind: kind, summary: i.summary, spend: i.spend, receive: i.receive, calls: i.calls, display: fields)
+            let fn = try XCTUnwrap(i.calls?.first?.fn)
+            let run = try await runBehindRestore(v1, intent: shown, bindings: PlanBindings(shown: [kind: fields, fn: fields]), pins: pins)
+            XCTAssertEqual(run.error as? PlanRunner.Failure, .refused(step: "Main", reason: "This generation no longer takes new launches or Moments."), name)
+            let sent = await run.backend.submitted
+            XCTAssertEqual(sent, ["s1"], name)
+            // The bindings alone refuse it too: the call isn't to the pinned v2 contract.
+            var check = PlanBindings.Check(PlanBindings(shown: [kind: fields, fn: fields]), user: v1.user, pinned: pins)
+            XCTAssertThrowsError(try check.step(shown, spends: false, last: true)) {
+                XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the transaction calls another contract than the one you reviewed"), name)
+            }
+        }
     }
 
     func testALaunchCreateBuiltDuringTheRunGoesOutOnlyWithTheFormsSettings() async throws {
@@ -998,10 +1023,11 @@ struct V2Vector: Decodable {
     let runtime: [String: String]?
     let now: Double
 
-    static func named(_ name: String) throws -> V2Vector {
+    /// The shared vector `name`; with `v2` (the default) one judged with v2's pins.
+    static func named(_ name: String, v2: Bool = true) throws -> V2Vector {
         let all = try JSONDecoder().decode([V2Vector].self, from: Data(contentsOf: SharedVectors.directory.appendingPathComponent("verifier.json")))
         let vector = try XCTUnwrap(all.first { $0.name == name }, name)
-        XCTAssertNotNil(vector.v2, "\(name) has v2's pins")
+        if v2 { XCTAssertNotNil(vector.v2, "\(name) has v2's pins") }
         return vector
     }
 

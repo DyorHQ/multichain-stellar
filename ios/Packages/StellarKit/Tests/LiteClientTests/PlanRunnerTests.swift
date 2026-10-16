@@ -359,15 +359,17 @@ final class PlanRunnerTests: XCTestCase {
         // Settings: by kind or by the function called; a field written as a number or as its digits; missing = refused.
         let shown: [String: StellarJSON] = ["price": .string("10000000"), "windowSecs": .number(86400)]
         let settings = PlanBindings(shown: ["moment_publish": shown, "publish": shown])
-        func step(kind: String, fn: String? = nil, display: [String: StellarJSON]) -> Intent {
-            Intent(kind: kind, summary: "", spend: [:], calls: fn.map { [Intent.Call(contract: token, fn: $0)] }, display: display)
+        let momentsV2 = StrKey.contractID([UInt8](repeating: 0x42, count: 32))
+        let pins = PinnedContracts(network: .testnet, sponsor: me, launchTokenWasmHash: "", roles: ["momentsV2": [momentsV2]])
+        func step(kind: String, fn: String? = nil, display: [String: StellarJSON], contract: String? = nil) -> Intent {
+            Intent(kind: kind, summary: "", spend: [:], calls: fn.map { [Intent.Call(contract: contract ?? momentsV2, fn: $0)] }, display: display)
         }
-        var held = PlanBindings.Check(settings, user: me)
+        var held = PlanBindings.Check(settings, user: me, pinned: pins)
         XCTAssertNoThrow(try held.step(step(kind: "trust", display: [:]), spends: false, last: false), "a step before it")
         XCTAssertNoThrow(try held.step(step(kind: "moment_publish", fn: "publish", display: ["price": .number(10_000_000), "windowSecs": .string("86400")]),
                                        spends: false, last: true))
         for display: [String: StellarJSON] in [["price": .string("1"), "windowSecs": .number(86400)], ["windowSecs": .number(86400)]] {
-            XCTAssertThrowsError(try held.step(step(kind: "moment_publish", display: display), spends: false, last: true)) {
+            XCTAssertThrowsError(try held.step(step(kind: "moment_publish", fn: "publish", display: display), spends: false, last: true)) {
                 XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the settings are not the ones you chose"))
             }
             XCTAssertThrowsError(try held.step(step(kind: "anything", fn: "publish", display: display), spends: false, last: true), "by its function")
@@ -375,6 +377,19 @@ final class PlanRunnerTests: XCTestCase {
         XCTAssertThrowsError(try held.step(step(kind: "trust", display: [:]), spends: false, last: true)) {
             XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the transaction isn't the action you reviewed"))
         }
+        // A publish showing the form's values but calling another contract (v1's Moments, say), or naming no call, or
+        // checked without the pins that name moments-v2, is refused: the settings it shows are bound only on moments-v2.
+        let right: [String: StellarJSON] = ["price": .string("10000000"), "windowSecs": .number(86400)]
+        for intent in [step(kind: "moment_publish", fn: "publish", display: right, contract: token),
+                       step(kind: "moment_claim", fn: "publish", display: right, contract: token),
+                       step(kind: "moment_publish", display: right)] {
+            XCTAssertThrowsError(try held.step(intent, spends: false, last: true)) {
+                XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the transaction calls another contract than the one you reviewed"))
+            }
+        }
+        var unpinned = PlanBindings.Check(settings, user: me)
+        XCTAssertThrowsError(try unpinned.step(step(kind: "moment_publish", fn: "publish", display: right), spends: false, last: true))
+        XCTAssertNoThrow(try unpinned.step(step(kind: "trust", display: [:]), spends: false, last: false), "a step that matches nothing needs no pins")
     }
 
     func testTheCompatibilityRunPricesUnbuiltStepsAtTheirCeiling() async throws {

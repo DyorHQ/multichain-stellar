@@ -608,7 +608,7 @@ public final class LiteStore {
     /// to them (`PlanRunner.run`).
     func prepare(_ plan: PlanView, limits: [String: Int64], bindings: PlanBindings = .none, title: String, titles: [String: String] = [:],
                  section: LiteSection, reference: String?, summary: LiteActionSummary) throws -> PreparedAction {
-        try Self.checkBuilt(plan, bindings: bindings, user: address)
+        try Self.checkBuilt(plan, bindings: bindings, user: address, pinned: env.pinned)
         let fees = try PlanFees(plan: plan, pinned: env.pinned, estimates: fees)
         let spends = limits.keys.sorted().map { isXLM($0) ? "XLM" : code($0) }
         return PreparedAction(plan: plan, limits: limits, bindings: bindings, title: title, titles: titles, section: section, reference: reference,
@@ -617,8 +617,8 @@ public final class LiteStore {
 
     /// The steps the server built already, against `bindings`, in plan order: the review never shows a minimum, a
     /// destination or a memo the run would refuse. A step not built yet is checked when the run builds it.
-    nonisolated static func checkBuilt(_ plan: PlanView, bindings: PlanBindings, user: String) throws {
-        var check = PlanBindings.Check(bindings, user: user)
+    nonisolated static func checkBuilt(_ plan: PlanView, bindings: PlanBindings, user: String, pinned: PinnedContracts) throws {
+        var check = PlanBindings.Check(bindings, user: user, pinned: pinned)
         for (index, step) in plan.steps.enumerated() {
             guard let intent = step.intent else { continue }
             do {
