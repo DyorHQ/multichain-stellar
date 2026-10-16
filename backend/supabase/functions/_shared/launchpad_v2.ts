@@ -185,6 +185,19 @@ function creatorFeeArg(v: unknown, maxCreatorFeeBps: number): number {
 
 /** A launch's recipient (null: the creator) and snipe exemptions, as create and its preview take them: Stellar
  *  addresses (400 bad_address), at most 32 distinct exemptions. */
+/** A launch's initial buy and the fewest tokens it may bring: with a buy, a minimum above 0 is required (a minimum of 0
+ *  lets anyone sandwich the buy), so a request without one is a 400; without a buy, both are 0. */
+function firstBuy(amount: unknown, minOut: unknown): { initialBuy: string; minOut: string } {
+  const buy = amount === undefined || amount === null ? 0n : unitsArg(amount, "amount", true);
+  if (buy === 0n) return { initialBuy: "0", minOut: "0" };
+  return { initialBuy: buy.toString(), minOut: unitsArg(minOut, "minOut").toString() };
+}
+
+/** A trade's minimum from a stored step: above 0, never defaulted (a step without one is refused, not built with 0). */
+function minimumOf(spec: StepSpec): string {
+  return unitsArg(spec.minOut, "minOut").toString();
+}
+
 function launchAddresses(input: { recipient?: unknown; exempt?: unknown }): { recipient: string | null; exempt: string[] } {
   const recipient = input.recipient === undefined || input.recipient === null || input.recipient === "" ? null : addressArg(input.recipient, "recipient");
   if (input.exempt !== undefined && !Array.isArray(input.exempt)) throw bad("bad_arg", "exempt lists Stellar addresses.");
@@ -1355,8 +1368,7 @@ export async function buildLaunchV2(user: string, input: Partial<LaunchV2BuildIn
       holderSharing: input.holderSharing !== false,
       recipient,
       exempt,
-      initialBuy: (input.amount === undefined ? 0n : unitsArg(input.amount, "amount", true)).toString(),
-      minOut: (input.minOut === undefined ? 0n : unitsArg(input.minOut, "minOut", true)).toString(),
+      ...firstBuy(input.amount, input.minOut),
       nonce: launchNonce().toString(),
     };
     return await createPlan(user, kind, [{ label: `Launch ${symbol} on ${terms.venue.name}`, spec }]);
@@ -1437,6 +1449,7 @@ async function stepLaunch(spec: StepSpec) {
 export const launchCreateStepV2: Builder = async (user, spec) => {
   const net = env.network;
   const { pad } = deployed(net);
+  const buy = firstBuy(spec.initialBuy, spec.minOut);
   const { quote, venue, raw, terms } = await launchTermsFor(net, String(spec.quote), spec.venue);
   const p: LaunchInput = {
     quote: quote.contract,
@@ -1448,8 +1461,8 @@ export const launchCreateStepV2: Builder = async (user, spec) => {
     holderSharing: spec.holderSharing !== false,
     recipient: typeof spec.recipient === "string" ? spec.recipient : null,
     exempt: Array.isArray(spec.exempt) ? spec.exempt.map(String) : [],
-    initialBuy: BigInt(String(spec.initialBuy ?? "0")),
-    minOut: BigInt(String(spec.minOut ?? "0")),
+    initialBuy: BigInt(buy.initialBuy),
+    minOut: BigInt(buy.minOut),
     nonce: BigInt(String(spec.nonce)),
   };
   const launchFee = BigInt(terms.launchFee);
@@ -1477,6 +1490,8 @@ export const launchCreateStepV2: Builder = async (user, spec) => {
     spend,
     ...(p.initialBuy > 0n ? { receive: { [String(token)]: p.minOut.toString() } } : {}),
     calls: [{ contract: pad, fn: "launch" }],
+    // The recipient the user typed, bound by both verifiers to the call's creator_fee_recipient; absent = the user.
+    ...(p.recipient ? { to: p.recipient } : {}),
     display: {
       generation: 2,
       token: String(token),
@@ -1498,6 +1513,9 @@ export const launchCreateStepV2: Builder = async (user, spec) => {
       venueLocked: terms.venueLocked,
       holderSharing: p.holderSharing,
       recipient: p.recipient ?? user,
+      // Bound by both verifiers to the call: the exemptions in order (comma-separated, "" for none), creatorFeeBps and
+      // holderSharing below too.
+      snipeExempt: p.exempt.join(","),
       exemptCount: p.exempt.length,
       creatorFeeBps: p.creatorFeeBps,
       feeBps: terms.feeBps,
@@ -1532,7 +1550,7 @@ function tradeStep(side: "buy" | "sell"): Builder {
     const { pad, token, launch, quote } = await stepLaunch(spec);
     const acct = await requireAccount(user);
     const amount = String(spec.amount);
-    const minOut = String(spec.minOut ?? "0");
+    const minOut = minimumOf(spec);
     const tx = await refusing(() => invoke(acct, pad, side, [sv.addr(user), sv.addr(token), sv.i128(amount), sv.i128(minOut)]));
     const [pay, get] = side === "buy" ? [launch.quote, token] : [token, launch.quote];
     return {

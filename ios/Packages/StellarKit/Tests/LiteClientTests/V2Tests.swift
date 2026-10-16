@@ -676,23 +676,32 @@ final class V2RuntimeContractTests: XCTestCase {
     }
 
     /// ContractInspector reads each instance's code from the pinned RPC: a WASM's hash, nothing for a Stellar Asset
-    /// Contract or a missing one, no read of a pinned contract, and no read at all while no runtime WASM is pinned.
+    /// Contract or a missing one, no read of a pinned contract, and no read at all while no runtime WASM is pinned. An
+    /// instance of a pinned v2 WASM counts only when the pinned singleton created it (its stored Launchpad or Minter),
+    /// and an entry counts only for the contract it belongs to (RuntimeProvenance).
     func testContractInspectorReadsEachInstancesCode() async throws {
         let (pad, v1, nft, coin, other, sac, missing) = (Self.contract(1), Self.contract(2), Self.contract(3), Self.contract(4), Self.contract(5), Self.contract(6), Self.contract(7))
+        let (moments, token, forged, elsewhere) = (Self.contract(8), Self.contract(10), Self.contract(11), Self.contract(12))
         let pinned = PinnedContracts(
-            network: .testnet, sponsor: Self.account(9), launchTokenWasmHash: Self.hash(0xc7), roles: ["launchpadV2": [pad]],
+            network: .testnet, sponsor: Self.account(9), launchTokenWasmHash: Self.hash(0xc7), roles: ["launchpadV2": [pad], "momentsV2": [moments]],
             runtimeWasmHashes: ["launchTokenV2": Self.hash(0xa1), "momentNft": Self.hash(0xa2), "momentCoin": Self.hash(0xa3)]
         )
         let code: [String: [UInt8]?] = [v1: Self.bytes(0xc7), nft: Self.bytes(0xa2), coin: Self.bytes(0xa3), other: Self.bytes(0xee), sac: nil, pad: Self.bytes(0x01)]
         var entries: [String: String] = [:]
-        for (contract, wasm) in code { entries[try ContractInspector.instanceKey(contract)] = try Self.instanceEntry(contract, wasm: wasm) }
+        let creators = [nft: ("Minter", moments), coin: ("Minter", moments)]
+        for (contract, wasm) in code { entries[try ContractInspector.instanceKey(contract)] = try Self.instanceEntry(contract, wasm: wasm, storage: creators[contract].map { [$0] } ?? []) }
+        // A launch token the pinned launchpad created; one an attacker deployed from the same WASM; and an answer
+        // for one contract that is another contract's entry.
+        entries[try ContractInspector.instanceKey(token)] = try Self.instanceEntry(token, wasm: Self.bytes(0xa1), storage: [("Launchpad", pad)])
+        entries[try ContractInspector.instanceKey(forged)] = try Self.instanceEntry(forged, wasm: Self.bytes(0xa1), storage: [("Launchpad", other)])
+        entries[try ContractInspector.instanceKey(elsewhere)] = try Self.instanceEntry(token, wasm: Self.bytes(0xa1), storage: [("Launchpad", pad)])
         V2Stub.rpc(entries)
         let inspector = ContractInspector(rpcURL: URL(string: "https://rpc.test")!, session: V2Stub.session)
-        let hashes = try await inspector.wasmHashes(among: [pad, v1, nft, coin, other, sac, missing, nft], pinned: pinned)
-        XCTAssertEqual(hashes, [v1: Self.hash(0xc7), nft: Self.hash(0xa2), coin: Self.hash(0xa3), other: Self.hash(0xee)])
+        let hashes = try await inspector.wasmHashes(among: [pad, v1, nft, coin, other, sac, missing, nft, token, forged, elsewhere], pinned: pinned)
+        XCTAssertEqual(hashes, [v1: Self.hash(0xc7), nft: Self.hash(0xa2), coin: Self.hash(0xa3), other: Self.hash(0xee), token: Self.hash(0xa1)])
         let asked = V2Stub.requests().compactMap { $0.body.flatMap(Self.ledgerKey) }
-        XCTAssertEqual(Set(asked), Set(try [v1, nft, coin, other, sac, missing].map(ContractInspector.instanceKey)), "the pinned launchpad isn't read")
-        XCTAssertEqual(asked.count, 6, "each contract read once")
+        XCTAssertEqual(Set(asked), Set(try [v1, nft, coin, other, sac, missing, token, forged, elsewhere].map(ContractInspector.instanceKey)), "the pinned launchpad isn't read")
+        XCTAssertEqual(asked.count, 9, "each contract read once")
         XCTAssertEqual(V2Stub.requests().first?.request.url?.absoluteString, "https://rpc.test")
         let launchTokens = try await inspector.launchTokens(among: [v1, nft, coin], pinned: pinned)
         XCTAssertEqual(launchTokens, [v1])
@@ -737,9 +746,10 @@ final class V2RuntimeContractTests: XCTestCase {
     private static func contract(_ b: UInt8) -> String { StrKey.contractID(bytes(b)) }
     private static func account(_ b: UInt8) -> String { StrKey.accountID(bytes(b)) }
 
-    /// LedgerEntryData::ContractData { contract, the instance key, persistent, ContractInstance { executable } }, base64:
-    /// the WASM `wasm`, or the Stellar Asset Contract's executable when nil.
-    private static func instanceEntry(_ contract: String, wasm: [UInt8]?) throws -> String {
+    /// LedgerEntryData::ContractData { contract, the instance key, persistent, ContractInstance { executable, storage } },
+    /// base64: the WASM `wasm`, or the Stellar Asset Contract's executable when nil; `storage` maps a unit variant of the
+    /// contract's DataKey (a one-symbol vector) to a contract address.
+    private static func instanceEntry(_ contract: String, wasm: [UInt8]?, storage: [(String, String)] = []) throws -> String {
         var w = XDRWriter()
         w.uint32(6) // CONTRACT_DATA
         w.uint32(0) // ext
@@ -754,7 +764,22 @@ final class V2RuntimeContractTests: XCTestCase {
         } else {
             w.uint32(1) // CONTRACT_EXECUTABLE_STELLAR_ASSET
         }
-        w.uint32(0) // no storage
+        if storage.isEmpty {
+            w.uint32(0) // no storage
+        } else {
+            w.uint32(1) // storage present
+            w.uint32(UInt32(storage.count))
+            for (name, address) in storage {
+                w.uint32(16) // SCV_VEC
+                w.uint32(1) // present
+                w.uint32(1) // one element
+                w.uint32(15) // SCV_SYMBOL
+                w.variable(Array(name.utf8))
+                w.uint32(18) // SCV_ADDRESS
+                w.uint32(1) // SC_ADDRESS_TYPE_CONTRACT
+                w.raw(try StrKey.decode(.contract, address))
+            }
+        }
         return Data(w.bytes).base64EncodedString()
     }
 
