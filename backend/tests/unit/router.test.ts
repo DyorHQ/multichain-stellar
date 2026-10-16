@@ -410,6 +410,7 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "flags",
       "minBuild",
       "inviteRequired",
+      "privyWallets",
     ]);
     assertEquals(c.network, "testnet");
     assertEquals(c.passphrase, "Test SDF Network ; September 2015");
@@ -429,6 +430,20 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals(c.flags, { enabled: true, maintenance: false });
     assertEquals(c.minBuild, 1);
     assertEquals(c.inviteRequired, false);
+    // On unless the owner's LITE_PRIVY_WALLETS says off.
+    assertEquals(c.privyWallets, true);
+  });
+
+  Deno.test("GET /v1/config: privyWallets follows LITE_PRIVY_WALLETS, the owner's switch", async () => {
+    try {
+      for (const [setting, expected] of [["off", false], ["on", true]] as const) {
+        Deno.env.set("LITE_PRIVY_WALLETS", setting);
+        const res = await handle(request("GET /v1/config", "/v1/config", null));
+        assertEquals((await res.json()).privyWallets, expected, setting);
+      }
+    } finally {
+      Deno.env.delete("LITE_PRIVY_WALLETS");
+    }
   });
 
   Deno.test("GET /v1/config: inviteRequired follows LITE_INVITE_REQUIRED on testnet, for QA", async () => {

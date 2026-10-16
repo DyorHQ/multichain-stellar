@@ -42,6 +42,7 @@ export function setTestEnv(): void {
       "LITE_MIN_BUILD",
       "LITE_LOCAL_STORAGE_DIR",
       "LITE_PUBLIC_BASE",
+      "LITE_PRIVY_WALLETS",
     ]
   ) Deno.env.delete(name);
 }

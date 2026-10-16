@@ -375,6 +375,9 @@ export interface LiteConfig {
   pricing?: Pricing;
   /** Added: whether a first sign-in needs an invite code: false on testnet, true on mainnet. */
   inviteRequired?: boolean;
+  /** Added: whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) may use Stellar,
+   *  with a Privy wallet their phone makes and signs with itself. Older servers send none: no. */
+  privyWallets?: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------ fees (public)
