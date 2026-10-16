@@ -27,6 +27,9 @@ const ledger = new Map<string, bigint>();
 let friendbotAsked: string[] = [];
 /** How Friendbot answers a funding: Horizon's whole transaction record, its hash alone, or text that isn't either. */
 let friendbotAnswers: "record" | "hash" | "text" = "record";
+/** How many more times Horizon answers an account's transactions without them: it lists a ledger's transactions a
+ *  few seconds after RPC shows what they did. */
+let horizonLag = 0;
 /** What RPC answers a sendTransaction with. */
 let sendAnswer: "PENDING" | "ERROR" = "PENDING";
 const sent: Transaction[] = [];
@@ -49,6 +52,7 @@ function reset() {
   ledger.clear();
   friendbotAsked = [];
   friendbotAnswers = "record";
+  horizonLag = 0;
   sendAnswer = "PENDING";
   sent.length = 0;
   txLog = [];
@@ -140,7 +144,8 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (url.host === "horizon-testnet.stellar.org") {
     const [, root, address, sub] = url.pathname.split("/");
     if (root === "accounts" && sub === "transactions") {
-      return Response.json({ _embedded: { records: ledger.has(address) ? [txRecord(CREATION_HASH)] : [] }, _links: {} });
+      const listed = ledger.has(address) && horizonLag-- <= 0;
+      return Response.json({ _embedded: { records: listed ? [txRecord(CREATION_HASH)] : [] }, _links: {} });
     }
     if (root === "transactions") return Response.json(txRecord(address));
     if (root === "accounts") {
@@ -267,6 +272,27 @@ Deno.test("Friendbot's answer without its transaction: the account's first trans
   await ask("POST", "/account/activate", await tokenFor(me));
   assertEquals(txLog.map((r) => [r.hash, r.address, r.status, r.fee_payer]), [[CREATION_HASH, me, "success", "external"]]);
   assertEquals(await faucetOf(me), { amount: "10000", claimed: true });
+});
+
+Deno.test("Horizon listing Friendbot's transaction late: it is asked again, and the claim is still logged", async () => {
+  reset();
+  friendbotAnswers = "text";
+  horizonLag = 2;
+  const me = Keypair.random().publicKey();
+  const act = await ask("POST", "/account/activate", await tokenFor(me));
+  assertEquals([act.status, act.body.kind], [200, "trust"]);
+  assertEquals(txLog.map((r) => [r.hash, r.address, r.status]), [[CREATION_HASH, me, "success"]]);
+  assertEquals(await faucetOf(me), { amount: "10000", claimed: true });
+});
+
+Deno.test("a funding nothing names: the activation is refused (504 friendbot_slow), never answered as if nothing was funded", async () => {
+  reset();
+  friendbotAnswers = "text";
+  horizonLag = Infinity;
+  const me = Keypair.random().publicKey();
+  const act = await ask("POST", "/account/activate", await tokenFor(me));
+  assertEquals([act.status, act.body.error.code], [504, "friendbot_slow"]);
+  assertEquals([friendbotAsked, ledger.get(me)], [[me], GRANT]);
 });
 
 Deno.test("an account that existed and never claimed: the faucet once (Friendbot's, merged in), then faucet_used", async () => {
