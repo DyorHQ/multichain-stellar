@@ -56,7 +56,9 @@ public struct PlanBindings: Equatable, Sendable {
 
     /// The least the user accepts, per asset contract id (base units), or for `anyAsset`: what the screen showed (the
     /// quote less its slippage). The step that brings it must name it in `intent.receive`, at or above it, and no step
-    /// that spends may leave one unnamed.
+    /// that spends may leave one unnamed. With minimums per asset, a step may receive no other asset: the verifiers
+    /// let a swap's bought token off the route allowlist because the intent names it, so it must be the one the user
+    /// chose.
     public var minimums: [String: Int64]
     public var destination: Destination
 
@@ -101,6 +103,10 @@ public struct PlanBindings: Equatable, Sendable {
                 // A minimum of nothing is no minimum: never signed, whatever the user confirmed.
                 guard let units = Int64(text), units > 0 else { throw Refusal.minimum(reason: "the transaction accepts receiving nothing") }
                 named[asset] = units
+            }
+            let chosen = Set(bindings.minimums.keys)
+            if !chosen.isEmpty, !chosen.contains(PlanBindings.anyAsset), !Set(named.keys).isSubset(of: chosen) {
+                throw Refusal.minimum(reason: "the transaction receives another asset than the one you chose")
             }
             for (asset, least) in bindings.minimums {
                 if asset == PlanBindings.anyAsset {

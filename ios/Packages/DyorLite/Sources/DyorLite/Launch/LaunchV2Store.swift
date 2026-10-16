@@ -283,16 +283,17 @@ public final class LaunchV2Store {
 
     /// The fields of `form` the plan's create binds differently, or doesn't state, by name; empty when it binds them as
     /// the form has them. Fails closed: a create not built yet, or one that doesn't state a field, differs. The creator
-    /// fee recipient is `intent.to` (absent, or the user, for the user); the others are the create's display fields
-    /// `exempt` (the addresses, in any order), `creatorFeeBps` and `holderSharing`.
+    /// fee recipient is `intent.to` (absent, or the user, for the user) and `display.recipient` (the recipient, or the
+    /// user); the others are the create's display fields `snipeExempt` (the addresses comma-separated, in the form's
+    /// order, "" for none), `creatorFeeBps` and `holderSharing`. Both verifiers bind each of them to the call.
     nonisolated static func formChanges(_ plan: PlanView, form: LaunchV2Form, user: String) -> [String] {
         guard let intent = plan.steps.lazy.compactMap(\.intent).first(where: { $0.kind == "launch_create" }) else { return ["create"] }
         var changes: [String] = []
         let wanted = form.recipient.flatMap { $0 == user ? nil : $0 }
         let bound = intent.to.flatMap { $0 == user ? nil : $0 }
-        if bound != wanted { changes.append("recipient") }
         let shown = BoundDisplay(intent.display)
-        if shown.strings("exempt").map({ $0.sorted() }) != form.exempt.sorted() { changes.append("exempt") }
+        if bound != wanted || shown.text("recipient") != (form.recipient ?? user) { changes.append("recipient") }
+        if shown.strings("snipeExempt") != form.exempt { changes.append("snipeExempt") }
         if shown.whole("creatorFeeBps") != form.creatorFeeBps { changes.append("creatorFeeBps") }
         if shown.flag("holderSharing") != form.holderSharing { changes.append("holderSharing") }
         return changes

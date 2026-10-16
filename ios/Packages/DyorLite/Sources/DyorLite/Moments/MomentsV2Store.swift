@@ -387,14 +387,14 @@ public struct MomentsV2Store {
     }
 
     /// The fields of `form` the plan's built publish binds differently, or doesn't state, by name; empty when it binds
-    /// them as the form has them: `price` (USDC base units), `allocBps` (or `allocationBps`) and `windowSecs`. Fails
-    /// closed: no built publish, or a field it doesn't state, differs.
+    /// them as the form has them: `price` (USDC base units), `allocationBps` and `windowSecs`, which both verifiers bind
+    /// to the call. Fails closed: no built publish, or a field it doesn't state, differs.
     public nonisolated static func formChanges(_ plan: PlanView, form: StellarMomentFormV2) -> [String] {
         guard let intent = plan.steps.first(where: isPublish)?.intent, intent.kind == "moment_publish" else { return ["publish"] }
         let shown = BoundDisplay(intent.display)
         var changes: [String] = []
         if shown.text("price") != String(form.price) { changes.append("price") }
-        if (shown.whole("allocBps") ?? shown.whole("allocationBps")) != form.allocationBps { changes.append("allocBps") }
+        if shown.whole("allocationBps") != form.allocationBps { changes.append("allocationBps") }
         if shown.whole("windowSecs") != form.windowSecs { changes.append("windowSecs") }
         return changes
     }

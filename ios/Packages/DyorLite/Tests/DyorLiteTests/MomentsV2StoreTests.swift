@@ -224,7 +224,7 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan()), form: form), [])
         XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "\"1\""])), form: form), ["price"])
         XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["allocationBps": "5000", "windowSecs": "3600"])), form: form),
-                       ["allocBps", "windowSecs"])
+                       ["allocationBps", "windowSecs"])
         XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "null"])), form: form), ["price"], "fails closed")
     }
 

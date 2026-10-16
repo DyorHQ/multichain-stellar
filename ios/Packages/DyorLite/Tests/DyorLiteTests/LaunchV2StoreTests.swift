@@ -255,7 +255,7 @@ final class LaunchV2StoreTests: XCTestCase {
         try serve("POST /v1/launches/metadata", ["uri": "https://media.test/meta/ecat.json"])
         let terms = try Self.decodedTerms()
         let buy = try XCTUnwrap(LaunchV2Store.firstBuy(500_000_000, terms: terms, creatorFeeBps: 100))
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT", "quote": "XLM", "initialBuy": "500000000"]),
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT", "quote": "XLM", "initialBuy": "500000000"], recipient: Self.recipient),
                                                        terms: Self.terms(), spend: [Self.xlm: "600000000"], receive: [Self.token: String(buy.minOut)],
                                                        to: Self.recipient))
         var form = LaunchV2Form(name: "E2E Cat", symbol: "ecat", website: "https://e2e.cat", quote: "XLM", creatorFeeBps: 100,
@@ -281,7 +281,7 @@ final class LaunchV2StoreTests: XCTestCase {
         XCTAssertEqual(sent["recipient"] as? String, "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR")
 
         // A USDC launch: the fee in XLM, the buy in USDC.
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"]), terms: Self.terms(quote: Self.usdc),
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: Self.recipient), terms: Self.terms(quote: Self.usdc),
                                                        receive: [Self.token: String(buy.minOut)], to: Self.recipient))
         form.quote = "USDC"
         form.developerBuy = 20_000_000
@@ -415,9 +415,11 @@ final class LaunchV2StoreTests: XCTestCase {
 
     private static let recipient = "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"
 
-    /// A create's display with the fields it binds from the form: no exemptions, a 1% creator fee, holder sharing on.
-    private static func bound(_ display: [String: Any], exempt: String = "", creatorFeeBps: Int = 100, holderSharing: Bool = true) -> [String: Any] {
-        display.merging(["exempt": exempt, "creatorFeeBps": creatorFeeBps, "holderSharing": holderSharing]) { $1 }
+    /// A create's display with the fields it binds from the form (backend launchpad_v2.ts): the fee recipient, no
+    /// exemptions, a 1% creator fee, holder sharing on.
+    private static func bound(_ display: [String: Any], recipient: String, exempt: String = "", creatorFeeBps: Int = 100,
+                              holderSharing: Bool = true) -> [String: Any] {
+        display.merging(["recipient": recipient, "snipeExempt": exempt, "creatorFeeBps": creatorFeeBps, "holderSharing": holderSharing]) { $1 }
     }
 
     func testACreateThatBindsAnythingElseThanTheFormIsRefusedBeforeItIsSigned() async throws {
@@ -426,12 +428,18 @@ final class LaunchV2StoreTests: XCTestCase {
         let terms = try Self.decodedTerms()
         let mallory = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
         let form = LaunchV2Form(name: "E2E Cat", symbol: "ECAT", quote: "XLM", creatorFeeBps: 100)
+        let me = launches.store.address
         let cases: [(String, [String: Any])] = [
-            ("the fees go to another recipient", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"]), terms: Self.terms(), to: mallory)),
-            ("another buyer skips the early-buy tax", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], exempt: mallory), terms: Self.terms())),
-            ("another creator fee", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], creatorFeeBps: 1_000), terms: Self.terms())),
-            ("holder sharing turned off", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], holderSharing: false), terms: Self.terms())),
-            ("no exemptions stated", Self.plan(kind: "launch_create", display: ["symbol": "ECAT", "creatorFeeBps": 100, "holderSharing": true], terms: Self.terms())),
+            ("the fees go to another recipient",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: mallory), terms: Self.terms(), to: mallory)),
+            ("the display names another recipient", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: mallory), terms: Self.terms())),
+            ("another buyer skips the early-buy tax",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: mallory), terms: Self.terms())),
+            ("another creator fee", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, creatorFeeBps: 1_000), terms: Self.terms())),
+            ("holder sharing turned off",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, holderSharing: false), terms: Self.terms())),
+            ("no exemptions stated",
+             Self.plan(kind: "launch_create", display: ["symbol": "ECAT", "recipient": me, "creatorFeeBps": 100, "holderSharing": true], terms: Self.terms())),
         ]
         for (name, built) in cases {
             try serve("POST /v1/launches/build", built)
@@ -442,10 +450,18 @@ final class LaunchV2StoreTests: XCTestCase {
                 XCTAssertEqual(code, "launch_form_changed", name)
             }
         }
-        // The same fields as the form, the exemptions in any order: it goes ahead.
+        // The exemptions in another order than the form's: refused; in the form's order, with the rest the same: it goes ahead.
         let other = "GAQKCKSB3YEAQDIBZAVHMAL5PBFCPWIA52TKIUXYIBNSJRQIDVHQB4SF"
         let exempting = LaunchV2Form(name: "E2E Cat", symbol: "ECAT", quote: "XLM", creatorFeeBps: 100, exempt: [mallory, other])
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], exempt: "\(other),\(mallory)"),
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: "\(other),\(mallory)"),
+                                                       terms: Self.terms()))
+        do {
+            _ = try await launches.createPlan(exempting, terms: terms, image: nil)
+            XCTFail("the exemptions reordered")
+        } catch let LiteAPIError.server(_, code, _, _) {
+            XCTAssertEqual(code, "launch_form_changed")
+        }
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: "\(mallory),\(other)"),
                                                        terms: Self.terms()))
         let ok = try await launches.createPlan(exempting, terms: terms, image: nil)
         XCTAssertEqual(ok.bindings, .none, "no buy, fees to the creator")

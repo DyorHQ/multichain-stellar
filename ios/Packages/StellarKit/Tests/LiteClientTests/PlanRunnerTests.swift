@@ -312,6 +312,14 @@ final class PlanRunnerTests: XCTestCase {
         check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
         XCTAssertNoThrow(try check.step(intent(receive: [token: "100"]), spends: true, last: true))
         XCTAssertTrue(check.outstanding.isEmpty)
+        // A swap that receives another asset than the one the user chose, whatever its amount: refused.
+        let usdc = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
+        check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
+        XCTAssertThrowsError(try check.step(intent(receive: [usdc: "1000"]), spends: true, last: true)) {
+            XCTAssertEqual($0 as? PlanBindings.Refusal, .minimum(reason: "the transaction receives another asset than the one you chose"))
+        }
+        check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
+        XCTAssertThrowsError(try check.step(intent(receive: [token: "100", usdc: "1"]), spends: true, last: true))
         // A last step that spends nothing (an Earn withdrawal) must still name it.
         check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
         XCTAssertThrowsError(try check.step(intent(), spends: false, last: true))
