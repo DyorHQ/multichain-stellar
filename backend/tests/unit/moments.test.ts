@@ -207,6 +207,77 @@ Deno.test("metadata: title 1–80 characters, description at most 500, place at 
   assertEquals([bare.description, bare.place, bare.takenOn], [null, null, null]);
 });
 
+Deno.test("metadata: takenOn is a day, or a date and time with its offset (ISO 8601) written one way, never in the future", () => {
+  const ok = { title: "Accra at dusk", mediaUrl: PHOTO, mediaType: "image" };
+  const taken = (takenOn: unknown) => m.metadataFields(ME, { ...ok, takenOn }, NOW).takenOn;
+  const code = (takenOn: unknown) => assertThrows(() => m.metadataFields(ME, { ...ok, takenOn }, NOW), ApiError).code;
+  // NOW is 2026-10-14T14:00:00Z.
+  assertEquals(taken("2026-10-14"), "2026-10-14", "a day as it is");
+  assertEquals(taken("2026-10-14T13:30:00Z"), "2026-10-14T13:30:00Z");
+  assertEquals(taken("2026-10-14T15:30:00+02:00"), "2026-10-14T15:30:00+02:00", "the creator's own offset kept");
+  assertEquals(taken("2026-10-14T04:00-09:30"), "2026-10-14T04:00:00-09:30", "seconds written out");
+  assertEquals(taken("2026-10-14T13:59:59.999Z"), "2026-10-14T13:59:59Z", "a fraction dropped");
+  assertEquals(taken("2026-10-14T13:00:00+00:00"), "2026-10-14T13:00:00Z", "UTC written as Z");
+  assertEquals(taken("2026-10-14T14:04:00Z"), "2026-10-14T14:04:00Z", "a phone clock a little fast");
+  assertEquals(taken("2026-10-15T01:00:00+14:00"), "2026-10-15T01:00:00+14:00", "the next day where it is, an hour ago here");
+  assertEquals(taken(""), null);
+  for (const bad of [
+    "2026-10-14T14:06:00Z", // later than now, past the clock's slack
+    "2026-10-14T16:30:00+02:00", // the same instant
+    "2026-02-30T10:00:00Z",
+    "2026-10-14T24:00:00Z",
+    "2026-10-14T10:60:00Z",
+    "2026-10-14T10:00:00", // no offset: no instant
+    "2026-10-14T10:00:00+15:00",
+    "2026-10-14 10:00:00Z",
+    "2026-10-14T10Z",
+    "14/10/2026",
+    7,
+  ]) assertEquals(code(bad), "bad_arg", String(bad));
+  // Every accepted form fits the contract's date (at most 32 bytes).
+  for (const v of ["2026-10-14", "2026-10-14T04:00:00-09:30", "2026-10-14T13:59:59.123456789Z"]) assert(new TextEncoder().encode(taken(v)!).length <= 32, v);
+});
+
+Deno.test("metadata: the Date attribute and the record carry the time; the day goes where readers of the day have it", async () => {
+  const video = m.metadataFields(ME, { title: "Harbour", mediaUrl: VIDEO, mediaType: "video", posterUrl: POSTER, takenOn: "2026-10-14T15:30:00+02:00" }, NOW);
+  assertEquals(m.sep50Json(ME, video, "testnet", null).attributes, [
+    { trait_type: "Creator", value: ME },
+    { trait_type: "Network", value: "Stellar Testnet" },
+    { trait_type: "Date", value: "2026-10-14T15:30:00+02:00" },
+  ]);
+  const seen = database((q) => {
+    if (q.startsWith("insert into lite.moment_metadata")) return [];
+    throw new Error(`unexpected query: ${q}`);
+  });
+  stored.length = 0;
+  for (const [takenOn, day, time] of [
+    ["2026-10-14T15:30:00+02:00", "2026-10-14", "2026-10-14T15:30:00+02:00"],
+    // The creator's own calendar day: still the 13th where it was taken.
+    ["2026-10-13T21:00:00-09:00", "2026-10-13", "2026-10-13T21:00:00-09:00"],
+    ["2026-10-13", "2026-10-13", null],
+  ] as const) {
+    const out = await m.writeMetadata(ME, { title: "Harbour", mediaUrl: PHOTO, mediaType: "image", takenOn }, NOW);
+    const insert = seen.findLast((s) => s.q.startsWith("insert into lite.moment_metadata"))!;
+    assertEquals(insert.params, [out.uri, ME, "Harbour", null, null, day, time, "image", PHOTO, PHOTO], takenOn);
+    const json = JSON.parse(stored[stored.length - 1].body);
+    assertEquals(json.attributes.find((a: { trait_type: string }) => a.trait_type === "Date")?.value, takenOn);
+  }
+  // A record answers what the Date attribute says: the time when it has one, else the day.
+  assertEquals(m.takenText("2026-10-14T15:30:00+02:00", new Date("2026-10-14T00:00:00Z")), "2026-10-14T15:30:00+02:00");
+  assertEquals(m.takenText(null, new Date("2026-10-14T00:00:00Z")), "2026-10-14");
+  assertEquals(m.takenText(null, "2026-10-14"), "2026-10-14");
+  assertEquals(m.takenText(undefined, null), null);
+});
+
+Deno.test("a reader of a Moment's date splits what was written into its day and its time, and never refuses one", () => {
+  assertEquals(m.takenParts("2026-10-14T15:30:00+02:00"), { text: "2026-10-14T15:30:00+02:00", day: "2026-10-14", at: "2026-10-14T15:30:00+02:00" });
+  assertEquals(m.takenParts("2026-10-13T21:00:00-09:00"), { text: "2026-10-13T21:00:00-09:00", day: "2026-10-13", at: "2026-10-13T21:00:00-09:00" });
+  assertEquals(m.takenParts("2026-10-14"), { text: "2026-10-14", day: "2026-10-14", at: null });
+  // Written whenever: a reader never compares it with its own clock.
+  assertEquals(m.takenParts("2099-01-01T00:00:00Z")?.at, "2099-01-01T00:00:00Z");
+  for (const v of [null, undefined, "", "yesterday", "2026-02-30", "2026-10-14T10:00:00", 7]) assertEquals(m.takenParts(v), null, String(v));
+});
+
 Deno.test("SEP-50 JSON: always an image; animation_url only for a video; the network's name; Place and Date when given", () => {
   const video = m.metadataFields(ME, { title: "Harbour", mediaUrl: VIDEO, mediaType: "video", posterUrl: POSTER, place: "Accra", takenOn: "2026-10-13" }, NOW);
   assertEquals(m.sep50Json(ME, video, "testnet", null), {
@@ -253,7 +324,7 @@ Deno.test("POST /v1/moments/metadata writes the JSON once to lite-media and reco
     const id = out.uri.slice(out.uri.lastIndexOf("/") + 1, -".json".length);
     assertEquals(json.external_url, linkBase ? `${linkBase}/${id}` : undefined);
     const insert = seen.findLast((s) => s.q.startsWith("insert into lite.moment_metadata"))!;
-    assertEquals(insert.params, [out.uri, ME, "Harbour", null, "Accra", null, "video", VIDEO, POSTER]);
+    assertEquals(insert.params, [out.uri, ME, "Harbour", null, "Accra", null, null, "video", VIDEO, POSTER]);
   }
   Deno.env.delete("LITE_MOMENT_LINK_BASE");
   // Nothing is recorded when storage refuses the write.
@@ -330,6 +401,12 @@ Deno.test("a row indexed before migration 09: its media type from the file, no t
   const old = m.momentRowOf({ ...ROW, media_type: null, poster_url: null, platform_bps: null, royalty_bps: null, taken_on: null }, prices as any, NOW);
   assertEquals([old.mediaType, old.posterUrl, old.platformBps, old.royaltyBps, old.priceUsd], ["video", null, undefined, undefined, null]);
   assertEquals(m.momentRowOf({ ...ROW, media_type: null, media_url: PHOTO }, prices as any, NOW).mediaType, "image");
+});
+
+Deno.test("a v1 Moment's row says the day it happened: no v1 Moment has a time", () => {
+  const prices = { XLM: { ref: "XLM", usd: null, stale: true, at: null, market: "", change24h: null, volume24hUsd: null }, USDC: { ref: "USDC", usd: 1, stale: false, at: null, market: "", change24h: null, volume24hUsd: null } } as const;
+  const row = { ...ROW, taken_on: new Date("2026-10-14T00:00:00Z"), taken_at: "2026-10-14T15:30:00+02:00" };
+  assertEquals(m.momentRowOf(row, prices as any, NOW).takenOn, "2026-10-14");
 });
 
 Deno.test("a Moment without a title is never served: 404", async () => {

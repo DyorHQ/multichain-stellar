@@ -16,7 +16,8 @@ public struct StellarMomentFormV2: Equatable, Sendable {
     public var description: String?
     /// Where it happened: at most 64 bytes.
     public var place: String?
-    /// The day it happened, "2026-10-14".
+    /// When it happened: a date and time with its offset, "2026-10-14T18:30:00+02:00" (`takenAt`), or a day,
+    /// "2026-10-14", sent with the metadata, whose Date attribute says it as it is.
     public var takenOn: String?
     /// Per edition, in USDC base units (7 decimals).
     public var price: Int64
@@ -35,6 +36,17 @@ public struct StellarMomentFormV2: Equatable, Sendable {
         self.price = price
         self.allocationBps = allocationBps
         self.windowSecs = windowSecs
+    }
+
+    /// When a Moment happened, as Publish writes it from its When (a day and a time, to the minute): ISO 8601 with the
+    /// offset of `timeZone`, "2026-10-14T18:30:00+02:00" ("…Z" in UTC). At most 25 bytes, within the contract's 32 for
+    /// the date.
+    public static func takenAt(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let minute = Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded(.down) * 60)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = timeZone
+        return formatter.string(from: minute)
     }
 }
 
@@ -68,7 +80,7 @@ public struct StellarMomentListingV2: Hashable, Sendable, Identifiable {
     /// The video, for a video Moment.
     public var video: String?
     public var place: String?
-    /// "2026-10-14".
+    /// When it happened: "2026-10-14T18:30:00+02:00", or a day, "2026-10-14" (`StellarMomentFormV2.takenOn`).
     public var takenOn: String?
 
     public var id: String { nft }

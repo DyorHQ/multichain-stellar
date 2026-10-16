@@ -1,8 +1,9 @@
 // The Stellar launch page and Create (docs/DESIGN-stellar-parity.md §8.10.2, §8.10.3; docs/DESIGN-stellar-contracts-v2.md
-// §21): the phase each v2 status reads as, the holders' minimum and its footnote, the price chart's points, the create
-// screen's name, description, links, ticker, XLM shortage, preview (read again for another account or once XLM is added)
-// and durations, actions waiting for the coin's row, no phase shown before anything is read, a retired launch known from
-// its row, and the source rules the Lite launch screens keep.
+// §21): the phase each v2 status reads as, the holders' minimum and its footnote, the price chart's points (no stray
+// one) and its distinct time labels, a new coin's page waiting for its row, the create screen's name, description, links,
+// ticker, XLM shortage, preview (read again for another account or once XLM is added), Advanced's footer and durations,
+// Done opening the new coin's page, actions waiting for the coin's row, no phase shown before anything is read, a retired
+// launch known from its row, and the source rules the Lite launch screens keep.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -117,6 +118,67 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertEqual(flat.map(\.time), [launched, now])
         XCTAssertEqual(flat.map(\.usd), [0.00000125, 0.00000125])
         XCTAssertEqual(StellarLaunchDetailView.priceSeries([], current: nil, launchedAt: launched, quoteUSD: 0.25), [], "no price, no line")
+    }
+
+    /// The line has no stray point: the launch's opening price and the developer buy recorded in the same ledger are one
+    /// point (the buy's), a zero or unreadable price is left out, points are drawn oldest first, and the live price is
+    /// never placed before a point read. So the line never runs up the edge and its fill is never cut.
+    func testThePriceLineHasNoStrayPoints() throws {
+        let points = try decode([StellarLaunchDetail.Point].self, """
+            [{"t": "2026-10-16T06:05:00Z", "price": "0.000002"}, {"t": "2026-10-16T06:05:00Z", "price": "0.0000021"},
+             {"t": "2026-10-16T06:40:00Z", "price": "0"}, {"t": "2026-10-16T07:20:00Z", "price": "0.0000022"},
+             {"t": "2026-10-16T06:50:00Z", "price": "0.00000215"}, {"t": "2026-10-16T07:30:00Z", "price": "n/a"}]
+            """)
+        let now = try XCTUnwrap(StellarFormat.date("2026-10-16T07:50:00Z"))
+        let series = StellarLaunchDetailView.priceSeries(points, current: 0.0000022, launchedAt: nil, quoteUSD: 0.18, now: now)
+        XCTAssertEqual(series.map(\.time), ["2026-10-16T06:05:00Z", "2026-10-16T06:50:00Z", "2026-10-16T07:20:00Z", "2026-10-16T07:50:00Z"].compactMap(StellarFormat.date))
+        XCTAssertEqual(series.first?.usd ?? 0, 0.0000021 * 0.18, accuracy: 1e-15, "the developer buy's price, not the opening's below it")
+        XCTAssertTrue(series.allSatisfy { $0.usd > 0 })
+        XCTAssertEqual(series.map(\.block), [0, 1, 2, 3])
+        XCTAssertTrue(zip(series, series.dropFirst()).allSatisfy { $0.time < $1.time }, "strictly oldest first")
+        // A phone clock behind the server's: the live price comes after the newest point, as one point with it.
+        let behind = StellarLaunchDetailView.priceSeries(points, current: 0.0000023, launchedAt: nil, quoteUSD: 0.18,
+                                                         now: try XCTUnwrap(StellarFormat.date("2026-10-16T07:00:00Z")))
+        XCTAssertEqual(behind.last?.time, StellarFormat.date("2026-10-16T07:20:00Z"))
+        XCTAssertEqual(behind.last?.usd ?? 0, 0.0000023 * 0.18, accuracy: 1e-15)
+        XCTAssertEqual(StellarLaunchDetailView.priceSeries(points, current: 0.0000022, launchedAt: nil, quoteUSD: 0), [], "no dollar price, no line")
+        // The fill starts at the plotted range's floor, never at zero.
+        let domain = StellarPriceChart.domain(series)
+        XCTAssertGreaterThan(domain.lowerBound, 0)
+        XCTAssertLessThan(domain.lowerBound, series.map(\.usd).min() ?? 0)
+        XCTAssertGreaterThan(domain.upperBound, series.map(\.usd).max() ?? 0)
+    }
+
+    /// The time axis's marks fall inside the line's span, at most about four of them, each label read once: a launch two
+    /// hours old reads "6:30 AM, 7:00 AM, 7:30 AM", never "6 AM, 6 AM, 7 AM, 7 AM".
+    func testTheTimeAxisLabelsAreDistinct() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_US")
+        let start = try XCTUnwrap(StellarFormat.date("2026-10-16T06:05:00Z"))
+        // 90 s, 20 min, 1 h 45, 5 h, 11 h, 23 h, 30 h, 3 days, 12 days, 70 days, 800 days.
+        let spans: [TimeInterval] = [90, 1_200, 6_300, 18_000, 39_600, 82_800, 108_000, 259_200, 1_036_800, 6_048_000, 69_120_000]
+        for span in spans {
+            let end = start.addingTimeInterval(span)
+            let axis = StellarPriceChart.timeAxis(from: start, to: end, locale: locale, calendar: calendar)
+            let labels: [String] = axis.marks.map { $0.formatted(axis.format) }
+            XCTAssertEqual(Set(labels).count, labels.count, "\(span): \(labels)")
+            XCTAssertLessThanOrEqual(axis.marks.count, 5, "\(span)")
+            XCTAssertTrue(axis.marks.allSatisfy { $0 >= start && $0 <= end }, "\(span)")
+        }
+        let twoHours = StellarPriceChart.timeAxis(from: start, to: start.addingTimeInterval(105 * 60), locale: locale, calendar: calendar)
+        XCTAssertEqual(twoHours.marks, ["2026-10-16T06:30:00Z", "2026-10-16T07:00:00Z", "2026-10-16T07:30:00Z"].compactMap(StellarFormat.date))
+    }
+
+    /// A coin Create launched seconds ago has no row yet: its page reads it again, up to its limit, and only then says it
+    /// couldn't be read. A page opened with its row never waits, nor one a link or a notification opened for a coin the
+    /// server doesn't know.
+    func testANewCoinsPageWaitsForItsRow() {
+        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: 0))
+        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit - 1))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: true, waits: 0))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: false, hasRow: false, waits: 0), "a link to a coin the server doesn't know")
     }
 
     // MARK: - Create
@@ -235,6 +297,46 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertEqual(StellarCreateLaunchView.duration(3600), "1 hour")
         XCTAssertEqual(StellarCreateLaunchView.duration(2_592_000), "30 days")
         XCTAssertEqual(StellarCreateLaunchView.duration(129_600), "1 day, 12 hours")
+    }
+
+    /// Done after a launch opens the new coin's own page: Create routes it through the router once its sheets have
+    /// closed, to the Launch tab, whose board pushes it (`pendingStellar`), and its page waits for the coin's row as a
+    /// just-launched coin's. Nothing opens for a launch that returned no coin.
+    func testDoneOpensTheNewCoinsPage() async throws {
+        let token = "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5"
+        StellarLaunchDetailView.justLaunched = []
+        defer { StellarLaunchDetailView.justLaunched = [] }
+        XCTAssertEqual(StellarCreateLaunchView.destination(afterLaunching: token), .launch(token: token))
+        XCTAssertNil(StellarCreateLaunchView.destination(afterLaunching: nil))
+        XCTAssertNil(StellarCreateLaunchView.destination(afterLaunching: "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"), "only a contract")
+        let results = try decode([TxStatus].self, #"[{"hash": "ab", "status": "success", "returnValue": "\#(token)"}]"#)
+        XCTAssertEqual(StellarCreateLaunchView.launchedToken(results), token)
+
+        let router = Router()
+        router.stellarTab = .home
+        StellarCreateLaunchView.openLaunched(token, router: router)
+        XCTAssertEqual(StellarLaunchDetailView.justLaunched, [token], "its page waits for its row")
+        XCTAssertNil(router.pendingStellar, "not while Create's sheets are still closing")
+        for _ in 0..<40 where router.pendingStellar == nil { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(router.pendingStellar, .launch(token: token))
+        XCTAssertEqual(router.stellarTab, .launch)
+
+        let untouched = Router()
+        StellarCreateLaunchView.openLaunched(nil, router: untouched)
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertNil(untouched.pendingStellar)
+        XCTAssertEqual(StellarLaunchDetailView.justLaunched, [token])
+    }
+
+    /// Advanced's one footer says what launchpad v2 does: the creator tax on curve trades only, and after graduation the
+    /// launch's own split of what its locked pool earns, holders taking it all with sharing on.
+    func testAdvancedSaysWhatLaunchpadV2Does() throws {
+        let terms = try decode(StellarLaunchTermsV2.self, Self.terms())
+        let footer = liteTr(StellarCreateLaunchView.feeFooter(terms))
+        XCTAssertTrue(footer.contains("curve trades only"), footer)
+        XCTAssertTrue(footer.contains("Soroswap"), footer)
+        XCTAssertTrue(footer.contains(NumberStyle.basisPoints(5_000)), footer)
+        XCTAssertTrue(footer.contains("holders"), footer)
     }
 
     // MARK: - Source rules

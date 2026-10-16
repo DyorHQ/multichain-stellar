@@ -1,7 +1,7 @@
 // The Moment page, Publish and View in Freighter (docs/DESIGN-stellar-parity.md §8.11.2–8.11.6;
 // docs/DESIGN-stellar-contracts-v2.md §21): the publish review's terms guard, Freighter's contract and token id, the
-// collect ticket's limits and what it pulls, a v2 Moment's times and figures, the new Moment Publish opens, and the
-// references that open a Moment.
+// collect ticket's limits, what it pulls and what it gets, a v2 Moment's times, figures and stats, its Share, the day its
+// When shows, Publish's links, the new Moment Publish opens, and the references that open a Moment.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -122,6 +122,78 @@ final class StellarMomentsTests: XCTestCase {
         XCTAssertEqual(StellarMomentText.gross(status, quantity: 6), 53_333_334, "4 USDC to go at 75%: 5.3333334 USDC, rounded up")
         XCTAssertEqual(StellarMomentText.gross(status, quantity: 20), 53_333_334, "never more than the reserve needs")
         XCTAssertEqual(StellarMomentText.gross(try Self.status(reserve: "0"), quantity: 1), 10_000_000)
+    }
+
+    /// Monad's "You get": the editions the stepper's collect mints and the coins promised for them (gross × the Moment's
+    /// rate), following the stepper; the collect that completes the Moment mints only what its gross pays for.
+    func testYouGetFollowsTheStepper() throws {
+        // 1 USDC an edition, 10,000 coin units per USDC unit promised.
+        let status = try Self.status(reserve: "0", rate: ("10000", "1"))
+        let one = try XCTUnwrap(StellarMomentText.collectGets(status, quantity: 1))
+        XCTAssertEqual(one.editions, 1)
+        XCTAssertEqual(one.coins, "100000000000", "1 USDC (10,000,000 units) × 10,000")
+        let five = try XCTUnwrap(StellarMomentText.collectGets(status, quantity: 5))
+        XCTAssertEqual(five.editions, 5)
+        XCTAssertEqual(five.coins, "500000000000")
+        // 4 USDC to go at 75%: 6 asked, 5.3333334 USDC pulled, 6 editions minted.
+        let terminal = try XCTUnwrap(StellarMomentText.collectGets(try Self.status(reserve: "60000000", rate: ("3", "2")), quantity: 20))
+        XCTAssertEqual(terminal.editions, 6)
+        XCTAssertEqual(terminal.coins, "80000001", "53,333,334 × 3 / 2, rounded down")
+        XCTAssertNil(StellarMomentText.collectGets(try Self.status(reserve: "0", rate: ("1", "0")), quantity: 1), "no rate, no row")
+    }
+
+    /// The stats strip as Monad's: dollars, compact ("$1.00", "$25.93" for the FDV), never "25.9259259 USDC".
+    func testTheStatsAreDollarsAsOnMonad() throws {
+        XCTAssertEqual(StellarMomentText.perEdition("10000000"), PriceFormat.usdValue(1, fractionDigits: 2...4))
+        XCTAssertEqual(StellarMomentText.perEdition("259259259"), PriceFormat.usdValue(25.9259, fractionDigits: 2...4))
+        XCTAssertFalse(StellarMomentText.perEdition("259259259").contains("USDC"))
+        XCTAssertEqual(StellarMomentText.fdv(20_000_000_000), MomentsFormat.fdv(2_000))
+        XCTAssertEqual(StellarMomentText.perEdition("n/a"), "—")
+    }
+
+    /// Share sends the Moment's title and ticker with its NFT contract's page on StellarExpert, the build's own network:
+    /// never a local stack's address.
+    func testShareSendsTheTitleTickerAndTheContractsPage() throws {
+        let link = try XCTUnwrap(StellarMomentText.shareLink(nft: Self.nft))
+        XCTAssertEqual(link, StellarAccountID(Self.nft)?.explorerURL())
+        XCTAssertEqual(link.scheme, "https")
+        XCTAssertTrue(link.absoluteString.contains(Self.nft))
+        XCTAssertFalse(["127.0.0.1", "localhost"].contains(link.host() ?? ""))
+        XCTAssertEqual(StellarMomentText.shareMessage(title: "Harbour at dusk", symbol: "DUSK"), "Harbour at dusk ($DUSK)")
+        XCTAssertEqual(StellarMomentText.shareMessage(title: "Harbour at dusk", symbol: nil), "Harbour at dusk")
+        XCTAssertNil(StellarMomentText.shareLink(nft: "not-an-address"))
+    }
+
+    /// When is a day and a time: the page shows its day, Monad's way, where it is read; a day alone is that day anywhere.
+    func testWhenIsShownAsItsDay() throws {
+        var style = Date.FormatStyle(date: .long, time: .omitted).locale(L10n.locale)
+        let tokyo = try XCTUnwrap(TimeZone(identifier: "Asia/Tokyo"))
+        style.timeZone = tokyo
+        let taken = "2026-10-14T18:30:00-05:00" // 23:30 UTC: the 15th in Tokyo
+        XCTAssertEqual(StellarMomentText.day(taken, timeZone: tokyo), try XCTUnwrap(StellarFormat.date(taken)).formatted(style))
+        style.timeZone = TimeZone(identifier: "UTC")!
+        XCTAssertEqual(StellarMomentText.day("2026-10-14", timeZone: tokyo), Date(timeIntervalSince1970: 1_791_936_000).formatted(style))
+        XCTAssertNil(StellarMomentText.day("2026-10-14T18:30", timeZone: tokyo))
+    }
+
+    /// Publish's links: an ipfs:// CID through the app's gateways, an https link as it is, nothing else; a fetched video
+    /// is an MP4 or QuickTime movie by its bytes.
+    func testPublishLinksAreFetchedOnlyFromWhatTheyName() throws {
+        let cid = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+        XCTAssertEqual(StellarMediaLink.sources("ipfs://\(cid)"), MomentsMath.ipfsGateways.compactMap { URL(string: $0 + cid) })
+        XCTAssertEqual(StellarMediaLink.sources(" https://example.com/dusk.jpg "), [URL(string: "https://example.com/dusk.jpg")!])
+        for refused in ["http://example.com/dusk.jpg", "ipfs://not-a-cid", "ftp://example.com/a.jpg", "https://user:pw@example.com/a.jpg", "dusk.jpg",
+                        "https://example.com/" + String(repeating: "a", count: 2_100)] {
+            XCTAssertNil(StellarMediaLink.sources(refused), refused)
+        }
+        let mp4 = Data([0, 0, 0, 0x18] + Array("ftypisom".utf8) + [0, 0, 2, 0])
+        let mov = Data([0, 0, 0, 0x14] + Array("ftypqt  ".utf8) + [0, 0, 2, 0])
+        XCTAssertEqual(StellarMediaLink.videoType(mp4), "video/mp4")
+        XCTAssertEqual(StellarMediaLink.videoType(mov), "video/quicktime")
+        XCTAssertNil(StellarMediaLink.videoType(Data("<!doctype html><html>".utf8)))
+        XCTAssertNil(StellarMediaLink.videoType(Data([0xFF, 0xD8, 0xFF])))
+        XCTAssertEqual(StellarMediaLink.problem(RemoteMedia.Failure.notAnImage, video: false), liteTr(LocalizedStringResource("That link isn't an image DyorHQ can use.", table: "StellarMoments")))
+        XCTAssertEqual(StellarMediaLink.problem(StellarMediaLink.Failure.notAVideo, video: true), liteTr(LocalizedStringResource("That link isn't an MP4 or MOV video.", table: "StellarMoments")))
     }
 
     func testAMomentsFigures() throws {
@@ -294,14 +366,14 @@ final class StellarMomentsTests: XCTestCase {
     """
 
     static func status(reserve: String, state: String = "collecting", completedAt: String? = nil, expiresAt: String? = nil,
-                       backstopAt: String? = nil) throws -> StellarMomentStatusV2 {
+                       backstopAt: String? = nil, rate: (num: String, den: String) = ("1", "1")) throws -> StellarMomentStatusV2 {
         let quoted = { (text: String?) in text.map { "\"\($0)\"" } ?? "null" }
         let json = """
         {"generation":2,"nft":"\(nft)","creator":"GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
          "coin":"CAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCRUA6","pool":null,"state":"\(state)","price":"10000000",
          "threshold":"100000000","reserve":"\(reserve)","totalGross":"0","progress":0,"collects":0,"editions":0,"entitlements":"0",
          "creatorAllocBps":1000,"creatorBps":2000,"platformBps":500,"reserveBps":7500,"expiryCreatorBps":7000,"royaltyBps":500,
-         "rate":{"num":"1","den":"1"},"publishedAt":"2026-10-13T11:00:00.000Z","deadline":"2026-10-15T11:00:00.000Z",
+         "rate":{"num":"\(rate.num)","den":"\(rate.den)"},"publishedAt":"2026-10-13T11:00:00.000Z","deadline":"2026-10-15T11:00:00.000Z",
          "completedAt":\(quoted(completedAt)),"stuckSince":null,"graduatedAt":null,"endedAt":null,"expiresAt":\(quoted(expiresAt)),
          "expiresBy":null,"backstopAt":\(quoted(backstopAt)),"failureExpiresAt":null,"expirable":false,"graduatable":false,"failure":null,
          "proceeds":{"creator":"0","platform":"0","treasury":"0"}}

@@ -1,7 +1,8 @@
 // The Moments board and My Moments (docs/DESIGN-stellar-parity.md §8.11.1, §8.11.5; docs/DESIGN-stellar-contracts-v2.md
-// §21): the filter at the window and completion boundaries, the retired v1 Moments under it at their sold-out and window
-// boundaries, no untitled card, art only from DyorHQ's media, the progress a card shows, and My Moments' totals as GET
-// /v1/moments/mine and GET /v1/moments/v2/mine state them, its coins and Claim All.
+// §21): Monad's filters (All, Collecting, Graduated) at the window and completion boundaries, the retired v1 Moments
+// under All only at their sold-out and window boundaries, no untitled card, art only from DyorHQ's media, the progress a
+// card shows, and My Moments' totals as GET /v1/moments/mine and GET /v1/moments/v2/mine state them, its coins and
+// Claim All.
 @testable import DyorHQ
 import BigInt
 import DyorKit
@@ -13,29 +14,38 @@ import XCTest
 final class StellarMomentsBoardTests: XCTestCase {
     // MARK: - The filter (§8.11.1)
 
+    /// Monad's filters, with Monad's words: All, Collecting and Graduated.
+    func testTheFiltersAreMonads() {
+        XCTAssertEqual(StellarMomentFilter.allCases, [.all, .collecting, .graduated])
+    }
+
     /// A v2 Moment collects until its deadline: at the last second before it, it is under Collecting; at the deadline it
-    /// moves to Closed, as the Moment page's phase does (`StellarMomentPhaseV2`).
+    /// leaves Collecting, as the Moment page's phase does (`StellarMomentPhaseV2`), and stays under All. Its window closing
+    /// doesn't make it Graduated.
     func testTheFilterFollowsTheWindowToTheSecond() throws {
         let row = try Self.row(state: "collecting", deadline: Self.deadline)
         let status = try Self.status(state: "collecting")
         let before = Self.deadlineDate.addingTimeInterval(-1)
         for (now, collecting) in [(before, true), (Self.deadlineDate, false), (Self.deadlineDate.addingTimeInterval(60), false)] {
             XCTAssertEqual(StellarMomentFilter.collecting.shows(row, at: now), collecting, "\(now)")
-            XCTAssertEqual(StellarMomentFilter.closed.shows(row, at: now), !collecting, "\(now)")
+            XCTAssertFalse(StellarMomentFilter.graduated.shows(row, at: now), "\(now)")
             XCTAssertTrue(StellarMomentFilter.all.shows(row, at: now))
             XCTAssertEqual(StellarMomentPhaseV2(status, now: now).isCollecting, collecting, "the page agrees at \(now)")
             XCTAssertEqual(StellarMomentRowPhase(row, at: now), collecting ? .collecting : .windowClosed)
         }
     }
 
-    /// The collect that completes a Moment (v2's sold-out: no edition cap, a threshold) closes it at once, its window
-    /// still open: graduation pending, graduated and expired Moments are all Closed.
-    func testACompletedMomentIsClosedBeforeItsDeadline() throws {
+    /// Graduated is the Moments whose coin graduated, as on Monad. The collect that completes a Moment ends its collecting
+    /// at once, its window still open; one waiting to graduate, or expired, is neither collecting nor graduated, and
+    /// shows under All only.
+    func testGraduatedIsTheMomentsWhoseCoinGraduated() throws {
         let early = Self.deadlineDate.addingTimeInterval(-86_400)
-        for state in ["graduation_pending", "graduated", "expired"] {
+        for (state, graduated) in [("graduation_pending", false), ("graduated", true), ("expired", false)] {
             let row = try Self.row(state: state, deadline: Self.deadline)
             XCTAssertFalse(StellarMomentFilter.collecting.shows(row, at: early), state)
-            XCTAssertTrue(StellarMomentFilter.closed.shows(row, at: early), state)
+            XCTAssertEqual(StellarMomentFilter.graduated.shows(row, at: early), graduated, state)
+            XCTAssertEqual(StellarMomentFilter.graduated.shows(row, at: Self.deadlineDate.addingTimeInterval(86_400)), graduated, "after the window: \(state)")
+            XCTAssertTrue(StellarMomentFilter.all.shows(row, at: early), state)
             XCTAssertFalse(StellarMomentPhaseV2(try Self.status(state: state), now: early).isCollecting, "the page agrees for \(state)")
         }
         XCTAssertEqual(StellarMomentRowPhase(try Self.row(state: "graduation_pending", deadline: Self.deadline), at: early), .graduating)
@@ -43,9 +53,9 @@ final class StellarMomentsBoardTests: XCTestCase {
         XCTAssertEqual(StellarMomentRowPhase(try Self.row(state: "expired", deadline: Self.deadline), at: early), .expired)
     }
 
-    /// A retired v1 Moment is never collected here: whatever `StellarMomentState` says at its sold-out and window
-    /// boundaries, it is under All and Closed, never Collecting.
-    func testARetiredMomentIsClosedAtEveryBoundary() throws {
+    /// A retired v1 Moment is never collected here and has no coin: whatever `StellarMomentState` says at its sold-out and
+    /// window boundaries, it is under All only.
+    func testARetiredMomentIsUnderAllOnly() throws {
         let before = Self.deadlineDate.addingTimeInterval(-1)
         let cases: [(maxEditions: Int, minted: Int, now: Date, state: StellarMomentState)] = [
             (10, 9, before, .collecting),
@@ -58,7 +68,7 @@ final class StellarMomentsBoardTests: XCTestCase {
             let moment = try Self.retired(maxEditions: c.maxEditions, minted: c.minted)
             XCTAssertEqual(StellarMomentState(moment, now: c.now), c.state, "\(c)")
             XCTAssertFalse(StellarMomentFilter.collecting.shows(retired: moment), "\(c)")
-            XCTAssertTrue(StellarMomentFilter.closed.shows(retired: moment), "\(c)")
+            XCTAssertFalse(StellarMomentFilter.graduated.shows(retired: moment), "\(c)")
             XCTAssertTrue(StellarMomentFilter.all.shows(retired: moment), "\(c)")
         }
     }

@@ -288,18 +288,19 @@ struct StellarRetiredMomentNumber: Identifiable, Hashable {
     let id: Int
 }
 
-/// The board's filter: every Moment, the ones taking collects now, and the rest. A retired v1 Moment is never collected
-/// here, so it is closed whatever its own window says.
+/// The board's filter, as Monad's: every Moment, the ones taking collects now, and the ones whose coin graduated. A Moment
+/// that is neither (its window closed, waiting to graduate, expired) shows under All only, and so does a retired v1
+/// Moment, which is never collected here and has no coin.
 enum StellarMomentFilter: String, CaseIterable, Identifiable {
-    case all, collecting, closed
+    case all, collecting, graduated
     var id: String { rawValue }
 
-    /// The segment's name, written out (never the raw value) so it is translated.
+    /// The segment's name, written out (never the raw value) so it is translated: Monad's own words.
     var label: Text {
         switch self {
         case .all: Text(verbatim: tr(LocalizedStringResource("momentFilter.all", defaultValue: "All")))
         case .collecting: Text("Collecting")
-        case .closed: Text("Closed", tableName: "StellarMomentsBoard", comment: "[tight] Moments filter on Stellar: the Moments no longer taking collects (window closed, graduating, graduated, expired)")
+        case .graduated: Text(verbatim: tr(LocalizedStringResource("momentFilter.graduated", defaultValue: "Graduated")))
         }
     }
 
@@ -308,18 +309,18 @@ enum StellarMomentFilter: String, CaseIterable, Identifiable {
         switch self {
         case .all: true
         case .collecting: Self.isCollecting(row, at: now)
-        case .closed: !Self.isCollecting(row, at: now)
+        case .graduated: row.state == "graduated"
         }
     }
 
-    /// Whether the retired v1 Moment `moment` belongs under this filter: under All and Closed only.
+    /// Whether the retired v1 Moment `moment` belongs under this filter: under All only.
     func shows(retired moment: StellarMoment) -> Bool {
-        self != .collecting
+        self == .all
     }
 
     /// A v2 Moment takes collects until its deadline, while its state is collecting: the API's own `collecting` filter
-    /// and the Moment page's phase (`StellarMomentPhaseV2`). Its window closing, or the collect that completes it, moves
-    /// it to Closed at that instant. The indexer's `open` only when the deadline can't be read.
+    /// and the Moment page's phase (`StellarMomentPhaseV2`). Its window closing, or the collect that completes it, takes
+    /// it out of Collecting at that instant. The indexer's `open` only when the deadline can't be read.
     static func isCollecting(_ row: StellarMomentRowV2, at now: Date) -> Bool {
         guard row.state == "collecting" else { return false }
         guard let deadline = StellarFormat.date(row.deadline) else { return row.open }
