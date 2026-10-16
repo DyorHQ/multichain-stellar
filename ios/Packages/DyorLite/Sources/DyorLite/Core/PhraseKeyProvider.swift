@@ -45,7 +45,7 @@ final class PhraseSigningRun: LiteSigningRun {
         self.phrase = phrase
     }
 
-    func signer(reason: String) async throws -> StellarSigner {
+    func signer(reason: String) async throws -> any StellarHashSigner {
         try ended.check()
         let signer = try StellarDerivation.sep5(mnemonic: try await phrase(reason))
         // A run that ended during the ceremony signs nothing more.
@@ -116,7 +116,7 @@ final class SeedSigningRun: LiteSigningRun {
         self.seed = seed
     }
 
-    func signer(reason: String) async throws -> StellarSigner {
+    func signer(reason: String) async throws -> any StellarHashSigner {
         try ended.check()
         return try Self.signer(seed: seed, address: address)
     }

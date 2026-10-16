@@ -146,6 +146,9 @@ public final class LiteSession {
     private(set) var keys: LiteKeyProvider?
     /// A passkey account's one setup ceremony (the host's).
     @ObservationIgnored private let setupKey: (@Sendable (String) async throws -> UnlockResult)?
+    /// A Privy account's key provider, found the first time (the host's): its Stellar wallet is looked up, or made, with
+    /// no prompt, and checked by the host before it is given.
+    @ObservationIgnored private let resolveKeys: (@Sendable () async throws -> LiteKeyProvider)?
     @ObservationIgnored let backend: LiteBackend
     @ObservationIgnored let vault: LiteSessionVault
     @ObservationIgnored let defaults: UserDefaults
@@ -195,9 +198,14 @@ public final class LiteSession {
     ///     this address, which signs the sign-in and the account's setup and is then dropped. `reason` is in the current
     ///     language. Throw a `Failure` to say exactly what went wrong (`.keyNotOnDevice`, `.cancelled`);
     ///     `KeyError.badMnemonic` reads as another account's key, and passkey cancellations as `.cancelled`.
+    ///   - resolveKeys: a Privy account's provider, the first time, when the host has none yet (`keys` nil): its
+    ///     Stellar wallet looked up through the Lite API (`/v1/privy/wallet`) and checked by the host, with no prompt.
+    ///     Asked only where the server serves Privy wallets (`LiteConfig.privyWallets`); the run then goes on as a seed
+    ///     account's.
     public convenience init(env: LiteEnvironment, stellarAddress: String?, monad: LiteMonadBridge?, keys: LiteKeyProvider?,
-                            setupKey: (@Sendable (_ reason: String) async throws -> UnlockResult)? = nil) {
-        self.init(env: env, stellarAddress: stellarAddress, monad: monad, keys: keys, setupKey: setupKey,
+                            setupKey: (@Sendable (_ reason: String) async throws -> UnlockResult)? = nil,
+                            resolveKeys: (@Sendable () async throws -> LiteKeyProvider)? = nil) {
+        self.init(env: env, stellarAddress: stellarAddress, monad: monad, keys: keys, setupKey: setupKey, resolveKeys: resolveKeys,
                   backend: LiveBackend(api: LiteAPI(baseURL: env.apiURL, network: env.pinned.network.name), pinned: env.pinned),
                   vault: KeychainSessionVault(), defaults: .standard)
     }
@@ -211,11 +219,13 @@ public final class LiteSession {
     }
 
     init(env: LiteEnvironment, stellarAddress: String?, monad: LiteMonadBridge?, keys: LiteKeyProvider?,
-         setupKey: (@Sendable (String) async throws -> UnlockResult)?, backend: LiteBackend, vault: LiteSessionVault, defaults: UserDefaults) {
+         setupKey: (@Sendable (String) async throws -> UnlockResult)?, resolveKeys: (@Sendable () async throws -> LiteKeyProvider)? = nil,
+         backend: LiteBackend, vault: LiteSessionVault, defaults: UserDefaults) {
         self.env = env
         self.monad = monad
         self.keys = keys
         self.setupKey = setupKey
+        self.resolveKeys = resolveKeys
         address = stellarAddress ?? keys?.address
         self.backend = backend
         self.vault = vault
@@ -444,6 +454,7 @@ public final class LiteSession {
         case .run:
             steps = rows(for: plan())
             guard await check(gen) else { return }
+            guard await resolveKeysIfNeeded(gen) else { return }
             // A session an earlier launch saved (a setup that stopped after its sign-in) spares a second sign-in.
             if expiry == nil { await restoreSaved() }
             guard gen == generation else { return }
@@ -467,6 +478,7 @@ public final class LiteSession {
             }
         case .join(let code):
             if config == nil { guard await check(gen) else { return } }
+            guard await resolveKeysIfNeeded(gen) else { return }
             if signsInSilently {
                 guard await signInStep(invite: code, gen) else { return }
                 await readAccount(gen)
@@ -475,6 +487,7 @@ public final class LiteSession {
             }
         case .setUp(let code):
             if config == nil { guard await check(gen) else { return } }
+            guard await resolveKeysIfNeeded(gen) else { return }
             if signsInSilently || hasSession {
                 await seedSetUp(gen)
             } else {
@@ -522,6 +535,39 @@ public final class LiteSession {
         if setupFee == nil || setupFee?.steps.contains(where: \.built) == false {
             setupFee = Self.setupEstimate(fees: fees, pinned: env.pinned)
         }
+    }
+
+    /// A Privy account's first run: its provider, from the host's `resolveKeys` (the wallet looked up and checked, no
+    /// prompt), as the sign-in step's first part. From then on the run is a seed account's: a silent sign-in. Where the
+    /// server serves no Privy wallets the step fails with that, and nothing is asked. True when the run may go on.
+    private func resolveKeysIfNeeded(_ gen: Int) async -> Bool {
+        guard keys == nil, let resolveKeys else { return true }
+        replace(.invite, with: .signIn)
+        guard config?.privyWallets == true else {
+            fail(.signIn, Self.privyWalletsUnavailable)
+            return false
+        }
+        set(.signIn, .running)
+        do {
+            let provider = try await resolveKeys()
+            guard gen == generation else { return false }
+            guard address == nil || address == provider.address else { throw Failure.otherAccountsKey }
+            keys = provider
+            if address == nil {
+                address = provider.address
+                await api.setViewer(address: provider.address)
+            }
+            return gen == generation
+        } catch {
+            guard gen == generation else { return false }
+            fail(.signIn, Self.failure(for: error))
+            return false
+        }
+    }
+
+    /// The server serves no Privy wallets (now): said as the API's `privy_unavailable` is.
+    public nonisolated static var privyWalletsUnavailable: Failure {
+        .server(tr("Stellar isn't available for this sign-in right now. Try again later."))
     }
 
     /// A seed account's sign-in step: silent, with `invite` the first time where one is needed.
@@ -607,7 +653,7 @@ public final class LiteSession {
 
     /// Creates the account (Friendbot on testnet, DyorHQ's sponsor on mainnet) and runs the plan that enables USDC, at
     /// no more than the fee shown before the tap; then the account must read as set up.
-    private func activate(signer: @escaping @Sendable () async throws -> StellarSigner, _ gen: Int) async {
+    private func activate(signer: @escaping @Sendable () async throws -> any StellarHashSigner, _ gen: Int) async {
         guard let address else { return }
         set(.setUp, .running)
         isSending = true
@@ -1106,12 +1152,16 @@ public final class LiteSession {
                 case "bad_invite": return .inviteRejected
                 case "access_revoked": return .accessRevoked
                 case "rate_limited": return .rateLimited
+                // A Privy account's wallet and signatures (/v1/privy/*), in this build's words.
+                case "privy_unavailable", "privy_refused", "privy_bad_signature", "privy_token_invalid":
+                    return .server(LiteErrorText.describe(api))
                 default: return .server(message)
                 }
             case .notSignedIn, .decoding: return .server(LiteErrorText.describe(api))
             }
         }
         if error is CancellationError { return .cancelled }
+        if error is StellarSigningError { return .server(LiteErrorText.describe(error)) }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain { return .offline }
         if (ns.domain == "com.apple.LocalAuthentication" && [-2, -4, -9].contains(ns.code)) // userCancel, systemCancel, appCancel
@@ -1190,7 +1240,7 @@ final class CeremonySigningRun: LiteSigningRun {
         self.ceremony = ceremony
     }
 
-    func signer(reason: String) async throws -> StellarSigner {
+    func signer(reason: String) async throws -> any StellarHashSigner {
         try ended.check()
         return try await ceremony(reason).signer
     }
@@ -1208,7 +1258,7 @@ final class AccountSigningRun: LiteSigningRun {
         self.address = address
     }
 
-    func signer(reason: String) async throws -> StellarSigner {
+    func signer(reason: String) async throws -> any StellarHashSigner {
         let signer = try await run.signer(reason: reason)
         guard signer.address == address else { throw KeyError.badMnemonic }
         return signer
@@ -1226,7 +1276,7 @@ protocol LiteBackend: Sendable {
     var api: LiteAPI { get }
     /// Verifies, signs and sends a plan's steps for `user`, within `limits` and the `fees` the user confirmed.
     func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
-             signer: @Sendable () async throws -> StellarSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus]
+             signer: @Sendable () async throws -> any StellarHashSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus]
 }
 
 struct LiveBackend: LiteBackend {
@@ -1235,7 +1285,7 @@ struct LiveBackend: LiteBackend {
 
     /// `PlanRunner` with launch tokens checked on the build's pinned RPC (§5.5), never the one the server names.
     func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
-             signer: @Sendable () async throws -> StellarSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
+             signer: @Sendable () async throws -> any StellarHashSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
         let runner = PlanRunner(api: api, user: user, pinned: pinned, inspector: ContractInspector(pinned: pinned))
         return try await runner.run(plan, limits: limits, fees: fees, signer: signer, onEvent: onEvent)
     }

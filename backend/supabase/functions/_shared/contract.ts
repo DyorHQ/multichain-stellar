@@ -195,7 +195,13 @@ export type ErrorCode =
   | "not_available"
   | "insufficient_xlm"
   | "bad_venue"
-  | "terms_unpinned";
+  | "terms_unpinned"
+  // added: Stellar wallets for Privy sign-ins (lite/routes/privy.ts): the feature off or Privy unreachable, a Privy token
+  // that doesn't verify, an authorization Privy refused, a signature that doesn't verify for the wallet
+  | "privy_unavailable"
+  | "privy_token_invalid"
+  | "privy_refused"
+  | "privy_bad_signature";
 
 /** A contract's own refusal, named in `simulation_failed`'s detail. Stable across contract versions, and always
  *  `<area>.<reason>`: an ErrorCode never holds a dot, so the two can't be confused. */
@@ -288,6 +294,42 @@ export interface SignoutRequest {
   refreshToken: string;
 }
 
+// ------------------------------------------------------------------------------------------------ Privy wallets (public)
+
+/** POST /v1/privy/wallet: an account that signs in with Privy (Apple, Google, an email code, a Privy passkey) asks for
+ *  its Stellar wallet, which Privy holds and the user owns. Made once, the first time. */
+export interface PrivyWalletRequest {
+  /** A token Privy issued to the user for DyorHQ's app (the identity token; ES256, issuer privy.io). */
+  privyToken: string;
+}
+
+export interface PrivyWallet {
+  /** Privy's id of the wallet: the phone puts it in the raw_sign request it authorizes. */
+  walletId: string;
+  /** The account's Stellar address. The phone checks it against what Privy itself says before keeping it. */
+  address: AccountAddress;
+}
+
+/** POST /v1/privy/sign: relays Privy's raw_sign of `hash` by the wallet, for a request the phone authorized with the
+ *  user's own Privy key: `{version: 1, method: "POST", url: "https://api.privy.io/v1/wallets/<walletId>/raw_sign",
+ *  body: {params: {hash}}, headers: {"privy-app-id": <app id>, "privy-request-expiry": "<expiresAt>"}}`. 404 for a
+ *  wallet DyorHQ didn't make, 403 `privy_refused` when Privy refuses the authorization. */
+export interface PrivySignRequest {
+  walletId: string;
+  /** 0x and 64 lowercase hex: a transaction's hash or a SEP-53 digest the phone computed. */
+  hash: string;
+  /** Milliseconds; the request's privy-request-expiry, at most 5 minutes ahead. */
+  expiresAt: number;
+  /** The privy-authorization-signature the phone made (base64 DER). */
+  authorization: string;
+}
+
+export interface PrivySignature {
+  /** 0x and 128 hex: the Ed25519 signature of `hash`, checked against the wallet's address here. The phone checks it
+   *  again before using it. */
+  signature: string;
+}
+
 /** Which answer a viewer route gave: the token's own account, or the public view of `?address=` (no token). */
 export type View = "owner" | "public";
 
@@ -375,6 +417,8 @@ export interface LiteConfig {
   pricing?: Pricing;
   /** Added: whether a first sign-in needs an invite code: false on testnet, true on mainnet. */
   inviteRequired?: boolean;
+  /** Added: whether accounts that sign in with Privy can have a Stellar wallet (/v1/privy/*). */
+  privyWallets?: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------ fees (public)
@@ -1427,6 +1471,8 @@ export interface Routes {
   "POST /v1/auth/refresh": { auth: "public"; body: RefreshRequest; response: AuthResult };
   /** 204, no body. */
   "POST /v1/auth/signout": { auth: "public"; body: SignoutRequest; response: void };
+  "POST /v1/privy/wallet": { auth: "public"; body: PrivyWalletRequest; response: PrivyWallet };
+  "POST /v1/privy/sign": { auth: "public"; body: PrivySignRequest; response: PrivySignature };
   "GET /v1/config": { auth: "public"; response: LiteConfig };
   "GET /v1/fees": { auth: "public"; response: Fees };
   "GET /v1/markets": { auth: "public"; response: Markets };
@@ -1529,6 +1575,8 @@ export type PublicClassIsExact = Holds<
     | "POST /v1/auth/verify"
     | "POST /v1/auth/refresh"
     | "POST /v1/auth/signout"
+    | "POST /v1/privy/wallet"
+    | "POST /v1/privy/sign"
     | "GET /v1/config"
     | "GET /v1/fees"
     | "GET /v1/markets"

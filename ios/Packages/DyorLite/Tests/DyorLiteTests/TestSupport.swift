@@ -176,6 +176,8 @@ final class FakeLite: @unchecked Sendable {
         var plan: String?
         /// Whether the account has had Friendbot's test XLM (`firstFunding.faucet.claimed`); nil: no add-funds card.
         var claimed: Bool?
+        /// Whether this server serves Stellar wallets for Privy sign-ins (`LiteConfig.privyWallets`).
+        var privyWallets = true
     }
 
     func update(_ change: (inout State) -> Void) { lock.withLock { change(&state) } }
@@ -218,7 +220,7 @@ final class FakeLite: @unchecked Sendable {
         if let pause = s.slow[r.path] { Thread.sleep(forTimeInterval: pause) }
         if s.offline.contains(r.path) { return (0, Data()) }
         switch (r.method, r.path) {
-        case ("GET", "/v1/config"): return (200, Self.config(enabled: s.enabled, minBuild: s.minBuild, sponsor: s.sponsor))
+        case ("GET", "/v1/config"): return (200, Self.config(enabled: s.enabled, minBuild: s.minBuild, sponsor: s.sponsor, privyWallets: s.privyWallets))
         case ("GET", "/v1/fees"): return (200, Self.fees)
         case ("POST", "/v1/auth/challenge"):
             let address = r.json["address"] ?? ""
@@ -325,7 +327,7 @@ final class FakeLite: @unchecked Sendable {
         try! JSONSerialization.data(withJSONObject: ["error": ["code": code, "message": message]])
     }
 
-    static func config(enabled: Bool = true, minBuild: Int = 1, sponsor: String = PinnedContracts.testnet.sponsor) -> Data {
+    static func config(enabled: Bool = true, minBuild: Int = 1, sponsor: String = PinnedContracts.testnet.sponsor, privyWallets: Bool = true) -> Data {
         Data("""
         {"network":"testnet","passphrase":"Test SDF Network ; September 2015","rpcUrl":"http://127.0.0.1:9/rpc",
          "horizonUrl":"http://127.0.0.1:9/horizon","activation":"friendbot","sponsor":"\(sponsor)",
@@ -333,7 +335,7 @@ final class FakeLite: @unchecked Sendable {
                    {"id":"USDC","code":"USDC","name":"USD Coin","decimals":7,"contract":"CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA","classic":"USDC:G","note":null}],
          "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},
          "bridge":{"routes":[],"monad":null},"flags":{"enabled":\(enabled)},"minBuild":\(minBuild),"inviteRequired":false,
-         "faucet":{"amount":"10000"}}
+         "faucet":{"amount":"10000"},"privyWallets":\(privyWallets)}
         """.utf8)
     }
 
@@ -404,7 +406,7 @@ final class TestBackend: LiteBackend, @unchecked Sendable {
     var lastFees: PlanFees? { lock.withLock { fees } }
 
     func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
-             signer: @Sendable () async throws -> StellarSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
+             signer: @Sendable () async throws -> any StellarHashSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
         lock.withLock {
             runPlans.append(plan.planId)
             self.fees = fees

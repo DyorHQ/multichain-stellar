@@ -11,6 +11,8 @@ public enum LiteErrorText {
         switch error {
         case let api as LiteAPIError: return describe(api)
         case let runner as PlanRunner.Failure: return describe(runner)
+        // A signature from a key held elsewhere (Privy) that doesn't verify for the account: never attached.
+        case is StellarSigningError: return privySigningFailed
         default: return LiteSession.failure(for: error).errorDescription ?? error.localizedDescription
         }
     }
@@ -78,6 +80,9 @@ public enum LiteErrorText {
         case "bad_invite": return LiteSession.Failure.inviteRejected.errorDescription ?? message
         case "not_invited": return tr("Enter your invite code to continue.")
         case "unauthorized", "refresh_invalid", "refresh_reused": return tr("Sign in on Stellar to continue.")
+        case "privy_unavailable": return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case "privy_refused", "privy_bad_signature": return privySigningFailed
+        case "privy_token_invalid": return tr("Sign in to DyorHQ again to use Stellar.")
         default: return message
         }
     }
@@ -122,6 +127,7 @@ public enum LiteErrorText {
     }
 
     private static var notEnoughForFee: String { tr("Not enough XLM for the network fee.") }
+    private static var privySigningFailed: String { tr("Couldn't sign with your Privy wallet. Nothing was sent.") }
     private static var notEnoughForReserve: String { tr("Not enough XLM for Stellar's minimum balance.") }
 
     /// "Not enough XLM. 1.5 XLM stays in your account." when the refusal says what stays.

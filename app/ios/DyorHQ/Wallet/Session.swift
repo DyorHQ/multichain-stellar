@@ -639,6 +639,37 @@ final class Session {
         state = .signedOut
     }
 
+    #if STELLAR_LITE
+    /// The Privy SDK's authorization signature of one Privy API request (`version` 1, `url`, `method`, the `privy-*`
+    /// `headers` and the `body`), made on this iPhone with the signed-in user's own Privy key. A Privy account's Stellar
+    /// wallet signs only requests this authorized (`DyorHQLiteKeys`): the Lite API relays them and can't change them.
+    func privyAuthorizationSignature<Body: Encodable & Sendable>(url: String, method: String, headers: [String: String],
+                                                                 body: Body) async throws -> String {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { throw SessionError.authenticationRequired }
+        return try await user.generateAuthorizationSignature(payload: WalletApiPayload(version: 1, url: url, method: method,
+                                                                                       headers: headers, body: body))
+    }
+
+    /// The signed-in Privy user's identity token, as the SDK has it from Privy (signed by Privy; it lists the user's
+    /// linked accounts, wallets included); `refresh` asks Privy for the user again first, so a wallet made a moment ago is
+    /// in it. Nil without a Privy user, or when the Privy app doesn't issue identity tokens.
+    func privyIdentityToken(refresh: Bool) async throws -> String? {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        guard refresh else { return user.identityToken }
+        try await user.refresh()
+        guard case .authenticated(let fresh) = await privy.getAuthState() else { return nil }
+        return fresh.identityToken
+    }
+    #endif
+
+    #if STELLAR_LITE && DEBUG
+    /// Prototype only (`PrivyStellarProbe`): the signed-in Privy user.
+    func privyUserForProbe() async -> (any PrivyUser)? {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        return user
+    }
+    #endif
+
     /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
     /// server function uses it to prove the caller owns the Privy account it is asked to delete. `fresh` renews the
     /// Privy session first: delete-account takes only a token issued in the last 15 minutes.

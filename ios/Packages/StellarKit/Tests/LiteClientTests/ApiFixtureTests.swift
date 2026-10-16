@@ -81,6 +81,8 @@ final class ApiFixtureTests: XCTestCase {
         "holdings.partial": (roundTrip(StellarHoldings.self), []),
         "holdings.public": (roundTrip(StellarHoldings.self), []),
         "portfolio": (roundTrip(StellarPortfolio.self), []),
+        "privy-wallet": (roundTrip(PrivyWallet.self), []),
+        "privy-sign": (roundTrip(PrivySignature.self), []),
         "launches": (roundTrip(StellarLaunchBoard.self), []),
         "launches.legacy": (roundTrip(StellarLaunchBoard.self), []),
         "launch": (roundTrip(StellarLaunchDetail.self), []),

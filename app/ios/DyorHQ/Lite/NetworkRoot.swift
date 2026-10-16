@@ -67,6 +67,7 @@ struct NetworkRoot: View {
         // The app's language reaches the Stellar screens at once, as it reaches the app's (`LanguageStore`).
         .onChange(of: env.language.locale, initial: true) { _, locale in LiteL10n.locale = locale }
         .task { await StellarRemoteFlag.shared.check(client: env.social.client) }
+        .task { await PrivyWalletsFlag.shared.check() }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             // Away: the session's renewal timer stops, and a passkey account's setup run ends with its signer ("Not
@@ -77,6 +78,7 @@ struct NetworkRoot: View {
             case .active:
                 stellarSession?.appDidBecomeActive()
                 Task { await StellarRemoteFlag.shared.check(client: env.social.client) }
+                Task { await PrivyWalletsFlag.shared.check() }
             default: break
             }
         }
@@ -137,11 +139,17 @@ struct NetworkRoot: View {
         if session.account?.method == .meraPasskey {
             setupKey = { [session] reason in try await DyorHQLiteKeys.setupKey(session: session, evm: owner, reason: reason) }
         }
+        // Privy accounts only: their Stellar wallet is found, or made, and checked at the first switch, with no prompt.
+        var resolveKeys: (@Sendable () async throws -> LiteKeyProvider)?
+        if let method = session.account?.method, DyorHQLiteKeys.isPrivy(method) {
+            resolveKeys = { [session, settings] in try await DyorHQLiteKeys.resolvePrivy(session: session, settings: settings, evm: owner) }
+        }
         let lite = LiteSession(env: LiteGate.environment,
                                stellarAddress: DyorHQLiteKeys.stellarAddress(for: owner),
                                monad: MonadBridgeAdapter(session: session),
                                keys: DyorHQLiteKeys.provider(session: session, settings: settings),
-                               setupKey: setupKey)
+                               setupKey: setupKey,
+                               resolveKeys: resolveKeys)
         StellarActivityRecorder.install(on: lite, owner: owner)
         lite.onSignOut = { [router, weak lite] _ in
             StellarSaved.shared.forget(owner)

@@ -88,13 +88,13 @@ public struct PlanRunner: Sendable {
     /// the user confirmed spending across the whole plan, per asset contract id (base units). An asset not listed may
     /// not be spent at all. `fees`: the network fees the user confirmed, per step (`PlanFees(plan:pinned:)`, worked
     /// out when the review opened); a step whose fee comes out higher, or that the user confirmed as paid by DyorHQ
-    /// and no longer is, is refused. `signer` is asked once per step (it may prompt Face ID or a passkey).
+    /// and no longer is, is refused. `signer` is asked once per step (it may prompt Face ID or a passkey, or ask Privy).
     @discardableResult
     public func run(
         _ plan: PlanView,
         limits: [String: Int64],
         fees: PlanFees,
-        signer: @Sendable () async throws -> StellarSigner,
+        signer: @Sendable () async throws -> any StellarHashSigner,
         onEvent: @Sendable (Event) -> Void = { _ in }
     ) async throws -> [TxStatus] {
         var spent: [String: Int64] = [:]
@@ -143,7 +143,8 @@ public struct PlanRunner: Sendable {
             onEvent(.signing(stepId: step.id, label: step.label))
             let key = try await signer()
             guard key.address == user else { throw Failure.refused(step: step.label, reason: "wrong signing key") }
-            try envelope.sign(with: key, network: pinned.network)
+            // A key held elsewhere (Privy) signs over the network: its signature is attached only once it verifies.
+            try await envelope.sign(using: key, network: pinned.network)
             let sent = try await api.submit(planId: plan.planId, stepId: step.id, signedXdr: envelope.base64())
             onEvent(.submitted(stepId: step.id, hash: sent.hash))
             let settled = try await waitFor(sent.hash, step: step.label)
@@ -159,7 +160,7 @@ public struct PlanRunner: Sendable {
     public func run(
         _ plan: PlanView,
         limits: [String: Int64],
-        signer: @Sendable () async throws -> StellarSigner,
+        signer: @Sendable () async throws -> any StellarHashSigner,
         onEvent: @Sendable (Event) -> Void = { _ in }
     ) async throws -> [TxStatus] {
         try await run(plan, limits: limits, fees: PlanFees(plan: plan, pinned: pinned), signer: signer, onEvent: onEvent)

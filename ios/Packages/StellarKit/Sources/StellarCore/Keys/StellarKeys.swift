@@ -32,8 +32,12 @@ public struct StellarSigner: Sendable {
 
     /// SEP-53 message signing: ed25519 over sha256("Stellar Signed Message:\n" + message), base64.
     public func signMessage(_ message: String) throws -> String {
-        let digest = Array(SHA256.hash(data: Data(("Stellar Signed Message:\n" + message).utf8)))
-        return Data(try sign(digest)).base64EncodedString()
+        Data(try sign(Self.sep53Digest(message))).base64EncodedString()
+    }
+
+    /// What a SEP-53 signature of `message` signs: sha256("Stellar Signed Message:\n" + message).
+    public static func sep53Digest(_ message: String) -> [UInt8] {
+        Array(SHA256.hash(data: Data(("Stellar Signed Message:\n" + message).utf8)))
     }
 
     public static func verify(address: String, message: [UInt8], signature: [UInt8]) -> Bool {

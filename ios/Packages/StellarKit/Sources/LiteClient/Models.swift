@@ -104,6 +104,9 @@ public struct LiteConfig: Codable, Equatable, Sendable {
     /// Whether a first sign-in needs an invite code: false on testnet, true on mainnet. Nil from older servers, which
     /// always ask for one.
     public let inviteRequired: Bool?
+    /// Whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) can have a Stellar
+    /// wallet here (`/v1/privy/*`). Nil from older servers: they can't.
+    public let privyWallets: Bool?
 
     public func asset(_ id: String) -> AssetInfo? { assets.first { $0.id == id || $0.contract == id } }
 }

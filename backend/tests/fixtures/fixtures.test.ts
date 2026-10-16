@@ -84,6 +84,8 @@ const fixtures: Record<string, string> = {
   "plan.legacy": "C.PlanView",
   "portfolio": "C.Portfolio",
   "prices": "C.Prices",
+  "privy-sign": "C.PrivySignature",
+  "privy-wallet": "C.PrivyWallet",
   "recipient": "C.Recipient",
   "swap-quote": "C.SwapQuote",
   "swap-quote.legacy": "C.SwapQuote",

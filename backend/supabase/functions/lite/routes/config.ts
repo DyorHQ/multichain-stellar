@@ -40,6 +40,7 @@ export function register(router: Router): void {
       flags: cfg[0]?.value ?? { enabled: false },
       minBuild: env.minBuild,
       inviteRequired: env.inviteRequired,
+      privyWallets: env.privyWallets,
     }, 200, PUBLIC_CACHE);
   });
 }

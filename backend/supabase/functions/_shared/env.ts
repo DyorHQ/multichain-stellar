@@ -141,6 +141,21 @@ export const env = {
   get cronSecret(): string | undefined {
     return read("LITE_CRON_SECRET");
   },
+  /** Stellar wallets for the accounts that sign in with Privy (lite/routes/privy.ts): LITE_PRIVY_WALLETS on or off (the
+   *  default), and on only with PRIVY_APP_SECRET set. */
+  get privyWallets(): boolean {
+    const v = read("LITE_PRIVY_WALLETS") ?? "off";
+    if (v !== "on" && v !== "off") throw new Error("LITE_PRIVY_WALLETS is on or off");
+    return v === "on" && read("PRIVY_APP_SECRET") !== undefined;
+  },
+  /** DyorHQ's Privy app (public), as the project's other functions default it. */
+  get privyAppId(): string {
+    return read("PRIVY_APP_ID") ?? "cmttp2squ00lk0djrso3z0yvm";
+  },
+  /** The Privy app's secret: the project's own, which delete-account, email-pepper and email-rebind read too. */
+  get privyAppSecret(): string {
+    return required("PRIVY_APP_SECRET");
+  },
   /** The most the sponsor pays for one transaction, in stroops: the network's maxFee. Kept for plans.ts until its
    *  per-user budget goes (§4.1). */
   get maxFeePerTx(): bigint {
