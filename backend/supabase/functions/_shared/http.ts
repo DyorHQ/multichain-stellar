@@ -28,10 +28,28 @@ export function json(body: unknown, status = 200, headers: Record<string, string
 
 export function errorResponse(err: unknown): Response {
   if (err instanceof ApiError) {
-    return json({ error: { code: err.code, message: err.message, detail: err.detail ?? null } }, err.status);
+    return json({ error: { code: err.code, message: err.message, detail: clientDetail(err) } }, err.status);
   }
   console.error("unhandled", err);
   return json({ error: { code: "internal", message: "Something went wrong on our side. Try again." } }, 500);
+}
+
+/** An error's detail as a client sees it. An RPC client's own error text (`detail.raw` of rpc_unavailable, and of any
+ *  5xx) can carry the RPC's URL, a keyed provider's included: it is logged here, URLs stripped, and never answered.
+ *  A refused simulation keeps its `raw` (the contract's error, which the phone and the fixtures read). */
+function clientDetail(err: ApiError): unknown {
+  const d = err.detail;
+  if (d === null || d === undefined) return null;
+  const internal = err.code === "rpc_unavailable" || err.status >= 500;
+  if (!internal || typeof d !== "object" || Array.isArray(d) || !("raw" in d)) return d;
+  const { raw, ...rest } = d as Record<string, unknown>;
+  console.warn(`${err.code}:`, redactUrls(String(raw)).slice(0, 300));
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+/** `text` with every URL in it replaced by "<url>", so a keyed RPC or provider URL never reaches a log line. */
+export function redactUrls(text: string): string {
+  return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]*/gi, "<url>");
 }
 
 /** Sign-in's routes (lite/routes/auth.ts) read a body that isn't a JSON object as one with no fields, so their 400 names

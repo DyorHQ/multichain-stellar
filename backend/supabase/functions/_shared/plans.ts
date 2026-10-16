@@ -9,7 +9,7 @@ import type { PlanStep as StepView, PlanView, Section, SponsorReason, StepKind, 
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { assertAffordable, baseReserve, feeCeiling, inclusionFee, Need, positionOf, starterSwapEligibility } from "./fees.ts";
-import { ApiError, bad, notFound } from "./http.ts";
+import { ApiError, bad, notFound, redactUrls } from "./http.ts";
 import { assetById, contractAllowlist } from "./networks.ts";
 import { launchTokensAmong } from "./assets.ts";
 import { refusalError, releaseSponsorship, reserveSponsorship, settleSponsorship, sponsorshipSent, starterUsed } from "./sponsor.ts";
@@ -497,7 +497,7 @@ export async function submitStep(user: string, planId: string, stepId: string, s
     }
     // It may land: a failed step could be built and sent again, a released sponsorship paid for twice. Settling it
     // (trackTx, jobs/settle.ts) settles both: success, or failed once it can no longer land.
-    console.warn("submit: unconfirmed, settled later", JSON.stringify(err.detail).slice(0, 300));
+    console.warn("submit: unconfirmed, settled later", redactUrls(JSON.stringify(err.detail)).slice(0, 300));
     hash = err.hash;
   }
   if (sponsorship) await sponsorshipSent(sponsorship, hash);
