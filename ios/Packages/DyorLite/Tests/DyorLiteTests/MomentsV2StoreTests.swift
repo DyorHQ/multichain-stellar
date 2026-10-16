@@ -40,6 +40,13 @@ final class MomentsV2StoreTests: XCTestCase {
             case ("GET", "/v1/economics"): return (200, Data(Self.economics.utf8))
             case ("GET", "/v1/moments/\(Self.nft)/status"): return (200, Data(Self.status(state: "collecting").utf8))
             case ("GET", "/v1/moments/v2/\(Self.nft)"): return (200, FakeLite.fixture("moment-v2"))
+            case ("GET", "/v1/moments/v2"): return (200, FakeLite.fixture("moments-v2"))
+            case ("GET", "/v1/moments/v2/owned"):
+                guard request.token != nil || request.route.contains("address=") else { return (400, FakeLite.error("address_required", "An address is required.")) }
+                return (200, FakeLite.fixture(request.token != nil ? "moments-v2-owned" : "moments-v2-owned.public"))
+            case ("GET", "/v1/moments/v2/mine"):
+                guard request.token != nil else { return (401, FakeLite.error("unauthorized", "Sign in.")) }
+                return (200, FakeLite.fixture("moments-v2-mine"))
             case ("GET", "/v1/moments/\(Self.nft)/vesting"):
                 guard request.token != nil || request.route.contains("address=") else { return (401, FakeLite.error("unauthorized", "Sign in.")) }
                 return (200, Data(Self.vesting.utf8))
@@ -103,6 +110,49 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(listing.image, detail.moment.posterUrl, "a video's image is its cover frame")
         XCTAssertEqual(listing.video, detail.moment.mediaUrl)
         XCTAssertEqual(tally.prompts, 0, "reads ask nothing")
+    }
+
+    /// The feed, the account's Moments and My Moments read their v2 routes: the feed's filter and page as asked, the
+    /// account's Moments and My Moments as the session's (what it paid included), and nothing prompts.
+    func testTheFeedOwnedAndMineReadTheirV2Routes() async throws {
+        let (_, moments) = try await ready()
+        let feed = try await moments.feed(filter: "collecting", cursor: "page-2")
+        XCTAssertEqual(feed.moments.map(\.symbol), ["DUSK", "MAKOLA"])
+        let asked = try XCTUnwrap(server.seen.last { $0.path == "/v1/moments/v2" })
+        XCTAssertTrue(asked.route.contains("filter=collecting") && asked.route.contains("cursor=page-2"), asked.route)
+        let owned = try await moments.owned()
+        XCTAssertEqual(owned.moments.map(\.editions), [[3], [1, 2]])
+        XCTAssertEqual(owned.moments.first?.spent, "50000000", "the session's view says what it paid")
+        let mine = try await moments.mine()
+        XCTAssertEqual([mine.totals.editions, mine.totals.moments], [3, 2])
+        XCTAssertEqual([mine.totals.spentByQuote, mine.totals.earnedByQuote], [["USDC": "350000000"], ["USDC": "200000000"]])
+        XCTAssertEqual(mine.created.map(\.proceeds), ["200000000"])
+        XCTAssertEqual(moments.store.status(.myMoments), .read)
+        XCTAssertEqual(tally.prompts, 0, "reads ask nothing")
+    }
+
+    /// In the public view (a passkey account with no session) the feed and the account's Moments still read, and My
+    /// Moments, DyorHQ's history, reports the sign-in instead of asking for the passkey.
+    func testMyMomentsNeedsASignInInThePublicView() async throws {
+        let keys = TestAccount.passkeyKeys(tally: tally)
+        defaults.set(true, forKey: LiteSession.activatedKey(keys.address))
+        let session = LiteSession(env: env, stellarAddress: keys.address, monad: nil, keys: keys, setupKey: nil, backend: backend, vault: vault,
+                                  defaults: defaults)
+        sessions.append(session)
+        await session.resumeAtLaunch()
+        XCTAssertEqual(session.access, .publicView)
+        let moments = MomentsV2Store(store: try XCTUnwrap(session.store))
+        let feed = try await moments.feed()
+        XCTAssertEqual(feed.moments.count, 2)
+        let owned = try await moments.owned()
+        XCTAssertNil(owned.moments.first?.spent, "the public view never says what the account paid")
+        do {
+            _ = try await moments.mine()
+            XCTFail("My Moments without a session")
+        } catch {}
+        XCTAssertEqual(moments.store.status(.myMoments), .needsSignIn)
+        XCTAssertFalse(server.paths.contains("GET /v1/moments/v2/mine"), "nothing asked without a session")
+        XCTAssertEqual(tally.prompts, 0, "nothing prompts until Sign in is tapped")
     }
 
     /// Publish enables USDC first when the account can't hold it: the publish is then built at once, and its review can
