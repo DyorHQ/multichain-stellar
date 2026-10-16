@@ -5691,31 +5691,31 @@
         }
       }
     },
-    "Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home." : {
-      "comment" : "The Deposit sheet, under the Stellar address. “Bridge” is the Home action of that name; Monad is a network's name.",
+    "Send only Stellar assets to this address." : {
+      "comment" : "The Deposit sheet, under the Stellar address. Stellar is a network's name.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Envía solo activos de Stellar a esta dirección. Para mover USDC desde Monad, usa Puente en Inicio."
+            "value" : "Envía solo activos de Stellar a esta dirección."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "N'envoyez que des actifs Stellar à cette adresse. Pour transférer des USDC depuis Monad, utilisez Bridge sur l'Accueil."
+            "value" : "N'envoyez que des actifs Stellar à cette adresse."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 주소로는 Stellar 자산만 보내세요. Monad에서 USDC를 옮기려면 홈의 브리지를 사용하세요."
+            "value" : "이 주소로는 Stellar 자산만 보내세요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只能向此地址发送 Stellar 资产。如需从 Monad 转入 USDC，使用首页的跨链桥。"
+            "value" : "只能向此地址发送 Stellar 资产。"
           }
         }
       }

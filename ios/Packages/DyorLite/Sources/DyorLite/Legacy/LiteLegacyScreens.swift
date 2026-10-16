@@ -65,11 +65,6 @@ public enum LiteLegacyScreens {
         LiteLegacyHost(session: session, style: style, chrome: chrome) { SendSheet(asset: asset) }
     }
 
-    /// The bridge between Monad and Stellar, starting `toStellar` or the other way. A sheet, with its Close.
-    public static func bridge(session: LiteSession, toStellar: Bool = true, style: LiteStyle = .default, chrome: LiteChrome = .none) -> some View {
-        LiteLegacyHost(session: session, style: style, chrome: chrome) { BridgeSheet(toStellar: toStellar) }
-    }
-
     /// The search over the account's holdings and the launches; `onPick` gets the asset id or the coin's contract. A
     /// sheet, with its Cancel.
     public static func search(session: LiteSession, style: LiteStyle = .default, onPick: @escaping (String) -> Void) -> some View {

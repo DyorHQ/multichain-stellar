@@ -639,7 +639,7 @@ struct ReceiveSheet: View {
                 }
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.capsule)
-                LiteParagraph(tr("Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home."))
+                LiteParagraph(tr("Send only Stellar assets to this address."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
