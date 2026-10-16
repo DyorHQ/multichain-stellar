@@ -28,7 +28,7 @@ import { native, rpcServer, sv, view, xdr } from "../_shared/stellar.ts";
 import { errorName } from "../_shared/v2_errors.ts";
 import { launchFacts, pairSide, watchContract } from "./handlers/launchpad.ts";
 import { decodeMove, metadataFromJson } from "./handlers/moments.ts";
-import { cursorLedger, deploymentKey, handle as handleV1 } from "./jobs/main_events.ts";
+import { cursorLedger, deploymentKey, handle as handleV1, streamStart } from "./jobs/main_events.ts";
 import { clearIndexed, resetAllowed } from "./jobs/reset.ts";
 import { CAUGHT_UP_LEDGERS, decodeTokenEvent, GROUP_SIZE, ledgerOf, mergeGroups, type Position, RETENTION_MARGIN } from "./jobs/watch.ts";
 import { fireAlert, gradFailAlert, venueKindName } from "./v2_keeper.ts";
@@ -1109,8 +1109,8 @@ export function cursorAction(row: CursorRow | null, key: string, latest: number)
 /** Reads a stream's events from its cursor (or from its start), as jobs/main_events.ts reads v1's: RPC scans a bounded
  *  window per request, so pages go on until the cursor reaches the latest ledger, at most 30 a run. */
 async function readStream(st: Stream, start: string | null, latest: number): Promise<number> {
-  const fromStart = () => ({ filters: st.filters, limit: 500, startLedger: Math.max(st.fromLedger || latest - 100_000, latest - 110_000) });
-  let req: any = start ? { filters: st.filters, limit: 500, cursor: start } : fromStart();
+  const fromStart = async () => ({ filters: st.filters, limit: 500, startLedger: await streamStart(st.fromLedger, latest) });
+  let req: any = start ? { filters: st.filters, limit: 500, cursor: start } : await fromStart();
   let count = 0;
   for (let round = 0; round < 30; round++) {
     let res: rpc.Api.GetEventsResponse;
@@ -1120,7 +1120,7 @@ async function readStream(st: Stream, start: string | null, latest: number): Pro
       // A cursor older than RPC's retention (~7 days) is refused: again from what RPC keeps.
       if (round === 0 && req.cursor) {
         console.warn(`${st.cursor}: cursor refused, restarting from the retention window`, String((err as Error).message).slice(0, 120));
-        req = fromStart();
+        req = await fromStart();
         res = await rpcServer().getEvents(req);
       } else {
         throw err;

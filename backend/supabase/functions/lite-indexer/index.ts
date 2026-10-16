@@ -7,6 +7,7 @@
 // indexGenerations); watch reads v1's watched contracts and then v2's (launch tokens' rewards, Moment NFTs and coins);
 // graduate is v2's keeper (v2_keeper.ts), v1's graduations and, every 10 minutes, v2's fee sweeps; ttl's rotation
 // includes v2's entries (_shared/ttl.ts).
+import "../_shared/node_globals.ts";
 import { sql, tableExists } from "../_shared/db.ts";
 import { env } from "../_shared/env.ts";
 import { json } from "../_shared/http.ts";

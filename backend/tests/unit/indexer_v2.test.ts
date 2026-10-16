@@ -35,7 +35,7 @@ const ev = await import("../../supabase/functions/lite-indexer/v2_events.ts");
 const k = await import("../../supabase/functions/lite-indexer/v2_keeper.ts");
 const ttl = await import("../../supabase/functions/_shared/ttl.ts");
 const { decodeMove } = await import("../../supabase/functions/lite-indexer/handlers/moments.ts");
-const { deploymentKey } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
+const { deploymentKey, streamStart } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
 
 const C = (n: number) => StrKey.encodeContract(new Uint8Array(32).fill(n) as any);
 const G = (n: number) => StrKey.encodeEd25519PublicKey(new Uint8Array(32).fill(n) as any);
@@ -557,6 +557,24 @@ Deno.test("generations: deploying v2, or another v2, clears no v1 row and reads 
     assertEquals(reads[1].startLedger, 5_300_000);
     assertEquals(writes.filter(([q]) => q.startsWith("insert into lite.indexer_cursors")).map(([, p]) => [p[0], p[3]]), [["events", v1Key], ["events_v2", ev.v2Key(NET)]]);
   }
+});
+
+Deno.test("generations: a fresh stream starts inside the window RPC keeps, never at a deploy ledger it no longer holds", async () => {
+  // Testnet's RPC keeps about 13 hours: v2's deploy ledger (5_300_000) is gone once the oldest it holds is LATEST - 10_000.
+  rpcAnswer = (method) => {
+    if (method === "getHealth") return { status: "healthy", latestLedger: LATEST, oldestLedger: LATEST - 10_000, ledgerRetentionWindow: 10_000 };
+    throw new Error(`no ${method} here`);
+  };
+  try {
+    assertEquals(await streamStart(5_300_000, LATEST), LATEST - 10_000 + 20);
+    // A deploy ledger inside the window stands; with none, the ~5.8-day look-back is clamped the same way.
+    assertEquals(await streamStart(LATEST - 5_000, LATEST), LATEST - 5_000);
+    assertEquals(await streamStart(0, LATEST), LATEST - 10_000 + 20);
+  } finally {
+    rpcAnswer = null;
+  }
+  // An RPC that doesn't answer getHealth (the default fake): the start it always had.
+  assertEquals(await streamStart(5_300_000, LATEST), 5_300_000);
 });
 
 Deno.test("generations: another v1 deployment clears v1's rows only, never v2's", async () => {
