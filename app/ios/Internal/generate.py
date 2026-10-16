@@ -78,7 +78,7 @@ def main() -> None:
     info = target["info"]
     info["path"] = INFO
     info["properties"].update({
-        # The Lite API: the local stack in Debug (docs/RUNBOOK-testnet.md in multichain-stellar), the DyorHQ project's
+        # The Lite API: the local stack in Debug (docs/DEVELOPMENT.md), the DyorHQ project's
         # lite function in Release. A public URL, no key.
         "LITE_API_URL": "$(LITE_API_URL)",
         # The only origin Stellar images and videos load from (`LiteGate.mediaBase`, `LiteMediaPolicy`), and the
