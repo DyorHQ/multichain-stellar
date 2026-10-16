@@ -2,18 +2,23 @@
 // Aquarius chain runs the code of every token it goes through, so verify.ts (routeListed) and the phone's TxVerifier
 // refuse a route through a token off the allowlist, apart from the one sold and the one bought. quote() drops such a
 // route, so the best it offers is one /swap/build can build, and a route that stays on listed tokens stays offered.
+// Swap asks the Stellar DEX and Soroswap only while Aquarius is off (decision O7); the tests of Aquarius's routes turn
+// it on. Each route's price impact is read along that route's own path or chain, never another one.
 import { Address, Asset, Keypair, nativeToScVal, SorobanDataBuilder, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { fakeSql, setTestEnv, USER, XLM_SAC } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
-const { quote } = await import("../../supabase/functions/_shared/swap.ts");
+const { quote, SWAP_VENUES } = await import("../../supabase/functions/_shared/swap.ts");
+type Venue = import("../../supabase/functions/_shared/swap.ts").Venue;
 const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
 const { TESTNET } = await import("../../supabase/functions/_shared/networks.ts");
 
 const PASS = TESTNET.passphrase;
 const ONE = 10_000_000n;
+/** Every venue, Aquarius included, as a deployment that turns it back on asks them. */
+const ALL: Venue[] = ["sdex", "soroswap", "aquarius"];
 const USDC = TESTNET.assets.find((a) => a.id === "USDC")!;
 /** Tokens off the allowlist that testnet's Aquarius routes XLM → USDC through (AQUA, and its issuer's own USDC and USDT). */
 const AQUA_ISSUER = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(21) as any).publicKey();
@@ -27,8 +32,9 @@ const rates = { sdex: 1_700_000n, soroswap: 1_800_000n, aquarius: 3_000_000n };
 /** Set to a depth in XLM base units to give a venue a pool's curve: `amount × rate × depth / (depth + amount)`, so a
  *  bigger trade gets a worse rate. Null: the same rate at any size. */
 const depths: { sdex: bigint | null; soroswap: bigint | null } = { sdex: null, soroswap: null };
-/** A second Stellar DEX path, through EURC, that Horizon finds besides the direct one: its rate and depth. */
-let sdexViaEurc: { rate: bigint; depth: bigint } | null = null;
+/** A second Stellar DEX path, through EURC, that Horizon finds besides the direct one: its rate and depth, and the least
+ *  it finds it for (in XLM base units; 0: any amount). */
+let sdexViaEurc: { rate: bigint; depth: bigint; from?: bigint } | null = null;
 const EURC_ISSUER = Keypair.fromRawEd25519Seed(new Uint8Array(32).fill(22) as any).publicKey();
 
 function along(amount: bigint, rate: bigint, depth: bigint | null): bigint {
@@ -40,11 +46,16 @@ const asUnits = (out: bigint) => `${out / ONE}.${(out % ONE).toString().padStart
 let aquariusChain: { tokens: string[]; out: string }[] = [];
 /** Set to answer find-path with this chain instead (one the router couldn't read). */
 let aquariusChainXdr: string | null = null;
+/** Set to answer amounts below `below` with another chain, at another rate, as testnet's find-path answers a small XLM →
+ *  USDC trade through AQUA and USDT while a big one goes through the direct pool. */
+let aquariusSmall: { below: bigint; chain: { tokens: string[]; out: string }[]; rate: bigint } | null = null;
+/** The amounts find-path was asked for. */
+const findPathAsked: bigint[] = [];
 
 const addr = (c: string) => Address.fromString(c).toScVal();
 
-function chainXdr(): string {
-  const hops = aquariusChain.map((h) => xdr.ScVal.scvVec([xdr.ScVal.scvVec(h.tokens.map(addr)), xdr.ScVal.scvBytes(POOL_HASH), addr(h.out)]));
+function chainXdr(chain = aquariusChain): string {
+  const hops = chain.map((h) => xdr.ScVal.scvVec([xdr.ScVal.scvVec(h.tokens.map(addr)), xdr.ScVal.scvBytes(POOL_HASH), addr(h.out)]));
   return xdr.ScVal.scvVec(hops).toXDR("base64");
 }
 
@@ -97,7 +108,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
       path,
     });
     const records = [record(along(amount, rates.sdex, depths.sdex), [])];
-    if (sdexViaEurc) {
+    if (sdexViaEurc && amount >= (sdexViaEurc.from ?? 0n)) {
       const eurc = { asset_type: "credit_alphanum4", asset_code: "EURC", asset_issuer: EURC_ISSUER };
       records.push(record(along(amount, sdexViaEurc.rate, sdexViaEurc.depth), [eurc]));
     }
@@ -110,9 +121,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   }
   if (url.host === "amm-api-testnet.aqua.network" && url.pathname.endsWith("/find-path/")) {
     const body = await req.json();
-    const amount = (BigInt(body.amount) * rates.aquarius) / ONE;
-    const tokens = [aquariusChain[0].tokens[0], ...aquariusChain.map((h) => h.out)];
-    return Response.json({ success: true, swap_chain_xdr: aquariusChainXdr ?? chainXdr(), tokens_addresses: tokens, amount: Number(amount), amount_with_fee: Number(amount) });
+    findPathAsked.push(BigInt(body.amount));
+    const small = aquariusSmall && BigInt(body.amount) < aquariusSmall.below ? aquariusSmall : null;
+    const chain = small?.chain ?? aquariusChain;
+    const amount = (BigInt(body.amount) * (small?.rate ?? rates.aquarius)) / ONE;
+    const tokens = [chain[0].tokens[0], ...chain.map((h) => h.out)];
+    return Response.json({ success: true, swap_chain_xdr: aquariusChainXdr ?? chainXdr(chain), tokens_addresses: tokens, amount: Number(amount), amount_with_fee: Number(amount) });
   }
   return new Response("offline", { status: 503 });
 }) as typeof fetch;
@@ -135,7 +149,7 @@ Deno.test("a route through a token off the allowlist is never quoted, however mu
     { tokens: [OTHER_USDC, USDT], out: USDT },
     { tokens: [USDT, USDC.contract], out: USDC.contract },
   ];
-  const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100);
+  const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100, ALL);
   assertEquals(q.routes!.map((r) => r.venue), ["soroswap", "sdex"], "Aquarius's route goes through AQUA and USDT");
   assertEquals([q.best.venue, q.routes![0].best, q.best.amountOut], ["soroswap", true, (50n * rates.soroswap).toString()]);
   assertEquals(q.alternatives.map((r) => r.venue), ["sdex"]);
@@ -145,7 +159,7 @@ Deno.test("a route through a token off the allowlist is never quoted, however mu
 
 Deno.test("an Aquarius chain on listed tokens only stays quoted, and is the best when it brings the most", async () => {
   aquariusChain = [{ tokens: [XLM_SAC, USDC.contract], out: USDC.contract }];
-  const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100);
+  const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100, ALL);
   assertEquals(q.routes!.map((r) => r.venue), ["aquarius", "soroswap", "sdex"]);
   assertEquals([q.best.venue, q.best.amountOut], ["aquarius", (50n * rates.aquarius).toString()]);
 });
@@ -155,7 +169,7 @@ Deno.test("an Aquarius chain that can't be read is never quoted", async () => {
   // A hop that is not (tokens, pool, token out).
   aquariusChainXdr = xdr.ScVal.scvVec([xdr.ScVal.scvVec([addr(USDC.contract)])]).toXDR("base64");
   try {
-    const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100);
+    const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100, ALL);
     assertEquals(q.routes!.map((r) => r.venue), ["soroswap", "sdex"]);
   } finally {
     aquariusChainXdr = null;
@@ -168,7 +182,7 @@ Deno.test("with no route left to sign, the quote says there is none", async () =
   rates.sdex = 0n;
   rates.soroswap = 0n;
   try {
-    const e = await assertRejects(() => quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100), ApiError);
+    const e = await assertRejects(() => quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100, ALL), ApiError);
     assertEquals([e.status, e.code], [404, "no_route"]);
   } finally {
     Object.assign(rates, before);
@@ -189,7 +203,7 @@ Deno.test("each venue's price impact is its rate for the amount against its own 
   depths.sdex = 1_000n * ONE;
   depths.soroswap = 500n * ONE;
   try {
-    const q = await quote(USER.publicKey(), "XLM", "USDC", amountIn, 100);
+    const q = await quote(USER.publicKey(), "XLM", "USDC", amountIn, 100, ALL);
     const impact = Object.fromEntries(q.routes!.map((r) => [r.venue, r.priceImpactBps]));
     const expect = (rate: bigint, depth: bigint) => impactOf(along(amountIn, rate, depth), along(amountIn / 1_000n, rate, depth), amountIn);
     assertEquals(impact.sdex, expect(rates.sdex, depths.sdex));
@@ -223,6 +237,58 @@ Deno.test("the Stellar DEX's impact is read along the path it quotes, not a bett
 
 Deno.test("an amount whose thousandth rounds to nothing has no price impact", async () => {
   aquariusChain = [{ tokens: [XLM_SAC, USDC.contract], out: USDC.contract }];
-  const q = await quote(USER.publicKey(), "XLM", "USDC", 999n, 100);
+  const q = await quote(USER.publicKey(), "XLM", "USDC", 999n, 100, ALL);
   assertEquals(q.routes!.map((r) => r.priceImpactBps), q.routes!.map(() => null));
+});
+
+Deno.test("Swap asks the Stellar DEX and Soroswap only: Aquarius is off (decision O7)", async () => {
+  // Aquarius would bring the most, on a chain both verifiers sign.
+  aquariusChain = [{ tokens: [XLM_SAC, USDC.contract], out: USDC.contract }];
+  findPathAsked.length = 0;
+  assertEquals([...SWAP_VENUES], ["sdex", "soroswap"]);
+  const q = await quote(USER.publicKey(), "XLM", "USDC", 50n * ONE, 100);
+  assertEquals(q.routes!.map((r) => r.venue), ["soroswap", "sdex"]);
+  assertEquals([q.best.venue, ...q.alternatives.map((r) => r.venue)], ["soroswap", "sdex"]);
+  assertEquals(stored.at(-1)!.alternatives.map((r) => r.venue), ["sdex"], "the quote /swap/build redeems has no Aquarius route");
+  assertEquals(findPathAsked, [], "find-path is never asked: neither for the route nor for a price impact");
+});
+
+Deno.test("Aquarius's impact is read along its own chain: another chain for the small trade gives none", async () => {
+  // Owner bug 8, as testnet answered it: 5,000 XLM goes through the direct XLM/USDC pool, while find-path answers 5 XLM
+  // through AQUA and USDT at a far better rate for that size, and that other chain read as an impact of 64%.
+  aquariusChain = [{ tokens: [XLM_SAC, USDC.contract], out: USDC.contract }];
+  const amountIn = 5_000n * ONE;
+  aquariusSmall = {
+    below: amountIn,
+    chain: [{ tokens: [XLM_SAC, AQUA], out: AQUA }, { tokens: [AQUA, USDT], out: USDT }, { tokens: [USDT, USDC.contract], out: USDC.contract }],
+    rate: rates.aquarius * 3n,
+  };
+  try {
+    const q = await quote(USER.publicKey(), "XLM", "USDC", amountIn, 100, ALL);
+    const aquarius = q.routes!.find((r) => r.venue === "aquarius")!;
+    assertEquals(aquarius.path, [XLM_SAC, USDC.contract], "the route is the direct pool's");
+    assertEquals(aquarius.priceImpactBps, null, "no impact from another chain's rate");
+    // The same chain for the small trade: its impact, which a pool at one rate for any size puts at nothing.
+    aquariusSmall = null;
+    const same = await quote(USER.publicKey(), "XLM", "USDC", amountIn, 100, ALL);
+    assertEquals(same.routes!.find((r) => r.venue === "aquarius")!.priceImpactBps, 0);
+  } finally {
+    aquariusSmall = null;
+  }
+});
+
+Deno.test("the Stellar DEX's impact is none when Horizon no longer finds its path for the small trade", async () => {
+  aquariusChain = [{ tokens: [XLM_SAC, USDC.contract], out: USDC.contract }];
+  const amountIn = 50n * ONE;
+  // Through EURC at a better rate than direct, on a deep book, but Horizon lists it only from 1 XLM: the small trade
+  // (0.05 XLM) finds only the direct path, whose rate says nothing about the EURC one.
+  sdexViaEurc = { rate: 2_500_000n, depth: 1_000_000n * ONE, from: ONE };
+  try {
+    const q = await quote(USER.publicKey(), "XLM", "USDC", amountIn, 100);
+    const sdex = q.routes!.find((r) => r.venue === "sdex")!;
+    assertEquals(sdex.path.length, 3, "50 XLM brings the most through EURC");
+    assertEquals(sdex.priceImpactBps, null);
+  } finally {
+    sdexViaEurc = null;
+  }
 });
