@@ -1,23 +1,30 @@
-// The retired generation's routes serve its rows only (DESIGN-stellar-contracts-v2 §17 step 7): lite.launches and
-// lite.moments hold both generations once the indexer reads v2 (migration 20261015000012), and v1's board, a launch's
-// page, My Launchpad, the v1 plans, the Moments feed and My Moments read v1's rows only. A v1 launch is the one with a
-// launch index and a v1 Moment the one with a number: v2's have neither, which also holds before the migration. The
-// markets list launch tokens of both generations.
+// Both generations in one database (DESIGN-stellar-contracts-v2 §17): lite.launches and lite.moments hold v1's
+// (retired) and v2's (live) rows once the indexer reads v2 (migration 20261015000012).
+// - Launches: the board, a launch's page, My Launchpad and the markets list both generations, each row with its
+//   `generation`, so the app shows v1's as Retired; a launch's curve and creator fees are read from its own launchpad,
+//   and its holders leave out both launchpads. v1's plans act on v1's launches only.
+// - Moments: v1's feed and My Moments read v1's rows only (a v2 Moment has no number); v2's are served under
+//   /v1/moments/v2 (moments_v2_feed.ts, moments_v2_feed.test.ts).
+// A v1 launch is the one with a launch index and a v1 Moment the one with a number: v2's have neither, which also holds
+// before the migration.
 //
 // The fake database answers each query from rows of both generations and applies the v1 condition only when the query
 // states it, so a query that leaves it out answers v2's rows too, and the route shows it.
-import { Address, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import { Address, nativeToScVal, StrKey, Transaction, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fakeSql, OTHER, type Row, setTestEnv, USER } from "../fixtures/routes/harness.ts";
 
 setTestEnv();
 const { replaceSql } = await import("../../supabase/functions/_shared/db.ts");
 const { TESTNET } = await import("../../supabase/functions/_shared/networks.ts");
+const { env } = await import("../../supabase/functions/_shared/env.ts");
 const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
 const lp = await import("../../supabase/functions/_shared/launchpad.ts");
 const moments = await import("../../supabase/functions/_shared/moments.ts");
 
 const PAD = TESTNET.contracts.launchpad!;
+/** The owner's launchpad-v2 (testnet-v2.json, bundled). */
+const PAD_V2 = env.network.contracts.launchpadV2!;
 const XLM = TESTNET.assets.find((a) => a.id === "XLM")!.contract;
 const ME = USER.publicKey();
 const SOMEONE = OTHER.publicKey();
@@ -42,7 +49,7 @@ function launch(token: string, creator: string, v2: boolean): Row {
     launch_index: v2 ? null : 4,
     generation: v2 ? 2 : 1,
     nonce: v2 ? "77" : null,
-    phase: v2 ? "curve" : null,
+    phase: v2 ? "completed" : null,
     supply: "10000000000000000",
     phantom: "20000000000",
     quote_reserve: "300000000000",
@@ -108,8 +115,10 @@ function momentsFor(q: string, p: unknown[]): Row[] {
 }
 
 let queries: string[] = [];
+let asked: [string, unknown[]][] = [];
 replaceSql(fakeSql((q, p) => {
   queries.push(q);
+  asked.push([q, p]);
   if (q.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total")) return launchesFor(q, p);
   if (q.startsWith("select count(*) filter (where not l.graduated)::int as explore")) {
     const rows = launchesFor(q, p);
@@ -124,7 +133,26 @@ replaceSql(fakeSql((q, p) => {
   return [];
 }));
 
-// The v1 launchpad answers that it never launched v2's token; any other call fails, as an unreachable RPC would.
+/** launchpad-v2's Curve for my v2 launch: completed, waiting to graduate, with 0.25 XLM of creator fees booked. */
+const i128 = (n: bigint) => nativeToScVal(n, { type: "i128" });
+const V2_CURVE = xdr.ScVal.scvMap(
+  Object.entries({
+    phantom: i128(20000000000n),
+    threshold: i128(50000000000n),
+    quote_reserve: i128(70000000000n),
+    token_reserve: i128(2000000000000000n),
+    real_quote: i128(50000000000n),
+    creator_fees: i128(2500000n),
+    phase: nativeToScVal(1, { type: "u32" }),
+    pool: xdr.ScVal.scvVoid(),
+  }).sort(([a], [b]) => (a < b ? -1 : 1)).map(([k, v]) => new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(k), val: v })),
+);
+
+/** Each contract call the fake RPC was asked: "<contract> <function>". */
+let calls: string[] = [];
+
+// The v1 launchpad answers that it never launched v2's token, and launchpad-v2 gives v2's curve; any other call fails,
+// as an unreachable RPC would.
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const req = input instanceof Request ? input : new Request(String(input), init);
   if (new URL(req.url).host !== "soroban-testnet.stellar.org") return new Response("offline", { status: 503 });
@@ -132,7 +160,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (body.method !== "simulateTransaction") return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: "offline" } });
   const tx = TransactionBuilder.fromXDR(body.params.transaction, TESTNET.passphrase) as Transaction;
   const call = (tx.operations[0] as any).func.invokeContract() as xdr.InvokeContractArgs;
-  const unknown = Address.fromScAddress(call.contractAddress()).toString() === PAD && call.functionName().toString() === "get_launch";
+  const contract = Address.fromScAddress(call.contractAddress()).toString();
+  calls.push(`${contract === PAD ? "launchpad" : contract === PAD_V2 ? "launchpad-v2" : contract} ${call.functionName().toString()}`);
+  if (contract === PAD_V2 && call.functionName().toString() === "get_curve") {
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: { latestLedger: 1, results: [{ auth: [], xdr: V2_CURVE.toXDR("base64") }], events: [] } });
+  }
+  const unknown = contract === PAD && call.functionName().toString() === "get_launch";
   // contracts/launchpad Error::UnknownLaunch (#7), as testnet logs it (launch.test.ts).
   const error = unknown ? `HostError: Error(Contract, #7)\n\nEvent log (newest first):\n   0: [Diagnostic Event] contract:${PAD}, topics:[error, Error(Contract, #7)], data:["failing with contract error", 7]` : "HostError: Error(WasmVm, InvalidAction)";
   return Response.json({ jsonrpc: "2.0", id: body.id, result: { latestLedger: 1, error } });
@@ -148,26 +181,62 @@ const tokensOf = (rows: { token: string }[]) => rows.map((r) => r.token);
 
 // ------------------------------------------------------------------------------------------------ launches
 
-Deno.test("the launch board (both forms) and its counts: v1's launches only", async () => {
+const generationsOf = (rows: { token: string; generation?: number }[]) => rows.map((r) => [r.token, r.generation]);
+
+Deno.test("the launch board (both forms) and its counts: both generations, each row with its own", async () => {
   queries = [];
   const board = await lp.launchBoard(lp.boardQuery(new URLSearchParams("section=explore")), "public", NOW);
-  assertEquals([tokensOf(board.launches), board.counts], [[V1_TOKEN], { explore: 1, graduated: 0 }]);
+  assertEquals([generationsOf(board.launches), board.counts], [[[V1_TOKEN, 1], [V2_TOKEN, 2]], { explore: 2, graduated: 0 }]);
   const legacy = await lp.launchBoard(lp.boardQuery(new URLSearchParams("sort=new")), "public", NOW);
-  assertEquals(tokensOf(legacy.launches), [V1_TOKEN]);
-  assertEquals(queries.filter((q) => q.includes("from lite.launches l") && !q.includes("l.launch_index is not null")), [], "every board query states it");
+  assertEquals(generationsOf(legacy.launches), [[V1_TOKEN, 1], [V2_TOKEN, 2]]);
+  assertEquals(queries.filter((q) => q.includes("l.launch_index is not null")), [], "no board query keeps to v1");
 });
 
-Deno.test("a launch's page: v2's token has none here (404)", async () => {
-  const err = await refused(() => lp.launchDetail(V2_TOKEN, { address: null, scope: "public" }, undefined, NOW));
-  assertEquals([err.status, err.code], [404, "not_found"]);
+Deno.test("a v2 row says where it is: a completed curve waiting to graduate is completed, at 100%", async () => {
+  const [, v2] = (await lp.launchBoard(lp.boardQuery(new URLSearchParams("section=explore")), "public", NOW)).launches;
+  assertEquals([v2.phase, v2.completed, v2.graduated, v2.progress], ["completed", true, false, 1]);
+  assertEquals(lp.phaseOf({ generation: 2, phase: "rescued", completed: false, graduated: false }), "rescued");
+  assertEquals(lp.phaseOf({ generation: 2, phase: "curve", completed: false, graduated: false }), "curve");
+  // v1's phase stays its curve's flags: it has no phase column.
+  assertEquals(lp.phaseOf({ completed: true, graduated: false }), "completed");
+  assertEquals(lp.phaseOf({ generation: 2, phase: "graduated", completed: true, graduated: true }), "graduated");
 });
 
-Deno.test("My Launchpad: v1's coins held and created only; a v2 launch's creator fees aren't read from the v1 launchpad", async () => {
-  queries = [];
-  // Read from the v1 launchpad, my v2 launch's fees fail (RPC can't find it): the page would answer 502.
+Deno.test("holders leave out both launchpads, the pool and the token itself", async () => {
+  asked = [];
+  await lp.launchBoard(lp.boardQuery(new URLSearchParams("section=explore")), "public", NOW);
+  const [q, p] = asked.find(([text]) => text.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total"))!;
+  assert(q.includes("lite.launch_holders(l.token, array[?::text, ?::text, l.pair, l.token]) as holders"), q);
+  assertEquals(p.slice(0, 2), [PAD, PAD_V2]);
+});
+
+Deno.test("a launch's page: a v2 launch, with generation 2 and its curve and creator fees read from launchpad-v2", async () => {
+  calls = [];
+  const page = await lp.launchDetail(V2_TOKEN, { address: null, scope: "public" }, undefined, NOW);
+  assertEquals([page.launch.token, page.launch.generation, page.launch.phase], [V2_TOKEN, 2, "completed"]);
+  assertEquals(page.curve, {
+    quoteReserve: "70000000000",
+    tokenReserve: "2000000000000000",
+    realQuote: "50000000000",
+    threshold: "50000000000",
+    creatorFees: "2500000",
+    completed: true,
+    graduated: false,
+    pair: null,
+  });
+  assertEquals(page.creatorFees?.unclaimed, "2500000");
+  assertEquals(calls, ["launchpad-v2 get_curve"]);
+  const v1 = await lp.launchDetail(V1_TOKEN, { address: null, scope: "public" }, undefined, NOW);
+  assertEquals(v1.launch.generation, 1);
+});
+
+Deno.test("My Launchpad: coins of both generations held and created, each with its generation; a v2 launch's creator fees from launchpad-v2", async () => {
+  calls = [];
+  lp.forgetLaunchReads();
   const mine = await lp.myLaunchpad(ME, NOW);
-  assertEquals([mine.held.map((h) => h.token), mine.created.map((c) => c.launch.token)], [[V1_TOKEN], []]);
-  assertEquals(queries.filter((q) => q.startsWith("select l.*") && !q.includes("l.launch_index is not null")), []);
+  assertEquals(mine.held.map((h) => [h.token, h.launch.generation]), [[V1_TOKEN, 1], [V2_TOKEN, 2]]);
+  assertEquals(mine.created.map((c) => [c.launch.token, c.launch.generation, c.creatorFees.unclaimed]), [[V2_TOKEN, 2, "2500000"]]);
+  assertEquals(calls, ["launchpad-v2 get_curve"], "never the v1 launchpad, which doesn't know it");
 });
 
 Deno.test("v1's plans: a v2 token isn't v1's to graduate (404), and claim all leaves v2's launches out", async () => {

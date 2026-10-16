@@ -8,8 +8,9 @@ import XCTest
 
 // Contracts v2 on the phone (docs/DESIGN-stellar-contracts-v2.md §20.1–20.3, §18.4): the models of the v2 API decode
 // what the API's launchpad_v2.ts and moments_v2.ts answer (V2Fixtures, captured from them), including every state only
-// testnet-qa reaches (finding F4); the LiteAPI methods ask for their routes; and PlanRunner signs calls to the
-// contracts v2 creates at runtime only when they run a pinned WASM.
+// testnet-qa reaches (finding F4), and what its indexed Moments reads answer (moments_v2_feed.ts: the API fixtures
+// moments-v2, moment-v2, moments-v2-owned and moments-v2-mine); the LiteAPI methods ask for their routes; and
+// PlanRunner signs calls to the contracts v2 creates at runtime only when they run a pinned WASM.
 
 /// Every v2 fixture decodes, keeps every field it carries, and reads as its state.
 final class V2ModelTests: XCTestCase {
@@ -352,6 +353,68 @@ final class V2ModelTests: XCTestCase {
     }
 }
 
+/// The v2 Moments as the API's indexer recorded them: a card's and a page's figures, an account's and a creator's
+/// Moments, and launch rows' generation.
+final class V2IndexedReadTests: XCTestCase {
+    func testTheFeedNamesTheCoinAndPoolOnceGraduated() throws {
+        let feed = try ApiFixtures.decode("moments-v2", as: StellarMomentFeedV2.self)
+        XCTAssertNil(feed.nextCursor)
+        let (collecting, graduated) = (feed.moments[0], feed.moments[1])
+        XCTAssertEqual([collecting.generation, graduated.generation], [2, 2])
+        XCTAssertEqual([collecting.state, graduated.state], ["collecting", "graduated"])
+        XCTAssertEqual([collecting.progress, graduated.progress], [0.75, 1])
+        XCTAssertTrue(collecting.open)
+        XCTAssertNil(collecting.coin)
+        XCTAssertNil(collecting.pool)
+        XCTAssertNotNil(graduated.coin)
+        XCTAssertNotNil(graduated.pool)
+        // The card's art: a video's cover frame, a photo itself.
+        XCTAssertTrue(collecting.isVideo)
+        XCTAssertEqual(collecting.image, collecting.posterUrl)
+        XCTAssertEqual(graduated.image, graduated.mediaUrl)
+        XCTAssertEqual([collecting.place, collecting.takenOn], ["Accra", "2026-10-13"])
+        XCTAssertEqual(collecting.durations.vestPeriod, 604_800)
+        XCTAssertEqual(collecting.id, collecting.nft)
+    }
+
+    func testAPageSaysWhatTheViewerHolds() throws {
+        let owner = try ApiFixtures.decode("moment-v2", as: StellarMomentDetailV2.self)
+        XCTAssertEqual(owner.you?.editions, [3])
+        XCTAssertEqual(owner.you?.spent, "50000000")
+        XCTAssertEqual(owner.collectorsSummary.largest?.editions, 2)
+        XCTAssertEqual(owner.collectors.map(\.firstTokenId), [3, 2, 1])
+        XCTAssertEqual(owner.creatorEarned, "40000000")
+        let viewer = try ApiFixtures.decode("moment-v2.public", as: StellarMomentDetailV2.self)
+        XCTAssertEqual(viewer.view, "public")
+        XCTAssertNil(viewer.you?.spent, "DyorHQ's history stays out of the public view")
+        XCTAssertEqual(viewer.you?.entitlement, owner.you?.entitlement)
+    }
+
+    func testAnAccountsAndACreatorsMoments() throws {
+        let owned = try ApiFixtures.decode("moments-v2-owned", as: StellarOwnedMomentsV2.self)
+        XCTAssertEqual(owned.moments.map(\.editions), [[3], [1, 2]])
+        XCTAssertEqual(owned.moments.map(\.claimed), ["0", "36000000000000"])
+        XCTAssertEqual(owned.moments.map(\.id), owned.moments.map(\.moment.nft))
+        XCTAssertEqual(try ApiFixtures.decode("moments-v2-owned.public", as: StellarOwnedMomentsV2.self).moments.map(\.spent), [nil, nil])
+        let mine = try ApiFixtures.decode("moments-v2-mine", as: StellarMyMomentsV2.self)
+        XCTAssertEqual(mine.created.map(\.moment.symbol), ["MAKOLA"])
+        XCTAssertEqual(mine.created.map { [$0.proceeds, $0.withdrawn] }, [["200000000", "150000000"]])
+        XCTAssertEqual(mine.created.first?.proceedsUsd, 20)
+        XCTAssertEqual(mine.collected, owned.moments)
+        XCTAssertEqual(mine.totals.editions, 3)
+        XCTAssertEqual(mine.totals.earnedByQuote, ["USDC": "200000000"])
+    }
+
+    func testLaunchRowsCarryTheirGeneration() throws {
+        let board = try ApiFixtures.decode("launches", as: StellarLaunchBoard.self)
+        XCTAssertEqual(board.launches.map(\.generation), [1, 1])
+        XCTAssertEqual(try ApiFixtures.decode("launch", as: StellarLaunchDetail.self).launch.generation, 1)
+        XCTAssertEqual(try ApiFixtures.decode("launchpad-me", as: StellarMyLaunchpad.self).created.map(\.launch.generation), [1])
+        // Older servers leave it out.
+        XCTAssertNil(try ApiFixtures.decode("launches.legacy", as: StellarLaunchBoard.self).launches[0].generation)
+    }
+}
+
 /// The v2 LiteAPI methods ask for their routes, send the session token only where the route takes it, send their
 /// bodies typed as the API reads them, and refuse a ticker the contracts would refuse before sending anything.
 final class V2RouteTests: XCTestCase {
@@ -451,6 +514,40 @@ final class V2RouteTests: XCTestCase {
         try await expect("GET", "/v1/moments/CNFT/status", token: false, answer: V2Fixtures.momentStatusPending) { _ = try await $0.momentStatusV2("CNFT") }
     }
 
+    func testIndexedMomentRoutes() async throws {
+        let feed = try fixture("moments-v2")
+        try await expect("GET", "/v1/moments/v2?filter=collecting&limit=20&cursor=page-2", token: true, answer: feed) {
+            let page = try await $0.momentsV2(filter: "collecting", limit: 20, cursor: "page-2")
+            XCTAssertEqual(page.moments.map(\.symbol), ["DUSK", "MAKOLA"])
+        }
+        try await expect("GET", "/v1/moments/v2", token: true, answer: feed) { _ = try await $0.momentsV2() }
+        try await expect("GET", "/v1/moments/v2/CNFT", token: true, answer: try fixture("moment-v2")) {
+            let page = try await $0.momentV2("CNFT")
+            XCTAssertEqual(page.you?.editions, [3])
+        }
+        try await expect("GET", "/v1/moments/v2/owned", token: true, answer: try fixture("moments-v2-owned")) { _ = try await $0.ownedMomentsV2() }
+        try await expect("GET", "/v1/moments/v2/mine", token: true, answer: try fixture("moments-v2-mine")) { _ = try await $0.myMomentsV2() }
+        try await expect("GET", "/v1/moments/v2/C%2F..%2Fmine", token: true, answer: try fixture("moment-v2")) { _ = try await $0.momentV2("C/../mine") }
+    }
+
+    /// Without a session: the feed and a page ask as they are, or for the viewer's public view; an account's Moments
+    /// need the viewer; a creator's Moments are a session's.
+    func testIndexedMomentRoutesWithoutASession() async throws {
+        api = LiteAPI(baseURL: URL(string: base)!, session: V2Stub.session)
+        try await expect("GET", "/v1/moments/v2?limit=10", token: false, answer: try fixture("moments-v2")) { _ = try await $0.momentsV2(limit: 10) }
+        try await expect("GET", "/v1/moments/v2/CNFT", token: false, answer: try fixture("moment-v2.public")) { _ = try await $0.momentV2("CNFT") }
+        try await refusedUnsent(.notSignedIn) { _ = try await $0.ownedMomentsV2() }
+        try await refusedUnsent(.notSignedIn) { _ = try await $0.myMomentsV2() }
+        await api.setViewer(address: viewer)
+        try await expect("GET", "/v1/moments/v2?limit=10&address=\(viewer)", token: false, answer: try fixture("moments-v2")) { _ = try await $0.momentsV2(limit: 10) }
+        try await expect("GET", "/v1/moments/v2/CNFT?address=\(viewer)", token: false, answer: try fixture("moment-v2.public")) { _ = try await $0.momentV2("CNFT") }
+        try await expect("GET", "/v1/moments/v2/owned?address=\(viewer)", token: false, answer: try fixture("moments-v2-owned.public")) {
+            let owned = try await $0.ownedMomentsV2()
+            XCTAssertEqual(owned.view, "public")
+        }
+        try await refusedUnsent(.notSignedIn) { _ = try await $0.myMomentsV2() }
+    }
+
     /// A ticker the contracts would refuse is refused before anything is sent, with the API's own code and words.
     func testTickersAreRefusedBeforeAnythingIsSent() async throws {
         for symbol in [nil, "", "E", "ABCDEFGHIJK", "ÉCAT", "E CAT", "E-CAT"] as [String?] {
@@ -479,6 +576,8 @@ final class V2RouteTests: XCTestCase {
             XCTAssertEqual(V2Stub.requests().count, 0, "\"\(nft)\" was sent")
         }
     }
+
+    private func fixture(_ name: String) throws -> String { String(decoding: try ApiFixtures.data(name), as: UTF8.self) }
 
     /// Answers `answer`, runs `call`, and checks the one request it made; returns the request's JSON body.
     @discardableResult

@@ -167,6 +167,9 @@ export const routeRows: Responder = (q) => {
   if (q.includes("from lite.moment_editions e join lite.moments m")) return [];
   if (q.startsWith("select * from lite.moments where creator = ?")) return [];
   if (q.includes("from lite.moment_collects c join lite.moments m")) return [];
+  // Contracts v2's Moments (moments_v2_feed.ts): none listed, at TOKEN, held, promised or published.
+  if (q.startsWith("select m.* from lite.moments m where")) return [];
+  if (q.includes("from lite.moment_positions p join lite.moments m")) return [];
   // Nobody holds a launch token (holdings.ts).
   if (q.startsWith("select l.*, coalesce(tb.balance, 0) as indexed_balance")) return [];
   if (q === "select * from lite.moments where id = ?") return [];

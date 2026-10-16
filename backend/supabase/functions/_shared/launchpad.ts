@@ -8,9 +8,10 @@
 // - The launchpad's own refusals carry their stable codes (§6.13).
 // - The board and a launch's page are viewer routes (§6.0): in the public view `you` holds on-chain facts only (the
 //   indexed balance), never DyorHQ's history.
-// - This is the retired generation 1 (DESIGN-stellar-contracts-v2 §17): the board, a launch's page, My Launchpad and
-//   the plans read v1's launches only, though lite.launches holds v2's too (launchpad_v2.ts serves those). The markets
-//   and the asset search list launch tokens of both generations.
+// - Both generations (DESIGN-stellar-contracts-v2 §17): lite.launches holds v1's (retired) and v2's (live) launches,
+//   and the board, a launch's page, My Launchpad, the markets and the asset search list both, each row with its
+//   `generation`, so the app shows v1's as Retired. A launch's curve is read from its own launchpad. The plans here are
+//   v1's (launchpad_v2.ts builds v2's, and v2's live reads: status, recipient, rewards).
 import type postgres from "postgres";
 import type {
   ActivityItem,
@@ -20,6 +21,7 @@ import type {
   FeePayer,
   LaunchBoard,
   LaunchDetail,
+  LaunchPhase,
   LaunchRow,
   LaunchTrade,
   MyLaunchpad,
@@ -217,8 +219,23 @@ export function priceOf(r: Row): string {
   return tokenReserve > 0n ? ratio(big(r.quote_reserve), tokenReserve) : "0";
 }
 
+/** The launchpad generation a launch was made on: 2 for launchpad-v2's (migration 20261015000012 records it), else 1. */
+export function generationOf(r: Row): 1 | 2 {
+  return Number(r.generation ?? 1) === 2 ? 2 : 1;
+}
+
+/** Where a launch is. A v2 row says itself (its phase moves with launchpad-v2's events, refund mode included); a v1
+ *  row from its curve's flags. A v2 launch is `completed` in the indexer only once it graduated: its phase says
+ *  earlier. */
+export function phaseOf(r: Row): LaunchPhase {
+  if (r.graduated === true) return "graduated";
+  if (generationOf(r) === 2 && (r.phase === "completed" || r.phase === "rescued")) return r.phase;
+  return r.completed === true ? "completed" : "curve";
+}
+
 function progressOf(r: Row): number {
-  if (r.graduated === true) return 1;
+  // A curve that completed reached its threshold, refund mode too (a rescue empties its real quote).
+  if (phaseOf(r) !== "curve") return 1;
   const threshold = big(r.threshold);
   return threshold > 0n ? Math.min(1, Number((big(r.real_quote) * 10_000n) / threshold) / 10_000) : 0;
 }
@@ -236,6 +253,7 @@ export function launchRowOf(r: Row, p: PriceContext): FullLaunchRow {
   const circulating = supply - burned;
   const priceQuote = priceOf(r);
   const priceNow = Number(priceQuote);
+  const phase = phaseOf(r);
   const isNew = p.now - new Date(r.created_at).getTime() < DAY;
   const marketCap = decimalText((scaled(priceQuote) * circulating) / 10n ** BigInt(TOKEN_DECIMALS), decimals);
   const volume24h = unitsText(big(r.volume_24h), decimals);
@@ -256,7 +274,7 @@ export function launchRowOf(r: Row, p: PriceContext): FullLaunchRow {
     realQuote: num(r.real_quote),
     threshold: num(r.threshold),
     progress: progressOf(r),
-    completed: r.completed === true,
+    completed: phase !== "curve",
     graduated: r.graduated === true,
     pair: known(r.pair) ? String(r.pair) : null,
     lastPrice: known(r.last_price) ? decimalText(scaled(num(r.last_price))) : null,
@@ -269,7 +287,7 @@ export function launchRowOf(r: Row, p: PriceContext): FullLaunchRow {
     links: linksOf(r.links),
     burned: burned.toString(),
     circulating: circulating.toString(),
-    phase: r.graduated === true ? "graduated" : r.completed === true ? "completed" : "curve",
+    phase,
     priceQuote,
     priceUsd: usd.now === null ? null : usdPrice(priceNow * usd.now),
     change24h,
@@ -287,23 +305,26 @@ export function launchRowOf(r: Row, p: PriceContext): FullLaunchRow {
     lookAlike: r.look_alike === true,
     graduatedAt: iso(r.graduated_at),
     lastTradeAt: iso(r.last_trade_at),
+    generation: generationOf(r),
   };
 }
 
-/** v1's launches (`l`): lite.launches holds v2's too (migration 20261015000012). A v1 launch has its launchpad's launch
- *  index and a v2 one none (L15), which holds on a database without that migration too, where every row is v1's. */
+/** v1's launches (`l`), for v1's plans: lite.launches holds v2's too (migration 20261015000012). A v1 launch has its
+ *  launchpad's launch index and a v2 one none (L15), which holds on a database without that migration too, where every
+ *  row is v1's. */
 function v1Launch(): Fragment {
   return sql()`l.launch_index is not null`;
 }
 
 /** lite.launches rows (`l`) with what a LaunchRow adds up from the other tables: every burn seen (`b`: the graduation's
- *  is also on the row, so the larger counts), holders besides the launchpad and the pair, the last 24 hours' volume on
- *  the curve and in the pool, and the price a day ago. */
+ *  is also on the row, so the larger counts), holders, the last 24 hours' volume on the curve and in the pool, and the
+ *  price a day ago. Holders leave out the contracts that hold the coin for the protocol: both launchpads (each holds
+ *  its curves' tokens), the pool, and the token itself (a v2 token holds the rewards its holders are paid in it). */
 function launchQuery(where: Fragment, order: Fragment, limit: number, offset: number, dayAgo: Date): Promise<Row[]> {
-  const pad = env.network.contracts.launchpad;
+  const { launchpad, launchpadV2 } = env.network.contracts;
   return sql()`
     select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total,
-           lite.launch_holders(l.token, array[${pad}::text, l.pair]) as holders,
+           lite.launch_holders(l.token, array[${launchpad}::text, ${launchpadV2}::text, l.pair, l.token]) as holders,
            coalesce((select sum(t.quote_amount) from lite.launch_trades t where t.token = l.token and t.ts > ${dayAgo}), 0)
              + coalesce((select sum(s.quote_amount) from lite.pool_swaps s where s.token = l.token and s.ts > ${dayAgo}), 0) as volume_24h,
            lite.token_price_at(l.token, ${dayAgo}) as price_24h
@@ -386,26 +407,26 @@ function legacyBoard(sort: string): [Fragment, Fragment] {
   return [sql()`where l.listed`, sql()`order by l.created_at desc, l.token`];
 }
 
-/** GET /v1/launches (§6.9): listed launches only (a deployment's smoke launches never are). Explore holds every coin that
- *  hasn't graduated, completed curves included. */
+/** GET /v1/launches (§6.9): listed launches only (a deployment's smoke launches never are), of both generations, each
+ *  row with its own. Explore holds every coin that hasn't graduated, completed curves included. */
 export async function launchBoard(query: BoardQuery, scope: View, now: number = Date.now()): Promise<LaunchBoard> {
   const net = env.network;
   const dayAgo = new Date(now - DAY);
   const search = searchFilter(query.q);
   if (query.section === null) {
     const [where, order] = legacyBoard(query.sort);
-    const rows = await launchQuery(sql()`${where} and ${v1Launch()} ${search}`, order, query.limit, 0, dayAgo);
+    const rows = await launchQuery(sql()`${where} ${search}`, order, query.limit, 0, dayAgo);
     const p = await priceContext(rows, net, now);
     return { launches: rows.map((r) => launchRowOf(r, p)), view: scope };
   }
   const refs = await referencePrices(now, net);
   const graduated = query.section === "graduated";
-  const where = sql()`where l.listed and ${v1Launch()} and ${graduated ? sql()`l.graduated` : sql()`not l.graduated`} ${search}`;
+  const where = sql()`where l.listed and ${graduated ? sql()`l.graduated` : sql()`not l.graduated`} ${search}`;
   const order = boardOrder(query.section, query.sort as BoardSort, usdByContract(net, refs));
   const [rows, counts] = await Promise.all([
     launchQuery(where, order, query.limit + 1, (query.page - 1) * query.limit, dayAgo),
     sql()`select count(*) filter (where not l.graduated)::int as explore, count(*) filter (where l.graduated)::int as graduated
-            from lite.launches l where l.listed and ${v1Launch()} ${search}`,
+            from lite.launches l where l.listed ${search}`,
   ]);
   const page = rows.slice(0, query.limit);
   const p = await priceContext(page, net, now, refs);
@@ -428,16 +449,25 @@ const POINT_BUCKETS_S = [60, 300, 900, 3_600, 14_400, 86_400, 604_800];
 
 const curves = new Map<string, { at: number; curve: Row }>();
 
-/** The launchpad's get_curve(token); null when it can't be read. A read younger than `maxAgeMs` is answered from the
- *  isolate: 30 s for the public view and My Launchpad, none (a fresh read) for an owner's page, quotes and plans, which
- *  must see a trade the user just made. */
-async function liveCurve(token: string, now: number = Date.now(), maxAgeMs: number = CURVE_TTL_MS): Promise<Row | null> {
-  const pad = env.network.contracts.launchpad;
+/** launchpad-v2's Curve as v1's reads it: completed from the curve's completion on (refund mode too), graduated, and
+ *  the pool as the pair. Its phase is launchpad-v2's Phase (Curve, Completed, Graduated, Rescued). */
+export function curveFromV2(c: Row): Row {
+  const phase = Number(c.phase);
+  return { ...c, completed: phase >= 1, graduated: phase === 2, pair: c.pool ?? null };
+}
+
+/** The get_curve(token) of the launch's own launchpad (v1's, or launchpad-v2 for `generation` 2, read as v1's);
+ *  null when it can't be read. A read younger than `maxAgeMs` is answered from the isolate: 30 s for the public view and
+ *  My Launchpad, none (a fresh read) for an owner's page, quotes and plans, which must see a trade the user just
+ *  made. */
+async function liveCurve(token: string, now: number = Date.now(), maxAgeMs: number = CURVE_TTL_MS, generation: 1 | 2 = 1): Promise<Row | null> {
+  const pad = generation === 2 ? env.network.contracts.launchpadV2 : env.network.contracts.launchpad;
   if (!pad) return null;
   const hit = curves.get(token);
   if (hit && now - hit.at < maxAgeMs && now >= hit.at) return hit.curve;
   try {
-    const curve = await view(pad, "get_curve", [sv.addr(token)]);
+    const read = await view(pad, "get_curve", [sv.addr(token)]);
+    const curve = generation === 2 ? curveFromV2(read) : read;
     if (curves.size > 1_000) curves.clear();
     curves.set(token, { at: now, curve });
     return curve;
@@ -592,17 +622,17 @@ async function youOf(r: Row, viewer: LaunchViewer): Promise<LaunchDetail["you"]>
   return { balance: balance.toString(), costBasisQuote: position?.costBasis.toString() ?? null, pnlQuote: position?.pnl.toString() ?? null, isCreator };
 }
 
-/** GET /v1/launches/:token (§6.9). */
+/** GET /v1/launches/:token (§6.9), for a launch of either generation: its curve is read from its own launchpad. */
 export async function launchDetail(token: string, viewer: LaunchViewer, candles?: string, now: number = Date.now()): Promise<LaunchDetail> {
   if (!isContractId(token)) throw notFound("Launch");
   const net = env.network;
-  const rows = await launchQuery(sql()`where l.token = ${token} and ${v1Launch()}`, sql()``, 1, 0, new Date(now - DAY));
+  const rows = await launchQuery(sql()`where l.token = ${token}`, sql()``, 1, 0, new Date(now - DAY));
   if (rows.length === 0) throw notFound("Launch");
   const r = rows[0];
   const interval = candles ? CANDLES[candles] : undefined;
   const [p, curve, trades, candleRows, points, you] = await Promise.all([
     priceContext(rows, net, now),
-    liveCurve(token, now, viewer.scope === "owner" ? 0 : CURVE_TTL_MS),
+    liveCurve(token, now, viewer.scope === "owner" ? 0 : CURVE_TTL_MS, generationOf(r)),
     recentTrades(token),
     interval ? sql()`select bucket, open, high, low, close, volume from lite.token_candles(${token}, ${interval}::interval, 300)` : Promise.resolve([] as Row[]),
     pricePoints(r, now),
@@ -1030,21 +1060,22 @@ export async function launchSearch(q: string): Promise<Record<string, unknown>[]
 // ------------------------------------------------------------------------------------------------ My Launchpad
 
 /** GET /v1/launchpad/me (§6.9): launches held (indexed balances, cost basis and P&L over curve trades and pool swaps),
- *  launches created with their creator fees (unclaimed read live), fees by quote asset, and the launch activity. */
+ *  launches created with their creator fees (unclaimed read live, from each launch's own launchpad), fees by quote
+ *  asset, and the launch activity. Both generations, each launch with its own. */
 export async function myLaunchpad(user: string, now: number = Date.now()): Promise<MyLaunchpad> {
   const net = env.network;
   const dayAgo = new Date(now - DAY);
   const order = sql()`order by l.created_at desc, l.token`;
   const [held, created, balances] = await Promise.all([
-    launchQuery(sql()`where l.token in (select tb.token from lite.token_balances tb where tb.address = ${user} and tb.balance > 0) and ${v1Launch()}`, order, 200, 0, dayAgo),
-    launchQuery(sql()`where l.creator = ${user} and ${v1Launch()}`, order, 200, 0, dayAgo),
+    launchQuery(sql()`where l.token in (select tb.token from lite.token_balances tb where tb.address = ${user} and tb.balance > 0)`, order, 200, 0, dayAgo),
+    launchQuery(sql()`where l.creator = ${user}`, order, 200, 0, dayAgo),
     sql()`select token, balance from lite.token_balances where address = ${user} and balance > 0`,
   ]);
   const p = await priceContext([...held, ...created], net, now);
   const balance = new Map(balances.map((b) => [String(b.token), big(b.balance)]));
   const [fills, live, activity] = await Promise.all([
     fillsOf(user, held.map((r) => String(r.token))),
-    Promise.all(created.map((r) => liveCurve(String(r.token), now))),
+    Promise.all(created.map((r) => liveCurve(String(r.token), now, CURVE_TTL_MS, generationOf(r)))),
     launchActivity(user, p),
   ]);
   if (live.some((c) => c === null)) throw new ApiError(502, "rpc_unavailable", "Your creator fees couldn't be read just now. Try again.");

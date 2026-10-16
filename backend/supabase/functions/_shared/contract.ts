@@ -3,6 +3,8 @@
 // example of each. Types only: a route module annotates what it answers with these, so the compiler holds the server
 // to the contract. A field marked "added" is new in the parity API: the phone also decodes payloads without it.
 // `Routes` gives every route its auth class (public, viewer or session: docs/API-lite.md §0), checked at the end.
+import type { LaunchPreviewV2, LaunchStateV2, LaunchV2BuildInput } from "./launchpad_v2.ts";
+import type { MomentsV2Durations, MomentV2State, MomentV2Status, MomentV2Vesting } from "./moments_v2.ts";
 
 // ------------------------------------------------------------------------------------------------ conventions
 
@@ -32,7 +34,8 @@ export type NetworkName = "testnet" | "mainnet";
 export type Section = "spot" | "earn" | "launch" | "moments" | "bridge" | "cash" | "account";
 export type FeePayer = "user" | "sponsor" | "external";
 export type SponsorReason = "setup" | "starter_swap";
-export type LaunchPhase = "curve" | "completed" | "graduated";
+/** `rescued`: a v2 launch in refund mode (DESIGN-stellar-contracts-v2 §5.1, O2). */
+export type LaunchPhase = "curve" | "completed" | "graduated" | "rescued";
 export type MomentState = "collecting" | "sold_out" | "closed";
 export type PartStatus = "ok" | "failed";
 export type SwapVenue = "sdex" | "soroswap" | "aquarius";
@@ -849,6 +852,9 @@ export interface LaunchRow {
   lookAlike?: boolean;
   graduatedAt?: IsoTime | null;
   lastTradeAt?: IsoTime | null;
+  /** Added (contracts v2): the launchpad generation it was launched on, 1 (retired) or 2 (live). The app shows v1's
+   *  launches as Retired. */
+  generation?: 1 | 2;
 }
 
 export interface LaunchBoard {
@@ -1119,6 +1125,117 @@ export interface UploadTicket {
   path: string;
 }
 
+// ------------------------------------------------------------------------------------------------ contracts v2
+
+// Launchpad v2's and Moments v2's own routes (DESIGN-stellar-contracts-v2 §20). The live reads' shapes are their
+// modules' (launchpad_v2.ts, moments_v2.ts); the indexed v2 Moments reads' are below (moments_v2_feed.ts). Each body
+// carries generation 2.
+export type { LaunchPreviewV2, LaunchStateV2, LaunchV2BuildInput, MomentsV2Durations, MomentV2State, MomentV2Status, MomentV2Vesting };
+
+/** A v2 Moment as the indexer recorded it: its NFT contract is its id. v1's MomentRow fields where they mean the same;
+ *  price, threshold, reserve and gross in USDC base units. */
+export interface MomentRowV2 {
+  generation: 2;
+  /** The Moment's NFT contract: its id. */
+  nft: ContractAddress;
+  /** DyorHQ's display number, in publish order. */
+  number: number | null;
+  creator: AccountAddress;
+  uri: string;
+  /** The NFT's and its coin's name and ticker, on chain. */
+  name: string;
+  symbol: string;
+  /** From DyorHQ's metadata, as v1's feed gives them; null without it. */
+  title: string | null;
+  description: string | null;
+  place: string | null;
+  /** "2026-10-14". */
+  takenOn: string | null;
+  mediaUrl: string | null;
+  mediaType: "image" | "video" | null;
+  /** The photo, or the video's cover frame. */
+  posterUrl: string | null;
+  /** Per edition. */
+  price: Units;
+  /** USDC's contract, the only quote of v2 Moments. */
+  quote: ContractAddress;
+  quoteCode: string;
+  priceUsd: Usd;
+  /** The reserve that completes it. */
+  threshold: Units;
+  /** USDC collected so far, the gross of every collect. */
+  totalGross: Units;
+  /** What its reserve holds now: 0 once graduated or expired. */
+  reserve: Units;
+  /** How far it got to its threshold, 0 to 1: 1 once it completed. */
+  progress: Fraction;
+  /** Editions minted; v2 Moments have no edition cap. */
+  minted: number;
+  collects: number;
+  collectors: number;
+  /** The creator's coins, in bps of the coin's supply. */
+  creatorAllocBps: number;
+  platformBps: number | null;
+  royaltyBps: number | null;
+  deadline: IsoTime;
+  state: MomentV2State;
+  /** Collecting, before its deadline. */
+  open: boolean;
+  /** Its coin and Soroswap pool, once graduated; null before. */
+  coin: ContractAddress | null;
+  pool: ContractAddress | null;
+  /** The durations its terms bound, in seconds. */
+  durations: MomentsV2Durations;
+  publishedAt: IsoTime;
+  completedAt: IsoTime | null;
+  graduatedAt: IsoTime | null;
+  expiredAt: IsoTime | null;
+}
+
+export interface MomentFeedV2 {
+  moments: MomentRowV2[];
+  nextCursor: string | null;
+  view: View;
+}
+
+export interface MomentDetailV2 {
+  moment: MomentRowV2;
+  /** The newest 50 collects. */
+  collectors: { collector: AccountAddress; quantity: number; firstTokenId: number; ts: IsoTime }[];
+  collectorsSummary: { count: number; largest: { address: AccountAddress; editions: number } | null };
+  /** The viewer's account: the editions it holds, the coins it was promised as a collector (coin base units) and has
+   *  claimed, and what it paid (null in the public view). Null without an account. */
+  you: { editions: number[]; entitlement: Units; claimed: Units; spent: Units | null } | null;
+  /** The creator's share of every collect, and of an expired Moment's reserve. */
+  creatorEarned: Units;
+  view: View;
+}
+
+/** A v2 Moment an account holds editions of, or was promised coins in. */
+export interface MomentHoldingV2 {
+  moment: MomentRowV2;
+  /** Its editions' numbers: the NFT's token ids. */
+  editions: number[];
+  /** The coins promised as a collector, and claimed so far (coin base units). */
+  entitlement: Units;
+  claimed: Units;
+  /** What it paid collecting; null in the public view. */
+  spent: Units | null;
+}
+
+export interface OwnedMomentsV2 {
+  moments: MomentHoldingV2[];
+  view: View;
+}
+
+export interface MyMomentsV2 {
+  /** The proceeds: the creator's share of every collect and of an expired Moment's reserve; withdrawn: what left the
+   *  contract to the creator. */
+  created: (MomentRowV2 & { proceeds: Units; proceedsUsd: Usd; withdrawn: Units })[];
+  collected: MomentHoldingV2[];
+  totals: { editions: number; moments: number; spentByQuote: Record<AssetId, Units>; earnedByQuote: Record<AssetId, Units> };
+}
+
 /** A file's bytes, not JSON: what an upload to the local media stand-in sends, with the ticket's content type, and what
  *  a read of it answers, with the content type it was stored with. Local stack only (testnet, LITE_LOCAL_STORAGE_DIR);
  *  it stands in for Supabase Storage, and its URLs are the ones `UploadTicket` hands out there. */
@@ -1354,6 +1471,14 @@ export interface Routes {
   "GET /v1/moments": { auth: "viewer"; query: { filter?: "all" | "collecting" | "closed"; limit?: number } & ViewerQuery; response: MomentFeed };
   "GET /v1/moments/owned": { auth: "viewer"; query: ViewerQuery; response: OwnedEditions };
   "GET /v1/moments/mine": { auth: "session"; response: MyMoments };
+  "GET /v1/moments/v2": {
+    auth: "viewer";
+    query: { filter?: "all" | "collecting" | "closed"; limit?: number; cursor?: string } & ViewerQuery;
+    response: MomentFeedV2;
+  };
+  "GET /v1/moments/v2/owned": { auth: "viewer"; query: ViewerQuery; response: OwnedMomentsV2 };
+  "GET /v1/moments/v2/mine": { auth: "session"; response: MyMomentsV2 };
+  "GET /v1/moments/v2/:nft": { auth: "viewer"; query: ViewerQuery; response: MomentDetailV2 };
   "GET /v1/moments/:id": { auth: "viewer"; query: ViewerQuery; response: MomentDetail };
   "POST /v1/moments/metadata": { auth: "session"; body: MomentMetadataRequest; response: MomentMetadata };
   "POST /v1/moments/build": { auth: "session"; body: MomentBuildRequest; response: PlanView };
@@ -1363,6 +1488,14 @@ export interface Routes {
   "PUT /v1/local-media/upload/:token": { auth: "upload"; body: MediaBytes; response: void };
   /** `<folder>/<owner>/<file>`: `uploads/G…/<uuid>.<ext>`, or a metadata JSON under `launches/` or `moments/`. */
   "GET /v1/local-media/lite-media/:folder/:owner/:file": { auth: "public"; response: MediaBytes };
+  /** Contracts v2: the terms a launch binds now, its 10 XLM fee, the Create screen's Max and any XLM shortfall. */
+  "POST /v1/launches/preview": { auth: "session"; body: Partial<LaunchV2BuildInput>; response: LaunchPreviewV2 };
+  /** Contracts v2: a launch's live status, recipient, creator fees and holder rewards; `you` is the viewer's. */
+  "GET /v1/launches/:token/state": { auth: "viewer"; query: ViewerQuery; response: LaunchStateV2 };
+  /** Contracts v2: a Moment's live state and when it may expire. */
+  "GET /v1/moments/:nft/status": { auth: "public"; response: MomentV2Status };
+  /** Contracts v2: the account's coins in a Moment as they vest. */
+  "GET /v1/moments/:nft/vesting": { auth: "viewer"; query: ViewerQuery; response: MomentV2Vesting };
   "GET /v1/activity": {
     auth: "session";
     query: { section?: Section; kind?: string; period?: Period; market?: string; limit?: number };
@@ -1406,6 +1539,7 @@ export type PublicClassIsExact = Holds<
     | "GET /v1/earn/markets"
     | "GET /v1/earn/history"
     | "GET /v1/local-media/lite-media/:folder/:owner/:file"
+    | "GET /v1/moments/:nft/status"
   >
 >;
 export type ViewerClassIsExact = Holds<
@@ -1420,6 +1554,11 @@ export type ViewerClassIsExact = Holds<
     | "GET /v1/moments"
     | "GET /v1/moments/:id"
     | "GET /v1/assets"
+    | "GET /v1/launches/:token/state"
+    | "GET /v1/moments/:nft/vesting"
+    | "GET /v1/moments/v2"
+    | "GET /v1/moments/v2/owned"
+    | "GET /v1/moments/v2/:nft"
   >
 >;
 export type UploadClassIsExact = Holds<Same<RoutesOf<"upload">, "PUT /v1/local-media/upload/:token">>;
