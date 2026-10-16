@@ -130,9 +130,12 @@ final class LaunchV2StoreTests: XCTestCase {
 
     /// A built step: its intent (with terms for a create), no transaction yet (priced from its ceiling).
     private static func plan(kind: String, display: [String: Any] = [:], terms: [String: Any]? = nil, spend: [String: String] = [:],
-                             before: [[String: Any]] = [], backlog: [String: Any]? = nil) -> [String: Any] {
+                             receive: [String: String]? = nil, to: String? = nil, before: [[String: Any]] = [],
+                             backlog: [String: Any]? = nil) -> [String: Any] {
         var intent: [String: Any] = ["kind": kind, "summary": "The server's English", "spend": spend, "display": display]
         if let terms { intent["terms"] = terms }
+        if let receive { intent["receive"] = receive }
+        if let to { intent["to"] = to }
         let main: [String: Any] = ["id": "s\(before.count + 1)", "label": "The server's label", "status": "built", "intent": intent,
                                    "maxFee": "4650100", "feePayer": "user", "reserveDelta": 0]
         var plan: [String: Any] = ["planId": "p-\(kind)", "kind": kind, "expiresAt": "2026-10-15T14:47:36.511Z", "steps": before + [main]]
@@ -250,14 +253,17 @@ final class LaunchV2StoreTests: XCTestCase {
     func testACreateWritesItsMetadataAndConfirmsTheFeeAndTheBuy() async throws {
         let (_, launches) = try await ready()
         try serve("POST /v1/launches/metadata", ["uri": "https://media.test/meta/ecat.json"])
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: ["symbol": "ECAT", "quote": "XLM", "initialBuy": "500000000"],
-                                                       terms: Self.terms(), spend: [Self.xlm: "600000000"]))
         let terms = try Self.decodedTerms()
         let buy = try XCTUnwrap(LaunchV2Store.firstBuy(500_000_000, terms: terms, creatorFeeBps: 100))
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT", "quote": "XLM", "initialBuy": "500000000"], recipient: Self.recipient),
+                                                       terms: Self.terms(), spend: [Self.xlm: "600000000"], receive: [Self.token: String(buy.minOut)],
+                                                       to: Self.recipient))
         var form = LaunchV2Form(name: "E2E Cat", symbol: "ecat", website: "https://e2e.cat", quote: "XLM", creatorFeeBps: 100,
-                                recipient: "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR", developerBuy: 500_000_000, minOut: buy.minOut)
+                                recipient: Self.recipient, developerBuy: 500_000_000, minOut: buy.minOut)
         let action = try await launches.createPlan(form, terms: terms, image: nil)
         XCTAssertEqual(action.limits, [Self.xlm: 600_000_000], "the 10 XLM fee and the 50 XLM buy, both in XLM")
+        XCTAssertEqual(action.bindings, PlanBindings(minimums: [PlanBindings.anyAsset: buy.minOut], destination: .confirmed(to: Self.recipient, memo: nil)),
+                       "the new coin's minimum and the fee recipient the user typed")
         XCTAssertEqual(action.section, .launch)
         XCTAssertNil(action.reference, "the new coin's page comes from what the launch returns")
         XCTAssertEqual(action.title(of: action.plan.steps[0]), "Launch ECAT and buy with 50 XLM")
@@ -275,7 +281,8 @@ final class LaunchV2StoreTests: XCTestCase {
         XCTAssertEqual(sent["recipient"] as? String, "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR")
 
         // A USDC launch: the fee in XLM, the buy in USDC.
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: ["symbol": "ECAT"], terms: Self.terms(quote: Self.usdc)))
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: Self.recipient), terms: Self.terms(quote: Self.usdc),
+                                                       receive: [Self.token: String(buy.minOut)], to: Self.recipient))
         form.quote = "USDC"
         form.developerBuy = 20_000_000
         let usdc = try await launches.createPlan(form, terms: try Self.decodedTerms(quote: Self.usdc), image: nil)
@@ -316,19 +323,23 @@ final class LaunchV2StoreTests: XCTestCase {
         let (_, launches) = try await ready()
         let asset = try Self.xlmQuote()
         try serve("POST /v1/launches/\(Self.token)/quote", ["side": "buy", "used": "500000000", "tokensOut": "11952000000000", "fees": "2000000"])
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_buy", display: ["symbol": "ECAT", "amount": "500000000", "quote": "XLM"]))
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_buy", display: ["symbol": "ECAT", "amount": "500000000", "quote": "XLM"],
+                                                       spend: [Self.xlm: "500000000"], receive: [Self.token: "11832480000000"]))
         let buy = try await launches.tradePlan(try await launches.quote(token: Self.token, side: .buy, amount: 500_000_000), token: Self.token,
                                                symbol: "ECAT", asset: asset)
         XCTAssertEqual(buy.limits, [Self.xlm: 500_000_000])
+        XCTAssertEqual(buy.bindings, PlanBindings(minimums: [Self.token: 11_832_480_000_000]), "the quote's minimum, from the phone's own quote")
         XCTAssertEqual(buy.reference, "stellar:launch/\(Self.token)")
         XCTAssertEqual(try body("POST /v1/launches/build") as? [String: String],
                        ["action": "buy", "token": Self.token, "amount": "500000000", "minOut": "11832480000000"])
 
         try serve("POST /v1/launches/\(Self.token)/quote", ["side": "sell", "quoteOut": "100000000", "fees": "2000000"])
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_sell", display: ["symbol": "ECAT", "amount": "11952000000000"]))
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_sell", display: ["symbol": "ECAT", "amount": "11952000000000"],
+                                                       spend: [Self.token: "11952000000000"], receive: [Self.xlm: "99000000"]))
         let sell = try await launches.tradePlan(try await launches.quote(token: Self.token, side: .sell, amount: 11_952_000_000_000), token: Self.token,
                                                 symbol: "ECAT", asset: asset)
         XCTAssertEqual(sell.limits, [Self.token: 11_952_000_000_000])
+        XCTAssertEqual(sell.bindings, PlanBindings(minimums: [Self.xlm: 99_000_000]))
 
         try serve("POST /v1/launches/\(Self.token)/quote", ["side": "refund", "quoteOut": "48050", "fees": "0", "rate": "0.000000048050614666"])
         try serve("POST /v1/launches/build", Self.plan(kind: "launch_refund", display: ["symbol": "ECAT", "amount": "1000000000000"]))
@@ -382,12 +393,13 @@ final class LaunchV2StoreTests: XCTestCase {
         let harvest: [String: Any] = ["id": "s1", "label": "Collect ECAT's pool fees first", "status": "built",
                                       "intent": ["kind": "launch_harvest", "summary": "Collect", "spend": [String: String]()],
                                       "maxFee": "4650100", "feePayer": "user", "reserveDelta": 0]
-        try serve("POST /v1/launches/build", Self.plan(kind: "launch_recipient_transfer", before: [harvest], backlog: [
+        let to = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_recipient_transfer", to: to, before: [harvest], backlog: [
             "residualQuote": "22251", "residualToken": "89005", "growthQuote": "44502", "growthToken": "178010", "roundsToDrain": 10,
             "nextHarvestAt": "2026-10-15T15:32:36.000Z", "drainedBy": "2026-10-16T00:32:36.000Z",
         ]))
-        let to = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
         let change = try await launches.recipientPlan(token: Self.token, symbol: "ECAT", change: .transfer(to: to))
+        XCTAssertEqual(change.action.bindings, PlanBindings(destination: .confirmed(to: to, memo: nil)))
         XCTAssertEqual(change.backlog?.roundsToDrain, 10)
         XCTAssertEqual(change.action.limits, [:])
         XCTAssertEqual(change.action.plan.steps.map { change.action.title(of: $0) }, ["Collect ECAT's pool fees first", "Change ECAT's fee recipient"])
@@ -397,6 +409,102 @@ final class LaunchV2StoreTests: XCTestCase {
         let veto = try await launches.recipientPlan(token: Self.token, symbol: "ECAT", change: .cancel)
         XCTAssertNil(veto.backlog)
         XCTAssertEqual(try body("POST /v1/launches/build") as? [String: String], ["action": "recipient_cancel", "token": Self.token])
+    }
+
+    // MARK: - What the user chose, against what the server built
+
+    private static let recipient = "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"
+
+    /// A create's display with the fields it binds from the form (backend launchpad_v2.ts): the fee recipient, no
+    /// exemptions, a 1% creator fee, holder sharing on.
+    private static func bound(_ display: [String: Any], recipient: String, exempt: String = "", creatorFeeBps: Int = 100,
+                              holderSharing: Bool = true) -> [String: Any] {
+        display.merging(["recipient": recipient, "snipeExempt": exempt, "creatorFeeBps": creatorFeeBps, "holderSharing": holderSharing]) { $1 }
+    }
+
+    func testACreateThatBindsAnythingElseThanTheFormIsRefusedBeforeItIsSigned() async throws {
+        let (_, launches) = try await ready()
+        try serve("POST /v1/launches/metadata", ["uri": "https://media.test/meta/ecat.json"])
+        let terms = try Self.decodedTerms()
+        let mallory = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
+        let form = LaunchV2Form(name: "E2E Cat", symbol: "ECAT", quote: "XLM", creatorFeeBps: 100)
+        let me = launches.store.address
+        let cases: [(String, [String: Any])] = [
+            ("the fees go to another recipient",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: mallory), terms: Self.terms(), to: mallory)),
+            ("the display names another recipient", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: mallory), terms: Self.terms())),
+            ("another buyer skips the early-buy tax",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: mallory), terms: Self.terms())),
+            ("another creator fee", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, creatorFeeBps: 1_000), terms: Self.terms())),
+            ("holder sharing turned off",
+             Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, holderSharing: false), terms: Self.terms())),
+            ("no exemptions stated",
+             Self.plan(kind: "launch_create", display: ["symbol": "ECAT", "recipient": me, "creatorFeeBps": 100, "holderSharing": true], terms: Self.terms())),
+        ]
+        for (name, built) in cases {
+            try serve("POST /v1/launches/build", built)
+            do {
+                _ = try await launches.createPlan(form, terms: terms, image: nil)
+                XCTFail(name)
+            } catch let LiteAPIError.server(_, code, _, _) {
+                XCTAssertEqual(code, "launch_form_changed", name)
+            }
+        }
+        // The exemptions in another order than the form's: refused; in the form's order, with the rest the same: it goes ahead.
+        let other = "GAQKCKSB3YEAQDIBZAVHMAL5PBFCPWIA52TKIUXYIBNSJRQIDVHQB4SF"
+        let exempting = LaunchV2Form(name: "E2E Cat", symbol: "ECAT", quote: "XLM", creatorFeeBps: 100, exempt: [mallory, other])
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: "\(other),\(mallory)"),
+                                                       terms: Self.terms()))
+        do {
+            _ = try await launches.createPlan(exempting, terms: terms, image: nil)
+            XCTFail("the exemptions reordered")
+        } catch let LiteAPIError.server(_, code, _, _) {
+            XCTAssertEqual(code, "launch_form_changed")
+        }
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: "\(mallory),\(other)"),
+                                                       terms: Self.terms()))
+        let ok = try await launches.createPlan(exempting, terms: terms, image: nil)
+        XCTAssertEqual(ok.bindings, .none, "no buy, fees to the creator")
+    }
+
+    func testATradeWhoseMinimumIsLowerThanTheQuotesIsRefusedBeforeItIsSigned() async throws {
+        let (_, launches) = try await ready()
+        let asset = try Self.xlmQuote()
+        try serve("POST /v1/launches/\(Self.token)/quote", ["side": "buy", "used": "500000000", "tokensOut": "11952000000000", "fees": "2000000"])
+        let quote = try await launches.quote(token: Self.token, side: .buy, amount: 500_000_000)
+        for receive in ["11832479999999", "0"] {
+            try serve("POST /v1/launches/build", Self.plan(kind: "launch_buy", spend: [Self.xlm: "500000000"], receive: [Self.token: receive]))
+            do {
+                _ = try await launches.tradePlan(quote, token: Self.token, symbol: "ECAT", asset: asset)
+                XCTFail("minimum \(receive)")
+            } catch let f as PlanRunner.Failure {
+                XCTAssertEqual(f, .minimumNotConfirmed(step: "The server's label"), receive)
+            }
+        }
+        // And a buy whose intent names no minimum at all.
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_buy", spend: [Self.xlm: "500000000"]))
+        do {
+            _ = try await launches.tradePlan(quote, token: Self.token, symbol: "ECAT", asset: asset)
+            XCTFail("no minimum")
+        } catch let f as PlanRunner.Failure {
+            XCTAssertEqual(f, .minimumNotConfirmed(step: "The server's label"))
+        }
+    }
+
+    func testARecipientChangeToAnotherAddressThanTheTypedOneIsRefused() async throws {
+        let (_, launches) = try await ready()
+        let typed = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_recipient_transfer", to: Self.recipient))
+        do {
+            _ = try await launches.recipientPlan(token: Self.token, symbol: "ECAT", change: .transfer(to: typed))
+            XCTFail("another recipient")
+        } catch let f as PlanRunner.Failure {
+            XCTAssertEqual(f, .destinationNotConfirmed(step: "The server's label"))
+        }
+        // A pending change applied by anyone names the contract's new recipient, which the user didn't type.
+        try serve("POST /v1/launches/build", Self.plan(kind: "launch_recipient_execute", to: Self.recipient))
+        let apply = try await launches.recipientPlan(token: Self.token, symbol: "ECAT", change: .execute)
+        XCTAssertEqual(apply.action.bindings, PlanBindings(destination: .unchecked))
     }
 
     // MARK: - The package's words

@@ -151,6 +151,58 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(action.spends, ["XLM"], "what a shortfall on the network names")
     }
 
+    // MARK: - What the user confirmed besides the spends (PlanBindings)
+
+    func testASwapBindsTheMinimumItsQuoteShowedAndTheRunIsHeldToIt() async throws {
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        let action = try await swapAction(store)
+        let usdc = try XCTUnwrap(store.asset("USDC")?.contract)
+        XCTAssertEqual(action.bindings, PlanBindings(minimums: [usdc: 18_843_341]), "the quote's 18.938032 USDC less its 0.5%")
+        _ = try await store.run(action, reason: "Confirm Swap")
+        XCTAssertEqual(backend.lastBindings, action.bindings)
+    }
+
+    func testASwapsMinimumIsTheQuotesNeverLessAndNeverNothing() throws {
+        XCTAssertEqual(try LiteStore.swapMinimum(quoted: "18938032", minOut: "18843341", slippageBps: 50), 18_843_341)
+        XCTAssertEqual(try LiteStore.swapMinimum(quoted: "18938032", minOut: "1", slippageBps: 50), 18_843_341,
+                       "a route minimum below the quote less its slippage")
+        XCTAssertEqual(try LiteStore.swapMinimum(quoted: "18938032", minOut: nil, slippageBps: 50), 18_843_341)
+        XCTAssertEqual(try LiteStore.swapMinimum(quoted: String(Int64.max), minOut: nil, slippageBps: 100), Int64.max / 100 * 99 + Int64.max % 100 * 99 / 100)
+        XCTAssertThrowsError(try LiteStore.swapMinimum(quoted: "0", minOut: "0", slippageBps: 50))
+    }
+
+    func testASendsMemoIsBoundAsTheServerBindsIt() {
+        XCTAssertNil(LiteStore.boundMemo(nil, type: nil))
+        XCTAssertNil(LiteStore.boundMemo("", type: "text"))
+        XCTAssertEqual(LiteStore.boundMemo("hello", type: nil), Intent.Memo(type: "text", value: "hello"))
+        XCTAssertEqual(LiteStore.boundMemo("00042", type: "id"), Intent.Memo(type: "id", value: "42"))
+        let hex = String(repeating: "ab", count: 32)
+        XCTAssertEqual(LiteStore.boundMemo(hex.uppercased(), type: "hash"), Intent.Memo(type: "hash", value: hex))
+        XCTAssertEqual(LiteStore.boundMemo(Data(repeating: 0xab, count: 32).base64EncodedString(), type: "hash"), Intent.Memo(type: "hash", value: hex))
+    }
+
+    func testABuiltSendToAnotherAddressOrMemoIsRefusedBeforeTheReview() throws {
+        let me = "GAQKCKSB3YEAQDIBZAVHMAL5PBFCPWIA52TKIUXYIBNSJRQIDVHQB4SF"
+        let friend = "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"
+        let lookalike = "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG"
+        func plan(to: String, memo: String?) throws -> PlanView {
+            let memoJSON = memo.map { #","memo":{"type":"id","value":"\#($0)"}"# } ?? ""
+            let json = #"{"planId":"p","kind":"payment","expiresAt":"2026-10-15T14:47:36.511Z","steps":[{"id":"s1","label":"Send","status":"built","#
+                + #""intent":{"kind":"payment","summary":"Send 1 XLM","spend":{"XLM":"10000000"},"to":"\#(to)"\#(memoJSON)},"#
+                + #""maxFee":"100","feePayer":"user","reserveDelta":0}]}"#
+            return try JSONDecoder().decode(PlanView.self, from: Data(json.utf8))
+        }
+        let typed = PlanBindings(destination: .confirmed(to: friend, memo: Intent.Memo(type: "id", value: "42")))
+        XCTAssertNoThrow(try LiteStore.checkBuilt(plan(to: friend, memo: "42"), bindings: typed, user: me))
+        for (other, memo) in [(lookalike, "42"), (friend, "43"), (friend, nil)] as [(String, String?)] {
+            XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: other, memo: memo), bindings: typed, user: me)) { error in
+                XCTAssertEqual(error as? PlanRunner.Failure, .destinationNotConfirmed(step: "Send"))
+            }
+        }
+        // Nothing typed: a step may pay only the user.
+        XCTAssertThrowsError(try LiteStore.checkBuilt(plan(to: friend, memo: nil), bindings: .none, user: me))
+    }
+
     func testAStepAboveThePinnedCapIsRefusedBeforeTheReview() async throws {
         let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
         let plan = try JSONDecoder().decode(PlanView.self, from: Data(FakeLite.plan(id: "p", steps: [("s1", "swap_soroswap", "Swap", 40_000_000)]).utf8))

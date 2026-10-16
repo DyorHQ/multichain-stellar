@@ -725,7 +725,8 @@ final class V2RuntimeContractTests: XCTestCase {
         runner.now = { Date(timeIntervalSince1970: now) }
         let key = try SharedVectors.user()
         let limits = vector.intent.spend.compactMapValues(TxVerifier.units)
-        return try await runner.run(plan, limits: limits, fees: try PlanFees(plan: plan, pinned: pinned), signer: { key })
+        return try await runner.run(plan, limits: limits, bindings: PlanBindings.typed(vector.intent, user: vector.user),
+                                    fees: try PlanFees(plan: plan, pinned: pinned), signer: { key })
     }
 
     @discardableResult

@@ -236,6 +236,9 @@ public struct MomentsV2Store {
                                                           place: form.place, takenOn: form.takenOn)
         let plan = try await store.api.buildMomentV2(.init(action: .publish, uri: metadata.uri, name: form.name, symbol: symbol,
                                                            price: String(form.price), allocationBps: form.allocationBps, windowSecs: form.windowSecs))
+        // What the user chose, as the publish binds it (verify.ts and TxVerifier bind these to the transaction). A publish
+        // queued behind the USDC trustline isn't built yet: its review doesn't go ahead (`publishWaits`).
+        if !Self.publishWaits(plan), !Self.formChanges(plan, form: form).isEmpty { throw Self.formChanged }
         let main = LiteTitles.intent(kind: "moment_publish", display: ["price": .string(String(form.price)), "quote": .string("USDC")])
         return try store.prepare(plan, limits: [:], title: title,
                                  titles: LiteStore.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string("USDC")])),
@@ -381,6 +384,23 @@ public struct MomentsV2Store {
             ("symbol", StellarTickerV2.normalized(form.symbol) ?? form.symbol),
         ]
         return expected.filter { name, value in shown[name]?.text != value }.map(\.0)
+    }
+
+    /// The fields of `form` the plan's built publish binds differently, or doesn't state, by name; empty when it binds
+    /// them as the form has them: `price` (USDC base units), `allocationBps` and `windowSecs`, which both verifiers bind
+    /// to the call. Fails closed: no built publish, or a field it doesn't state, differs.
+    public nonisolated static func formChanges(_ plan: PlanView, form: StellarMomentFormV2) -> [String] {
+        guard let intent = plan.steps.first(where: isPublish)?.intent, intent.kind == "moment_publish" else { return ["publish"] }
+        let shown = BoundDisplay(intent.display)
+        var changes: [String] = []
+        if shown.text("price") != String(form.price) { changes.append("price") }
+        if shown.whole("allocationBps") != form.allocationBps { changes.append("allocationBps") }
+        if shown.whole("windowSecs") != form.windowSecs { changes.append("windowSecs") }
+        return changes
+    }
+
+    nonisolated static var formChanged: LiteAPIError {
+        .server(status: 409, code: "moment_form_changed", message: words("The Moment doesn't match what you chose. Nothing was signed. Review it again."))
     }
 
     /// Whether a publish plan's publish waits, unbuilt, behind another step (the account's USDC trustline): it can't be

@@ -386,6 +386,7 @@ final class TestBackend: LiteBackend, @unchecked Sendable {
     private var runPlans: [String] = []
     private var signed = 0
     private var fees: PlanFees?
+    private var bindings: PlanBindings?
     var afterRun: (@Sendable (PlanView) -> Void)?
     /// A pause before each step's signature, to catch a run in the middle.
     var stepPause: TimeInterval = 0
@@ -402,12 +403,15 @@ final class TestBackend: LiteBackend, @unchecked Sendable {
     var signatures: Int { lock.withLock { signed } }
     /// The fees the last run was held to.
     var lastFees: PlanFees? { lock.withLock { fees } }
+    /// The minimums, destination and memo the last run was held to.
+    var lastBindings: PlanBindings? { lock.withLock { bindings } }
 
-    func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
+    func run(_ plan: PlanView, user: String, limits: [String: Int64], bindings: PlanBindings, fees: PlanFees,
              signer: @Sendable () async throws -> StellarSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
         lock.withLock {
             runPlans.append(plan.planId)
             self.fees = fees
+            self.bindings = bindings
         }
         if let failure { throw failure }
         var results: [TxStatus] = []
