@@ -83,6 +83,12 @@ public struct StellarMomentListingV2: Hashable, Sendable, Identifiable {
         self.place = place
         self.takenOn = takenOn
     }
+
+    /// A Moment as the API's indexer recorded it (a feed's card, a page's header, an account's or a creator's Moment).
+    public init(_ row: StellarMomentRowV2) {
+        self.init(nft: row.nft, name: row.name, symbol: row.symbol, image: row.image, video: row.isVideo ? row.mediaUrl : nil, place: row.place,
+                  takenOn: row.takenOn)
+    }
 }
 
 /// Where a v2 Moment is at an instant: the contract's state, with the deadline and a recorded failure read in, so a page
@@ -130,6 +136,17 @@ public struct StellarCollectV2: Equatable, Sendable {
     public let terminal: Bool
 }
 
+/// What a graduation plan's attempt does, as the API's simulation found it when it built the step
+/// (`MomentsV2Store.graduation(in:)`): for the review and the notification.
+public struct StellarGraduationAttemptV2: Equatable, Sendable {
+    /// The attempt fails as things stand: it records the failure, which starts the clock to the Moment's expiry, and the
+    /// Moment doesn't graduate.
+    public let failed: Bool
+    /// The failure: the contract error's name ("GraduationInvalid"), or its origin and code when the API's table doesn't
+    /// name it; nil when it graduates.
+    public let failure: String?
+}
+
 /// v2 Moments: reads and plans keyed by the Moment's NFT address. A thin layer over `LiteStore` (made where it is used,
 /// `MomentsV2Store(store:)`): reads never prompt (the status is public, the vesting a viewer read), and each plan is built
 /// once a session is held, then priced and verified on the phone like any other (`LiteStore.prepare`). `title` is the
@@ -165,10 +182,32 @@ public struct MomentsV2Store {
         try await store.api.momentVestingV2(nft)
     }
 
+    /// A Moment's page as the API's indexer recorded it (a viewer read): its name, ticker, media, place and date, its
+    /// collectors, the account's editions and coins (`you`), and the creator's earnings. A 404 until the indexer has seen
+    /// its publish.
+    public func detail(_ nft: String) async throws -> StellarMomentDetailV2 {
+        try await store.api.momentV2(nft)
+    }
+
     /// The account's USDC, in base units, as last read.
     public var usdcBalance: Int64 { store.balance("USDC") }
 
     // MARK: - Publish
+
+    /// Whether the account must enable USDC before it publishes, read again now: a creator's proceeds are paid in USDC,
+    /// and a publish the server queues behind the account's USDC trustline can't be checked against its review
+    /// (`publishWaits`), so Publish enables USDC first (`enableUSDCPlan`). False when the account can't be read: the
+    /// publish's own plan then says.
+    public func needsUSDC() async -> Bool {
+        await store.refreshAccount()
+        guard let account = store.account, account.exists else { return false }
+        return !(account.balances.first { $0.asset == "USDC" }?.enabled ?? false)
+    }
+
+    /// Enables USDC on the account (its trustline, one base reserve of the account's own XLM), before a publish.
+    public func enableUSDCPlan() async throws -> PreparedAction {
+        try await store.enablePlan(asset: "USDC")
+    }
 
     /// Uploads a Moment's photo, or its video and cover frame (the NFT's image), to DyorHQ's storage. A video doesn't go
     /// without its cover frame; the screen keeps it within `maxVideoBytes`.
@@ -184,9 +223,11 @@ public struct MomentsV2Store {
         return StellarMomentUploadV2(mediaUrl: mediaUrl, posterUrl: posterUrl)
     }
 
-    /// A new Moment: its metadata written, then the publish, which binds the terms as they stand by value and the
-    /// account's USDC trustline first when it has none (a creator withdraws its proceeds in USDC). The ticker is refused
-    /// here, before anything is sent, unless the contracts would take it (`StellarTickerV2`).
+    /// A new Moment: its metadata written, then the publish, which binds the terms as they stand by value. The server puts
+    /// the account's USDC trustline first when it has none (a creator withdraws its proceeds in USDC), and builds the
+    /// publish only once that confirmed, too late for its review to check it (`publishWaits`): enable USDC first
+    /// (`needsUSDC`). The ticker is refused here, before anything is sent, unless the contracts would take it
+    /// (`StellarTickerV2`).
     public func publishPlan(_ form: StellarMomentFormV2, media: StellarMomentUploadV2, title: String) async throws -> PreparedAction {
         guard let symbol = StellarTickerV2.normalized(form.symbol) else { throw StellarTickerV2.refusal }
         try await store.ensureSession()
@@ -225,10 +266,15 @@ public struct MomentsV2Store {
     }
 
     /// The coins of the Moment `nft` the account can claim now: as a collector and, for its creator, the allocation.
-    public func claimPlan(nft: String, title: String) async throws -> PreparedAction {
+    /// `name` and `symbol` name the Moment in the notification ("Claimed $DUSK").
+    public func claimPlan(nft: String, name: String, symbol: String?, title: String) async throws -> PreparedAction {
         try await store.ensureSession()
         let plan = try await store.api.buildMomentV2(.init(action: .claim, nft: nft))
-        return try store.prepare(plan, limits: [:], title: title, section: .moments, reference: Self.reference(nft), summary: Self.unannounced)
+        let coins = Self.amount(plan, "moment_claim", "total")
+        let summary = LiteActionSummary.momentV2(kind: "moment_claim", title: words("Claimed \(Self.label(name: name, symbol: symbol))"),
+                                               body: coins.map { words("\(Self.written($0)) vested coins") } ?? "")
+        return try store.prepare(plan, limits: [:], title: title, titles: Self.titles(plan, kind: "moment_claim", main: words("Claim your vested coins")),
+                                 section: .moments, reference: Self.reference(nft), summary: summary)
     }
 
     /// The coins of up to `maxClaimIds` (20) Moments in one transaction; the API leaves out those with nothing due.
@@ -242,32 +288,64 @@ public struct MomentsV2Store {
         }
         try await store.ensureSession()
         let plan = try await store.api.buildMomentV2(.init(action: .claimAll, nfts: unique))
-        return try store.prepare(plan, limits: [:], title: title, section: .moments, reference: "stellar:moment", summary: Self.unannounced)
+        let count = plan.steps.lazy.compactMap(\.intent).first { $0.kind == "moment_claim_all" }?.display?["moments"].flatMap(Self.whole) ?? unique.count
+        let summary = LiteActionSummary.momentV2(kind: "moment_claim_all", title: words("Claimed vested coins"), body: words("across \(count) Moments"))
+        return try store.prepare(plan, limits: [:], title: title,
+                                 titles: Self.titles(plan, kind: "moment_claim_all", main: words("Claim vested coins from \(count) Moments")),
+                                 section: .moments, reference: "stellar:moment", summary: summary)
     }
 
     /// The creator's proceeds of the Moment `nft` (its share of every collect, and of an expired reserve), in USDC, to
-    /// the account: with its USDC trustline first when it has none.
-    public func withdrawPlan(nft: String, symbol: String, title: String) async throws -> PreparedAction {
+    /// the account: with its USDC trustline first when it has none. `proceeds` (USDC base units, as the page read them)
+    /// words the notification while the withdrawal waits behind that trustline; once built, it states its own amount.
+    public func withdrawPlan(nft: String, name: String, symbol: String?, proceeds: Int64?, title: String) async throws -> PreparedAction {
         try await store.ensureSession()
         let plan = try await store.api.buildMomentV2(.init(action: .withdraw, nft: nft))
-        return try store.prepare(plan, limits: [:], title: title, titles: LiteStore.unbuilt(plan, main: nil, before: LiteTitles.intent(kind: "trust", display: ["asset": .string("USDC")])),
-                                 section: .moments, reference: Self.reference(nft), summary: .launchClaim(symbol: symbol))
+        let amount = Self.amount(plan, "moment_withdraw", "amount") ?? proceeds
+        let summary = LiteActionSummary.momentV2(kind: "moment_withdraw", title: words("Collected \(Self.label(name: name, symbol: symbol)) proceeds"),
+                                               body: amount.map { words("\(Self.written($0)) USDC creator proceeds") } ?? "")
+        return try store.prepare(plan, limits: [:], title: title, titles: Self.titles(plan, kind: "moment_withdraw", main: words("Withdraw your proceeds")),
+                                 section: .moments, reference: Self.reference(nft), summary: summary)
     }
 
     /// Graduates the completed Moment `nft` into its coin and Soroswap pool: anyone may, paying only the network fee. The
-    /// API offers it only when it would graduate, or record the first failure (which starts the clock to expiry).
-    public func graduatePlan(nft: String, symbol: String, title: String) async throws -> PreparedAction {
+    /// API offers it only when it would graduate, or record the first failure (which starts the clock to expiry): the
+    /// plan says which (`graduation(in:)`), and so do its review and its notification. `reserve` (USDC base units, as the
+    /// page read it) words a graduation's notification.
+    public func graduatePlan(nft: String, name: String, symbol: String?, reserve: Int64?, title: String) async throws -> PreparedAction {
         try await store.ensureSession()
         let plan = try await store.api.buildMomentV2(.init(action: .graduate, nft: nft))
-        return try store.prepare(plan, limits: [:], title: title, section: .moments, reference: Self.reference(nft), summary: .launchGraduate(symbol: symbol))
+        let label = Self.label(name: name, symbol: symbol)
+        let summary: LiteActionSummary
+        let main: String
+        switch Self.graduation(in: plan) {
+        case let attempt? where attempt.failed:
+            summary = .momentV2(kind: "moment_graduate", title: words("Recorded a failed graduation of \(label)"), body: attempt.failure ?? "")
+            main = words("Record a failed graduation attempt")
+        case .some:
+            summary = .momentV2(kind: "moment_graduate", title: words("Graduated \(label)"),
+                                body: reserve.map { words("\(Self.written($0)) USDC reserve into a locked pool") } ?? "")
+            main = words("Graduate this Moment")
+        case nil:
+            // Not built yet (behind a restore): what the attempt does is known only once it is.
+            summary = .momentV2(kind: "moment_graduate", title: words("Tried to graduate \(label)"), body: "")
+            main = words("Graduate this Moment")
+        }
+        return try store.prepare(plan, limits: [:], title: title, titles: Self.titles(plan, kind: "moment_graduate", main: main), section: .moments,
+                                 reference: Self.reference(nft), summary: summary)
     }
 
     /// Ends the Moment `nft` without graduating, once it may (`StellarMomentStatusV2.expirable`): its reserve goes to the
-    /// creator and the treasury (`expiryCreatorBps`), and collectors keep their editions. Anyone may.
-    public func expirePlan(nft: String, title: String) async throws -> PreparedAction {
+    /// creator and the treasury (`expiryCreatorBps`), and collectors keep their editions. Anyone may. `name` names it in
+    /// the notification ("Expired Harbour at dusk").
+    public func expirePlan(nft: String, name: String, title: String) async throws -> PreparedAction {
         try await store.ensureSession()
         let plan = try await store.api.buildMomentV2(.init(action: .expire, nft: nft))
-        return try store.prepare(plan, limits: [:], title: title, section: .moments, reference: Self.reference(nft), summary: Self.unannounced)
+        let reserve = Self.amount(plan, "moment_expire", "reserve")
+        let summary = LiteActionSummary.momentV2(kind: "moment_expire", title: words("Expired \(name)"),
+                                               body: reserve.map { words("\(Self.written($0)) USDC reserve wound down") } ?? "")
+        return try store.prepare(plan, limits: [:], title: title, titles: Self.titles(plan, kind: "moment_expire", main: words("Expire this Moment")),
+                                 section: .moments, reference: Self.reference(nft), summary: summary)
     }
 
     // MARK: - Reading plans and results
@@ -281,13 +359,11 @@ public struct MomentsV2Store {
     }
 
     /// The terms a publish plan binds that differ from `terms`, the ones its review showed, and from the form's own
-    /// values, by name; empty when it binds them exactly. A field the publish doesn't state counts as differing (the
-    /// guard fails closed). Nil while the publish isn't built yet (behind the account's USDC trustline): the server
-    /// builds it once that step confirmed, with the terms as they stand then.
-    public nonisolated static func termsChanges(_ plan: PlanView, terms: StellarMomentsTermsV2, form: StellarMomentFormV2) -> [String]? {
-        guard let step = plan.steps.first(where: { ($0.stepKind ?? $0.intent?.kind) == "moment_publish" }) else { return ["publish"] }
-        guard let intent = step.intent else { return step.xdr == nil ? nil : ["publish"] }
-        guard intent.kind == "moment_publish" else { return ["publish"] }
+    /// values, by name; empty when it binds them exactly. The guard fails closed: a field the publish doesn't state counts
+    /// as differing, and a plan with no built publish (none at all, or one queued behind the account's USDC trustline,
+    /// `publishWaits`, which the server would build later with the terms as they stand then) is "publish".
+    public nonisolated static func termsChanges(_ plan: PlanView, terms: StellarMomentsTermsV2, form: StellarMomentFormV2) -> [String] {
+        guard let intent = plan.steps.first(where: isPublish)?.intent, intent.kind == "moment_publish" else { return ["publish"] }
         let shown = intent.display ?? [:]
         let p = terms.policy
         let d = terms.durations
@@ -305,6 +381,23 @@ public struct MomentsV2Store {
             ("symbol", StellarTickerV2.normalized(form.symbol) ?? form.symbol),
         ]
         return expected.filter { name, value in shown[name]?.text != value }.map(\.0)
+    }
+
+    /// Whether a publish plan's publish waits, unbuilt, behind another step (the account's USDC trustline): it can't be
+    /// compared with its review before it is built, so the review doesn't go ahead (`termsChanges`).
+    public nonisolated static func publishWaits(_ plan: PlanView) -> Bool {
+        plan.steps.first(where: isPublish).map { $0.intent == nil } ?? false
+    }
+
+    /// What a graduation plan's attempt does, from its built step's intent; nil before the server built it.
+    public nonisolated static func graduation(in plan: PlanView) -> StellarGraduationAttemptV2? {
+        guard let d = plan.steps.lazy.compactMap(\.intent).first(where: { $0.kind == "moment_graduate" })?.display,
+              case .string(let outcome)? = d["outcome"] else { return nil }
+        // Anything but a graduation reads as an attempt that doesn't graduate.
+        guard outcome != "graduated" else { return StellarGraduationAttemptV2(failed: false, failure: nil) }
+        let named: String? = if case .string(let name)? = d["failureName"], !name.isEmpty { name } else { nil }
+        let coded = [d["failureOrigin"], d["failureCode"]].compactMap { $0.flatMap(whole).map(String.init) }
+        return StellarGraduationAttemptV2(failed: true, failure: named ?? (coded.count == 2 ? coded.joined(separator: " · ") : nil))
     }
 
     /// The new Moment's NFT address, as a publish plan predicts it (the address follows from the creator and the nonce).
@@ -338,9 +431,36 @@ public struct MomentsV2Store {
         return spends.allSatisfy { $0.key == usdc && Int64($0.value) == total }
     }
 
-    /// A claim's or an expiry's summary: `LiteActionSummary` has no case for either yet, so they settle without a
-    /// notification (a trust step's kind posts none) rather than with another action's words.
-    private static var unannounced: LiteActionSummary { .enable(code: "") }
+    /// A publish step: built (its intent's kind) or not yet (the server's step kind, v1's or v2's builder).
+    private nonisolated static func isPublish(_ step: PlanStep) -> Bool {
+        step.intent?.kind == "moment_publish" || ["moment_publish", "moment_v2_publish"].contains(step.stepKind ?? "")
+    }
+
+    /// The phone's title for the action's own step (`kind`, built or not: v2's builder kind is "moment_v2_…"), so the
+    /// review, the passkey prompt and the progress rows never show the server's English; a step `LiteTitles` names keeps
+    /// its words.
+    nonisolated static func titles(_ plan: PlanView, kind: String, main: String) -> [String: String] {
+        let builder = "moment_v2_" + kind.dropFirst("moment_".count)
+        var titles: [String: String] = [:]
+        for step in plan.steps where [kind, builder].contains(step.intent?.kind ?? step.stepKind ?? "") {
+            if let intent = step.intent, LiteTitles.intent(kind: intent.kind, display: intent.display) != nil { continue }
+            titles[step.id] = main
+        }
+        return titles
+    }
+
+    /// An amount in base units that the plan's built `kind` step states in its display under `key`.
+    private nonisolated static func amount(_ plan: PlanView, _ kind: String, _ key: String) -> Int64? {
+        guard case .string(let text)? = plan.steps.lazy.compactMap(\.intent).first(where: { $0.kind == kind })?.display?[key],
+              let units = Int64(text), units >= 0 else { return nil }
+        return units
+    }
+
+    /// The Moment as a notification names it: its ticker ("$DUSK"), else its name.
+    nonisolated static func label(name: String, symbol: String?) -> String { symbol.map { "$\($0)" } ?? name }
+
+    /// An amount in base units as notifications write it (at most 4 decimals).
+    nonisolated static func written(_ units: Int64) -> String { StellarAmount.format(units, maxFraction: 4) }
 
     private nonisolated static func contract(_ text: String) -> String? {
         StrKey.isValid(.contract, text) ? text : nil
@@ -361,4 +481,9 @@ public struct MomentsV2Store {
         default: nil
         }
     }
+}
+
+/// Moments v2's words, from the package's own table (Resources/MomentsV2.xcstrings), in the current language.
+private func words(_ value: String.LocalizationValue) -> String {
+    LiteL10n.string(LocalizedStringResource(value, table: "MomentsV2", bundle: LiteL10n.lite))
 }

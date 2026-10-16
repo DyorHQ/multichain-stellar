@@ -219,6 +219,9 @@ enum LiteActionSummary: Equatable, Sendable {
     /// A launchpad v2 action no case above words (a refund, a rewards claim, a recipient change, …): its main step's kind
     /// and its notification, in the current language (`LaunchV2Store`).
     case launchV2(kind: String, title: String, body: String)
+    /// A Moments v2 action no case above words (a claim, a claim all, a withdrawal, a graduation or a recorded failed
+    /// attempt, an expiry): its main step's kind and its notification, in the current language (`MomentsV2Store`).
+    case momentV2(kind: String, title: String, body: String)
 
     /// The main step's kind, as the server names it.
     var kind: String {
@@ -234,7 +237,7 @@ enum LiteActionSummary: Equatable, Sendable {
         case .publish: "moment_publish"
         case .collect: "moment_collect"
         case .bridgeOut: "bridge_out"
-        case .launchV2(let kind, _, _): kind
+        case .launchV2(let kind, _, _), .momentV2(let kind, _, _): kind
         }
     }
 }
