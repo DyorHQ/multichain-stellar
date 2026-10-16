@@ -49,8 +49,13 @@ struct StellarCreateLaunchView: View {
     @State private var imageData: Data?
     @State private var previewImage: UIImage?
     @State private var imageError: String?
+    /// The launch preview of the last read that went through; nil again once a read fails, as it no longer describes the
+    /// form.
     @State private var preview: StellarLaunchPreviewV2?
+    /// Why the last read of the preview failed (said with Retry); nil once a read is under way again.
     @State private var previewError: String?
+    /// Retry and Check Again read the preview again: after a failed read, a cancelled sign-in, or XLM added.
+    @State private var previewReads = 0
     /// The new coin, from what the launch returned.
     @State private var launchedToken: String?
     /// View asked for the new coin's page: the review closes, and its cleanup opens the page.
@@ -165,7 +170,13 @@ struct StellarCreateLaunchView: View {
         Self.linkAccepted(website, .website) && Self.linkAccepted(twitter, .x) && Self.linkAccepted(telegram, .telegram)
     }
 
+    /// The preview Review waits for is being read: nothing went wrong, so the footer says it is checking.
+    private var previewPending: Bool {
+        currentPreview == nil && previewError == nil && blocker == nil && quote != nil
+    }
+
     /// Review waits for the preview of the quote and venue chosen too: its shortfall is what the launch checks first.
+    /// While it is missing the footer always says why: checking, or the read's error with Retry.
     private var valid: Bool {
         trimmedName.count >= 2 && ticker != nil && refusal == nil && terms != nil && blocker == nil && !recipientInvalid && linksValid
             && currentPreview != nil && shortfall == nil && (initialBuy == 0 || firstBuy != nil) && (session?.canSign ?? false)
@@ -364,10 +375,27 @@ struct StellarCreateLaunchView: View {
             Text("Developer Buy (Optional)")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                if let shortfall {
-                    Paragraph(verbatim: shortfall).foregroundStyle(Color.attention)
-                } else if let previewError {
-                    InlineError(message: previewError)
+                // Review waits for the preview, so whenever it is off for the preview's sake this says why, and each of
+                // these can read it again: a read that failed or a sign-in that was cancelled, the account's XLM once
+                // some is added.
+                if let previewError {
+                    HStack(alignment: .firstTextBaseline) {
+                        InlineError(message: previewError)
+                        Spacer(minLength: 8)
+                        Button("Retry") { previewReads += 1 }.font(.footnote.weight(.semibold))
+                    }
+                } else if let shortfall {
+                    HStack(alignment: .firstTextBaseline) {
+                        Paragraph(verbatim: shortfall).foregroundStyle(Color.attention)
+                        Spacer(minLength: 8)
+                        Button("Check Again") { previewReads += 1 }.font(.footnote.weight(.semibold))
+                    }
+                } else if previewPending {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Checking…")
+                    }
+                    .foregroundStyle(.secondary)
                 }
                 Paragraph("Buy your own coin in the same transaction — snipe-tax exempt.")
             }
@@ -569,25 +597,38 @@ struct StellarCreateLaunchView: View {
         if quoteAsset.isEmpty, let first = launches.economics?.quotes.first(where: \.enabled) { quoteAsset = first.asset }
     }
 
-    /// What changes the launch's fee, Max and the XLM it needs.
+    /// What changes the launch's fee, Max and the XLM it needs: the form's terms, the account (another one, or XLM added
+    /// since), and Retry or Check Again. (The name and ticker don't: the preview prices the longest ones while they're
+    /// empty.)
     private var previewKey: String {
-        "\(quote?.asset ?? "")-\(chosenVenue ?? -1)-\(creatorFeeBps)-\(holderSharing)-\(recipient?.checksummed ?? "")-\(exempt.count)-\(launches?.economics != nil)"
+        "\(quote?.asset ?? "")-\(chosenVenue ?? -1)-\(creatorFeeBps)-\(holderSharing)-\(recipient?.checksummed ?? "")-\(exempt.joined(separator: ","))"
+            + "-\(launches?.economics != nil)-\(Self.accountKey(store?.account))-\(previewReads)"
     }
 
-    /// The launch preview (§20.3): the terms for this quote and venue, Max for the first buy and any XLM shortfall.
+    /// The account and its balances as one string: another account, its activation or a change of any balance reads the
+    /// preview again; the same balances read again (in any order) change nothing.
+    static func accountKey(_ account: AccountView?) -> String {
+        guard let account else { return "" }
+        return "\(account.address):\(account.exists):" + account.balances.map { "\($0.asset)=\($0.balance)" }.sorted().joined(separator: ",")
+    }
+
+    /// The launch preview (§20.3): the terms for this quote and venue, Max for the first buy and any XLM shortfall. A read
+    /// that fails drops the last one, so Review stays off with the error and Retry rather than on terms that may be stale.
     private func readPreview() async {
         guard let launches, let quote, blocker == nil else { return }
         try? await Task.sleep(for: .milliseconds(400))
         guard !Task.isCancelled else { return }
+        previewError = nil
         let draft = LaunchV2Form(name: trimmedName, symbol: ticker ?? "", quote: quote.asset, venue: chosenVenue, creatorFeeBps: creatorFeeBps,
                                  holderSharing: holderSharing, recipient: recipient?.checksummed, exempt: exempt)
         do {
             let fresh = try await launches.preview(draft)
             guard !Task.isCancelled else { return }
             preview = fresh
-            previewError = nil
         } catch {
-            if !Task.isCancelled { previewError = LiteErrorText.describe(error) }
+            guard !Task.isCancelled else { return }
+            preview = nil
+            previewError = LiteErrorText.describe(error)
         }
     }
 
