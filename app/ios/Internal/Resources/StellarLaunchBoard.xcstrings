@@ -1,6 +1,41 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%lld claims · each asks for %@" : {
+      "comment" : "The Claim All review on Stellar, above its button, when App Lock is on: each claim is its own transaction and asks for Face ID or the passcode on its own. The first value is how many claims, the second the prompt's name (Face ID, Touch ID, Passcode)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld claims · each asks for %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld reclamos · cada uno pide %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld réclamations · chacune demande %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld건 · 건마다 %2$@ 필요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 项领取 · 每项都需要 %2$@"
+          }
+        }
+      }
+    },
     "%lld steps · each asks for your passkey" : {
       "comment" : "The Claim All review on Stellar, above its button, on a passkey account: how many transactions the claims sign, each with its own passkey prompt",
       "localizations" : {
@@ -113,35 +148,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "每笔领取都是单独的一笔交易，依次发送。你的手机会在签名前将每笔交易与此确认页核对，并拒绝任何不符的内容。"
-          }
-        }
-      }
-    },
-    "Launched on DyorHQ's retired launchpad. A coin still on its curve can be sold, not bought." : {
-      "comment" : "Under the Retired section of Stellar's Launch board: these coins come from DyorHQ's previous launchpad; one still on its bonding curve takes sales only. DyorHQ is never translated",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lanzados en el launchpad retirado de DyorHQ. Una moneda que sigue en su curva se puede vender, pero no comprar."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Lancés sur le launchpad retiré de DyorHQ. Un coin encore sur sa courbe peut être vendu, mais pas acheté."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "DyorHQ의 운영 종료된 런치패드에서 런칭됐어요. 아직 커브에 있는 코인은 팔 수만 있고 살 수는 없어요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在 DyorHQ 已退役的 Launchpad 上发射。仍在曲线上的币只能卖出，不能买入。"
           }
         }
       }
@@ -321,7 +327,7 @@
       }
     },
     "Retired" : {
-      "comment" : "[tight] A section of Stellar's Launch board and of My Launchpad: coins launched on DyorHQ's previous, retired launchpad",
+      "comment" : "[tight] A section of My Launchpad on Stellar: the coins held or launched on DyorHQ's previous, retired launchpad",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -345,6 +351,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已退役"
+          }
+        }
+      }
+    },
+    "These creator fees now go to the coin's fee recipient, not to you." : {
+      "comment" : "The creator fee claim review on Stellar, when the coin's fee recipient is no longer this account: the claim would pay someone else, so it is refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estas comisiones del creador ahora van al receptor de comisiones de la moneda, no a ti."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ces frais du créateur vont désormais au destinataire des frais du coin, pas à vous."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 크리에이터 수수료는 이제 내가 아니라 코인의 수수료 수령인에게 가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些创作者费用现在归该代币的费用接收方，而不是你。"
           }
         }
       }

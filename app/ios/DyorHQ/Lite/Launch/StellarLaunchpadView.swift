@@ -11,8 +11,10 @@ import SwiftUI
 
 /// The Launch tab on Stellar, laid out as Monad's `LaunchpadView`: an image-forward two-column board of the coins that
 /// graduated and the coins still climbing their curve, searched and sorted by the server, with Create (launchpad v2) and
-/// My Launchpad. A completed curve waiting to graduate stays in Explore. Coins launched on the retired v1 launchpad are
-/// listed apart, under Retired: their pages sell and claim, and nothing new, as on Monad's retired stacks.
+/// My Launchpad. A completed curve waiting to graduate stays in Explore. The board lists launchpad v2's coins only: as
+/// Monad's board hides its retired launchpads' coins, a coin of the retired v1 launchpad is neither listed nor found by
+/// search (`StellarLaunchBoardModel.listsOnBoard`). Its holders and its creator reach its page from My Launchpad, where it
+/// is still sold and its fees claimed. A coin launched from Create opens over the board once the board lists it.
 ///
 /// The board is a viewer read (decision 6): it fills with or without a session. What was saved for the account when it
 /// was last read in full is in the tab's first frame, said to be, until a read replaces it; a read that fails keeps the
@@ -29,6 +31,9 @@ struct StellarLaunchpadView: View {
     @State private var sort: LaunchSort = .newest
     /// The launch pages over the board.
     @State private var path: [StellarLaunchPage] = []
+    /// The coin Create just launched, whose page opens once the board lists it (`openLaunched`); nil once it opened, or
+    /// when another page opened first.
+    @State private var launchedToken: String?
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -89,15 +94,22 @@ struct StellarLaunchpadView: View {
                 await model.poll(store: store, request: request, owner: account.address)
             }
             // Another account can take over in place without the tabs being rebuilt: the pages over the board were the
-            // previous account's, so they go.
-            .onChange(of: account.address) { _, _ in path = [] }
+            // previous account's, so they go, and so does the wait for a coin it launched.
+            .onChange(of: account.address) { _, _ in
+                path = []
+                launchedToken = nil
+            }
             .overlay { if firstLoad { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) {
-                StellarCreateLaunchView { _ in
-                    guard let store else { return }
-                    Task { await model.load(store: store, request: request, owner: account.address) }
+                // After a launch, Done opens the new coin's page over the board (§8.10.5 L), as View does from the review.
+                StellarCreateLaunchView { token in
+                    if let token { launchedToken = token } else { reload() }
                 }
             }
+            .task(id: launchedToken) { await openLaunched() }
+            // Any page opened or closed meanwhile (the review's View opens the coin's own, a card's, a notification's): the
+            // wait for the new coin's row ends there.
+            .onChange(of: path) { _, _ in launchedToken = nil }
             .sheet(isPresented: $showProfile) { StellarLaunchpadProfileView() }
             // A coin a notification, My Launchpad or Create named opens over the board, also when the tab is built for it.
             .onChange(of: router.pendingStellar, initial: true) { _, pending in
@@ -122,6 +134,17 @@ struct StellarLaunchpadView: View {
     /// Pushes `page`, unless the coin's page is already on top.
     private func open(_ page: StellarLaunchPage) {
         if path.last?.token != page.token { path.append(page) }
+    }
+
+    /// The coin Create launched opens over the board: its row once the board lists it, else, after the board's reads, its
+    /// token, so its page reads it (`StellarLaunchBoardModel.launched`).
+    private func openLaunched() async {
+        guard let token = launchedToken else { return }
+        var row: StellarLaunch?
+        if let store { row = await model.launched(token, store: store, request: request, owner: account.address) }
+        guard !Task.isCancelled, launchedToken == token else { return }
+        open(StellarLaunchBoardModel.launchedPage(token, row: row))
+        launchedToken = nil
     }
 
     private var board: some View {
@@ -153,20 +176,16 @@ struct StellarLaunchpadView: View {
                 }
                 // The board saved when it was last read, shown while it is read again: said to be, never taken for this read.
                 if let savedAt = model.savedAt { SavedLine(date: savedAt, reading: model.loading) }
-                if sections.graduated.isEmpty, sections.explore.isEmpty, sections.retired.isEmpty, !firstLoad {
-                    // A search that found nothing says so. Only the first load hides this: a poll leaves it on screen. A
-                    // board with nothing read shows the error above, never "no coins".
+                if sections.isEmpty, !firstLoad {
+                    // A search that found nothing says so: a coin the board doesn't list (the retired launchpad's) is
+                    // reached from My Launchpad, not found here. Only the first load hides this: a poll leaves it on screen.
+                    // A board with nothing read shows the error above, never "no coins".
                     if searching { ContentUnavailableView.search(text: query).padding(.top, 40) } else if model.error == nil { emptyState }
                 } else {
                     if !sections.graduated.isEmpty {
                         section(title: Text("Graduated"), subtitle: Text("Cleared the graduation threshold"), coins: sections.graduated)
                     }
                     exploreSection(sections.explore)
-                    if !sections.retired.isEmpty {
-                        section(title: Text(StellarLaunchBoardWords.retired),
-                                subtitle: Text("Launched on DyorHQ's retired launchpad. A coin still on its curve can be sold, not bought.", tableName: "StellarLaunchBoard", comment: "Under the Retired section of Stellar's Launch board: these coins come from DyorHQ's previous launchpad; one still on its bonding curve takes sales only. DyorHQ is never translated"),
-                                coins: sections.retired)
-                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -304,11 +323,6 @@ struct StellarLaunchpadView: View {
     }
 }
 
-/// The words the Launch board and My Launchpad share (table StellarLaunchBoard).
-enum StellarLaunchBoardWords {
-    static let retired = LocalizedStringResource("Retired", table: "StellarLaunchBoard", comment: "[tight] A section of Stellar's Launch board and of My Launchpad: coins launched on DyorHQ's previous, retired launchpad")
-}
-
 /// A page over Stellar's Launch board: a coin's, with its board row, or one opened by its token alone (a notification,
 /// My Launchpad, Create, a saved board), which reads the coin first. One typed path holds both, pushed by value.
 enum StellarLaunchPage: Hashable {
@@ -360,8 +374,6 @@ struct StellarLaunchCard: View {
                     }
                     Spacer()
                     VStack(alignment: .trailing, spacing: 1) {
-                        // A retired launchpad's graduated coin is an ordinary pool coin: no caption.
-                        if StellarLaunchBoardModel.isRetired(coin), !coin.graduated { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                         if let created = StellarFormat.date(coin.createdAt) {
                             Text(verbatim: RelativeTime.short(Int(created.timeIntervalSince1970))).font(.caption2).foregroundStyle(.tertiary)
                         }
@@ -444,16 +456,19 @@ final class StellarLaunchBoardModel {
     /// A search's answer.
     struct Search: Equatable {
         let query: String
-        let sort: StellarLaunchMath.Sort
+        /// The order `lists.explore` is in, as the server sorted it; nil when it is in no known order (the board's coins,
+        /// before the board was read), so the phone sorts it for any chip.
+        let sort: StellarLaunchMath.Sort?
         let lists: Lists
     }
 
     /// What the board shows: launchpad v2's coins that graduated and those still on their curve (completed curves
-    /// included), and the retired v1 launchpad's.
+    /// included). The retired v1 launchpad's are never listed (`listsOnBoard`).
     struct Sections: Equatable {
         let graduated: [StellarLaunch]
         let explore: [StellarLaunch]
-        let retired: [StellarLaunch]
+
+        var isEmpty: Bool { graduated.isEmpty && explore.isEmpty }
     }
 
     /// Whether launches can be made: the terms not read yet (or unreadable), no v2 launchpad on this network, paused, or
@@ -495,6 +510,8 @@ final class StellarLaunchBoardModel {
         return trimmed.isEmpty ? nil : String(trimmed.prefix(maxQuery))
     }
 
+    /// No coin has been read (or saved), for the board or the last search, listed or not (as Monad's board counts every
+    /// launch read): a board whose coins are all the retired launchpad's says "No Launches Yet" between polls.
     var isEmpty: Bool { board.explore.isEmpty && board.graduated.isEmpty && (search?.lists.explore.isEmpty ?? true) && (search?.lists.graduated.isEmpty ?? true) }
 
     var availability: Availability {
@@ -502,8 +519,8 @@ final class StellarLaunchBoardModel {
         return launches?.economicsStatus == .read ? .notDeployed : .unknown
     }
 
-    /// The sections for `request`: the server's own order once its read has landed; until then, the coins on screen
-    /// searched and sorted on the phone as the server sorts them.
+    /// The sections for `request`: the server's own order once its read has landed; until then (or when it failed), the
+    /// coins on screen searched and sorted on the phone as the server sorts them.
     func lists(for request: Request) -> Lists {
         Self.lists(board: board, boardSort: boardSort, search: search, request: request)
     }
@@ -526,14 +543,54 @@ final class StellarLaunchBoardModel {
         coins.filter { $0.token == query || $0.name.localizedCaseInsensitiveContains(query) || $0.symbol.localizedCaseInsensitiveContains(query) }
     }
 
-    /// Launchpad v2's coins in their sections, and the retired launchpad's apart (Explore's first, then the graduated).
+    /// The coins the board lists, in their sections: every section, and so its count and the search, is taken from these.
     nonisolated static func sections(_ lists: Lists) -> Sections {
-        Sections(graduated: lists.graduated.filter { !isRetired($0) }, explore: lists.explore.filter { !isRetired($0) },
-                 retired: (lists.explore + lists.graduated).filter(isRetired))
+        Sections(graduated: lists.graduated.filter(listsOnBoard), explore: lists.explore.filter(listsOnBoard))
     }
+
+    /// Listed on the board: launchpad v2's coins. The retired v1 launchpad's never are, graduated or not, as Monad's board
+    /// hides its retired launchpads' coins: their holders and creators reach their pages from My Launchpad.
+    nonisolated static func listsOnBoard(_ coin: StellarLaunch) -> Bool { !isRetired(coin) }
 
     /// A coin of the retired v1 launchpad: generation 1, or no generation (a server from before v2, which has only v1's).
     nonisolated static func isRetired(_ coin: StellarLaunch) -> Bool { (coin.generation ?? 1) < 2 }
+
+    /// After a launch from Create, the most reads of the board for the new coin's row, and the pause between them: the
+    /// server lists a launch once it has indexed its transaction.
+    nonisolated static let launchedReads = 6
+    nonisolated static let launchedPause: Duration = .seconds(2)
+
+    /// The row of `token`, a coin just launched, once the board lists it: the board is read again, as `request` asks, until
+    /// it does, at most `launchedReads` times. Nil when it never did, or the wait was cancelled.
+    func launched(_ token: String, store: LiteStore, request: Request, owner: Address?) async -> StellarLaunch? {
+        await Self.firstRow(attempts: Self.launchedReads, pause: Self.launchedPause) {
+            await self.load(store: store, request: request, owner: owner)
+            return Self.row(token, in: [self.board] + (self.search.map { [$0.lists] } ?? []))
+        }
+    }
+
+    /// `token`'s row among the coins `lists` list on the board; nil when none of them does.
+    nonisolated static func row(_ token: String, in lists: [Lists]) -> StellarLaunch? {
+        lists.lazy.flatMap { $0.explore + $0.graduated }.first { $0.token == token && listsOnBoard($0) }
+    }
+
+    /// The page a coin just launched opens: its row as read, else its token, so the page reads it.
+    nonisolated static func launchedPage(_ token: String, row: StellarLaunch?) -> StellarLaunchPage {
+        row.map(StellarLaunchPage.launch) ?? .token(token)
+    }
+
+    /// Runs `read` until it gives a row, at most `attempts` times, `pause` apart. Nil when none did, or the task was
+    /// cancelled.
+    static func firstRow(attempts: Int, pause: Duration, _ read: () async -> StellarLaunch?) async -> StellarLaunch? {
+        for attempt in 0..<max(1, attempts) {
+            if attempt > 0 {
+                do { try await Task.sleep(for: pause) } catch { return nil }
+            }
+            if let row = await read() { return row }
+            if Task.isCancelled { return nil }
+        }
+        return nil
+    }
 
     func poll(store: LiteStore, request: Request, owner: Address?) async {
         // A search waits for the typing to pause: each keystroke restarts this task.
@@ -576,10 +633,8 @@ final class StellarLaunchBoardModel {
         // A read cut short because the tab went off screen isn't a failure to show: the board reads again when it's back.
         guard !Task.isCancelled else { return }
         if let query = request.query {
-            let previous = search?.query == query ? search?.lists : nil
-            let lists = Lists(explore: (try? readExplore.get()) ?? previous?.explore ?? Self.matching(board.explore, query),
-                              graduated: (try? readGraduated.get()) ?? previous?.graduated ?? Self.matching(board.graduated, query))
-            search = Search(query: query, sort: request.sort, lists: lists)
+            search = Self.searched(query: query, sort: request.sort, explore: readExplore, graduated: readGraduated,
+                                   previous: search, board: board, boardSort: boardSort)
         } else {
             if let coins = try? readExplore.get() {
                 board.explore = coins
@@ -600,13 +655,60 @@ final class StellarLaunchBoardModel {
         }
     }
 
-    /// One section of the board, as the server orders it.
+    /// The answer to a search for `query` with Explore sorted by `sort`, from its two reads. A section whose read failed
+    /// keeps what was shown for it: the previous answer to the same search, else the board's coins that match; Explore
+    /// is then labelled with the order those coins are really in, never with `sort`, so the phone sorts them for the chip
+    /// on screen (`lists(board:boardSort:search:request:)`).
+    nonisolated static func searched(query: String, sort: StellarLaunchMath.Sort, explore: Result<[StellarLaunch], Error>,
+                                     graduated: Result<[StellarLaunch], Error>, previous: Search?, board: Lists,
+                                     boardSort: StellarLaunchMath.Sort?) -> Search {
+        let previous = previous?.query == query ? previous : nil
+        let exploreCoins: [StellarLaunch]
+        let exploreSort: StellarLaunchMath.Sort?
+        switch explore {
+        case .success(let coins):
+            (exploreCoins, exploreSort) = (coins, sort)
+        case .failure:
+            if let previous {
+                (exploreCoins, exploreSort) = (previous.lists.explore, previous.sort)
+            } else {
+                (exploreCoins, exploreSort) = (matching(board.explore, query), boardSort)
+            }
+        }
+        // Graduated is always newest first, whichever chip is on: the board's and a previous answer's are in that order.
+        let graduatedCoins = (try? graduated.get()) ?? previous?.lists.graduated ?? matching(board.graduated, query)
+        return Search(query: query, sort: exploreSort, lists: Lists(explore: exploreCoins, graduated: graduatedCoins))
+    }
+
+    /// The most pages one section reads (50 coins each, the server's page): the board lists every launch up to 1,000 per
+    /// section.
+    nonisolated static let maxPages = 20
+
+    /// One section of the board, every page of it, as the server orders it.
     private static func section(_ store: LiteStore, _ section: String, sort: StellarLaunchMath.Sort, query: String?) async -> Result<[StellarLaunch], Error> {
         do {
-            return .success(try await store.launchBoard(section: section, sort: sort.rawValue, query: query).launches)
+            return .success(try await pages { cursor in
+                try await store.launchBoard(section: section, sort: sort.rawValue, query: query, cursor: cursor)
+            })
         } catch {
             return .failure(error)
         }
+    }
+
+    /// Every page `read` answers, from the first (cursor nil) on each page's `nextCursor`, up to `maxPages`, as one list in
+    /// the server's order. A coin a later page repeats (a launch made between two reads moves the pages along) stays where
+    /// it first showed. A page that fails fails the section: the board keeps what it showed for it.
+    static func pages(maxPages: Int = maxPages, _ read: (String?) async throws -> StellarLaunchBoard) async throws -> [StellarLaunch] {
+        var coins: [StellarLaunch] = []
+        var seen = Set<String>()
+        var cursor: String?
+        for _ in 0..<max(1, maxPages) {
+            let page = try await read(cursor)
+            for coin in page.launches where seen.insert(coin.token).inserted { coins.append(coin) }
+            guard let next = page.nextCursor, !next.isEmpty, !Task.isCancelled else { break }
+            cursor = next
+        }
+        return coins
     }
 }
 #endif

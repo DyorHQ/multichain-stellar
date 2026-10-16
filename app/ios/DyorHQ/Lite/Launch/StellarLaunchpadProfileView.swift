@@ -12,8 +12,10 @@ import SwiftUI
 /// My Launchpad on Stellar, laid out as Monad's `LaunchpadProfileView`: the account's creator and trader dashboard. The
 /// coins it holds (value and on-curve P&L), the coins it launched, its fees by quote asset, and its launchpad activity;
 /// then every claim waiting for it, one per row: a coin's creator fees, a v2 coin's holder rewards (in its quote and in
-/// the coin itself), and the creator fees owed to it from before a fee recipient change. Claim All runs one transaction
-/// per claim, in sequence, in one sheet. Coins of the retired v1 launchpad are listed apart, under Retired.
+/// the coin itself), and the creator fees owed to it from before a fee recipient change. A claim whose figures come from
+/// an earlier read says "As last read"; Claim All runs the claims of the latest read, one transaction per claim, in
+/// sequence, in one sheet. Every review shows what the claim's own plan pays, and to whom. Coins of the retired v1
+/// launchpad are listed apart, under Retired.
 ///
 /// My Launchpad is DyorHQ's history (decision 6): it needs a session. A passkey account without one sees "Sign in with
 /// your passkey" in place of it, never an error. Holder rewards, the fee recipient and owed fees are launchpad v2's live
@@ -84,8 +86,8 @@ struct StellarLaunchpadProfileView: View {
     }
 
     private var claims: [StellarLaunchClaim] {
-        guard let mine = model.mine, let store else { return [] }
-        return StellarLaunchClaim.claims(mine, states: model.states, account: store.address, code: code)
+        guard let mine = model.mine else { return [] }
+        return StellarLaunchClaim.claims(mine, states: model.states, fresh: model.fresh, mineCurrent: model.mineCurrent, code: code)
     }
 
     var body: some View {
@@ -179,6 +181,8 @@ struct StellarLaunchpadProfileView: View {
     @ViewBuilder private var claimSection: some View {
         let fees = model.mine.map { mine in StellarLaunchFeeLines(fees: mine.fees, code: code) }
         let claims = self.claims
+        // Claim All sends only what the latest read found: a claim as last read is claimed on its own row.
+        let current = StellarLaunchClaim.claimAll(claims)
         Section {
             VStack(spacing: 10) {
                 feeTile(Text("Total fees"), fees?.total, loading: model.reading)
@@ -199,8 +203,8 @@ struct StellarLaunchpadProfileView: View {
             ForEach(claims) { claim in
                 claimRow(claim) { claimTarget = .one(claim) }
             }
-            if canSign, claims.count > 1 {
-                Button { Haptics.tap(); claimTarget = .all(claims) } label: {
+            if canSign, current.count > 1 {
+                Button { Haptics.tap(); claimTarget = .all(current) } label: {
                     Text("Claim All").frame(maxWidth: .infinity).fontWeight(.semibold)
                 }
                 .buttonStyle(.borderedProminent).tint(.brand)
@@ -275,7 +279,9 @@ struct StellarLaunchpadProfileView: View {
             VStack(alignment: .leading, spacing: 1) {
                 claim.title.font(.subheadline.weight(.medium))
                 Text(verbatim: claim.amount + (claim.usd.map { " · \(PriceFormat.usdValue($0))" } ?? "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                if claim.retired { Text("Retired launchpad").font(.caption2).foregroundStyle(.secondary) }
+                // Monad's caption: the retired launchpad's, and a figure kept from an earlier read.
+                let caption = [claim.retired ? tr("Retired launchpad") : nil, claim.current ? nil : tr("As last read")].compactMap { $0 }
+                if !caption.isEmpty { Text(verbatim: caption.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary) }
             }
             Spacer(minLength: 8)
             Button("Claim", action: action).buttonStyle(.bordered).controlSize(.small).tint(.brand).disabled(!canSign)
@@ -410,25 +416,28 @@ struct StellarLaunchpadProfileView: View {
         if let store, let launches = model.launches {
             switch target {
             case .one(let claim):
-                StellarConfirmationSheet(title: claim.reviewTitle, confirmTitle: claim.confirmTitle,
-                                         build: { try await claim.plan(store: store, launches: launches) },
-                                         onDone: { Task { await load() } }) {
-                    DetailRow(claim.reviewLabel, Text(verbatim: claim.amount))
-                    DetailRow("To", verbatim: StellarAccountID(claim.to)?.short ?? "—")
-                }
+                StellarClaimReview(claim: claim, account: store.address, build: { try await claim.plan(store: store, launches: launches) },
+                                   onDone: { Task { await load() } })
             case .all(let claims):
-                StellarClaimAllSheet(claims: claims, build: { try await $0.plan(store: store, launches: launches) },
+                StellarClaimAllSheet(claims: claims, account: store.address, build: { try await $0.plan(store: store, launches: launches) },
+                                     estimate: { kind in store.fees?.estimate(kind) ?? StellarFeeDefaults.estimate(kind) },
                                      onDone: { Task { await load() } })
             }
         }
     }
 }
 
+/// My Launchpad's words (table StellarLaunchBoard).
+enum StellarLaunchBoardWords {
+    static let retired = LocalizedStringResource("Retired", table: "StellarLaunchBoard", comment: "[tight] A section of My Launchpad on Stellar: the coins held or launched on DyorHQ's previous, retired launchpad")
+}
+
 // MARK: - Claims
 
 /// One claim My Launchpad offers (§8.10.4, DESIGN-stellar-contracts-v2 §21): a coin's creator fees (either generation),
 /// a v2 coin's holder rewards, or the creator fees owed to the account in one asset from before a fee recipient change.
-/// Each is one transaction.
+/// Each is one transaction. Its row's figures are the screen's reads; its review's are its plan's (`amount(in:)`,
+/// `payee(in:account:)`), which the server reads from the contracts as it builds it.
 struct StellarLaunchClaim: Identifiable, Equatable {
     enum Kind: Equatable {
         /// A coin's creator fees; `retired`: on the v1 launchpad (claimed through `LiteStore`).
@@ -444,8 +453,9 @@ struct StellarLaunchClaim: Identifiable, Equatable {
     let amount: String
     /// Its dollar value at today's prices, where the server gave one.
     let usd: Double?
-    /// Who it pays: a coin's creator fees go to its fee recipient, the rest to the account.
-    let to: String
+    /// Every figure it shows was read in the latest load; false for one kept from an earlier read (or from what was
+    /// saved), which says "As last read" and stays out of Claim All.
+    let current: Bool
 
     var id: String {
         switch kind {
@@ -507,6 +517,56 @@ struct StellarLaunchClaim: Identifiable, Equatable {
         LocalizedStringResource("Owed fees · \(code)", table: "StellarLaunchBoard", comment: "A claim on My Launchpad on Stellar: creator fees owed to the account from before a coin's fee recipient changed. The value is the asset's code (XLM)")
     }
 
+    /// What it claims, in a few words with nothing to translate: the coin's ticker, or the owed asset's code.
+    var subject: String {
+        switch kind {
+        case .creator(_, let symbol, _), .rewards(_, let symbol): symbol
+        case .owed(let asset, _): asset.code
+        }
+    }
+
+    /// What its plan pays, from the claim step's intent (`display`), written as its row writes it: a coin's creator fees and
+    /// owed fees in their asset, holder rewards in both. Nil when the plan doesn't say (an older server).
+    func amount(in display: [String: StellarJSON]?) -> String? {
+        guard let display else { return nil }
+        func text(_ key: String) -> String? {
+            if case .string(let value)? = display[key], !value.isEmpty { return value }
+            return nil
+        }
+        func units(_ key: String) -> Int64? { text(key).flatMap { Int64($0) } }
+        switch kind {
+        case .creator:
+            guard let units = units("amount"), let code = text("quote") else { return nil }
+            return StellarFormat.amount(units, code: code)
+        case .owed:
+            guard let units = units("amount"), let code = text("asset") else { return nil }
+            return StellarFormat.amount(units, code: code)
+        case .rewards(_, let symbol):
+            var parts: [String] = []
+            if let quote = units("pendingQuote"), quote > 0, let code = text("quote") { parts.append("\(StellarFormat.units(quote, compact: true)) \(code)") }
+            if let coins = units("pendingToken"), coins > 0 { parts.append("\(StellarFormat.units(coins, compact: true)) \(text("symbol") ?? symbol)") }
+            return parts.isEmpty ? nil : parts.joined(separator: " + ")
+        }
+    }
+
+    /// Who its plan pays: a coin's creator fees go to the fee recipient the plan names, owed fees to the account it names;
+    /// holder rewards go to the account that claims them (`claim(user)` pays the caller). Nil when the plan doesn't say.
+    func payee(in display: [String: StellarJSON]?, account: String) -> String? {
+        if case .rewards = kind { return account }
+        if case .string(let to)? = display?["to"], !to.isEmpty { return to }
+        return nil
+    }
+
+    /// Why the plan can't be My Launchpad's claim: a coin's creator fees that now go to another fee recipient (the
+    /// account would pay the network fee for someone else's payout). Nil when it may go.
+    func refusal(in display: [String: StellarJSON]?, account: String) -> LocalizedStringResource? {
+        guard case .creator = kind, let payee = payee(in: display, account: account), payee != account else { return nil }
+        return LocalizedStringResource("These creator fees now go to the coin's fee recipient, not to you.", table: "StellarLaunchBoard", comment: "The creator fee claim review on Stellar, when the coin's fee recipient is no longer this account: the claim would pay someone else, so it is refused")
+    }
+
+    /// The claims Claim All sends: those whose figures were all read in the latest load.
+    static func claimAll(_ claims: [StellarLaunchClaim]) -> [StellarLaunchClaim] { claims.filter(\.current) }
+
     /// Its plan: v2's from `launches`, a retired coin's creator fees from `store` (v1).
     func plan(store: LiteStore, launches: LaunchV2Store) async throws -> PreparedAction {
         switch kind {
@@ -522,11 +582,13 @@ struct StellarLaunchClaim: Identifiable, Equatable {
         }
     }
 
-    /// Every claim waiting for `account`, in order: creator fees (launchpad v2's coins, then the retired launchpad's), holder
-    /// rewards, then owed fees. A v2 coin's creator fees are claimed by its fee recipient: they are the account's only while
-    /// launchpad v2's state says it is the recipient (the server's figure stands in while the state is unread). `code`
-    /// names a quote asset from its id.
-    static func claims(_ mine: StellarMyLaunchpad, states: [String: StellarLaunchStateV2], account: String,
+    /// Every claim waiting for the account, in order: creator fees (launchpad v2's coins, then the retired launchpad's),
+    /// holder rewards, then owed fees. A v2 coin's creator fees are claimed by its fee recipient: they are the account's
+    /// only while launchpad v2's state says it is the recipient (the server's figure stands in while the state is unread,
+    /// and the review refuses a plan that pays someone else). `fresh`: the coins whose state the latest load read;
+    /// `mineCurrent`: `mine` is that load's. A claim made from anything older isn't `current`. `code` names a quote asset
+    /// from its id.
+    static func claims(_ mine: StellarMyLaunchpad, states: [String: StellarLaunchStateV2], fresh: Set<String>, mineCurrent: Bool,
                        code: (String) -> String) -> [StellarLaunchClaim] {
         var live: [StellarLaunchClaim] = []
         var retired: [StellarLaunchClaim] = []
@@ -537,7 +599,7 @@ struct StellarLaunchClaim: Identifiable, Equatable {
             if StellarLaunchBoardModel.isRetired(coin) {
                 guard serverUnits > 0 else { continue }
                 retired.append(StellarLaunchClaim(kind: .creator(token: coin.token, symbol: coin.symbol, retired: true),
-                                                  amount: StellarFormat.amount(serverUnits, code: code(fees.quote)), usd: fees.unclaimedUsd, to: account))
+                                                  amount: StellarFormat.amount(serverUnits, code: code(fees.quote)), usd: fees.unclaimedUsd, current: mineCurrent))
                 continue
             }
             let state = states[coin.token]
@@ -546,7 +608,8 @@ struct StellarLaunchClaim: Identifiable, Equatable {
             guard units > 0 else { continue }
             live.append(StellarLaunchClaim(kind: .creator(token: coin.token, symbol: coin.symbol, retired: false),
                                            amount: StellarFormat.amount(units, code: state?.quote.code ?? code(fees.quote)),
-                                           usd: units == serverUnits ? fees.unclaimedUsd : nil, to: state?.recipient ?? account))
+                                           usd: units == serverUnits ? fees.unclaimedUsd : nil,
+                                           current: state == nil ? mineCurrent : fresh.contains(coin.token)))
         }
         var claims = live + retired
         let coins = mine.held.map(\.launch) + mine.created.map(\.launch)
@@ -556,14 +619,28 @@ struct StellarLaunchClaim: Identifiable, Equatable {
             let lines = rewards(state, symbol: coin.symbol)
             guard !lines.isEmpty else { continue }
             claims.append(StellarLaunchClaim(kind: .rewards(token: coin.token, symbol: coin.symbol),
-                                             amount: lines.map { "\($0.amount) \($0.code)" }.joined(separator: " + "), usd: nil, to: account))
+                                             amount: lines.map { "\($0.amount) \($0.code)" }.joined(separator: " + "), usd: nil,
+                                             current: fresh.contains(coin.token)))
         }
-        var owedAssets = Set<String>()
+        // Owed fees are the account's in an asset, whichever coin's state tells them: the latest load's state, where one
+        // read them, says what they are now, zero included.
+        var owed: [String: (asset: StellarLaunchStateV2.Quote, units: Int64, current: Bool)] = [:]
+        var assets: [String] = []
         for coin in coins where !StellarLaunchBoardModel.isRetired(coin) {
-            guard let state = states[coin.token], let owed = state.you.flatMap({ Int64($0.creatorOwed) }), owed > 0,
-                  owedAssets.insert(state.quote.contract).inserted else { continue }
-            claims.append(StellarLaunchClaim(kind: .owed(asset: state.quote, units: owed), amount: StellarFormat.amount(owed, code: state.quote.code),
-                                             usd: nil, to: account))
+            guard let state = states[coin.token], let you = state.you else { continue }
+            let units = Int64(you.creatorOwed) ?? 0
+            let current = fresh.contains(coin.token)
+            if let found = owed[state.quote.contract] {
+                if current, !found.current { owed[state.quote.contract] = (state.quote, units, true) }
+            } else {
+                owed[state.quote.contract] = (state.quote, units, current)
+                assets.append(state.quote.contract)
+            }
+        }
+        for contract in assets {
+            guard let found = owed[contract], found.units > 0 else { continue }
+            claims.append(StellarLaunchClaim(kind: .owed(asset: found.asset, units: found.units), amount: StellarFormat.amount(found.units, code: found.asset.code),
+                                             usd: nil, current: found.current))
         }
         return claims
     }
@@ -643,6 +720,10 @@ final class StellarLaunchpadProfileModel {
     /// Some coin's state couldn't be read at the last read: its rewards and owed fees may be missing (those read before
     /// stay).
     private(set) var statesUnread = false
+    /// The coins whose state the latest load read: a claim made from any other state is as last read.
+    private(set) var fresh: Set<String> = []
+    /// `mine` is the latest load's: not what was saved, nor what an earlier load read before one that failed.
+    private(set) var mineCurrent = false
     /// The claim plans of launchpad v2.
     private(set) var launches: LaunchV2Store?
     private(set) var loading = false
@@ -671,10 +752,13 @@ final class StellarLaunchpadProfileModel {
         mine = saved.value.mine
         states = saved.value.states
         savedAt = saved.savedAt
+        fresh = []
+        mineCurrent = false
     }
 
-    /// Reads the account's launchpad history, then the state of each v2 coin in it. A read that fails keeps what was read
-    /// before and says so; a passkey account with no session gets `needsSignIn`, and nothing asks.
+    /// Reads the account's launchpad history, then the state of each v2 coin in it, a few at a time (`readStates`). A read
+    /// that fails keeps what was read before and says so; a passkey account with no session gets `needsSignIn`, and nothing
+    /// asks.
     func load(store: LiteStore, owner: Address?) async {
         loading = true
         defer { loading = false }
@@ -687,6 +771,9 @@ final class StellarLaunchpadProfileModel {
             read = try await store.myLaunchpad()
         } catch {
             guard !Task.isCancelled else { return }
+            // What stays on screen is from an earlier read.
+            fresh = []
+            mineCurrent = false
             if store.status(.myLaunchpad) == .needsSignIn {
                 needsSignIn = true
                 self.error = nil
@@ -699,30 +786,57 @@ final class StellarLaunchpadProfileModel {
         guard !Task.isCancelled else { return }
         needsSignIn = false
         let tokens = Self.v2Tokens(read)
-        var fresh: [String: StellarLaunchStateV2] = [:]
-        var unread = false
-        await withTaskGroup(of: (String, StellarLaunchStateV2?, Bool).self) { group in
-            for token in tokens {
-                group.addTask { @MainActor in
-                    do { return (token, try await launches.state(token), true) } catch { return (token, nil, false) }
-                }
-            }
-            for await (token, state, ok) in group {
-                if let state { fresh[token] = state }
-                if !ok { unread = true }
-            }
-        }
+        let reads = await Self.readStates(tokens) { try await launches.state($0) }
         guard !Task.isCancelled else { return }
         let readAt = Date()
+        let unread = reads.read.count < tokens.count
         mine = read
-        // A coin whose state couldn't be read keeps the one read before.
-        states = fresh.merging(states.filter { token, _ in tokens.contains(token) && fresh[token] == nil }) { new, _ in new }
+        mineCurrent = true
+        fresh = reads.read
+        // A coin whose state couldn't be read keeps the one read before (as last read); a coin launchpad v2 answered
+        // without one has none.
+        states = reads.states.merging(states.filter { token, _ in tokens.contains(token) && !reads.read.contains(token) }) { new, _ in new }
         statesUnread = unread
         error = nil
         savedAt = nil
         if !unread, let owner, let epoch {
             StellarSaved.shared.save(Saved(mine: read, states: states), .myLaunchpad, owner: owner, savedAt: readAt, epoch: epoch)
         }
+    }
+
+    /// At most this many coins' states are read at once: each costs the server several contract reads, and testnet's RPC
+    /// is rate-limited.
+    nonisolated static let stateReadLimit = 4
+
+    /// Launchpad v2's state of each of `tokens`, at most `limit` reads at a time: the states read, and the tokens whose read
+    /// went through (a coin launchpad v2 doesn't know answers no state, and counts as read).
+    static func readStates(_ tokens: [String], limit: Int = stateReadLimit,
+                           read: @escaping @MainActor (String) async throws -> StellarLaunchStateV2?) async -> (states: [String: StellarLaunchStateV2], read: Set<String>) {
+        var states: [String: StellarLaunchStateV2] = [:]
+        var done = Set<String>()
+        let one: @MainActor (String) async -> (String, StellarLaunchStateV2?, Bool) = { token in
+            do { return (token, try await read(token), true) } catch { return (token, nil, false) }
+        }
+        await withTaskGroup(of: (String, StellarLaunchStateV2?, Bool).self) { group in
+            var next = 0
+            while next < min(max(1, limit), tokens.count) {
+                let token = tokens[next]
+                group.addTask { @MainActor in await one(token) }
+                next += 1
+            }
+            // Each read that ends starts the next.
+            while let result = await group.next() {
+                let (token, state, ok) = result
+                if let state { states[token] = state }
+                if ok { done.insert(token) }
+                if next < tokens.count {
+                    let token = tokens[next]
+                    group.addTask { @MainActor in await one(token) }
+                    next += 1
+                }
+            }
+        }
+        return (states, done)
     }
 
     /// Launchpad v2's coins among those held and launched, once each.
@@ -827,84 +941,333 @@ private struct StellarCreatedRow: View {
     }
 }
 
+// MARK: - A claim's review
+
+/// A claim's review (§8.10.5 C): `StellarConfirmationSheet` over the claim's own plan. Its rows say what that plan pays and
+/// to whom, as the server read them from the contracts when it built it, never My Launchpad's figures, which may be from
+/// an earlier read. A coin's creator fees that now go to someone else are refused before Confirm.
+private struct StellarClaimReview: View {
+    let claim: StellarLaunchClaim
+    /// The account's address: who the claim must pay.
+    let account: String
+    let build: () async throws -> PreparedAction
+    let onDone: () -> Void
+    @State private var built: PreparedAction?
+    @State private var failed = false
+
+    var body: some View {
+        StellarConfirmationSheet(title: claim.reviewTitle, confirmTitle: claim.confirmTitle, build: {
+            do {
+                let action = try await build()
+                await MainActor.run { built = action }
+                return action
+            } catch {
+                await MainActor.run { failed = true }
+                throw error
+            }
+        }, onDone: onDone, check: { claim.refusal(in: $0.claimDisplay, account: account) }) {
+            StellarClaimFigure(label: claim.reviewLabel, value: amount, reading: reading)
+            StellarClaimFigure(label: Text("To"), value: payee, reading: reading)
+        }
+    }
+
+    /// The plan is being built: its rows are placeholders until it says what it pays.
+    private var reading: Bool { built == nil && !failed }
+
+    private var amount: String {
+        if let built { return claim.amount(in: built.claimDisplay) ?? claim.amount }
+        return failed ? "—" : claim.amount
+    }
+
+    private var payee: String {
+        guard let built else { return failed ? "—" : StellarLaunchClaim.short(account) }
+        return claim.payee(in: built.claimDisplay, account: account).map(StellarLaunchClaim.short) ?? "—"
+    }
+}
+
+/// A review row whose value is a placeholder while the plan is built.
+private struct StellarClaimFigure: View {
+    let label: Text
+    let value: String
+    let reading: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            label.foregroundStyle(.secondary)
+            Spacer(minLength: 16)
+            Text(verbatim: value).monospacedDigit().multilineTextAlignment(.trailing).unreadFigure(reading)
+        }
+    }
+}
+
+extension StellarLaunchClaim {
+    /// An address as the review writes it: G… or C… shortened, anything else as it is.
+    static func short(_ address: String) -> String {
+        if let account = StellarAccountID(address) { return account.short }
+        return address.count > 12 ? "\(address.prefix(6))…\(address.suffix(4))" : address
+    }
+}
+
 // MARK: - Claim All
 
-/// Claim All (§8.10.5, CA): every claim My Launchpad lists, each its own transaction, built and reviewed together in one
-/// sheet with a network fee row each, then signed and sent one after another, as Monad's review runs one plan. A claim
-/// that fails stops the run: those before it are settled, and Claim All carries on from it, unless it already reached
-/// the network (then the sheet only closes, as the review does).
-private struct StellarClaimAllSheet: View {
+/// A claim's plan as Claim All reads it: `PreparedAction`, or a test's own.
+protocol StellarClaimPlan {
+    /// Its claim step's intent display: what it pays, and to whom.
+    var claimDisplay: [String: StellarJSON]? { get }
+    /// The most the user's steps may charge together, in stroops.
+    var claimFee: Int64 { get }
+    /// Its claim step's fee kind ("launch_v2_claim"): that kind's estimate prices the plan built again.
+    var claimStepKind: String? { get }
+    /// The transactions it signs.
+    var claimSteps: Int { get }
+    /// The base reserves it holds back.
+    var claimReserves: Int { get }
+}
+
+extension PreparedAction: StellarClaimPlan {
+    var claimDisplay: [String: StellarJSON]? { plan.steps.compactMap(\.intent).last?.display }
+    var claimFee: Int64 { fees.userMax }
+    var claimStepKind: String? { plan.steps.last?.stepKind }
+    var claimSteps: Int { plan.steps.count }
+    var claimReserves: Int { fees.newReserves }
+}
+
+/// Claim All (§8.10.5 CA) apart from its sheet: each claim's plan, built for the review in order, then sent one after
+/// another, each its own transaction. The server builds a plan's transaction on the account's sequence number as it
+/// stands, so a plan built before another claim went out could never land: once one claim is handed to a run, every other
+/// plan is built again just before it is sent, and held to the network fee the review showed for it (`cap`). A claim that
+/// can't be built, or whose plan pays someone else, is set aside with why, and Claim All goes on with the others (Try
+/// Again builds the ones set aside). A send that fails stops the run: Claim All carries on from that claim, unless it
+/// reached the network, which nothing here sends again.
+@Observable
+@MainActor
+final class StellarClaimAllModel<Plan: StellarClaimPlan> {
+    /// How one claim's send went.
+    enum Outcome: Equatable {
+        case settled
+        case failed(String, reachedNetwork: Bool)
+    }
+
+    /// The send that stopped the run.
+    struct Failure: Equatable {
+        let id: String
+        let message: String
+        /// It reached the network: the sheet only closes.
+        let reachedNetwork: Bool
+    }
+
+    /// Every claim the sheet opened with, in order.
     let claims: [StellarLaunchClaim]
-    let build: (StellarLaunchClaim) async throws -> PreparedAction
+    /// The plan of each claim in Claim All, by claim id: the review's, then the one sent.
+    private(set) var prepared: [String: Plan] = [:]
+    /// The claims set aside, and why.
+    private(set) var problems: [String: String] = [:]
+    private(set) var preparing = false
+    private(set) var running = false
+    private(set) var settled: Set<String> = []
+    private(set) var failure: Failure?
+
+    private let account: String
+    private let build: (StellarLaunchClaim) async throws -> Plan
+    private let estimate: (String) -> Int64?
+    /// The plans built before a claim was handed to a run: each is built again before it is sent.
+    @ObservationIgnored private var stale: Set<String> = []
+
+    /// `account`: who every claim must pay. `build`: a claim's plan, built now. `estimate`: a step kind's fee estimate.
+    init(claims: [StellarLaunchClaim], account: String, build: @escaping (StellarLaunchClaim) async throws -> Plan,
+         estimate: @escaping (String) -> Int64?) {
+        self.claims = claims
+        self.account = account
+        self.build = build
+        self.estimate = estimate
+    }
+
+    /// The claims with a plan, not settled yet, in order.
+    var pending: [StellarLaunchClaim] { claims.filter { prepared[$0.id] != nil && !settled.contains($0.id) } }
+    /// Every claim with a plan went through (a claim set aside may be tried again).
+    var isDone: Bool { !settled.isEmpty && pending.isEmpty }
+    /// A send reached the network and failed: nothing more is sent from here.
+    var stopped: Bool { failure?.reachedNetwork == true }
+
+    /// The most `id`'s network fee may come to: its plan's own fee, or its kind's estimate (`/v1/fees`) where that is
+    /// higher, as the claim may be built again before it is sent. The review shows it, and that build is held to it.
+    func cap(_ id: String) -> Int64? {
+        guard let plan = prepared[id] else { return nil }
+        return max(plan.claimFee, plan.claimStepKind.flatMap(estimate) ?? 0)
+    }
+
+    /// Each claim's most, of the claims still to send.
+    var caps: [Int64] { pending.compactMap { cap($0.id) } }
+    /// The transactions the claims still to send sign.
+    var steps: Int { pending.reduce(0) { $0 + (prepared[$1.id]?.claimSteps ?? 0) } }
+    /// The base reserves the claims still to send hold back.
+    var reserves: Int { pending.reduce(0) { $0 + (prepared[$1.id]?.claimReserves ?? 0) } }
+
+    /// What the review shows `claim` pays: its plan's figure once built, the listed one before.
+    func amount(_ claim: StellarLaunchClaim) -> String {
+        prepared[claim.id].flatMap { claim.amount(in: $0.claimDisplay) } ?? claim.amount
+    }
+
+    /// Builds the plan of each claim that has none, in order: every claim when the sheet opens, the ones set aside on Try
+    /// Again.
+    func prepare() async {
+        guard !preparing, !running, !stopped else { return }
+        preparing = true
+        defer { preparing = false }
+        for claim in claims where prepared[claim.id] == nil && !settled.contains(claim.id) {
+            problems[claim.id] = nil
+            do {
+                let plan = try await build(claim)
+                if let refusal = refused(claim, plan) {
+                    problems[claim.id] = refusal
+                } else {
+                    prepared[claim.id] = plan
+                    stale.remove(claim.id)
+                }
+            } catch {
+                problems[claim.id] = LiteErrorText.describe(error)
+            }
+        }
+    }
+
+    /// Sends the claims still to send, in order, each through `send` (its own run). What each may cost is the review's at
+    /// this moment.
+    func confirm(send: (StellarLaunchClaim, Plan) async -> Outcome) async {
+        guard !running, !preparing, !stopped else { return }
+        let queue = pending
+        guard !queue.isEmpty else { return }
+        let caps = Dictionary(queue.compactMap { claim in cap(claim.id).map { (claim.id, $0) } }, uniquingKeysWith: { first, _ in first })
+        running = true
+        defer { running = false }
+        failure = nil
+        for claim in queue {
+            guard var plan = prepared[claim.id], let cap = caps[claim.id] else { continue }
+            if stale.contains(claim.id) {
+                do {
+                    plan = try await build(claim)
+                } catch {
+                    setAside(claim, LiteErrorText.describe(error))
+                    continue
+                }
+                if let refusal = refused(claim, plan) {
+                    setAside(claim, refusal)
+                    continue
+                }
+                guard plan.claimFee <= cap else {
+                    setAside(claim, LiteErrorText.describe(PlanRunner.Failure.feeAboveConfirmed(step: claim.subject)))
+                    continue
+                }
+                prepared[claim.id] = plan
+                stale.remove(claim.id)
+            }
+            // Every other plan now waits on this one's transaction: each is built again before it goes.
+            stale.formUnion(prepared.keys)
+            switch await send(claim, plan) {
+            case .settled:
+                settled.insert(claim.id)
+            case .failed(let message, let reachedNetwork):
+                failure = Failure(id: claim.id, message: message, reachedNetwork: reachedNetwork)
+                return
+            }
+        }
+    }
+
+    private func setAside(_ claim: StellarLaunchClaim, _ message: String) {
+        prepared[claim.id] = nil
+        stale.remove(claim.id)
+        problems[claim.id] = message
+    }
+
+    private func refused(_ claim: StellarLaunchClaim, _ plan: Plan) -> String? {
+        claim.refusal(in: plan.claimDisplay, account: account).map(liteTr)
+    }
+}
+
+extension StellarXLMShortage {
+    /// What the account's XLM (`position`) can't cover of Claim All's claims still to send: each one's most (`caps`) and
+    /// the reserves they hold back. Nil when it covers them.
+    static func of(claims caps: [Int64], reserves: Int, position: XLMReserve) -> StellarXLMShortage? {
+        func sum(_ a: Int64, _ b: Int64) -> Int64 {
+            let (value, overflow) = a.addingReportingOverflow(b)
+            return overflow ? .max : value
+        }
+        let fees = caps.reduce(Int64(0)) { sum($0, max(0, $1)) }
+        let need = sum(fees, position.reserves(reserves))
+        guard position.spendable < need else { return nil }
+        return StellarXLMShortage(fee: position.spendable < fees, need: need, spendable: position.spendable, minBalance: position.minBalance)
+    }
+}
+
+/// Claim All's sheet (§8.10.5 CA): the claims of the latest read, a row each with what its plan pays, one "To" (every plan
+/// here pays the account; one that doesn't is set aside), each claim's network fee, the account's XLM checked against them
+/// all, then each claim's progress as it is sent (`StellarClaimAllModel`). It keeps the review's rules
+/// (`StellarConfirmationSheet`): Claim All waits for the sheet's own read of the account, and a claim that reached the
+/// network is never sent again. Each claim is its own transaction and its own run, so the key provider asks once per
+/// claim (App Lock where it applies, the passkey per step), and the sheet says so above Claim All.
+@MainActor
+private struct StellarClaimAllSheet: View {
+    let account: String
     /// The caller's reload once a claim settled: on Done, or when the sheet goes.
     let onDone: () -> Void
 
     @Environment(Session.self) private var session
+    @Environment(AppSettings.self) private var settings
     @Environment(\.stellarSession) private var stellar
     @Environment(\.stellarActions) private var stellarActions
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
-    @State private var prepared: [String: PreparedAction] = [:]
-    @State private var buildErrors: [String: String] = [:]
-    @State private var preparing = true
-    /// Each claim's run, once Claim All started it.
+    @State private var model: StellarClaimAllModel<PreparedAction>
+    /// Each claim's latest run, for its progress.
     @State private var runs: [String: StellarReviewRun] = [:]
-    @State private var running = false
     @State private var accountCheck = AccountCheck.reading
     @State private var accountReads = 0
     @State private var cleanedUp = false
+
+    init(claims: [StellarLaunchClaim], account: String, build: @escaping (StellarLaunchClaim) async throws -> PreparedAction,
+         estimate: @escaping (String) -> Int64?, onDone: @escaping () -> Void) {
+        self.account = account
+        self.onDone = onDone
+        _model = State(initialValue: StellarClaimAllModel(claims: claims, account: account, build: build, estimate: estimate))
+    }
 
     /// The sheet's read of the account's XLM: on appear, and again on return to the app.
     private enum AccountCheck { case reading, read, failed }
 
     private var store: LiteStore? { stellar?.store }
     private var isPasskey: Bool { session.isPasskeyAccount }
-    private var allPrepared: Bool { !preparing && claims.allSatisfy { prepared[$0.id] != nil } }
-    private var isDone: Bool { !claims.isEmpty && claims.allSatisfy { runs[$0.id]?.isDone == true } }
-    private var anySettled: Bool { runs.values.contains { $0.isDone } }
-
-    /// The claim whose run failed, and why.
-    private var failed: (claim: StellarLaunchClaim, run: StellarReviewRun, message: String)? {
-        for claim in claims {
-            if let run = runs[claim.id], case .failed(let message) = run.phase { return (claim, run, message) }
-        }
-        return nil
-    }
-
-    /// The claims still to send.
-    private var pending: [PreparedAction] {
-        claims.filter { runs[$0.id]?.isDone != true }.compactMap { prepared[$0.id] }
-    }
-
-    private var steps: Int { pending.reduce(0) { $0 + $1.plan.steps.count } }
+    /// A seed account while App Lock applies: each claim's run asks for Face ID or the passcode.
+    private var asksAppLock: Bool { !isPasskey && settings.appLockApplies(to: session.account) }
+    /// The plans are built, and some claim waits to be sent.
+    private var ready: Bool { !model.preparing && !model.pending.isEmpty }
 
     /// What the account's XLM can't cover of the claims still to send, once the sheet's own read of the account went through.
     private var shortage: StellarXLMShortage? {
-        guard accountCheck == .read, allPrepared, let store, let position = store.account?.xlm.flatMap({ XLMReserve($0) }) else { return nil }
-        let pending = self.pending
-        let limits = pending.reduce(into: [String: Int64]()) { all, action in all.merge(action.limits, uniquingKeysWith: +) }
-        return StellarXLMShortage.of(fees: PlanFees(steps: pending.flatMap(\.fees.steps)), limits: limits, position: position, estimates: store.fees,
-                                     isXLM: { $0 == "XLM" || $0 == "native" || store.asset("XLM")?.contract == $0 })
+        guard accountCheck == .read, ready, let position = store?.account?.xlm.flatMap({ XLMReserve($0) }) else { return nil }
+        return StellarXLMShortage.of(claims: model.caps, reserves: model.reserves, position: position)
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    ForEach(claims) { claim in DetailRow(claim.allLabel, Text(verbatim: claim.amount)) }
+                    ForEach(model.claims) { claim in
+                        if model.problems[claim.id] == nil { DetailRow(claim.allLabel, Text(verbatim: model.amount(claim))) }
+                    }
+                    if !model.prepared.isEmpty {
+                        // Every plan here pays the account: one that doesn't is set aside.
+                        DetailRow("To", verbatim: StellarLaunchClaim.short(account))
+                    }
                 } header: {
                     if AppNetwork.stellar.isTestnet { StellarNetworkLine() }
                 } footer: {
-                    if allPrepared, !isDone {
+                    if ready, !model.isDone {
                         Paragraph(LocalizedStringResource("Each claim is its own transaction, sent one after another. Your phone checks each one against this review before it signs, and refuses anything else.", table: "StellarLaunchBoard", comment: "The Claim All review on My Launchpad on Stellar: every claim is a separate transaction, and the phone signs only what the review shows"))
                     }
                 }
-                if !isDone, !prepared.isEmpty {
+                if !model.isDone, !model.pending.isEmpty {
                     Section {
-                        ForEach(claims) { claim in
-                            if let action = prepared[claim.id] {
-                                DetailRow(claim.allLabel, Text(verbatim: StellarFormat.feeSummary(StellarFeeSummary(action.fees))))
-                            }
+                        ForEach(model.pending) { claim in
+                            if let cap = model.cap(claim.id) { DetailRow(claim.allLabel, Text(verbatim: Self.fee(cap))) }
                         }
                     } header: {
                         Text("Max network fee")
@@ -912,35 +1275,41 @@ private struct StellarClaimAllSheet: View {
                         Paragraph("The most the network can charge. Each transaction's fee is checked again before it's signed, and refused if it's unusually high.")
                     }
                 }
-                if let shortage, !running, !isDone {
+                if let shortage, !model.running, !model.isDone {
                     shortageSection(shortage)
                 }
-                if allPrepared, !running, !isDone {
+                if ready, !model.running, !model.isDone {
                     accountCheckSection
                 }
-                if preparing {
+                if model.preparing {
                     Section {
                         HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Preparing transaction").foregroundStyle(.secondary) }
                     }
                 }
-                ForEach(claims) { claim in
-                    if let error = buildErrors[claim.id] {
+                ForEach(model.claims) { claim in
+                    if let problem = model.problems[claim.id] {
                         Section {
                             VStack(alignment: .leading, spacing: 4) {
                                 claim.allLabel.font(.subheadline.weight(.medium))
-                                InlineError(message: error)
+                                InlineError(message: problem)
                             }
                         }
                         .listRowBackground(Color.clear)
                     }
                 }
-                ForEach(claims) { claim in
+                // A claim set aside isn't lost: its plan can be built again, and Claim All then sends it too.
+                if !model.problems.isEmpty, !model.preparing, !model.running, !model.stopped {
+                    Section {
+                        Button("Try Again", systemImage: "arrow.clockwise") { Task { await model.prepare() } }
+                    }
+                }
+                ForEach(model.claims) { claim in
                     if let run = runs[claim.id], !run.progress.isEmpty {
                         Section { StellarTransactionProgress(steps: run.progress.steps) } header: { claim.allLabel }
                     }
                 }
-                if let failed {
-                    Section { InlineError(message: failed.message) }.listRowBackground(Color.clear)
+                if let failure = model.failure {
+                    Section { InlineError(message: failure.message) }.listRowBackground(Color.clear)
                 }
             }
             .listStyle(.insetGrouped)
@@ -948,15 +1317,15 @@ private struct StellarClaimAllSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(isDone ? "Done" : "Cancel") { finish() }
-                        .disabled(running)
+                    Button(model.isDone ? "Done" : "Cancel") { finish() }
+                        .disabled(model.running)
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
-                    if isDone {
+                    if model.isDone {
                         PrimaryButton(title: "Done", systemImage: "checkmark") { finish() }
-                    } else if let failed, failed.run.progress.reachedNetwork {
+                    } else if model.stopped {
                         // The failed claim already reached the network: Claim All never sends it again from here.
                         Text(TransactionRun.alreadySent)
                             .font(.footnote)
@@ -969,14 +1338,14 @@ private struct StellarClaimAllSheet: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     } else {
-                        if isPasskey, steps > 1, !running {
-                            Text("\(steps) steps · each asks for your passkey", tableName: "StellarLaunchBoard", comment: "The Claim All review on Stellar, above its button, on a passkey account: how many transactions the claims sign, each with its own passkey prompt")
+                        if !model.running {
+                            promptLine
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }
-                        PrimaryButton(title: Text("Claim All"), isBusy: running,
-                                      isDisabled: !allPrepared || accountCheck != .read || shortage != nil) {
+                        PrimaryButton(title: Text("Claim All"), isBusy: model.running,
+                                      isDisabled: !ready || accountCheck != .read || shortage != nil) {
                             Task { await confirm() }
                         }
                     }
@@ -985,22 +1354,38 @@ private struct StellarClaimAllSheet: View {
                 .frame(maxWidth: .infinity)
                 .background(.bar)
             }
-            .interactiveDismissDisabled(running)
+            .interactiveDismissDisabled(model.running)
         }
         .onDisappear { cleanUp() }
         .holdsMomentLinks()
         .presentationDetents([.medium, .large])
         .presentationBackground(Color(.systemGroupedBackground))
-        .sensoryFeedback(.success, trigger: isDone) { _, done in done }
-        .task { await prepare() }
+        .sensoryFeedback(.success, trigger: model.isDone) { _, done in done }
+        .task { await model.prepare() }
         .task { await readAccount() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, !running, !isDone else { return }
+            guard phase == .active, !model.running, !model.isDone else { return }
             Task { await readAccount() }
         }
     }
 
-    /// The account's XLM can't cover the claims: what it needs and can spend, with the way to add some. Claim All stays off.
+    /// What signing asks for, said before Claim All: the passkey once per transaction, or App Lock once per claim.
+    @ViewBuilder private var promptLine: some View {
+        if isPasskey, model.steps > 1 {
+            Text("\(model.steps) steps · each asks for your passkey", tableName: "StellarLaunchBoard", comment: "The Claim All review on Stellar, above its button, on a passkey account: how many transactions the claims sign, each with its own passkey prompt")
+        } else if asksAppLock, model.pending.count > 1 {
+            Text("\(model.pending.count) claims · each asks for \(BiometricGate.promptName)", tableName: "StellarLaunchBoard", comment: "The Claim All review on Stellar, above its button, when App Lock is on: each claim is its own transaction and asks for Face ID or the passcode on its own. The first value is how many claims, the second the prompt's name (Face ID, Touch ID, Passcode)")
+        }
+    }
+
+    /// A claim's most, as the review's Max network fee row writes it: "Up to 0.05 XLM".
+    private static func fee(_ stroops: Int64) -> String {
+        let fee = StellarFormat.xlm(stroops: stroops)
+        return tr("Up to \(fee)")
+    }
+
+    /// The account's XLM can't cover the claims: what they need and it can spend, with the way to add some. Claim All
+    /// stays off.
     private func shortageSection(_ shortage: StellarXLMShortage) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 10) {
@@ -1037,20 +1422,8 @@ private struct StellarClaimAllSheet: View {
         }
     }
 
-    /// Builds each claim's plan, one after another: each is verified and priced on the phone, as the review's is.
-    private func prepare() async {
-        for claim in claims {
-            do {
-                prepared[claim.id] = try await build(claim)
-            } catch {
-                buildErrors[claim.id] = LiteErrorText.describe(error)
-            }
-        }
-        preparing = false
-    }
-
-    /// Reads the account again for the preflight (`StellarConfirmationSheet`'s rule): Claim All waits for a read that went
-    /// through.
+    /// Reads the account again for the preflight (`StellarConfirmationSheet`'s rule), and the fee estimates a claim built
+    /// again is priced by: Claim All waits for a read of the account that went through.
     private func readAccount() async {
         accountReads += 1
         let read = accountReads
@@ -1060,24 +1433,24 @@ private struct StellarClaimAllSheet: View {
             return
         }
         let started = Date()
+        async let fees: Void = store.refreshFees()
         await store.refreshAccount()
+        _ = await fees
         guard read == accountReads else { return }
         accountCheck = store.updatedAt.map { $0 >= started } == true ? .read : .failed
     }
 
-    /// Sends the claims in order, each through the store's own task with its own prompt (App Lock when it applies, or the
-    /// passkey per step): a claim already settled is skipped, and a failure stops the run there.
+    /// Sends the claims, each through the store's own task (`StellarReviewRun`), with its own prompt.
     private func confirm() async {
-        guard let store, !running, allPrepared else { return }
-        running = true
-        defer { running = false }
+        guard let store else { return }
         let reason = tr("Confirm \(tr("Claim All"))")
-        for claim in claims {
-            guard let action = prepared[claim.id] else { return }
-            let run = runs[claim.id] ?? StellarReviewRun()
+        let passkey = isPasskey
+        await model.confirm { claim, action in
+            let run = StellarReviewRun()
             runs[claim.id] = run
-            if run.isDone { continue }
-            guard await run.start(action, store: store, reason: reason, passkey: isPasskey) != nil else { return }
+            if await run.start(action, store: store, reason: reason, passkey: passkey) != nil { return .settled }
+            if case .failed(let message) = run.phase { return .failed(message, reachedNetwork: run.progress.reachedNetwork) }
+            return .failed(TransactionRun.notSent, reachedNetwork: run.progress.reachedNetwork)
         }
     }
 
@@ -1088,7 +1461,7 @@ private struct StellarClaimAllSheet: View {
 
     /// The caller's reload, once, when any claim settled.
     private func cleanUp() {
-        guard anySettled, !cleanedUp else { return }
+        guard !model.settled.isEmpty, !cleanedUp else { return }
         cleanedUp = true
         onDone()
     }
