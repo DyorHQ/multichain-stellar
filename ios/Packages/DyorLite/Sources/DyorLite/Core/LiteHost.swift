@@ -37,8 +37,9 @@ public protocol LiteKeyProvider: Sendable {
 /// one signature, and its caller drops it.
 public protocol LiteSigningRun: Sendable {
     /// A signer for one step. A seed account reads the Keychain, with no prompt; a passkey account asks for the passkey
-    /// once per call (`reason` names the step). Throws after `end()`.
-    func signer(reason: String) async throws -> StellarSigner
+    /// once per call (`reason` names the step); a Privy account's asks Privy, through the user's own Privy key, for each
+    /// signature. Throws after `end()`.
+    func signer(reason: String) async throws -> any StellarHashSigner
     /// The action settled, failed or was cancelled: no signer after this.
     func end()
 }

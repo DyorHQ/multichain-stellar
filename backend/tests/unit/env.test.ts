@@ -428,3 +428,19 @@ Deno.test("indexer with lite.job_runs: each run is recorded; a periodic job wait
   assertEquals([out.ok, out.fails, out.p, out.q], [{ n: 2n }, { error: "RPC down" }, undefined, "q"]);
   assertEquals(inserted.map(([job, , , ok, result]) => [job, ok, result]), [["ok", true, { n: "2" }], ["fails", false, { error: "RPC down" }], ["q", true, "q"]]);
 });
+
+Deno.test("LITE_PRIVY_WALLETS: on by default on testnet, off on mainnet; anything but on or off reads as off, with one warning", () => {
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => void warnings.push(args.join(" "));
+  try {
+    const read = (network: string, setting: string | undefined) =>
+      withEnv({ LITE_NETWORK: network, LITE_PRIVY_WALLETS: setting }, () => env.privyWallets);
+    assertEquals([read("testnet", undefined), read("mainnet", undefined)], [true, false]);
+    assertEquals([read("mainnet", "on"), read("testnet", "off")], [true, false]);
+    assertEquals([read("testnet", "yes"), read("testnet", "ON"), read("mainnet", "1")], [false, false, false]);
+    assertEquals(warnings, ["LITE_PRIVY_WALLETS is on or off: read as off."]);
+  } finally {
+    console.warn = warn;
+  }
+});
