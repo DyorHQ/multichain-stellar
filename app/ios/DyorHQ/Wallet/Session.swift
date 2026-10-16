@@ -682,7 +682,6 @@ final class Session {
         return (fresh.identityToken, true)
     }
     #endif
-
     /// The signed-in Privy user's access token (nil for imported, passkey-derived and watch-only accounts). A
     /// server function uses it to prove the caller owns the Privy account it is asked to delete. `fresh` renews the
     /// Privy session first: delete-account takes only a token issued in the last 15 minutes.

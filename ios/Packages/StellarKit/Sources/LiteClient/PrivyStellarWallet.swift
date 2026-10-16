@@ -183,9 +183,9 @@ public struct PrivyWalletAPI: PrivyWalletBackend {
         struct Page: Decodable { let data: [PrivyWalletRecord] }
         do {
             return try JSONDecoder().decode(Page.self, from: try await send("GET", "api/v1/wallets", query: [URLQueryItem(name: "chain_type", value: "stellar")])).data
-        } catch PrivyAPIError.refused {
-            // Privy doesn't open this route to every app's user sessions (it answers 401 there, with a token the wallet
-            // reads take): no list, and the identity token says instead.
+        } catch PrivyAPIError.refused(let status, _) where [401, 403, 404, 405].contains(status) {
+            // Privy doesn't open this route to every app's user sessions (it answered 401 on testnet, to a token the
+            // wallet reads take): no list, and the identity token says instead. Any other refusal is an error.
             return nil
         }
     }
@@ -265,30 +265,62 @@ public struct PrivyStellarSigner: StellarHashSigner {
     private let appId: String
     private let backend: any PrivyWalletBackend
     private let authorize: @Sendable (PrivyRawSignRequest) async throws -> String
+    private let recheck: PrivyWalletRecheck?
     private let now: @Sendable () -> Date
 
     /// - Parameters:
     ///   - authorize: the user's Privy authorization signature of the request (the Privy SDK's
     ///     `generateAuthorizationSignature`), made on this iPhone.
+    ///   - recheck: run before the first signature (`PrivyWalletRecheck`): the wallet, read from this iPhone's storage,
+    ///     must still be only the user's at Privy.
     public init(wallet: PrivyStellarWallet, appId: String, backend: any PrivyWalletBackend,
                 authorize: @escaping @Sendable (PrivyRawSignRequest) async throws -> String,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                recheck: PrivyWalletRecheck? = nil, now: @escaping @Sendable () -> Date = { Date() }) {
         address = wallet.address
         walletId = wallet.walletId
         self.appId = appId
         self.backend = backend
         self.authorize = authorize
+        self.recheck = recheck
         self.now = now
     }
 
     public func signHash(_ hash: [UInt8]) async throws -> [UInt8] {
-        guard hash.count == 32 else { throw StellarSigningError.badSignature }
+        // The request's URL names the wallet: a malformed id is never signed for.
+        guard hash.count == 32, PrivyWalletAPI.isWalletId(walletId) else { throw StellarSigningError.badSignature }
+        try await recheck?.ensure()
         let request = PrivyRawSignRequest(walletId: walletId, hash: hash, appId: appId, now: now())
         let authorization = try await authorize(request)
         let signature = try await backend.rawSign(request, authorization: authorization)
         guard StellarSigner.verify(address: address, message: hash, signature: signature) else { throw StellarSigningError.badSignature }
         return signature
     }
+}
+
+/// A check that runs until it first passes, then never again (for one signer's life, so once per Stellar session):
+/// callers at the same time share one run, and a failure is not kept, so the next signature tries again.
+public final class PrivyWalletRecheck: Sendable {
+    private actor State {
+        var passed = false
+        var running: Task<Void, Error>?
+
+        func ensure(_ check: @escaping @Sendable () async throws -> Void) async throws {
+            if passed { return }
+            if let running { return try await running.value }
+            let task = Task { try await check() }
+            running = task
+            defer { running = nil }
+            try await task.value
+            passed = true
+        }
+    }
+
+    private let state = State()
+    private let check: @Sendable () async throws -> Void
+
+    public init(_ check: @escaping @Sendable () async throws -> Void) { self.check = check }
+
+    public func ensure() async throws { try await state.ensure(check) }
 }
 
 /// Which Privy wallet a Privy account's Stellar key is (privy-stellar-wallets.md §5.3). Only one only the user controls:
@@ -298,13 +330,18 @@ public struct PrivyStellarSigner: StellarHashSigner {
 /// make one this iPhone uses.
 public enum PrivyWalletCheck {
     public enum Failure: Error, Equatable {
-        /// The account's Privy Monad wallet has no owner to compare with.
+        /// The account's Privy Monad wallet has no owner to compare with, or Privy answered with another wallet.
         case noOwner
         /// The wallet kept for the account, or the one just made, isn't one only the user controls.
         case notOnlyTheUsers
-        /// No wallet was found, and the list it was looked for in may be out of date (an identity token Privy couldn't
-        /// refresh): none is made, so an account never gets a second Stellar wallet for want of a fresh list.
+        /// The list the wallet is looked for in can't be relied on: an identity token Privy couldn't refresh, with no
+        /// wallet found in it, or one listing a Stellar wallet with no id to read (none is chosen then: the one it hides
+        /// may be the oldest). Nothing is made, so an account never gets a second Stellar wallet for want of a whole,
+        /// current list.
         case listNotFresh
+        /// Privy lists no wallets to the user's session and issued no identity token: the Privy app doesn't send them
+        /// (its "Return user data in an identity token" setting), so this sign-in can't find its wallet, now or later.
+        case noIdentityToken
     }
 
     /// A Stellar wallet as Privy's identity token lists it; Privy may leave the id out.
@@ -313,7 +350,8 @@ public enum PrivyWalletCheck {
         public let address: String
     }
 
-    /// Whether `record` is a Stellar wallet only the user controls, `owner` being the user's own key quorum.
+    /// Whether `record` is a Stellar wallet only the user controls, `owner` being the user's own key quorum. One the user
+    /// exported stays theirs: Privy exports a key only with its owner's authorization, so only the user can have it.
     public static func trusted(_ record: PrivyWalletRecord, owner: String) -> Bool {
         record.chainType == "stellar" && StrKey.isValid(.accountID, record.address) && PrivyWalletAPI.isWalletId(record.id)
             && record.ownerId == owner && record.additionalSigners.isEmpty && record.importedAt == nil && record.archivedAt == nil
@@ -324,16 +362,16 @@ public enum PrivyWalletCheck {
     /// - else the oldest of the user's Stellar wallets that is only the user's: as Privy lists them to the user's session,
     ///   or, where it doesn't, as Privy's identity token lists them;
     /// - else a new one, made now by Privy for the user, and checked as the others are.
-    /// `ownerWalletId` is the account's Privy Monad wallet, whose owner is the user's own key quorum. A wallet the token
-    /// lists that Privy won't show this user (404, 403) is passed over; an outage throws; and a wallet is made only from
-    /// a list known to be current (Privy's own, or an identity token just refreshed: `identityTokenIsFresh`), so a second
-    /// wallet is never made for want of an answer.
-    public static func resolve(backend: any PrivyWalletBackend, ownerWalletId: String, kept: PrivyStellarWallet?,
+    /// `ownerWalletId` is the account's Privy Monad wallet (an embedded Ethereum wallet at `ownerAddress`), whose owner is
+    /// the user's own key quorum. A wallet the token lists that Privy won't show this user (404, 403) is passed over; an
+    /// outage throws; and a wallet is made only from a list known to be complete and current (Privy's own, or an identity
+    /// token just refreshed, `identityTokenIsFresh`, whose every Stellar wallet could be read), so a second wallet is
+    /// never made for want of an answer.
+    public static func resolve(backend: any PrivyWalletBackend, ownerWalletId: String, ownerAddress: String, kept: PrivyStellarWallet?,
                                identityToken: String?, identityTokenIsFresh: Bool = true) async throws -> PrivyStellarWallet {
-        guard let owner = try await backend.wallet(id: ownerWalletId).ownerId, !owner.isEmpty else { throw Failure.noOwner }
+        let owner = try await owner(backend: backend, ownerWalletId: ownerWalletId, ownerAddress: ownerAddress)
         if let kept {
-            let record = try await backend.wallet(id: kept.walletId)
-            guard trusted(record, owner: owner), record.wallet == kept else { throw Failure.notOnlyTheUsers }
+            try await confirm(kept, backend: backend, owner: owner)
             return kept
         }
         let found: [PrivyWalletRecord]
@@ -342,7 +380,10 @@ public enum PrivyWalletCheck {
             found = listed.filter { trusted($0, owner: owner) }
             current = true
         } else {
-            found = try await fromIdentityToken(identityToken, backend: backend, owner: owner)
+            if identityToken == nil, identityTokenIsFresh { throw Failure.noIdentityToken }
+            let read = try await fromIdentityToken(identityToken, backend: backend, owner: owner)
+            guard read.complete else { throw Failure.listNotFresh }
+            found = read.found
             current = identityToken != nil && identityTokenIsFresh
         }
         if let oldest = found.min(by: { ($0.createdAt ?? .max) < ($1.createdAt ?? .max) }) { return oldest.wallet }
@@ -352,12 +393,39 @@ public enum PrivyWalletCheck {
         return made.wallet
     }
 
-    /// The trusted Stellar wallets among those Privy's identity token lists, each read from Privy.
+    /// That the wallet this iPhone kept for the account is still only the user's at Privy (its owner the key quorum that
+    /// owns the account's Privy Monad wallet, no other signer, not imported or archived), as each Stellar session checks
+    /// before its first signature: what this iPhone stored is never trusted on its own.
+    public static func confirm(_ kept: PrivyStellarWallet, backend: any PrivyWalletBackend, ownerWalletId: String,
+                               ownerAddress: String) async throws {
+        try await confirm(kept, backend: backend, owner: owner(backend: backend, ownerWalletId: ownerWalletId, ownerAddress: ownerAddress))
+    }
+
+    /// The user's own key quorum: the owner of the account's Privy Monad wallet, read from Privy, which must answer with
+    /// that wallet (its id, an Ethereum wallet, at the account's address).
+    private static func owner(backend: any PrivyWalletBackend, ownerWalletId: String, ownerAddress: String) async throws -> String {
+        let monad = try await backend.wallet(id: ownerWalletId)
+        guard monad.id == ownerWalletId, monad.chainType == "ethereum", monad.address.lowercased() == ownerAddress.lowercased(),
+              let owner = monad.ownerId, !owner.isEmpty else { throw Failure.noOwner }
+        return owner
+    }
+
+    private static func confirm(_ kept: PrivyStellarWallet, backend: any PrivyWalletBackend, owner: String) async throws {
+        let record = try await backend.wallet(id: kept.walletId)
+        guard trusted(record, owner: owner), record.wallet == kept else { throw Failure.notOnlyTheUsers }
+    }
+
+    /// The trusted Stellar wallets among those Privy's identity token lists, each read from Privy, and whether every one
+    /// it lists could be read (one with no id can't: the list is then not whole enough to choose from).
     private static func fromIdentityToken(_ identityToken: String?, backend: any PrivyWalletBackend,
-                                          owner: String) async throws -> [PrivyWalletRecord] {
+                                          owner: String) async throws -> (found: [PrivyWalletRecord], complete: Bool) {
         var found: [PrivyWalletRecord] = []
+        var complete = true
         for listed in stellarWallets(inIdentityToken: identityToken ?? "") {
-            guard let id = listed.id, PrivyWalletAPI.isWalletId(id) else { continue }
+            guard let id = listed.id, PrivyWalletAPI.isWalletId(id) else {
+                complete = false
+                continue
+            }
             let record: PrivyWalletRecord
             do {
                 record = try await backend.wallet(id: id)
@@ -366,7 +434,34 @@ public enum PrivyWalletCheck {
             }
             if trusted(record, owner: owner), record.address == listed.address { found.append(record) }
         }
-        return found
+        return (found, complete)
+    }
+
+    /// Whether the identity token read after a refresh (`refreshed`; `before`, the one held as it began) is current, so a
+    /// wallet may be made from what it lists: the refresh went through, and Privy issued a new token (each issue is a
+    /// new string, signed anew); or, where it didn't reissue it, the token is from a sign-in under a minute before the
+    /// refresh began (`began`), by its `iat` against this iPhone's clock, so a clock running fast only ever fails that
+    /// second case. No token at all counts as current: `resolve` then says Privy issues none.
+    public static func isCurrent(_ refreshed: String?, before: String?, refreshWentThrough: Bool, began: Date) -> Bool {
+        guard refreshWentThrough else { return false }
+        guard let refreshed else { return true }
+        if refreshed != before { return true }
+        return (issuedAt(identityToken: refreshed) ?? .distantPast) >= began.addingTimeInterval(-60)
+    }
+
+    /// Whether the wallet a lookup found (`found`) may be kept as the account's: it is the one this iPhone already kept,
+    /// or none is kept, and the Stellar address this iPhone has for the account, if any, is its. Kept once, never swapped.
+    public static func mayKeep(_ found: PrivyStellarWallet, kept: PrivyStellarWallet?, stellarAddress: String?) -> Bool {
+        (kept == nil || kept == found) && (stellarAddress == nil || stellarAddress == found.address)
+    }
+
+    /// When Privy issued `token` (its `iat` claim); nil when it can't be read.
+    public static func issuedAt(identityToken token: String) -> Date? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3, let payload = base64url(String(parts[1])),
+              let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+              let iat = claims["iat"] as? NSNumber else { return nil }
+        return Date(timeIntervalSince1970: iat.doubleValue)
     }
 
     /// The Stellar wallets a Privy identity token's `linked_accounts` claim lists (a JSON string, or an array); none when

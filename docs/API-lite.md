@@ -242,7 +242,7 @@ media base, the RPC and explorer links).
 | `limits` *added* | `{momentMaxEditions, momentWindowSecs: [min, max], collectMax, launchName: [min, max], launchSymbol: [min, max], uriMax, uploadBytes}` | What the server accepts. `launchName` is UTF-8 bytes. |
 | `pricing` *added* | `Pricing` | §8. |
 | `inviteRequired` *added* | boolean | Whether a first sign-in needs an invite code (§2): false on testnet, true on mainnet. Older servers send none and always ask for one. |
-| `privyWallets` *added* | boolean | Whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) may use Stellar: `LITE_PRIVY_WALLETS` on (the default) or off. Their phone makes its own Privy Stellar wallet and signs with it talking to Privy directly; the API is never in that path, and such an account signs in with SEP-53 like any other (§2). Older servers send none: no. |
+| `privyWallets` *added* | boolean | Whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) may use Stellar: `LITE_PRIVY_WALLETS` on or off (testnet's default on, mainnet's off; any other value is off). Their phone makes its own Privy Stellar wallet and signs with it talking to Privy directly; the API is never in that path, and such an account signs in with SEP-53 like any other (§2). Older servers send none: no. |
 
 ---
 

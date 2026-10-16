@@ -128,13 +128,20 @@ final class PrivyAccountTests: XCTestCase {
         let expired = session { throw PrivyAPIError.refused(status: 401, code: nil) }
         await expired.run()
         XCTAssertEqual(expired.state, .failed(.signIn, .server(tr("Sign in to DyorHQ again to use Stellar."))))
+        // A wallet Privy won't show this user, or no identity token to find it by: not available, nothing signed.
+        for error: Error in [PrivyAPIError.refused(status: 403, code: nil), PrivyAPIError.refused(status: 404, code: nil),
+                             PrivyWalletCheck.Failure.noIdentityToken] {
+            let hidden = session { throw error }
+            await hidden.run()
+            XCTAssertEqual(hidden.state, .failed(.signIn, .server(tr("Stellar isn't available for this sign-in right now. Try again later."))), "\(error)")
+        }
     }
 
     func testAWalletForAnotherAddressThanTheOneKeptIsRefused() async throws {
         let s = LiteSession(env: env, stellarAddress: TestAccount.seedSigner.address, monad: nil, keys: nil, setupKey: nil,
                             resolveKeys: { [wallet = provider()] in wallet }, backend: backend, vault: vault, defaults: defaults)
         await s.run()
-        XCTAssertEqual(s.state, .failed(.signIn, .otherAccountsKey))
+        XCTAssertEqual(s.state, .failed(.signIn, .server(tr("Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed."))))
         XCTAssertEqual(tally("privySign"), 0)
     }
 

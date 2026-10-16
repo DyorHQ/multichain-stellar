@@ -34,6 +34,57 @@ final class StellarKeysTests: XCTestCase {
                                           authenticate: { _ in asked.prompts += 1; return allow }))
     }
 
+    // MARK: Privy accounts' kept wallet
+
+    private func privyDefaults() -> UserDefaults {
+        let name = "StellarKeysTests.privy.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    func testAPrivyAccountsWalletIsKeptInOneKeyAndReadFromTheEarlierBuildsForm() throws {
+        let evm = Address(literal: "0x00000000000000000000000000000000000000aa")
+        let defaults = privyDefaults()
+        let wallet = PrivyStellarWallet(walletId: "wl1", address: address)
+        XCTAssertNil(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: defaults))
+        XCTAssertTrue(DyorHQLiteKeys.keep(wallet, for: evm, epoch: PrivyLookupEpochs.shared.epoch(evm), defaults: defaults))
+        XCTAssertEqual(defaults.dictionary(forKey: DyorHQLiteKeys.privyKey(evm)) as? [String: String], ["walletId": "wl1", "address": address])
+        XCTAssertEqual(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: defaults), wallet)
+        XCTAssertEqual(DyorHQLiteKeys.stellarAddress(for: evm, defaults: defaults), address)
+
+        // Internal builds before 2026-10-17: the id alone, beside the account's Stellar address.
+        let earlier = privyDefaults()
+        earlier.set("wl1", forKey: DyorHQLiteKeys.privyKey(evm))
+        XCTAssertNil(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: earlier), "no address, no wallet")
+        DyorHQLiteKeys.store(address, for: evm, defaults: earlier)
+        XCTAssertEqual(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: earlier), wallet)
+    }
+
+    func testAPrivyLookupKeepsNothingOverAnotherWalletOrAfterTheAccountWasForgotten() throws {
+        let evm = Address(literal: "0x00000000000000000000000000000000000000bb")
+        let wallet = PrivyStellarWallet(walletId: "wl1", address: address)
+        let other = PrivyStellarWallet(walletId: "wl2", address: try StellarSigner(seed: [UInt8](repeating: 9, count: 32)).address)
+
+        // Another wallet already kept, or another Stellar address: never swapped.
+        let kept = privyDefaults()
+        XCTAssertTrue(DyorHQLiteKeys.keep(other, for: evm, epoch: PrivyLookupEpochs.shared.epoch(evm), defaults: kept))
+        XCTAssertFalse(DyorHQLiteKeys.keep(wallet, for: evm, epoch: PrivyLookupEpochs.shared.epoch(evm), defaults: kept))
+        XCTAssertEqual(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: kept), other)
+        let addressed = privyDefaults()
+        DyorHQLiteKeys.store(other.address, for: evm, defaults: addressed)
+        XCTAssertFalse(DyorHQLiteKeys.keep(wallet, for: evm, epoch: PrivyLookupEpochs.shared.epoch(evm), defaults: addressed))
+        XCTAssertNil(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: addressed))
+
+        // A sign-out or erase while the lookup ran: what it found isn't written back.
+        let forgotten = privyDefaults()
+        let began = PrivyLookupEpochs.shared.epoch(evm)
+        PrivyLookupEpochs.shared.forgot(evm)
+        XCTAssertFalse(DyorHQLiteKeys.keep(wallet, for: evm, epoch: began, defaults: forgotten))
+        XCTAssertNil(DyorHQLiteKeys.keptPrivyWallet(for: evm, defaults: forgotten))
+        XCTAssertNil(DyorHQLiteKeys.stellarAddress(for: evm, defaults: forgotten))
+    }
+
     /// The sign-in challenge as the API writes it (§5.8).
     private var challenge: String {
         "DyorHQ Lite sign-in\nNetwork: testnet\nAddress: \(address)\nNonce: abcdefghijklmnop1234\nIssued: 2026-10-15T09:41:00.000Z"

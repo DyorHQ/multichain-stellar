@@ -551,7 +551,8 @@ public final class LiteSession {
         do {
             let provider = try await resolveKeys()
             guard gen == generation else { return false }
-            guard address == nil || address == provider.address else { throw Failure.otherAccountsKey }
+            // Not the Stellar address this iPhone has for the account: not the account's wallet, and never used.
+            guard address == nil || address == provider.address else { throw PrivyWalletCheck.Failure.notOnlyTheUsers }
             keys = provider
             if address == nil {
                 address = provider.address

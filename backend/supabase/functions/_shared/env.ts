@@ -154,11 +154,17 @@ export const env = {
   },
   /** Whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) may use Stellar: their
    *  phone makes and signs with a Privy wallet of their own, talking to Privy itself; this API only says whether
-   *  (`/v1/config` `privyWallets`). LITE_PRIVY_WALLETS on (the default) or off, the owner's switch. */
+   *  (`/v1/config` `privyWallets`). LITE_PRIVY_WALLETS on or off, the owner's switch: on by default on testnet, off on
+   *  mainnet until the owner turns it on. Any other value reads as off, with one warning, so a typo never opens it. */
   get privyWallets(): boolean {
-    const v = read("LITE_PRIVY_WALLETS") ?? "on";
-    if (v !== "on" && v !== "off") throw new Error("LITE_PRIVY_WALLETS is on or off");
-    return v === "on";
+    const v = read("LITE_PRIVY_WALLETS");
+    if (v === undefined) return networkName() !== "mainnet";
+    if (v === "on" || v === "off") return v === "on";
+    if (!ignoredWarned.has("LITE_PRIVY_WALLETS")) {
+      ignoredWarned.add("LITE_PRIVY_WALLETS");
+      console.warn("LITE_PRIVY_WALLETS is on or off: read as off.");
+    }
+    return false;
   },
   /** The most the sponsor pays for one transaction, in stroops: the network's maxFee. Kept for plans.ts until its
    *  per-user budget goes (§4.1). */

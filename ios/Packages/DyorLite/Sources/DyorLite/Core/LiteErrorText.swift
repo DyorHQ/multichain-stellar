@@ -15,7 +15,7 @@ public enum LiteErrorText {
         // refusals and outages, a wallet only the user doesn't control.
         case is StellarSigningError: return privySigningFailed
         case let privy as PrivyAPIError: return describe(privy)
-        case PrivyWalletCheck.Failure.listNotFresh:
+        case PrivyWalletCheck.Failure.listNotFresh, PrivyWalletCheck.Failure.noIdentityToken:
             return tr("Stellar isn't available for this sign-in right now. Try again later.")
         case is PrivyWalletCheck.Failure:
             return tr("Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed.")
@@ -135,13 +135,14 @@ public enum LiteErrorText {
     private static var notEnoughForFee: String { tr("Not enough XLM for the network fee.") }
     private static var privySigningFailed: String { tr("Couldn't sign with your Privy wallet. Nothing was sent.") }
 
-    /// Privy's client API, as a Privy account meets it: an expired Privy session needs a sign-in to DyorHQ again; an
-    /// outage, a refusal or an answer this build can't read means no signature.
+    /// Privy's client API, as a Privy account meets it: an expired Privy session needs a sign-in to DyorHQ again; a wallet
+    /// Privy won't show this user, or an outage, isn't available now; another refusal or an answer this build can't read
+    /// means no signature.
     private static func describe(_ privy: PrivyAPIError) -> String {
         switch privy {
         case .transport: return tr("No connection. Check your network and try again.")
         case .refused(401, _): return tr("Sign in to DyorHQ again to use Stellar.")
-        case .unavailable: return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case .unavailable, .refused(403, _), .refused(404, _): return tr("Stellar isn't available for this sign-in right now. Try again later.")
         case .refused, .decoding: return privySigningFailed
         }
     }

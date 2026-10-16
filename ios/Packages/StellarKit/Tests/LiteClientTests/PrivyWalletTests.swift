@@ -120,7 +120,8 @@ final class PrivyWalletTests: XCTestCase {
         let good = FakePlanBackend(plan: plan)
         let signer = privySigner(FakePrivy(signer: key)) { _ in "auth" }
         _ = try await PlanRunner(api: good, user: key.address, pinned: pinned, inspector: NoLaunchTokens())
-            .run(plan, limits: [xlm: 5_000_000], signer: { signer })
+            .run(plan, limits: [xlm: 5_000_000], bindings: PlanBindings(destination: .confirmed(to: friend, memo: nil)),
+                 fees: try PlanFees(plan: plan, pinned: pinned), signer: { signer })
         let signed = await good.signed
         XCTAssertTrue(try TransactionEnvelope(base64: XCTUnwrap(signed["s1"])).isSigned(by: key.address, network: .testnet))
 
@@ -128,7 +129,8 @@ final class PrivyWalletTests: XCTestCase {
         let badSigner = privySigner(FakePrivy(signer: stranger)) { _ in "auth" }
         do {
             _ = try await PlanRunner(api: bad, user: key.address, pinned: pinned, inspector: NoLaunchTokens())
-                .run(plan, limits: [xlm: 5_000_000], signer: { badSigner })
+                .run(plan, limits: [xlm: 5_000_000], bindings: PlanBindings(destination: .confirmed(to: friend, memo: nil)),
+                 fees: try PlanFees(plan: plan, pinned: pinned), signer: { badSigner })
             XCTFail("a step went out with a signature that doesn't verify")
         } catch {
             XCTAssertEqual(error as? StellarSigningError, .badSignature)
@@ -146,6 +148,7 @@ final class PrivyWalletTests: XCTestCase {
                           additionalSigners: signers.map(PrivyWalletRecord.Signer.init(signerId:)), importedAt: imported ? 5 : nil,
                           createdAt: createdAt)
     }
+    private let monadAddress = "0x00000000000000000000000000000000000000aA"
     private var monad: PrivyWalletRecord {
         PrivyWalletRecord(id: "wl-monad", address: "0x00000000000000000000000000000000000000aa", chainType: "ethereum", ownerId: owner)
     }
@@ -164,7 +167,7 @@ final class PrivyWalletTests: XCTestCase {
 
     func testTheKeptWalletStaysTheAccountsAndIsNeverSwapped() async throws {
         let privy = FakePrivy(signer: key, records: [monad, record("wl1", key)])
-        let kept = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: wallet, identityToken: nil)
+        let kept = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: wallet, identityToken: nil)
         XCTAssertEqual(kept, wallet)
         let created = await privy.created
         XCTAssertEqual(created, 0)
@@ -172,7 +175,7 @@ final class PrivyWalletTests: XCTestCase {
         for tampered in [record("wl1", key, signers: ["kq-someone"]), record("wl1", stranger)] {
             let other = FakePrivy(signer: key, records: [monad, tampered, record("wl2", stranger)])
             do {
-                _ = try await PrivyWalletCheck.resolve(backend: other, ownerWalletId: "wl-monad", kept: wallet,
+                _ = try await PrivyWalletCheck.resolve(backend: other, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: wallet,
                                                        identityToken: identityToken(["wl2": stranger.address]))
                 XCTFail("a wallet that isn't only the user's was used")
             } catch {
@@ -195,7 +198,7 @@ final class PrivyWalletTests: XCTestCase {
         ])
         let token = identityToken(["wl-backdoor": stranger.address, "wl-shared": stranger.address, "wl-imported": stranger.address,
                                    "wl1": key.address, "wl0": older.address, "wl-gone": key.address])
-        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil, identityToken: token)
+        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: token)
         XCTAssertEqual(found, PrivyStellarWallet(walletId: "wl0", address: older.address), "the oldest wallet only the user controls")
         let created = await privy.created
         XCTAssertEqual(created, 0, "nothing is made while one exists")
@@ -209,27 +212,27 @@ final class PrivyWalletTests: XCTestCase {
             record("wl1", key, createdAt: 20),
             record("wl0", older, createdAt: 10),
         ])
-        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil,
+        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil,
                                                        identityToken: identityToken(["wl-elsewhere": stranger.address]))
         XCTAssertEqual(found, PrivyStellarWallet(walletId: "wl0", address: older.address))
         let created = await privy.created
         XCTAssertEqual(created, 0)
         // An empty list means none yet: one is made.
         let none = FakePrivy(signer: key, records: [monad], make: record("wl-new", key), listing: [])
-        let made = try await PrivyWalletCheck.resolve(backend: none, ownerWalletId: "wl-monad", kept: nil, identityToken: nil)
+        let made = try await PrivyWalletCheck.resolve(backend: none, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: nil)
         XCTAssertEqual(made.walletId, "wl-new")
     }
 
     func testAWalletIsMadeOnlyWhenThereIsNoneAndOnlyKeptIfOnlyTheUsers() async throws {
         let privy = FakePrivy(signer: key, records: [monad], make: record("wl-new", key))
-        let made = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil, identityToken: identityToken([:]))
+        let made = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: identityToken([:]))
         XCTAssertEqual(made, PrivyStellarWallet(walletId: "wl-new", address: key.address))
         let count = await privy.created
         XCTAssertEqual(count, 1)
 
         let backdoored = FakePrivy(signer: key, records: [monad], make: record("wl-new", key, signers: ["kq-someone"]))
         do {
-            _ = try await PrivyWalletCheck.resolve(backend: backdoored, ownerWalletId: "wl-monad", kept: nil, identityToken: identityToken([:]))
+            _ = try await PrivyWalletCheck.resolve(backend: backdoored, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: identityToken([:]))
             XCTFail("a new wallet with another signer was used")
         } catch {
             XCTAssertEqual(error as? PrivyWalletCheck.Failure, .notOnlyTheUsers)
@@ -239,13 +242,13 @@ final class PrivyWalletTests: XCTestCase {
     func testAWalletIsNeverMadeFromAnIdentityTokenThatMayBeOutOfDate() async throws {
         let privy = FakePrivy(signer: key, records: [monad, record("wl1", key)], make: record("wl-new", key))
         // A stale token that lists the wallet still finds it.
-        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil,
+        let found = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil,
                                                        identityToken: identityToken(["wl1": key.address]), identityTokenIsFresh: false)
         XCTAssertEqual(found.walletId, "wl1")
         // One that lists none, or no token at all, makes nothing: the wallet may be newer than the token.
         for token in [identityToken([:]), nil] {
             do {
-                _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil, identityToken: token,
+                _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: token,
                                                        identityTokenIsFresh: false)
                 XCTFail("a wallet was made from a list that may be out of date")
             } catch {
@@ -254,19 +257,151 @@ final class PrivyWalletTests: XCTestCase {
         }
         let created = await privy.created
         XCTAssertEqual(created, 0)
-        // No token even when "fresh" (identity tokens off): nothing to know the list by, nothing made.
+        // No token even when "fresh" (identity tokens off): nothing to know the list by, nothing made, and said as such.
         do {
-            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil, identityToken: nil)
+            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: nil)
             XCTFail("a wallet was made with no list at all")
+        } catch {
+            XCTAssertEqual(error as? PrivyWalletCheck.Failure, .noIdentityToken)
+        }
+        // A fresh token listing a Stellar wallet with no id to read: the list isn't complete, nothing is made.
+        let idless = identityToken([:], idless: [key.address])
+        XCTAssertEqual(PrivyWalletCheck.stellarWallets(inIdentityToken: idless), [.init(id: nil, address: key.address)])
+        do {
+            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: idless)
+            XCTFail("a wallet was made beside one the token lists without an id")
         } catch {
             XCTAssertEqual(error as? PrivyWalletCheck.Failure, .listNotFresh)
         }
+        // Beside a wallet it lists in full, too: the hidden one may be the oldest, so none is chosen.
+        do {
+            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil,
+                                                   identityToken: identityToken(["wl1": key.address], idless: [stranger.address]))
+            XCTFail("a wallet was chosen from a list with one it couldn't read")
+        } catch {
+            XCTAssertEqual(error as? PrivyWalletCheck.Failure, .listNotFresh)
+        }
+        let after = await privy.created
+        XCTAssertEqual(after, 0)
+    }
+
+    func testTheOwnerIsReadOnlyFromTheAccountsOwnMonadWallet() async throws {
+        // Privy answering with another wallet, a wallet on another chain, or one at another address: no owner to trust.
+        for answer in [PrivyWalletRecord(id: "wl-other", address: monad.address, chainType: "ethereum", ownerId: owner),
+                       PrivyWalletRecord(id: "wl-monad", address: monad.address, chainType: "solana", ownerId: owner),
+                       PrivyWalletRecord(id: "wl-monad", address: "0x00000000000000000000000000000000000000bb", chainType: "ethereum", ownerId: owner)] {
+            let privy = FakePrivy(signer: key, records: [record("wl1", key)], make: record("wl-new", key), answering: ["wl-monad": answer])
+            do {
+                _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil,
+                                                       identityToken: identityToken(["wl1": key.address]))
+                XCTFail("an owner was read from \(answer.id) on \(answer.chainType) at \(answer.address)")
+            } catch {
+                XCTAssertEqual(error as? PrivyWalletCheck.Failure, .noOwner)
+            }
+            let created = await privy.created
+            XCTAssertEqual(created, 0)
+        }
+    }
+
+    func testAKeptWalletIsConfirmedAtPrivyAsAStellarSessionsFirstSignatureNeedsIt() async throws {
+        let privy = FakePrivy(signer: key, records: [monad, record("wl1", key)])
+        try await PrivyWalletCheck.confirm(wallet, backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress)
+        let backdoored = FakePrivy(signer: key, records: [monad, record("wl1", key, signers: ["kq-someone"])])
+        do {
+            try await PrivyWalletCheck.confirm(wallet, backend: backdoored, ownerWalletId: "wl-monad", ownerAddress: monadAddress)
+            XCTFail("a kept wallet given another signer was confirmed")
+        } catch {
+            XCTAssertEqual(error as? PrivyWalletCheck.Failure, .notOnlyTheUsers)
+        }
+    }
+
+    func testTheRecheckRunsOnceItPassesSharedByCallersAtOnceAndAgainAfterAFailure() async throws {
+        let runs = PrivyCounter()
+        let failing = Box<Bool>()
+        failing.set(true)
+        let recheck = PrivyWalletRecheck {
+            await runs.add()
+            try await Task.sleep(for: .milliseconds(50))
+            if failing.value == true { throw PrivyWalletCheck.Failure.notOnlyTheUsers }
+        }
+        do {
+            try await recheck.ensure()
+            XCTFail("a failed check passed")
+        } catch {
+            XCTAssertEqual(error as? PrivyWalletCheck.Failure, .notOnlyTheUsers)
+        }
+        failing.set(false)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<3 { group.addTask { try await recheck.ensure() } }
+            try await group.waitForAll()
+        }
+        try await recheck.ensure()
+        let count = await runs.value
+        XCTAssertEqual(count, 2, "one failed run, then one run shared by three callers; none after it passed")
+    }
+
+    func testASignerWhoseRecheckFailsOrWhoseWalletIdIsntPrivysAsksForNothing() async throws {
+        let privy = FakePrivy(signer: key)
+        let asked = PrivyCounter()
+        let now = now
+        let refused = PrivyStellarSigner(wallet: wallet, appId: "app1", backend: privy, authorize: { _ in await asked.add(); return "auth" },
+                                         recheck: PrivyWalletRecheck { throw PrivyWalletCheck.Failure.notOnlyTheUsers }, now: { now })
+        do {
+            _ = try await refused.signHash(digest)
+            XCTFail("signed for a wallet the recheck refused")
+        } catch {
+            XCTAssertEqual(error as? PrivyWalletCheck.Failure, .notOnlyTheUsers)
+        }
+        let path = PrivyStellarSigner(wallet: PrivyStellarWallet(walletId: "../users/me", address: key.address), appId: "app1",
+                                      backend: privy, authorize: { _ in await asked.add(); return "auth" }, now: { now })
+        do {
+            _ = try await path.signHash(digest)
+            XCTFail("signed for a wallet id that is a path")
+        } catch {
+            XCTAssertEqual(error as? StellarSigningError, .badSignature)
+        }
+        let count = await asked.value
+        let signed = await privy.signed
+        XCTAssertEqual([count, signed.count], [0, 0])
+    }
+
+    func testAnIdentityTokenSaysWhenPrivyIssuedIt() {
+        XCTAssertEqual(PrivyWalletCheck.issuedAt(identityToken: identityToken([:], iat: 1_760_600_000)), Date(timeIntervalSince1970: 1_760_600_000))
+        XCTAssertNil(PrivyWalletCheck.issuedAt(identityToken: identityToken([:])))
+        XCTAssertNil(PrivyWalletCheck.issuedAt(identityToken: "not a token"))
+    }
+
+    func testATokenIsCurrentWhenPrivyReissuedItWhateverThisIPhonesClockSays() {
+        let began = Date(timeIntervalSince1970: 1_760_600_000)
+        let old = identityToken([:], iat: 1_760_590_000)
+        let reissued = identityToken(["wl1": key.address], iat: 1_760_590_000)
+        // Reissued: current, even with the phone's clock far ahead of Privy's (the iat looks hours old).
+        XCTAssertTrue(PrivyWalletCheck.isCurrent(reissued, before: old, refreshWentThrough: true, began: began))
+        XCTAssertTrue(PrivyWalletCheck.isCurrent(reissued, before: nil, refreshWentThrough: true, began: began))
+        // Not reissued: current only if its sign-in was a moment before the refresh.
+        XCTAssertFalse(PrivyWalletCheck.isCurrent(old, before: old, refreshWentThrough: true, began: began))
+        let justNow = identityToken([:], iat: 1_760_599_970)
+        XCTAssertTrue(PrivyWalletCheck.isCurrent(justNow, before: justNow, refreshWentThrough: true, began: began))
+        let noIat = identityToken([:])
+        XCTAssertFalse(PrivyWalletCheck.isCurrent(noIat, before: noIat, refreshWentThrough: true, began: began))
+        // A refresh that didn't go through: never current.
+        XCTAssertFalse(PrivyWalletCheck.isCurrent(reissued, before: old, refreshWentThrough: false, began: began))
+        // No token at all (identity tokens off): current, so resolve says so instead of "try again".
+        XCTAssertTrue(PrivyWalletCheck.isCurrent(nil, before: nil, refreshWentThrough: true, began: began))
+    }
+
+    func testAWalletIsKeptOnlyIfItIsTheOneKeptOrTheFirstAndHasTheAccountsAddress() {
+        let other = PrivyStellarWallet(walletId: "wl2", address: stranger.address)
+        XCTAssertTrue(PrivyWalletCheck.mayKeep(wallet, kept: nil, stellarAddress: nil))
+        XCTAssertTrue(PrivyWalletCheck.mayKeep(wallet, kept: wallet, stellarAddress: wallet.address))
+        XCTAssertFalse(PrivyWalletCheck.mayKeep(wallet, kept: other, stellarAddress: nil), "never swapped for another")
+        XCTAssertFalse(PrivyWalletCheck.mayKeep(wallet, kept: nil, stellarAddress: stranger.address), "another Stellar address")
     }
 
     func testAnOutageNeverMakesASecondWalletAndNoOwnerIsNoWallet() async throws {
         let privy = FakePrivy(signer: key, records: [monad], down: ["wl1"], make: record("wl-new", key))
         do {
-            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", kept: nil, identityToken: identityToken(["wl1": key.address]))
+            _ = try await PrivyWalletCheck.resolve(backend: privy, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: identityToken(["wl1": key.address]))
             XCTFail("went on without an answer about a listed wallet")
         } catch {
             XCTAssertEqual(error as? PrivyAPIError, .unavailable(status: 503))
@@ -274,9 +409,9 @@ final class PrivyWalletTests: XCTestCase {
         let created = await privy.created
         XCTAssertEqual(created, 0)
 
-        let ownerless = FakePrivy(signer: key, records: [PrivyWalletRecord(id: "wl-monad", address: "0xaa", chainType: "ethereum", ownerId: nil)])
+        let ownerless = FakePrivy(signer: key, records: [PrivyWalletRecord(id: "wl-monad", address: monad.address, chainType: "ethereum", ownerId: nil)])
         do {
-            _ = try await PrivyWalletCheck.resolve(backend: ownerless, ownerWalletId: "wl-monad", kept: nil, identityToken: identityToken([:]))
+            _ = try await PrivyWalletCheck.resolve(backend: ownerless, ownerWalletId: "wl-monad", ownerAddress: monadAddress, kept: nil, identityToken: identityToken([:]))
             XCTFail("no owner to compare with")
         } catch {
             XCTAssertEqual(error as? PrivyWalletCheck.Failure, .noOwner)
@@ -322,17 +457,19 @@ final class PrivyWalletTests: XCTestCase {
         XCTAssertEqual([list.httpMethod, list.url?.absoluteString], ["GET", "https://auth.privy.io/api/v1/wallets?chain_type=stellar"])
         // Privy not listing wallets to the user's session is no list, never an error (it answers 401 to a session the
         // wallet reads take, as it did on testnet); an outage is an error.
-        for status in [401, 403, 404] {
+        for status in [401, 403, 404, 405] {
             StubServer.serve(Data("{}".utf8), status: status)
             let unlisted = try await api.stellarWallets()
             XCTAssertNil(unlisted, "\(status)")
         }
-        StubServer.serve(Data("{}".utf8), status: 503)
-        do {
-            _ = try await api.stellarWallets()
-            XCTFail("an outage read as no list")
-        } catch {
-            XCTAssertEqual(error as? PrivyAPIError, .unavailable(status: 503))
+        for (status, expected) in [(503, PrivyAPIError.unavailable(status: 503)), (400, .refused(status: 400, code: nil))] {
+            StubServer.serve(Data("{}".utf8), status: status)
+            do {
+                _ = try await api.stellarWallets()
+                XCTFail("\(status) read as no list")
+            } catch {
+                XCTAssertEqual(error as? PrivyAPIError, expected)
+            }
         }
 
         for (status, expected) in [(401, PrivyAPIError.refused(status: 401, code: nil)), (403, .refused(status: 403, code: nil)),
@@ -368,12 +505,15 @@ final class PrivyWalletTests: XCTestCase {
 
     /// An identity token as Privy shapes one, its `linked_accounts` a JSON string with an email and the given Stellar
     /// wallets (its signature isn't read: the SDK fetched it from Privy).
-    private func identityToken(_ stellar: [String: String]) -> String {
+    /// `idless`: Stellar wallets listed with no id; `iat`: when Privy issued it (none when nil).
+    private func identityToken(_ stellar: [String: String], idless: [String] = [], iat: Int? = nil) -> String {
         let b64url = { (data: Data) in data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "") }
         let linked: [[String: String]] = [["type": "email", "address": "a@b.c"]]
             + stellar.sorted { $0.key < $1.key }.map { ["type": "wallet", "chain_type": "stellar", "id": $0.key, "address": $0.value] }
-        let claims: [String: Any] = ["iss": "privy.io", "sub": "did:privy:cmuser",
+            + idless.map { ["type": "wallet", "chain_type": "stellar", "address": $0] }
+        var claims: [String: Any] = ["iss": "privy.io", "sub": "did:privy:cmuser",
                                      "linked_accounts": String(decoding: try! JSONSerialization.data(withJSONObject: linked), as: UTF8.self)]
+        if let iat { claims["iat"] = iat }
         return "\(b64url(Data(#"{"alg":"ES256","typ":"JWT"}"#.utf8))).\(b64url(try! JSONSerialization.data(withJSONObject: claims))).c2ln"
     }
 }
@@ -393,12 +533,15 @@ actor FakePrivy: PrivyWalletBackend {
     private let down: Set<String>
     private let make: PrivyWalletRecord?
     private let listing: [PrivyWalletRecord]?
+    private let answering: [String: PrivyWalletRecord]
     private(set) var signed: [Signed] = []
     private(set) var created = 0
 
     /// `listing`: the user's Stellar wallets as Privy lists them to the user's session; nil, Privy doesn't list them.
+    /// `answering`: what Privy answers when asked for an id, where it isn't that id's record.
     init(signer: StellarSigner, otherHash: Bool = false, garbage: Bool = false, records: [PrivyWalletRecord] = [],
-         down: Set<String> = [], make: PrivyWalletRecord? = nil, listing: [PrivyWalletRecord]? = nil) {
+         down: Set<String> = [], make: PrivyWalletRecord? = nil, listing: [PrivyWalletRecord]? = nil,
+         answering: [String: PrivyWalletRecord] = [:]) {
         self.signer = signer
         self.otherHash = otherHash
         self.garbage = garbage
@@ -406,13 +549,14 @@ actor FakePrivy: PrivyWalletBackend {
         self.down = down
         self.make = make
         self.listing = listing
+        self.answering = answering
     }
 
     func stellarWallets() async throws -> [PrivyWalletRecord]? { listing }
 
     func wallet(id: String) async throws -> PrivyWalletRecord {
         if down.contains(id) { throw PrivyAPIError.unavailable(status: 503) }
-        guard let record = records[id] else { throw PrivyAPIError.refused(status: 404, code: nil) }
+        guard let record = answering[id] ?? records[id] else { throw PrivyAPIError.refused(status: 404, code: nil) }
         return record
     }
 
@@ -438,4 +582,10 @@ final class Box<T: Sendable>: @unchecked Sendable {
 
     func set(_ value: T) { lock.withLock { held = value } }
     var value: T? { lock.withLock { held } }
+}
+
+/// A count, kept across tasks.
+private actor PrivyCounter {
+    private(set) var value = 0
+    func add() { value += 1 }
 }
