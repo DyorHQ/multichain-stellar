@@ -99,7 +99,11 @@ public final class LaunchV2Store {
         request.uri = uri
         let built = try await store.api.buildLaunchV2(request)
         if let bound = built.terms, bound != terms { throw Self.termsChanged }
-        return try store.prepare(built.plan, limits: Self.createLimits(terms: terms, developerBuy: form.developerBuy), title: tr("Launch a coin"),
+        // What the user chose, as the create binds it: the server can't change the form either (verify.ts and
+        // TxVerifier bind these fields to the transaction).
+        if !Self.formChanges(built.plan, form: form, user: store.address).isEmpty { throw Self.formChanged }
+        return try store.prepare(built.plan, limits: Self.createLimits(terms: terms, developerBuy: form.developerBuy),
+                                 bindings: Self.createBindings(form, user: store.address), title: tr("Launch a coin"),
                                  titles: Self.titles(built.plan, main: tr("Launch \(ticker)"), symbol: ticker), section: .launch, reference: nil,
                                  summary: .launchCreate(symbol: ticker, name: form.name))
     }
@@ -125,7 +129,14 @@ public final class LaunchV2Store {
         if quote.side != .refund { request.minOut = String(quote.minOut) }
         let built = try await store.api.buildLaunchV2(request)
         let main = quote.side == .refund ? words("Refund \(Self.written(quote.amount)) \(symbol)") : title
-        return try store.prepare(built.plan, limits: [quote.side == .buy ? asset.contract : token: quote.amount], title: title,
+        // A buy brings at least the quote's minimum of coins, a sale at least its minimum of the quote. A refund's rate is
+        // fixed on chain and its intent names no minimum.
+        let bindings = switch quote.side {
+        case .buy: PlanBindings(minimums: [token: quote.minOut])
+        case .sell: PlanBindings(minimums: [asset.contract: quote.minOut])
+        case .refund: PlanBindings.none
+        }
+        return try store.prepare(built.plan, limits: [quote.side == .buy ? asset.contract : token: quote.amount], bindings: bindings, title: title,
                                  titles: Self.titles(built.plan, main: main, symbol: symbol), section: .launch,
                                  reference: "stellar:launch/\(token)", summary: summary)
     }
@@ -186,23 +197,29 @@ public final class LaunchV2Store {
         var request: LiteAPI.LaunchRequestV2
         let main: String
         let summary: LiteActionSummary
+        let bindings: PlanBindings
         switch change {
         case .transfer(let to):
+            // The fees go to the address the user typed, exactly.
+            bindings = PlanBindings(destination: .confirmed(to: to, memo: nil))
             request = .init(action: .recipientTransfer, token: token)
             request.to = to
             main = words("Change \(symbol)'s fee recipient")
             summary = .launchV2(kind: "launch_recipient_transfer", title: words("Changed \(symbol)'s fee recipient"), body: LiteFormat.short(to))
         case .cancel:
+            bindings = .none
             request = .init(action: .recipientCancel, token: token)
             main = words("Veto the change of \(symbol)'s fee recipient")
             summary = .launchV2(kind: "launch_recipient_cancel", title: words("Vetoed the change of \(symbol)'s fee recipient"), body: "")
         case .execute:
+            // The new recipient is the one the contract already holds for the pending change; the call names none.
+            bindings = PlanBindings(destination: .unchecked)
             request = .init(action: .recipientExecute, token: token)
             main = words("Apply the change of \(symbol)'s fee recipient")
             summary = .launchV2(kind: "launch_recipient_execute", title: words("Changed \(symbol)'s fee recipient"), body: "")
         }
         let built = try await store.api.buildLaunchV2(request)
-        let action = try store.prepare(built.plan, limits: [:], title: main, titles: Self.titles(built.plan, main: main, symbol: symbol),
+        let action = try store.prepare(built.plan, limits: [:], bindings: bindings, title: main, titles: Self.titles(built.plan, main: main, symbol: symbol),
                                        section: .launch, reference: "stellar:launch/\(token)", summary: summary)
         return LaunchV2RecipientPlan(action: action, backlog: built.harvestBacklog)
     }
@@ -256,6 +273,31 @@ public final class LaunchV2Store {
         return limits
     }
 
+    /// What a create binds besides its spends: the developer buy's minimum (for the new coin, whose contract exists only
+    /// once launched), and where the creator fees go: the recipient the user typed, or the user.
+    nonisolated static func createBindings(_ form: LaunchV2Form, user: String) -> PlanBindings {
+        let minimums = form.developerBuy > 0 ? [PlanBindings.anyAsset: form.minOut] : [:]
+        guard let recipient = form.recipient, recipient != user else { return PlanBindings(minimums: minimums) }
+        return PlanBindings(minimums: minimums, destination: .confirmed(to: recipient, memo: nil))
+    }
+
+    /// The fields of `form` the plan's create binds differently, or doesn't state, by name; empty when it binds them as
+    /// the form has them. Fails closed: a create not built yet, or one that doesn't state a field, differs. The creator
+    /// fee recipient is `intent.to` (absent, or the user, for the user); the others are the create's display fields
+    /// `exempt` (the addresses, in any order), `creatorFeeBps` and `holderSharing`.
+    nonisolated static func formChanges(_ plan: PlanView, form: LaunchV2Form, user: String) -> [String] {
+        guard let intent = plan.steps.lazy.compactMap(\.intent).first(where: { $0.kind == "launch_create" }) else { return ["create"] }
+        var changes: [String] = []
+        let wanted = form.recipient.flatMap { $0 == user ? nil : $0 }
+        let bound = intent.to.flatMap { $0 == user ? nil : $0 }
+        if bound != wanted { changes.append("recipient") }
+        let shown = BoundDisplay(intent.display)
+        if shown.strings("exempt").map({ $0.sorted() }) != form.exempt.sorted() { changes.append("exempt") }
+        if shown.whole("creatorFeeBps") != form.creatorFeeBps { changes.append("creatorFeeBps") }
+        if shown.flag("holderSharing") != form.holderSharing { changes.append("holderSharing") }
+        return changes
+    }
+
     /// A permissionless or zero-spend action: built, then priced.
     private func plan(_ request: LiteAPI.LaunchRequestV2, title: String, main: String, symbol: String, summary: LiteActionSummary,
                       token: String?) async throws -> PreparedAction {
@@ -301,6 +343,10 @@ public final class LaunchV2Store {
     nonisolated static var termsRefused: LiteAPIError {
         .server(status: 409, code: "launch_terms_unpinned",
                 message: words("The launchpad's terms aren't the ones this version of DyorHQ signs. Update DyorHQ to launch."))
+    }
+
+    nonisolated static var formChanged: LiteAPIError {
+        .server(status: 409, code: "launch_form_changed", message: words("The launch doesn't match what you chose. Nothing was signed. Review your launch again."))
     }
 
     nonisolated static var termsChanged: LiteAPIError {

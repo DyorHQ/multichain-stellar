@@ -220,6 +220,26 @@ final class MomentsV2StoreTests: XCTestCase {
 
     private func plan(_ json: String) throws -> PlanView { try JSONDecoder().decode(PlanView.self, from: Data(json.utf8)) }
 
+    func testThePublishBindsThePriceAllocationAndWindowTheFormHas() throws {
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan()), form: form), [])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "\"1\""])), form: form), ["price"])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["allocationBps": "5000", "windowSecs": "3600"])), form: form),
+                       ["allocBps", "windowSecs"])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "null"])), form: form), ["price"], "fails closed")
+    }
+
+    func testAPublishOfAnotherPriceIsRefusedBeforeItIsSigned() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.publishPlan(overrides: ["price": "\"1\""])
+        let video = StellarMomentUploadV2(mediaUrl: "https://media.test/u/v.mp4", posterUrl: "https://media.test/u/p.jpg")
+        do {
+            _ = try await moments.publishPlan(form, media: video, title: "Publish DUSK")
+            XCTFail("a publish at another price")
+        } catch let LiteAPIError.server(_, code, _, _) {
+            XCTAssertEqual(code, "moment_form_changed")
+        }
+    }
+
     func testTheTermsGuardPassesAPublishOfTheReviewedTerms() throws {
         XCTAssertEqual(MomentsV2Store.termsChanges(try plan(Self.publishPlan()), terms: try terms(), form: form), [])
         XCTAssertFalse(MomentsV2Store.publishWaits(try plan(Self.publishPlan())))
