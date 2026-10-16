@@ -486,20 +486,33 @@ final class StellarSwapModel {
             do {
                 let answer = try await source.swapQuote(sell: sell, buy: buy, amount: amountIn, slippageBps: slippageBps)
                 if Task.isCancelled { return }
-                result = answer
+                let offered = Self.routes(answer, listed: listed)
+                // An answer whose every route the phone would refuse to sign is no route at all: Monad's words, and
+                // nothing to review (a server that offered such a route before it kept to the allowlist itself).
+                result = offered.isEmpty ? nil : answer
                 resultKey = key
-                error = nil
-                selection = selection.following(Self.routes(answer, listed: listed))
-                wait = Self.refreshDelay(expiresAt: answer.expiresAt, now: now())
+                error = offered.isEmpty ? Self.noRoute : nil
+                selection = selection.following(offered)
+                if !offered.isEmpty { wait = Self.refreshDelay(expiresAt: answer.expiresAt, now: now()) }
             } catch {
                 if Task.isCancelled { return }
                 result = nil
                 resultKey = key
-                self.error = LiteErrorText.describe(error)
+                self.error = Self.describe(error)
             }
             quoting = false
             do { try await sleep(wait) } catch { return }
         }
+    }
+
+    /// What Swap says when no venue offers a route it would sign, as Monad's Swap says it.
+    static var noRoute: String { tr("No venue can route this pair right now.") }
+
+    /// A failed quote, as a person reads it: the server finding no route at all reads as Monad's Swap words it; anything
+    /// else as every Stellar error does (`LiteErrorText`).
+    static func describe(_ error: Error) -> String {
+        if case .server(_, "no_route", _, _)? = error as? LiteAPIError { return noRoute }
+        return LiteErrorText.describe(error)
     }
 
     /// How long until the next quote: 15 seconds, or until the quote expires when that is sooner (at least a second).

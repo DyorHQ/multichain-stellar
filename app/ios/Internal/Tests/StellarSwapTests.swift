@@ -286,6 +286,35 @@ final class StellarSwapTests: XCTestCase {
         XCTAssertTrue(model.routes.isEmpty)
     }
 
+    /// A server that answers only with routes the phone would refuse to sign (before it kept to the allowlist itself,
+    /// testnet's Aquarius alone could answer a pair through AQUA and USDT) has offered no route: Swap says so in Monad's
+    /// words, offers nothing to review, and asks again at the next refresh. The server's own "no route" reads the same.
+    func testAnAnswerWithNoRouteThePhoneWouldSignReadsAsNoRoute() async throws {
+        let aqua = "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE"
+        let usdt = "CBL6KD2LFMLAUKFFWNNXWOXFN73GAXLEA4WMJRLQ5L76DMYTM3KWQVJN"
+        let source = FakeSwapSource()
+        source.quotes = [try quote([("aquarius", 76_955_448, 76_185_893)], paths: ["aquarius": [xlmContract, aqua, usdt, usdcContract]])]
+        let model = try model(source)
+        model.amountText = "50"
+        var waits: [Duration] = []
+        await model.quote(sleep: { wait in
+            waits.append(wait)
+            if waits.count == 2 { throw Stop() }
+        }, now: { self.now })
+        XCTAssertEqual(model.currentError, StellarSwapModel.noRoute)
+        XCTAssertTrue(model.routes.isEmpty)
+        XCTAssertNil(model.shownRoute)
+        XCTAssertNil(model.review, "nothing to review")
+        XCTAssertFalse(model.awaitingQuote, "the answer is in: no spinner")
+        XCTAssertEqual(waits, [.milliseconds(400), .seconds(15)], "asked again at the next refresh")
+        XCTAssertTrue(source.built.isEmpty)
+
+        let none = LiteAPIError.server(status: 404, code: "no_route", message: "No route from XLM to USDC right now.")
+        XCTAssertEqual(StellarSwapModel.describe(none), StellarSwapModel.noRoute)
+        let offline = LiteAPIError.transport("offline")
+        XCTAssertEqual(StellarSwapModel.describe(offline), LiteErrorText.describe(offline))
+    }
+
     // MARK: - Max, percents and the amount
 
     func testMaxOfXLMKeepsTheFeeAndTheMinimumBalance() async throws {
