@@ -76,7 +76,9 @@ export interface PlanStep {
 export interface BuiltTx {
   tx: Transaction;
   intent: Intent;
-  /** The sponsor signs too (an account's setup). */
+  /** The sponsor signs too (an account's setup): only when the step is submitted, once its sponsorship is reserved
+   *  (submitStep), never when it is built. An envelope the sponsor signed would let anyone who holds it send it
+   *  themselves, past every sponsorship cap. */
   cosignSponsor?: boolean;
   /** The step's kind, where the builder knows it better than the spec does (a send: classic, or a token transfer). */
   stepKind?: StepKind;
@@ -230,13 +232,14 @@ async function build(user: string, step: PlanStep): Promise<PlanStep> {
       spec = { ...spec, starter: false, fallback: null };
     }
   }
-  const { tx, intent, cosignSponsor } = made;
+  const { tx, intent } = made;
   const kind = builtKindOf(made, spec);
   const policy = env.network.feePolicy;
   const fee = BigInt(tx.fee);
   if (fee > policy.maxFee) throw feeTooHigh(fee, policy.maxFee);
   if (kind === "activate" && fee > policy.activationMaxFee) throw feeTooHigh(fee, policy.activationMaxFee);
-  if (cosignSponsor) tx.sign(sponsor());
+  // Nobody signs here: the step goes out unsigned, and the sponsor of an account's setup signs only in submitStep,
+  // after its sponsorship is reserved.
   const payer = payerOf(kind, spec);
   const ctx = verifyContext(user, await launchTokensIn(intent, tx));
   try {
@@ -443,7 +446,8 @@ async function assertStarter(user: string, spec: StepSpec): Promise<void> {
 
 /** Sends a signed step (§4.8): the hash must be the step's and the signature the user's; the fee must fit the cap and
  *  the verifier must pass it again. Then the user's own transaction is sent as signed, or for an account's setup and
- *  a starter swap the sponsorship is reserved first. Refused, nothing was sent: the step fails, and the sponsorship is
+ *  a starter swap the sponsorship is reserved first, and only then does the sponsor sign (the setup itself, or the
+ *  starter swap's fee-bump). Refused, nothing was sent: the step fails, and the sponsorship is
  *  released. Unconfirmed (RPC gave no answer), it may land: it counts as sent, keeping its sponsorship, and settling it
  *  tells. Logged in lite.tx_log with who pays, the step kind, the section and the declared fee. */
 export async function submitStep(user: string, planId: string, stepId: string, signedXdr: string, ip: string): Promise<{ hash: string; status: "pending" }> {
@@ -471,7 +475,10 @@ export async function submitStep(user: string, planId: string, stepId: string, s
   let hash: string;
   try {
     if (reason === "setup") {
+      // The sponsor signs only now, once the sponsorship is reserved (the caps counted it), and only the transaction
+      // the step's hash names: the envelope the user was handed carries no signature of DyorHQ's.
       sponsorship = await reserveSponsorship(user, "activate", ip, BigInt(tx.fee));
+      tx.sign(sponsor());
       hash = await sendSigned(tx, "sponsor");
     } else if (reason === "starter_swap") {
       await assertStarter(user, step.spec);
