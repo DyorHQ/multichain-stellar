@@ -356,6 +356,25 @@ final class PlanRunnerTests: XCTestCase {
         XCTAssertNoThrow(try bridge.step(intent(to: "0xabcd000000000000000000000000000000001234"), spends: true, last: true))
         var unchecked = PlanBindings.Check(PlanBindings(destination: .unchecked), user: me)
         XCTAssertNoThrow(try unchecked.step(intent(to: friend), spends: false, last: true))
+        // Settings: by kind or by the function called; a field written as a number or as its digits; missing = refused.
+        let shown: [String: StellarJSON] = ["price": .string("10000000"), "windowSecs": .number(86400)]
+        let settings = PlanBindings(shown: ["moment_publish": shown, "publish": shown])
+        func step(kind: String, fn: String? = nil, display: [String: StellarJSON]) -> Intent {
+            Intent(kind: kind, summary: "", spend: [:], calls: fn.map { [Intent.Call(contract: token, fn: $0)] }, display: display)
+        }
+        var held = PlanBindings.Check(settings, user: me)
+        XCTAssertNoThrow(try held.step(step(kind: "trust", display: [:]), spends: false, last: false), "a step before it")
+        XCTAssertNoThrow(try held.step(step(kind: "moment_publish", fn: "publish", display: ["price": .number(10_000_000), "windowSecs": .string("86400")]),
+                                       spends: false, last: true))
+        for display: [String: StellarJSON] in [["price": .string("1"), "windowSecs": .number(86400)], ["windowSecs": .number(86400)]] {
+            XCTAssertThrowsError(try held.step(step(kind: "moment_publish", display: display), spends: false, last: true)) {
+                XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the settings are not the ones you chose"))
+            }
+            XCTAssertThrowsError(try held.step(step(kind: "anything", fn: "publish", display: display), spends: false, last: true), "by its function")
+        }
+        XCTAssertThrowsError(try held.step(step(kind: "trust", display: [:]), spends: false, last: true)) {
+            XCTAssertEqual($0 as? PlanBindings.Refusal, .settings(reason: "the transaction isn't the action you reviewed"))
+        }
     }
 
     func testTheCompatibilityRunPricesUnbuiltStepsAtTheirCeiling() async throws {

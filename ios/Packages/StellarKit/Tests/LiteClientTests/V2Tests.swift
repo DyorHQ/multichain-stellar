@@ -792,6 +792,84 @@ final class V2RuntimeContractTests: XCTestCase {
     }
 }
 
+/// The settings a user chose, held on a step the server builds only during the run (PlanBindings.shown): a v2 Moment
+/// publish or launch create behind a restore step, which the review couldn't compare with the form.
+final class V2MidRunSettingsTests: XCTestCase {
+    private let publishShown: [String: StellarJSON] = ["price": .string("10000000"), "allocationBps": .number(500), "windowSecs": .number(86400)]
+
+    /// The plan [restore (built for the review), main (built by the server during the run)], run with `bindings`.
+    private func runBehindRestore(_ main: V2Vector, intent: Intent? = nil, bindings: PlanBindings) async throws -> (backend: FakePlanBackend, error: Error?) {
+        let restore = try V2Vector.named("v2 restore of a launch token's data and code ok")
+        let restored = try XCTUnwrap(restore.runtime?.keys.first)
+        let pinned = try main.pinned()
+        let nftHash = try XCTUnwrap(pinned.runtimeWasmHashes["momentNft"])
+        let built = intent ?? main.intent
+        let plan = TestPlan.view([
+            TestPlan.step("s1", "Restore", xdr: restore.envelope, intent: restore.intent),
+            TestPlan.step("s2", "Main", stepKind: built.kind, maxFee: main.feePolicy.maxFee),
+        ])
+        let backend = FakePlanBackend(plan: plan, builds: ["s2": TestPlan.step("s2", "Main", xdr: main.envelope, intent: built)])
+        var runner = PlanRunner(api: backend, user: main.user, pinned: pinned, inspector: ChainCode([restored: nftHash]))
+        let now = main.now
+        runner.now = { Date(timeIntervalSince1970: now) }
+        let key = try SharedVectors.user()
+        do {
+            try await runner.run(plan, limits: built.spend.compactMapValues(TxVerifier.units), bindings: bindings,
+                                 fees: try PlanFees(plan: plan, pinned: pinned), signer: { key })
+            return (backend, nil)
+        } catch {
+            return (backend, error)
+        }
+    }
+
+    func testAPublishBuiltDuringTheRunGoesOutOnlyWithTheFormsSettings() async throws {
+        let publish = try V2Vector.named("v2 moments publish ok")
+        let ok = try await runBehindRestore(publish, bindings: PlanBindings(shown: ["moment_publish": publishShown, "publish": publishShown]))
+        XCTAssertNil(ok.error)
+        let both = await ok.backend.submitted
+        XCTAssertEqual(both, ["s1", "s2"])
+
+        // The user chose 2 USDC an edition; the server builds the publish, after the restore, at 1 USDC.
+        var chosen = publishShown
+        chosen["price"] = .string("20000000")
+        let changed = try await runBehindRestore(publish, bindings: PlanBindings(shown: ["moment_publish": chosen, "publish": chosen]))
+        XCTAssertEqual(changed.error as? PlanRunner.Failure, .settingsNotConfirmed(step: "Main"))
+        let sent = await changed.backend.submitted
+        XCTAssertEqual(sent, ["s1"], "the restore went out; the publish was never signed")
+        let signed = await changed.backend.signed
+        XCTAssertNil(signed["s2"])
+
+        // The same publish under another kind is still held to the form, by the function it calls.
+        let i = publish.intent
+        let relabelled = Intent(kind: "moment_claim", summary: i.summary, spend: i.spend, receive: i.receive, calls: i.calls, ops: i.ops, trust: i.trust,
+                                display: i.display, to: i.to, memo: i.memo)
+        let disguised = try await runBehindRestore(publish, intent: relabelled, bindings: PlanBindings(shown: ["moment_publish": chosen, "publish": chosen]))
+        XCTAssertEqual(disguised.error as? PlanRunner.Failure, .settingsNotConfirmed(step: "Main"))
+    }
+
+    func testALaunchCreateBuiltDuringTheRunGoesOutOnlyWithTheFormsSettings() async throws {
+        let create = try V2Vector.named("v2 launch create ok")
+        let fields: [String: StellarJSON] = ["recipient": .string(create.user), "snipeExempt": .string(""), "creatorFeeBps": .number(100),
+                                             "holderSharing": .bool(true)]
+        let ok = try await runBehindRestore(create, bindings: PlanBindings(shown: ["launch_create": fields, "launch": fields]))
+        XCTAssertNil(ok.error)
+        let changes: [(String, StellarJSON)] = [
+            ("creatorFeeBps", .number(200)),
+            ("holderSharing", .bool(false)),
+            ("snipeExempt", .string("GBQ4BKDJ6A3ZDVHBMVQ2DLVBHNQSMJBAGG2RW4ZOGQN5QHTLRIXCEJXC")),
+            ("recipient", .string("GBQ4BKDJ6A3ZDVHBMVQ2DLVBHNQSMJBAGG2RW4ZOGQN5QHTLRIXCEJXC")),
+        ]
+        for (key, value) in changes {
+            var chosen = fields
+            chosen[key] = value
+            let refused = try await runBehindRestore(create, bindings: PlanBindings(shown: ["launch_create": chosen, "launch": chosen]))
+            XCTAssertEqual(refused.error as? PlanRunner.Failure, .settingsNotConfirmed(step: "Main"), key)
+            let sent = await refused.backend.submitted
+            XCTAssertEqual(sent, ["s1"], key)
+        }
+    }
+}
+
 // ------------------------------------------------------------------------------------------------------ fakes
 
 /// The code the chain runs, by contract, as the pinned RPC would answer it. Each contract outside the pins the runner

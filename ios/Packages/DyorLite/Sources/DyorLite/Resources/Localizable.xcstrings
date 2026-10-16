@@ -4199,6 +4199,35 @@
         }
       }
     },
+    "Not signed: %@ doesn't have the settings you chose. Nothing was sent." : {
+      "comment" : "An error: the step (%@, its title) shows other settings than the ones the user chose (a Moment's price, a launch's fee recipient or exemptions), or doesn't state them; nothing was signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: %@ no tiene los ajustes que elegiste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : %@ n'a pas les réglages que vous avez choisis. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: %@에 선택한 설정이 없습니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：%@ 的设置与你的选择不一致。未发送任何内容。"
+          }
+        }
+      }
+    },
     "Not signed: %@ doesn't pay the address and memo you confirmed. Nothing was sent." : {
       "comment" : "An error: the step (%@, its title) pays another address, or carries another memo, than the ones the user typed; nothing was signed.",
       "localizations" : {

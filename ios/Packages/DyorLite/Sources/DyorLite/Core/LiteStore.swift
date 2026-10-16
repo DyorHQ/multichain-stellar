@@ -618,6 +618,8 @@ public final class LiteStore {
                 throw PlanRunner.Failure.minimumNotConfirmed(step: step.label)
             } catch PlanBindings.Refusal.destination {
                 throw PlanRunner.Failure.destinationNotConfirmed(step: step.label)
+            } catch PlanBindings.Refusal.settings {
+                throw PlanRunner.Failure.settingsNotConfirmed(step: step.label)
             }
         }
     }

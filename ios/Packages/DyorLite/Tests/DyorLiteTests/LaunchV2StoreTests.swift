@@ -262,8 +262,12 @@ final class LaunchV2StoreTests: XCTestCase {
                                 recipient: Self.recipient, developerBuy: 500_000_000, minOut: buy.minOut)
         let action = try await launches.createPlan(form, terms: terms, image: nil)
         XCTAssertEqual(action.limits, [Self.xlm: 600_000_000], "the 10 XLM fee and the 50 XLM buy, both in XLM")
-        XCTAssertEqual(action.bindings, PlanBindings(minimums: [PlanBindings.anyAsset: buy.minOut], destination: .confirmed(to: Self.recipient, memo: nil)),
-                       "the new coin's minimum and the fee recipient the user typed")
+        XCTAssertEqual(action.bindings, PlanBindings(minimums: [PlanBindings.anyAsset: buy.minOut], destination: .confirmed(to: Self.recipient, memo: nil),
+                                                     shown: LaunchV2Store.createShown(form, user: launches.store.address)),
+                       "the new coin's minimum, the fee recipient the user typed and the settings it chose")
+        let shown = try XCTUnwrap(action.bindings.shown["launch"])
+        XCTAssertEqual(action.bindings.shown["launch_create"], shown, "by the kind and by launchpad v2's function alike")
+        XCTAssertEqual(shown, ["recipient": .string(Self.recipient), "snipeExempt": .string(""), "creatorFeeBps": .number(100), "holderSharing": .bool(true)])
         XCTAssertEqual(action.section, .launch)
         XCTAssertNil(action.reference, "the new coin's page comes from what the launch returns")
         XCTAssertEqual(action.title(of: action.plan.steps[0]), "Launch ECAT and buy with 50 XLM")
@@ -464,7 +468,9 @@ final class LaunchV2StoreTests: XCTestCase {
         try serve("POST /v1/launches/build", Self.plan(kind: "launch_create", display: Self.bound(["symbol": "ECAT"], recipient: me, exempt: "\(mallory),\(other)"),
                                                        terms: Self.terms()))
         let ok = try await launches.createPlan(exempting, terms: terms, image: nil)
-        XCTAssertEqual(ok.bindings, .none, "no buy, fees to the creator")
+        XCTAssertEqual(ok.bindings, PlanBindings(shown: LaunchV2Store.createShown(exempting, user: me)), "no buy, fees to the creator")
+        XCTAssertEqual(ok.bindings.shown["launch"]?["snipeExempt"], .string("\(mallory),\(other)"))
+        XCTAssertEqual(ok.bindings.shown["launch"]?["recipient"], .string(me))
     }
 
     func testATradeWhoseMinimumIsLowerThanTheQuotesIsRefusedBeforeItIsSigned() async throws {
