@@ -162,6 +162,27 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(backend.lastBindings, action.bindings)
     }
 
+    func testTheAssetASwapBuysIsWorkedOutOnThePhone() async throws {
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        let pinned = PinnedContracts.testnet.contracts("token")
+        XCTAssertEqual(store.contract("USDC"), "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA")
+        XCTAssertTrue(pinned.contains(store.contract("USDC")) && pinned.contains(store.contract("XLM")), "the build's pinned token contracts")
+        let issuer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+        XCTAssertEqual(store.contract("EURC:\(issuer)"), AssetContract.id(.credit(code: "EURC", issuer: issuer), network: .testnet))
+        XCTAssertEqual(LiteStore.assetContract("native", network: .testnet), AssetContract.id(.native, network: .testnet))
+        XCTAssertEqual(store.contract("not an asset"), PlanBindings.anyAsset)
+        // A quote whose bought asset can't be worked out is never built into a swap.
+        var json = try XCTUnwrap(try JSONSerialization.jsonObject(with: FakeLite.fixture("swap-quote")) as? [String: Any])
+        json["buy"] = "not an asset"
+        let quote = try JSONDecoder().decode(SwapQuote.self, from: JSONSerialization.data(withJSONObject: json))
+        do {
+            _ = try await store.swapPlan(quote)
+            XCTFail("a swap into an asset the phone can't check")
+        } catch let f as PlanRunner.Failure {
+            XCTAssertEqual(f, .refused(step: "Swap", reason: "the asset you buy can't be checked"))
+        }
+    }
+
     func testASwapsMinimumIsTheQuotesNeverLessAndNeverNothing() throws {
         XCTAssertEqual(try LiteStore.swapMinimum(quoted: "18938032", minOut: "18843341", slippageBps: 50), 18_843_341)
         XCTAssertEqual(try LiteStore.swapMinimum(quoted: "18938032", minOut: "1", slippageBps: 50), 18_843_341,

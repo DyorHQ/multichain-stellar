@@ -369,8 +369,12 @@ public final class LiteStore {
         let route = venue.flatMap { v in quote.routes?.first { $0.venue == v } }
         let out = route?.amountOut ?? quote.best.amountOut
         let least = try Self.swapMinimum(quoted: out, minOut: route?.minOut ?? quote.best.minOut, slippageBps: quote.slippageBps)
+        // The asset the user chose to buy, pinned on the phone: the verifiers let the bought token off the route
+        // allowlist because the intent names it, so the run must hold the intent to this one.
+        let bought = contract(quote.buy)
+        guard bought != PlanBindings.anyAsset else { throw PlanRunner.Failure.refused(step: tr("Swap"), reason: "the asset you buy can't be checked") }
         let main = LiteTitles.intent(kind: "swap", display: ["amountIn": .string(quote.amountIn), "sell": .string(sell), "buy": .string(buy)])
-        return try prepare(plan, limits: limit(quote.sell, quote.amountIn), bindings: PlanBindings(minimums: [contract(quote.buy): least]), title: tr("Swap"),
+        return try prepare(plan, limits: limit(quote.sell, quote.amountIn), bindings: PlanBindings(minimums: [bought: least]), title: tr("Swap"),
                            titles: Self.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string(buy)])),
                            section: isLaunchToken(quote.sell) || isLaunchToken(quote.buy) ? .launch : .spot, reference: "stellar:swap",
                            summary: .swap(amountIn: Int64(quote.amountIn) ?? 0, sell: sell, buy: buy, quotedOut: Int64(out) ?? 0))
@@ -618,6 +622,8 @@ public final class LiteStore {
                 throw PlanRunner.Failure.minimumNotConfirmed(step: step.label)
             } catch PlanBindings.Refusal.destination {
                 throw PlanRunner.Failure.destinationNotConfirmed(step: step.label)
+            } catch PlanBindings.Refusal.settings {
+                throw PlanRunner.Failure.settingsNotConfirmed(step: step.label)
             }
         }
     }
@@ -651,17 +657,26 @@ public final class LiteStore {
         }
     }
 
-    /// The key a step's `intent.receive` names an asset by: its contract id, from the registry ("XLM", "USDC"), as given
-    /// (C…), or a classic CODE:ISSUER's asset contract worked out on the phone; `PlanBindings.anyAsset` when none of
-    /// these applies.
+    /// The key a step's `intent.receive` names an asset by, worked out on the phone rather than taken from the server's
+    /// config: a registry asset ("XLM", "USDC") by its contract when the build pins it (the `token` role), else by the
+    /// asset contract of its classic asset (native, or CODE:ISSUER); a C… as given; a CODE:ISSUER by its asset contract.
+    /// `PlanBindings.anyAsset` when none of these applies, which a swap refuses (`swapPlan`).
     func contract(_ asset: String) -> String {
-        if let known = config?.asset(asset)?.contract { return known }
-        if StrKey.isValid(.contract, asset) { return asset }
-        let parts = asset.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-        if parts.count == 2, (1...12).contains(parts[0].count), StrKey.isValid(.accountID, parts[1]) {
-            return AssetContract.id(.credit(code: parts[0], issuer: parts[1]), network: env.pinned.network)
+        if let info = config?.asset(asset) {
+            if env.pinned.contracts("token").contains(info.contract) { return info.contract }
+            if let classic = info.classic { return Self.assetContract(classic, network: env.pinned.network) ?? PlanBindings.anyAsset }
+            return PlanBindings.anyAsset
         }
-        return PlanBindings.anyAsset
+        if StrKey.isValid(.contract, asset) { return asset }
+        return Self.assetContract(asset, network: env.pinned.network) ?? PlanBindings.anyAsset
+    }
+
+    /// A classic asset's contract ("native", or CODE:ISSUER), as Stellar derives it; nil for anything else.
+    nonisolated static func assetContract(_ classic: String, network: StellarNetwork) -> String? {
+        if classic == "native" { return AssetContract.id(.native, network: network) }
+        let parts = classic.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, (1...12).contains(parts[0].count), StrKey.isValid(.accountID, parts[1]) else { return nil }
+        return AssetContract.id(.credit(code: parts[0], issuer: parts[1]), network: network)
     }
 
     // MARK: - Running

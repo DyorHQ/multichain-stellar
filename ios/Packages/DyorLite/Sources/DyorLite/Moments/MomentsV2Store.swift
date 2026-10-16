@@ -240,7 +240,8 @@ public struct MomentsV2Store {
         // queued behind the USDC trustline isn't built yet: its review doesn't go ahead (`publishWaits`).
         if !Self.publishWaits(plan), !Self.formChanges(plan, form: form).isEmpty { throw Self.formChanged }
         let main = LiteTitles.intent(kind: "moment_publish", display: ["price": .string(String(form.price)), "quote": .string("USDC")])
-        return try store.prepare(plan, limits: [:], title: title,
+        // The run holds the publish to the form however late it is built (behind a trust or a restore step).
+        return try store.prepare(plan, limits: [:], bindings: PlanBindings(shown: Self.shown(form)), title: title,
                                  titles: LiteStore.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string("USDC")])),
                                  section: .moments, reference: Self.publishing(plan).map(Self.reference), summary: .publish(title: form.name))
     }
@@ -397,6 +398,14 @@ public struct MomentsV2Store {
         if shown.whole("allocationBps") != form.allocationBps { changes.append("allocationBps") }
         if shown.whole("windowSecs") != form.windowSecs { changes.append("windowSecs") }
         return changes
+    }
+
+    /// What a publish must show from `form`, by its kind and by moments-v2's function (`PlanBindings.shown`): the
+    /// price, the creator's allocation and the collecting window, as the verifiers bind them to the call.
+    public nonisolated static func shown(_ form: StellarMomentFormV2) -> [String: [String: StellarJSON]] {
+        let fields: [String: StellarJSON] = ["price": .string(String(form.price)), "allocationBps": .number(Double(form.allocationBps)),
+                                             "windowSecs": .number(Double(form.windowSecs))]
+        return ["moment_publish": fields, "publish": fields]
     }
 
     nonisolated static var formChanged: LiteAPIError {

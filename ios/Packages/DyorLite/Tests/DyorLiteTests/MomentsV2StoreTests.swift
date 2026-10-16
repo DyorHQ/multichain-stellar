@@ -228,6 +228,20 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "null"])), form: form), ["price"], "fails closed")
     }
 
+    func testAPublishBuiltDuringTheRunIsHeldToTheForm() async throws {
+        // The publish waits behind a step (a restore, the USDC trustline): its review can't compare it, so the run holds
+        // it to the form's price, allocation and window however late the server builds it.
+        let (_, moments) = try await ready()
+        answer.plan = Self.trustThenPublish
+        let video = StellarMomentUploadV2(mediaUrl: "https://media.test/u/v.mp4", posterUrl: "https://media.test/u/p.jpg")
+        let action = try await moments.publishPlan(form, media: video, title: "Publish DUSK")
+        XCTAssertEqual(action.bindings, PlanBindings(shown: MomentsV2Store.shown(form)))
+        let fields: [String: StellarJSON] = ["price": .string("10000000"), "allocationBps": .number(1_000), "windowSecs": .number(86_400)]
+        XCTAssertEqual(action.bindings.shown, ["moment_publish": fields, "publish": fields], "by the kind and by moments-v2's function alike")
+        _ = try await moments.store.run(action, reason: "Confirm Publish")
+        XCTAssertEqual(backend.lastBindings, action.bindings, "the run is held to them")
+    }
+
     func testAPublishOfAnotherPriceIsRefusedBeforeItIsSigned() async throws {
         let (_, moments) = try await ready()
         answer.plan = Self.publishPlan(overrides: ["price": "\"1\""])

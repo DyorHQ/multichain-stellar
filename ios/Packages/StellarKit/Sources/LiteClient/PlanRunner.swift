@@ -61,19 +61,28 @@ public struct PlanBindings: Equatable, Sendable {
     /// chose.
     public var minimums: [String: Int64]
     public var destination: Destination
+    /// The settings the user chose that a step shows in its display and the verifiers bind to its call, by the step's
+    /// intent kind or by the function it calls ("moment_publish" and "publish", "launch_create" and "launch"): display
+    /// field → value. Every step that matches, built for the review or during the run, must show exactly these values,
+    /// and one that doesn't state a field is refused; the plan's last step must match. Keyed by the function too, so a
+    /// step can't escape them under another kind: the verifier holds every call a transaction makes to `intent.calls`.
+    public var shown: [String: [String: StellarJSON]]
 
-    public init(minimums: [String: Int64] = [:], destination: Destination = .own) {
+    public init(minimums: [String: Int64] = [:], destination: Destination = .own, shown: [String: [String: StellarJSON]] = [:]) {
         self.minimums = minimums
         self.destination = destination
+        self.shown = shown
     }
 
     /// No minimums, nothing sent anywhere but to the user.
     public static let none = PlanBindings()
 
-    /// Why `bindings` refuse a step (`PlanRunner.Failure.minimumNotConfirmed`, `.destinationNotConfirmed`).
+    /// Why `bindings` refuse a step (`PlanRunner.Failure.minimumNotConfirmed`, `.destinationNotConfirmed`,
+    /// `.settingsNotConfirmed`).
     public enum Refusal: Error, Equatable, Sendable {
         case minimum(reason: String)
         case destination(reason: String)
+        case settings(reason: String)
     }
 
     /// The checks, step by step in plan order: what a run (and the review, for the steps already built) holds each step to.
@@ -94,6 +103,36 @@ public struct PlanBindings: Equatable, Sendable {
         public mutating func step(_ intent: Intent, spends: Bool, last: Bool) throws {
             try receive(intent, spends: spends, last: last)
             try destination(intent, last: last)
+            try settings(intent, last: last)
+        }
+
+        private func settings(_ intent: Intent, last: Bool) throws {
+            guard !bindings.shown.isEmpty else { return }
+            let entries = ([intent.kind] + (intent.calls ?? []).map(\.fn)).compactMap { bindings.shown[$0] }
+            guard !entries.isEmpty else {
+                if last { throw Refusal.settings(reason: "the transaction isn't the action you reviewed") }
+                return
+            }
+            let display = intent.display ?? [:]
+            for entry in entries {
+                for (key, value) in entry {
+                    guard let actual = display[key], Self.same(actual, value) else {
+                        throw Refusal.settings(reason: "the settings are not the ones you chose")
+                    }
+                }
+            }
+        }
+
+        /// Two display values say the same: equal, or the same whole number written as a number and as its digits.
+        static func same(_ a: StellarJSON, _ b: StellarJSON) -> Bool {
+            if a == b { return true }
+            switch (a, b) {
+            case let (.string(text), .number(n)), let (.number(n), .string(text)):
+                guard n == n.rounded(), abs(n) < 9e15, let whole = Int64(text) else { return false }
+                return Int64(n) == whole
+            default:
+                return false
+            }
         }
 
         private mutating func receive(_ intent: Intent, spends: Bool, last: Bool) throws {
@@ -169,6 +208,9 @@ public struct PlanRunner: Sendable {
         case minimumNotConfirmed(step: String)
         /// The step pays an address, or carries a memo, other than the one the user confirmed (`PlanBindings.destination`).
         case destinationNotConfirmed(step: String)
+        /// The step shows other settings than the ones the user chose (a Moment's price, a launch's fee recipient and
+        /// exemptions), or doesn't state them (`PlanBindings.shown`).
+        case settingsNotConfirmed(step: String)
 
         public var errorDescription: String? {
             switch self {
@@ -179,6 +221,7 @@ public struct PlanRunner: Sendable {
             case let .timedOut(step, _): return "\(step) was sent; confirmation not seen yet."
             case let .minimumNotConfirmed(step): return "Not signed: \(step) doesn't guarantee the minimum you confirmed. Nothing was sent."
             case let .destinationNotConfirmed(step): return "Not signed: \(step) doesn't pay the address and memo you confirmed. Nothing was sent."
+            case let .settingsNotConfirmed(step): return "Not signed: \(step) doesn't have the settings you chose. Nothing was sent."
             }
         }
     }
@@ -269,6 +312,8 @@ public struct PlanRunner: Sendable {
                 throw Failure.minimumNotConfirmed(step: step.label)
             } catch PlanBindings.Refusal.destination {
                 throw Failure.destinationNotConfirmed(step: step.label)
+            } catch PlanBindings.Refusal.settings {
+                throw Failure.settingsNotConfirmed(step: step.label)
             }
 
             onEvent(.signing(stepId: step.id, label: step.label))

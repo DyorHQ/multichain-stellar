@@ -277,8 +277,20 @@ public final class LaunchV2Store {
     /// once launched), and where the creator fees go: the recipient the user typed, or the user.
     nonisolated static func createBindings(_ form: LaunchV2Form, user: String) -> PlanBindings {
         let minimums = form.developerBuy > 0 ? [PlanBindings.anyAsset: form.minOut] : [:]
-        guard let recipient = form.recipient, recipient != user else { return PlanBindings(minimums: minimums) }
-        return PlanBindings(minimums: minimums, destination: .confirmed(to: recipient, memo: nil))
+        let shown = createShown(form, user: user)
+        guard let recipient = form.recipient, recipient != user else { return PlanBindings(minimums: minimums, shown: shown) }
+        return PlanBindings(minimums: minimums, destination: .confirmed(to: recipient, memo: nil), shown: shown)
+    }
+
+    /// What a create must show from `form`, by its kind and by launchpad v2's function (`PlanBindings.shown`), as the
+    /// verifiers bind them to the call: the fee recipient (the user's own address for none), the exemptions in the
+    /// form's order, the creator fee and holder sharing.
+    nonisolated static func createShown(_ form: LaunchV2Form, user: String) -> [String: [String: StellarJSON]] {
+        let fields: [String: StellarJSON] = [
+            "recipient": .string(form.recipient ?? user), "snipeExempt": .string(form.exempt.joined(separator: ",")),
+            "creatorFeeBps": .number(Double(form.creatorFeeBps)), "holderSharing": .bool(form.holderSharing),
+        ]
+        return ["launch_create": fields, "launch": fields]
     }
 
     /// The fields of `form` the plan's create binds differently, or doesn't state, by name; empty when it binds them as

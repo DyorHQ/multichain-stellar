@@ -1132,7 +1132,7 @@ public final class LiteSession {
         case let runner as PlanRunner.Failure:
             switch runner {
             case .failedOnChain, .timedOut: return .server(LiteErrorText.describe(runner))
-            case .refused, .overLimit, .feeAboveConfirmed, .minimumNotConfirmed, .destinationNotConfirmed:
+            case .refused, .overLimit, .feeAboveConfirmed, .minimumNotConfirmed, .destinationNotConfirmed, .settingsNotConfirmed:
                 return sent ? .server(LiteErrorText.describe(runner)) : .setUpFailed
             }
         case LiteAPIError.decoding:
