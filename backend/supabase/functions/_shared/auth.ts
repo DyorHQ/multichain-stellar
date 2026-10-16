@@ -270,6 +270,13 @@ export async function requireUser(req: Request): Promise<string> {
   const address = assertAccountId(claims.sub);
   // Revocation takes effect at once, not at token expiry.
   const rows = await sql()`select 1 from lite.testers where address = ${address} and revoked_at is null`;
-  if (rows.length === 0) throw new ApiError(403, "access_revoked", "Access to Stellar was turned off for this account.");
+  if (rows.length === 0) {
+    // A token for an address this database holds no tester for was issued against another one that shares the signing
+    // secret (a local stack, or this database before a reset): it signs in again here, which registers it where sign-in
+    // may. Only a tester whose access was turned off is refused for good.
+    const known = await sql()`select 1 from lite.testers where address = ${address}`;
+    if (known.length === 0) throw unauthorized("Sign in on Stellar to continue.");
+    throw new ApiError(403, "access_revoked", "Access to Stellar was turned off for this account.");
+  }
   return address;
 }
