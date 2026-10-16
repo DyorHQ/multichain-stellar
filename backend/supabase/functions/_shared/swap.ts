@@ -35,20 +35,27 @@ interface PricedRoute extends Route {
 
 const VENUE_NAMES: Record<Venue, string> = { sdex: "SDEX", soroswap: "Soroswap", aquarius: "Aquarius" };
 
-async function quoteSdex(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route | null> {
-  if (!sell.classic || !buy.classic) return null;
+/** Every path Horizon finds on the Stellar DEX from `sell` to `buy` for `amountIn`, with what it brings, the best first. */
+async function sdexRoutes(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route[]> {
+  if (!sell.classic || !buy.classic) return [];
   try {
     const call = horizon().strictSendPaths(classicAsset(sell.classic), fromStroops(amountIn), [classicAsset(buy.classic)]);
     const res = await call.call();
-    const best = res.records.sort((a: any, b: any) => Number(b.destination_amount) - Number(a.destination_amount))[0];
-    if (!best) return null;
     const toSpec = (p: any) => (p.asset_type === "native" ? "native" : `${p.asset_code}:${p.asset_issuer}`);
-    const [i, f = ""] = String(best.destination_amount).split(".");
-    const out = BigInt(i) * 10_000_000n + BigInt((f + "0000000").slice(0, 7));
-    return { venue: "sdex", amountOut: out.toString(), path: [sell.classic, ...best.path.map(toSpec), buy.classic] };
+    return res.records
+      .sort((a: any, b: any) => Number(b.destination_amount) - Number(a.destination_amount))
+      .map((r: any): Route => {
+        const [i, f = ""] = String(r.destination_amount).split(".");
+        const out = BigInt(i) * 10_000_000n + BigInt((f + "0000000").slice(0, 7));
+        return { venue: "sdex", amountOut: out.toString(), path: [sell.classic!, ...r.path.map(toSpec), buy.classic!] };
+      });
   } catch {
-    return null;
+    return [];
   }
+}
+
+async function quoteSdex(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route | null> {
+  return (await sdexRoutes(sell, buy, amountIn))[0] ?? null;
 }
 
 /** Soroswap's output for `amountIn` along `path`, or null. */
@@ -129,12 +136,31 @@ function pickBest(routes: Route[]): Route | null {
   return valid.reduce((a, b) => (BigInt(b.amountOut) > BigInt(a.amountOut) ? b : a));
 }
 
-/** Soroswap's price impact in basis points: how much worse the rate for `amountIn` is than for a thousandth of it.
- *  Null where the small trade rounds to nothing. */
-async function soroswapImpact(route: Route, amountIn: bigint): Promise<number | null> {
+/** What `route`'s venue brings for `amountIn` along the same way: Soroswap's path, the Stellar DEX's path when Horizon
+ *  still finds it (else its best one now), Aquarius's chain for that amount. Null when the venue doesn't answer. */
+async function venueOut(route: Route, sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<bigint | null> {
+  switch (route.venue) {
+    case "soroswap":
+      return await soroswapOut(route.path, amountIn);
+    case "sdex": {
+      const found = await sdexRoutes(sell, buy, amountIn);
+      const same = found.find((r) => r.path.join() === route.path.join()) ?? found[0];
+      return same ? BigInt(same.amountOut) : null;
+    }
+    case "aquarius": {
+      const found = await quoteAquarius(sell, buy, amountIn);
+      return found ? BigInt(found.amountOut) : null;
+    }
+  }
+}
+
+/** A route's price impact in basis points, for every venue as Monad works it out for its pools: how much worse the rate
+ *  for `amountIn` is than the venue's rate for a thousandth of it. Null where the small trade rounds to nothing or the
+ *  venue doesn't answer it. */
+async function priceImpact(route: Route, sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<number | null> {
   const small = amountIn / 1_000n;
   if (small === 0n) return null;
-  const smallOut = await soroswapOut(route.path, small);
+  const smallOut = await venueOut(route, sell, buy, small);
   if (!smallOut || smallOut === 0n) return null;
   // rate(full) / rate(small) = (out × small) / (smallOut × amountIn)
   const ratio = (BigInt(route.amountOut) * small * 10_000n) / (smallOut * amountIn);
@@ -188,7 +214,7 @@ export async function quote(user: string, sellId: string, buyId: string, amountI
   const priced: PricedRoute[] = await Promise.all(ranked.map(async (r) => ({
     ...r,
     minOut: minOut(r.amountOut, slippageBps),
-    priceImpactBps: r.venue === "soroswap" ? await soroswapImpact(r, amountIn) : null,
+    priceImpactBps: await priceImpact(r, sell, buy, amountIn),
   })));
   const starterSwap = await starterSwapFor(user, sell, buy, account.spendable, priced[0].minOut);
   const request = { sell: sell.id, buy: buy.id, amountIn: amountIn.toString(), slippageBps };
