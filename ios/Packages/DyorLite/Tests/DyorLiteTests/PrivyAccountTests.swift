@@ -3,9 +3,10 @@ import StellarKit
 import XCTest
 
 /// A Privy account's Stellar session (Apple, Google, an email code, a Privy passkey: DyorHQ/internal
-/// ios-app/stellar-v2/privy-stellar-wallets.md §5.2), against the fake server: its first run finds its wallet through the
-/// host (`resolveKeys`), with no prompt, then goes as a seed account's: a silent sign-in, App Lock once at Set Up. Where
-/// the server serves no Privy wallets nothing is asked; a signature that doesn't verify is never sent.
+/// ios-app/stellar-v2/privy-stellar-wallets.md), against the fake server: its first run finds its wallet through the host
+/// (`resolveKeys`, which talks to Privy itself), with no prompt, then goes as a seed account's: a silent sign-in, App Lock
+/// once at Set Up. Where the server doesn't let Privy accounts in nothing is asked; a signature that doesn't verify is
+/// never sent; Privy's own refusals and a wallet that isn't only the user's are said in the app's words.
 @MainActor
 final class PrivyAccountTests: XCTestCase {
     private var server: FakeLite!
@@ -102,7 +103,7 @@ final class PrivyAccountTests: XCTestCase {
             tally!.add("resolve")
             guard attempts.value else {
                 attempts.value = true
-                throw LiteAPIError.server(status: 503, code: "privy_unavailable", message: "server words", detail: nil)
+                throw PrivyAPIError.unavailable(status: 503)
             }
             return wallet
         }
@@ -111,6 +112,22 @@ final class PrivyAccountTests: XCTestCase {
         await s.retry()
         XCTAssertEqual(s.state, .waiting(.setUp), "\(s.steps)")
         XCTAssertEqual(tally("resolve"), 2)
+    }
+
+    func testAWalletThatIsntOnlyTheUsersFailsTheSignInInTheAppsWords() async throws {
+        let s = session { throw PrivyWalletCheck.Failure.notOnlyTheUsers }
+        await s.run()
+        XCTAssertEqual(s.state, .failed(.signIn, .server(tr("Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed."))))
+        XCTAssertNil(s.address)
+        let stale = session { throw PrivyWalletCheck.Failure.listNotFresh }
+        await stale.run()
+        XCTAssertEqual(stale.state, .failed(.signIn, .server(tr("Stellar isn't available for this sign-in right now. Try again later."))))
+        let offline = session { throw PrivyAPIError.transport("offline") }
+        await offline.run()
+        XCTAssertEqual(offline.state, .failed(.signIn, .offline))
+        let expired = session { throw PrivyAPIError.refused(status: 401, code: nil) }
+        await expired.run()
+        XCTAssertEqual(expired.state, .failed(.signIn, .server(tr("Sign in to DyorHQ again to use Stellar."))))
     }
 
     func testAWalletForAnotherAddressThanTheOneKeptIsRefused() async throws {

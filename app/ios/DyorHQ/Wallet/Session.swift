@@ -650,23 +650,36 @@ final class Session {
                                                                                        headers: headers, body: body))
     }
 
+    /// Privy's id of the signed-in user's embedded Ethereum wallet at `evm` (the account's Monad wallet); nil without a
+    /// Privy user, or for a wallet Privy gives no id. Its owner is the user's own key quorum (`PrivyWalletCheck`).
+    func privyWalletId(for evm: Address) async -> String? {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+        return user.embeddedEthereumWallets.first { Address($0.address) == evm }?.id
+    }
+
     /// The signed-in Privy user's identity token, as the SDK has it from Privy (signed by Privy; it lists the user's
     /// linked accounts, wallets included); `refresh` asks Privy for the user again first, so a wallet made a moment ago is
-    /// in it. Nil without a Privy user, or when the Privy app doesn't issue identity tokens.
-    func privyIdentityToken(refresh: Bool) async throws -> String? {
-        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
-        guard refresh else { return user.identityToken }
-        try await user.refresh()
-        guard case .authenticated(let fresh) = await privy.getAuthState() else { return nil }
-        return fresh.identityToken
+    /// in it. The refresh is best effort: Privy limits how often a user is read, and the token the sign-in brought is
+    /// current then. Nil without a Privy user, or when the Privy app doesn't issue identity tokens.
+    func privyIdentityToken(refresh: Bool) async -> String? {
+        guard refresh else {
+            guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
+            return user.identityToken
+        }
+        return await privyIdentityTokenRefreshed().token
     }
-    #endif
 
-    #if STELLAR_LITE && DEBUG
-    /// Prototype only (`PrivyStellarProbe`): the signed-in Privy user.
-    func privyUserForProbe() async -> (any PrivyUser)? {
-        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return nil }
-        return user
+    /// The identity token after asking Privy for the user again, and whether that went through: Privy limits how often a
+    /// user is read, and a token that wasn't refreshed may not list a wallet made since it was issued.
+    func privyIdentityTokenRefreshed() async -> (token: String?, fresh: Bool) {
+        guard let privy, case .authenticated(let user) = await privy.getAuthState() else { return (nil, false) }
+        do {
+            try await user.refresh()
+        } catch {
+            return (user.identityToken, false)
+        }
+        guard case .authenticated(let fresh) = await privy.getAuthState() else { return (nil, false) }
+        return (fresh.identityToken, true)
     }
     #endif
 

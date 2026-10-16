@@ -171,9 +171,6 @@ struct RootView: View {
             if session.canSign, settings.notificationsEnabled { await Notifications.requestAuthorizationIfUndetermined() }
             // Transactions sent in an earlier run of the app whose confirmation it never saw (GL-2).
             await PendingActivity.recheck(owner: session.address, rpc: env.rpc)
-            #if STELLAR_LITE && DEBUG
-            Task { await PrivyStellarProbe.runIfAsked(session: session) }
-            #endif
         }
         // Whenever the account's backend session opens — whoever signed in (the rebind above, the reconnect below,
         // Bridge, a screen that uploads) or a stored token was restored — pull what other devices recorded. Idempotent:

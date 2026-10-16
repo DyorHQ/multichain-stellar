@@ -146,8 +146,8 @@ public final class LiteSession {
     private(set) var keys: LiteKeyProvider?
     /// A passkey account's one setup ceremony (the host's).
     @ObservationIgnored private let setupKey: (@Sendable (String) async throws -> UnlockResult)?
-    /// A Privy account's key provider, found the first time (the host's): its Stellar wallet is looked up, or made, with
-    /// no prompt, and checked by the host before it is given.
+    /// A Privy account's key provider, found the first time (the host's): its Stellar wallet is found, or made, at Privy
+    /// with no prompt, and checked by the host before it is given.
     @ObservationIgnored private let resolveKeys: (@Sendable () async throws -> LiteKeyProvider)?
     @ObservationIgnored let backend: LiteBackend
     @ObservationIgnored let vault: LiteSessionVault
@@ -199,9 +199,9 @@ public final class LiteSession {
     ///     language. Throw a `Failure` to say exactly what went wrong (`.keyNotOnDevice`, `.cancelled`);
     ///     `KeyError.badMnemonic` reads as another account's key, and passkey cancellations as `.cancelled`.
     ///   - resolveKeys: a Privy account's provider, the first time, when the host has none yet (`keys` nil): its
-    ///     Stellar wallet looked up through the Lite API (`/v1/privy/wallet`) and checked by the host, with no prompt.
-    ///     Asked only where the server serves Privy wallets (`LiteConfig.privyWallets`); the run then goes on as a seed
-    ///     account's.
+    ///     Stellar wallet found or made at Privy by the host itself, and checked to be only the user's, with no prompt.
+    ///     Asked only where the server lets Privy accounts in (`LiteConfig.privyWallets`); the run then goes on as a
+    ///     seed account's.
     public convenience init(env: LiteEnvironment, stellarAddress: String?, monad: LiteMonadBridge?, keys: LiteKeyProvider?,
                             setupKey: (@Sendable (_ reason: String) async throws -> UnlockResult)? = nil,
                             resolveKeys: (@Sendable () async throws -> LiteKeyProvider)? = nil) {
@@ -565,7 +565,7 @@ public final class LiteSession {
         }
     }
 
-    /// The server serves no Privy wallets (now): said as the API's `privy_unavailable` is.
+    /// The server doesn't let Privy accounts use Stellar (now), or the account's Privy wallets can't be checked.
     public nonisolated static var privyWalletsUnavailable: Failure {
         .server(tr("Stellar isn't available for this sign-in right now. Try again later."))
     }
@@ -1152,16 +1152,17 @@ public final class LiteSession {
                 case "bad_invite": return .inviteRejected
                 case "access_revoked": return .accessRevoked
                 case "rate_limited": return .rateLimited
-                // A Privy account's wallet and signatures (/v1/privy/*), in this build's words.
-                case "privy_unavailable", "privy_refused", "privy_bad_signature", "privy_token_invalid":
-                    return .server(LiteErrorText.describe(api))
                 default: return .server(message)
                 }
             case .notSignedIn, .decoding: return .server(LiteErrorText.describe(api))
             }
         }
         if error is CancellationError { return .cancelled }
-        if error is StellarSigningError { return .server(LiteErrorText.describe(error)) }
+        // A Privy account's wallet and signatures, which the phone asks Privy for itself: in this build's words.
+        if let privy = error as? PrivyAPIError, case .transport = privy { return .offline }
+        if error is StellarSigningError || error is PrivyAPIError || error is PrivyWalletCheck.Failure {
+            return .server(LiteErrorText.describe(error))
+        }
         let ns = error as NSError
         if ns.domain == NSURLErrorDomain { return .offline }
         if (ns.domain == "com.apple.LocalAuthentication" && [-2, -4, -9].contains(ns.code)) // userCancel, systemCancel, appCancel

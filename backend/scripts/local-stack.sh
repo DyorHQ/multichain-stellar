@@ -22,8 +22,7 @@
 # no secret and prints none. A stack with PORT_BASE only reads .secrets (every worktree's .secrets links to the same
 # directory): its env file and its invites stay in its state directory. Without .secrets/testnet-functions.env, a stack
 # that has started before starts again from its env file as it is, with the same options; a new stack, or other
-# options, need the file back (docs/RUNBOOK-testnet.md §1). With .secrets/privy-app.env (PRIVY_APP_SECRET, made by the
-# owner), the stack also serves Stellar wallets for Privy sign-ins (LITE_PRIVY_WALLETS=on, lite/routes/privy.ts).
+# options, need the file back (docs/RUNBOOK-testnet.md §1).
 #
 #   local-stack.sh start [options]   idempotent: initdb once, the new migrations, then whatever isn't running
 #     --no-loop                    no indexer loop, and LITE_KEEPER=off: a package's stack never races the shared
@@ -49,7 +48,6 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PGBIN="/opt/homebrew/opt/postgresql@16/bin"
 SECRETS="$ROOT/.secrets"
 SOURCE_ENV="$SECRETS/testnet-functions.env"
-PRIVY_ENV="$SECRETS/privy-app.env"
 DENO_CONFIG="$ROOT/backend/supabase/functions/deno.json"
 DENO="$(command -v deno || echo /opt/homebrew/bin/deno)"
 MIGRATIONS_TABLE="public.local_stack_migrations"
@@ -294,9 +292,9 @@ start_options() {
 # This stack's settings, none of them a secret: what status reports, and what make_env compares.
 write_settings() {
   printf '# backend/scripts/local-stack.sh: the settings this stack was started with (no secret)\n'
-  printf 'loop=%s\nkeeper=%s\ndeployment=%s\nactivation=%s\nsessions=%s\ninvites=%s\nprivy=%s\n' "$LOOP" "$KEEPER" "$DEPLOYMENT" \
+  printf 'loop=%s\nkeeper=%s\ndeployment=%s\nactivation=%s\nsessions=%s\ninvites=%s\n' "$LOOP" "$KEEPER" "$DEPLOYMENT" \
     "${ACTIVATION:-default}" "$([ -n "$SHORT_SESSIONS" ] && echo short || echo default)" \
-    "$([ -n "$INVITE_REQUIRED" ] && echo required || echo default)" "$([ -f "$PRIVY_ENV" ] && echo on || echo off)"
+    "$([ -n "$INVITE_REQUIRED" ] && echo required || echo default)"
 }
 
 # The stack's env file, from .secrets/testnet-functions.env and this start's settings. A running stack keeps the env
@@ -321,13 +319,8 @@ make_env() {
   if [ -n "$ACTIVATION" ]; then vars+=(LITE_ACTIVATION="$ACTIVATION"); fi
   if [ -n "$SHORT_SESSIONS" ]; then vars+=(LITE_JWT_TTL_S=120 LITE_REFRESH_TTL_S=600); fi
   if [ -n "$INVITE_REQUIRED" ]; then vars+=(LITE_INVITE_REQUIRED=1); fi
-  local reads="$SOURCE_ENV" privy=()
-  if [ -f "$PRIVY_ENV" ]; then
-    reads="$SOURCE_ENV,$PRIVY_ENV"
-    privy=(--privy "$PRIVY_ENV")
-  fi
-  if ! clean "${vars[@]}" "$DENO" run --no-config --allow-read="$reads" --allow-write="$next" \
-    --allow-env="$SETTING_NAMES" "$ROOT/backend/scripts/local/make-local-env.ts" --from "$SOURCE_ENV" --to "$next" ${privy[@]+"${privy[@]}"} >/dev/null; then
+  if ! clean "${vars[@]}" "$DENO" run --no-config --allow-read="$SOURCE_ENV" --allow-write="$next" \
+    --allow-env="$SETTING_NAMES" "$ROOT/backend/scripts/local/make-local-env.ts" --from "$SOURCE_ENV" --to "$next" >/dev/null; then
     rm -f "$next" "$SETTINGS.next"
     die "make-local-env.ts wrote nothing (see above)"
   fi

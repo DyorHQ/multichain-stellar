@@ -34,9 +34,6 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/auth/verify", "/v1/auth/verify", true],
   ["POST /v1/auth/refresh", "/v1/auth/refresh", true],
   ["POST /v1/auth/signout", "/v1/auth/signout", true],
-  // A Privy account's Stellar wallet and its signatures, the sign-in's included: public, each with its own proof.
-  ["POST /v1/privy/wallet", "/v1/privy/wallet", true],
-  ["POST /v1/privy/sign", "/v1/privy/sign", true],
   ["GET /v1/config", "/v1/config", true],
   ["GET /v1/fees", "/v1/fees", true],
   ["GET /v1/account", "/v1/account", false],
@@ -189,13 +186,11 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals([mine.status, await mine.json()], [200, { created: [], collected: [], totals: { editions: 0, moments: 0, spentByQuote: {}, earnedByQuote: {} } }]);
   });
 
-  Deno.test("public: sign-in, the Privy wallet routes, config, fees, market data, economics, Earn's markets and history, a v2 Moment's status; nothing else", () => {
+  Deno.test("public: sign-in, config, fees, market data, economics, Earn's markets and history, a v2 Moment's status; nothing else", () => {
     const open = [
       "POST /v1/auth/verify",
       "POST /v1/auth/refresh",
       "POST /v1/auth/signout",
-      "POST /v1/privy/wallet",
-      "POST /v1/privy/sign",
       "GET /v1/config",
       "GET /v1/fees",
       "GET /v1/markets",
@@ -208,7 +203,6 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "GET /v1/moments/:nft/status",
     ];
     for (const r of open) assert(isPublic(r) && !isViewer(r), r);
-    for (const r of ["POST /v1/privy/walletx", "POST /v1/privy/sign/x", "POST /v1/privy/export", "POST /v1/privy"]) assert(!isPublic(r), r);
     const closed = ["GET /v1/assets", "GET /v1/holdings", "GET /v1/portfolio", "GET /v1/feesx", "GET /v1/marketsx", "GET /v1/configs", "GET /v1/account"];
     const v2 = ["GET /v1/moments/v2", "GET /v1/moments/:nft/vesting", "GET /v1/moments/:nft/statusx", "GET /v1/launches/:token/state"];
     for (const r of [...closed, ...v2, "GET /v1/economicsx", "GET /v1/earn/positions", "POST /v1/earn/build", "GET /v1/earn/historyx", "GET /v1/earn/markets/x"]) {
@@ -436,8 +430,20 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals(c.flags, { enabled: true, maintenance: false });
     assertEquals(c.minBuild, 1);
     assertEquals(c.inviteRequired, false);
-    // Off unless LITE_PRIVY_WALLETS=on and the Privy app secret is set.
-    assertEquals(c.privyWallets, false);
+    // On unless the owner's LITE_PRIVY_WALLETS says off.
+    assertEquals(c.privyWallets, true);
+  });
+
+  Deno.test("GET /v1/config: privyWallets follows LITE_PRIVY_WALLETS, the owner's switch", async () => {
+    try {
+      for (const [setting, expected] of [["off", false], ["on", true]] as const) {
+        Deno.env.set("LITE_PRIVY_WALLETS", setting);
+        const res = await handle(request("GET /v1/config", "/v1/config", null));
+        assertEquals((await res.json()).privyWallets, expected, setting);
+      }
+    } finally {
+      Deno.env.delete("LITE_PRIVY_WALLETS");
+    }
   });
 
   Deno.test("GET /v1/config: inviteRequired follows LITE_INVITE_REQUIRED on testnet, for QA", async () => {

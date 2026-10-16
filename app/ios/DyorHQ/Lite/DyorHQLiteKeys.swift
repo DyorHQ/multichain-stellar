@@ -27,9 +27,9 @@ enum DyorHQLiteKeys {
         let evm = account.address
         if isPrivy(account.method) {
             // A Privy account: its wallet, as this iPhone checked and kept it (`resolvePrivy`).
-            guard let walletId = privyWalletId(for: evm) else { return nil }
+            guard let walletId = privyStellarWalletId(for: evm) else { return nil }
             return privyProvider(session: session, settings: settings, method: account.method,
-                                 wallet: PrivyWallet(walletId: walletId, address: stellar))
+                                 wallet: PrivyStellarWallet(walletId: walletId, address: stellar))
         }
         let mera = session.mera
         return make(method: account.method, stellar: stellar,

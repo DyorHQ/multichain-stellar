@@ -44,15 +44,12 @@ import * as markets from "./routes/markets.ts";
 import * as moments from "./routes/moments.ts";
 import * as plans from "./routes/plans.ts";
 import * as portfolio from "./routes/portfolio.ts";
-import * as privy from "./routes/privy.ts";
 import * as swap from "./routes/swap.ts";
 
-/** Routes anyone may call (§6.0): sign-in, and the Privy wallet routes a Privy account signs its sign-in through (each
- *  checks its own proof: a Privy token, or an authorization only the user's Privy key can make), the network's
- *  configuration, fees, market data, the launchpad's economics, Earn's markets and rate history, a v2 Moment's status
- *  (read live from its contract), and the local stack's stand-in for public Storage, whose uploads carry their own
- *  signature. None reads an account's data without its own proof. */
-const PUBLIC = /^[A-Z]+ \/v1\/(auth\/|privy\/(wallet|sign)$|config$|fees$|markets(\/|$)|prices$|economics$|earn\/(markets|history)$|moments\/:nft\/status$|local-media\/)/;
+/** Routes anyone may call (§6.0): sign-in, the network's configuration, fees, market data, the launchpad's economics,
+ *  Earn's markets and rate history, a v2 Moment's status (read live from its contract), and the local stack's stand-in
+ *  for public Storage, whose uploads carry their own signature. None reads an account's data. */
+const PUBLIC = /^[A-Z]+ \/v1\/(auth\/|config$|fees$|markets(\/|$)|prices$|economics$|earn\/(markets|history)$|moments\/:nft\/status$|local-media\/)/;
 
 /** Reads of on-chain facts, whose session is optional (§6.0, §6.18): with a token, the owner's view; with no
  *  Authorization header, the public view of ?address= (routes/auth.ts viewer()). A v2 launch's state, an account's
@@ -258,7 +255,7 @@ export class LiteRouter extends Router {
 
 // ------------------------------------------------------------------------------------------------ the API
 
-const MODULES = [auth, privy, config, fees, account, plans, swap, markets, assets, launches, earn, moments, contractsV2, bridge, holdings, portfolio, activity];
+const MODULES = [auth, config, fees, account, plans, swap, markets, assets, launches, earn, moments, contractsV2, bridge, holdings, portfolio, activity];
 
 export const router = new LiteRouter().before(guard);
 for (const m of MODULES) m.register(router);

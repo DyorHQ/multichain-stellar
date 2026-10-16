@@ -11,8 +11,14 @@ public enum LiteErrorText {
         switch error {
         case let api as LiteAPIError: return describe(api)
         case let runner as PlanRunner.Failure: return describe(runner)
-        // A signature from a key held elsewhere (Privy) that doesn't verify for the account: never attached.
+        // A Privy account's wallet: a signature that doesn't verify for the account (never attached), Privy's own
+        // refusals and outages, a wallet only the user doesn't control.
         case is StellarSigningError: return privySigningFailed
+        case let privy as PrivyAPIError: return describe(privy)
+        case PrivyWalletCheck.Failure.listNotFresh:
+            return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case is PrivyWalletCheck.Failure:
+            return tr("Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed.")
         default: return LiteSession.failure(for: error).errorDescription ?? error.localizedDescription
         }
     }
@@ -80,9 +86,6 @@ public enum LiteErrorText {
         case "bad_invite": return LiteSession.Failure.inviteRejected.errorDescription ?? message
         case "not_invited": return tr("Enter your invite code to continue.")
         case "unauthorized", "refresh_invalid", "refresh_reused": return tr("Sign in on Stellar to continue.")
-        case "privy_unavailable": return tr("Stellar isn't available for this sign-in right now. Try again later.")
-        case "privy_refused", "privy_bad_signature": return privySigningFailed
-        case "privy_token_invalid": return tr("Sign in to DyorHQ again to use Stellar.")
         default: return message
         }
     }
@@ -128,6 +131,17 @@ public enum LiteErrorText {
 
     private static var notEnoughForFee: String { tr("Not enough XLM for the network fee.") }
     private static var privySigningFailed: String { tr("Couldn't sign with your Privy wallet. Nothing was sent.") }
+
+    /// Privy's client API, as a Privy account meets it: an expired Privy session needs a sign-in to DyorHQ again; an
+    /// outage, a refusal or an answer this build can't read means no signature.
+    private static func describe(_ privy: PrivyAPIError) -> String {
+        switch privy {
+        case .transport: return tr("No connection. Check your network and try again.")
+        case .refused(401, _): return tr("Sign in to DyorHQ again to use Stellar.")
+        case .unavailable: return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case .refused, .decoding: return privySigningFailed
+        }
+    }
     private static var notEnoughForReserve: String { tr("Not enough XLM for Stellar's minimum balance.") }
 
     /// "Not enough XLM. 1.5 XLM stays in your account." when the refusal says what stays.

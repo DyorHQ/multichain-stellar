@@ -4,11 +4,9 @@
 // process started with this file cannot reach the hosted database. Prints variable names only, never a value.
 //
 //   deno run --no-config --allow-read=<from> --allow-write=<to> --allow-env=<the settings below> \
-//     backend/scripts/local/make-local-env.ts [--from <file>] [--to <file>] [--privy <file>]
+//     backend/scripts/local/make-local-env.ts [--from <file>] [--to <file>]
 //
 // --from defaults to .secrets/testnet-functions.env, --to to .local-stack/functions.env (the default stack's).
-// --privy (.secrets/privy-app.env, when it exists) turns on Stellar wallets for Privy sign-ins (lite/routes/privy.ts):
-// its PRIVY_APP_SECRET, and its PRIVY_APP_ID when it has one, are copied, and LITE_PRIVY_WALLETS=on is set.
 // From the source file: LITE_NETWORK, LITE_MIN_BUILD, SPONSOR_SECRET, LITE_JWT_SECRET and LITE_CRON_SECRET, which it
 // must have, and KEEPER_SECRET and LITE_ACTIVATION when it has them. From this process's environment, when set (the
 // stack's options, which win over the source): the settings below. The local stack runs on testnet only.
@@ -38,39 +36,22 @@ function fail(message: string): never {
 
 let source = `${root}.secrets/testnet-functions.env`;
 let target = `${root}.local-stack/functions.env`;
-let privySource: string | null = null;
 for (let i = 0; i < Deno.args.length; i += 2) {
   const [flag, value] = [Deno.args[i], Deno.args[i + 1]];
   if (flag === "--from" && value) source = value;
   else if (flag === "--to" && value) target = value;
-  else if (flag === "--privy" && value) privySource = value;
-  else fail("usage: make-local-env.ts [--from <file>] [--to <file>] [--privy <file>]");
+  else fail("usage: make-local-env.ts [--from <file>] [--to <file>]");
 }
 
-/** NAME=value lines of an env file, values as written. */
-async function readVars(file: string): Promise<Map<string, string>> {
-  const vars = new Map<string, string>();
-  for (const raw of (await Deno.readTextFile(file)).split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
-    if (m) vars.set(m[1], m[2]);
-  }
-  return vars;
+const values = new Map<string, string>();
+for (const raw of (await Deno.readTextFile(source)).split("\n")) {
+  const line = raw.trim();
+  if (!line || line.startsWith("#")) continue;
+  const m = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+  if (m) values.set(m[1], m[2]);
 }
-
-const values = await readVars(source);
 const missing = COPY.filter((name) => !values.get(name));
 if (missing.length) fail(`${source} has no ${missing.join(", ")}`);
-
-// Privy's app secret, for the Privy wallet routes: copied as it is, next to the switch that turns them on.
-const privy = new Map<string, string>();
-if (privySource) {
-  const vars = await readVars(privySource);
-  if (!vars.get("PRIVY_APP_SECRET")) fail(`${privySource} has no PRIVY_APP_SECRET`);
-  for (const name of ["PRIVY_APP_SECRET", "PRIVY_APP_ID"]) if (vars.get(name)) privy.set(name, vars.get(name)!);
-  privy.set("LITE_PRIVY_WALLETS", "on");
-}
 
 const settings = new Map<string, string>();
 for (const [name, shape] of Object.entries(SETTINGS)) {
@@ -92,7 +73,6 @@ const text = [
   ...names.map((name) => `${name}=${values.get(name)}`),
   ...[...settings].map(([name, v]) => `${name}=${v}`),
   ...(settings.has("LITE_DB_URL") ? [] : [`LITE_DB_URL=${DEFAULT_DB_URL}`]),
-  ...[...privy].map(([name, v]) => `${name}=${v}`),
   "",
 ].join("\n");
 
@@ -106,5 +86,5 @@ try {
 } finally {
   file.close();
 }
-const written = [...names, ...settings.keys(), ...(settings.has("LITE_DB_URL") ? [] : ["LITE_DB_URL"]), ...privy.keys()];
+const written = [...names, ...settings.keys(), ...(settings.has("LITE_DB_URL") ? [] : ["LITE_DB_URL"])];
 console.log(`wrote ${target} (mode 600): ${written.join(", ")}`);

@@ -666,31 +666,31 @@
         }
       }
     },
-    "Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed." : {
-      "comment" : "An error on the network sheet: the Stellar wallet DyorHQ's server named for an Apple, Google, email-code or Privy-passkey account isn't one Privy (the company holding the key) lists for the user",
+    "Same account: Privy keeps your Stellar key, as it keeps your Monad wallet's." : {
+      "comment" : "The network sheet, before the first switch to Stellar, for an account that signs in with Apple, Google or an email code: Privy (a company's name, never translated) holds the account's keys, its Monad wallet's and now its Stellar one",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Privy no confirmó esta billetera de Stellar como tuya, así que DyorHQ no la usará. No se firmó nada."
+            "value" : "La misma cuenta: Privy guarda tu clave de Stellar, como guarda la de tu billetera de Monad."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Privy n'a pas confirmé que ce portefeuille Stellar est le vôtre, donc DyorHQ ne l'utilisera pas. Rien n'a été signé."
+            "value" : "Le même compte : Privy garde votre clé Stellar, comme celle de votre portefeuille Monad."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Privy가 이 Stellar 지갑을 회원님의 지갑으로 확인하지 않아 DyorHQ는 이 지갑을 사용하지 않습니다. 아무것도 서명되지 않았습니다."
+            "value" : "같은 계정이에요. Privy가 Monad 지갑 키처럼 Stellar 키도 보관해요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Privy 未确认此 Stellar 钱包属于你，因此 DyorHQ 不会使用它。未签署任何内容。"
+            "value" : "同一个账户：Privy 保管你的 Stellar 密钥，就像保管你的 Monad 钱包密钥一样。"
           }
         }
       }

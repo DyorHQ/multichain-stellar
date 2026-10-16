@@ -4908,6 +4908,35 @@
         }
       }
     },
+    "Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed." : {
+      "comment" : "An error: the Stellar wallet found for an Apple, Google, email-code or Privy-passkey account isn't one Privy (the company holding the key) says only the user controls",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy no confirmó esta billetera de Stellar como tuya, así que DyorHQ no la usará. No se firmó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy n'a pas confirmé que ce portefeuille Stellar est le vôtre, donc DyorHQ ne l'utilisera pas. Rien n'a été signé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy가 이 Stellar 지갑을 회원님의 지갑으로 확인하지 않아 DyorHQ는 이 지갑을 사용하지 않습니다. 아무것도 서명되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy 未确认此 Stellar 钱包属于你，因此 DyorHQ 不会使用它。未签署任何内容。"
+          }
+        }
+      }
+    },
     "Publish" : {
       "comment" : "A transaction's title: publish a Moment (a verb).",
       "localizations" : {

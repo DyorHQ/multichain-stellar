@@ -93,8 +93,6 @@ one, **session** routes need one. *Owner* is the package that serves the parity 
 | `POST /v1/auth/verify` | public | `{address, nonce, signature, inviteCode?}` | `AuthResult` | `auth-verify`, `auth-verify.legacy` | WP-02b |
 | `POST /v1/auth/refresh` *added* | public | `{address, refreshToken}` | `AuthResult` | `auth-refresh`, `error-refresh-reused` | WP-02b |
 | `POST /v1/auth/signout` *added* | public | `{refreshToken}` | 204, no body | — | WP-02b |
-| `POST /v1/privy/wallet` *added* | public | `{privyToken}` | `PrivyWallet` | `privy-wallet` | privy-wallets |
-| `POST /v1/privy/sign` *added* | public | `{walletId, hash, expiresAt, authorization}` | `PrivySignature` | `privy-sign` | privy-wallets |
 | `GET /v1/config` | public | | `LiteConfig` | `config`, `config.legacy` | WP-02 |
 | `GET /v1/fees` *added* | public | | `Fees` | `fees` | WP-10 |
 | `GET /v1/account[?address=]` | viewer | | `AccountView` | `account`, `account.legacy`, `account.missing`, `account.public` | WP-10 |
@@ -193,23 +191,6 @@ revoked too).
 204 too, so the answer says nothing about which tokens exist. The phone calls it, best effort within 3 seconds, when the
 user signs out of Stellar or of the app, or erases this iPhone.
 
-**Privy accounts** *added*. An account that signs in with Apple, Google, an email code or a Privy passkey has a Stellar
-wallet that Privy holds and the user owns (DyorHQ/internal `ios-app/stellar-v2/privy-stellar-wallets.md`). Its sign-in
-is the same SEP-53 challenge as everyone's, signed through `POST /v1/privy/sign`. Both routes are off (503
-`privy_unavailable`, and `privyWallets: false` in the config) unless `LITE_PRIVY_WALLETS=on` and `PRIVY_APP_SECRET`
-is set.
-
-- **`POST /v1/privy/wallet`** `{privyToken}` → `{walletId, address}`. `privyToken` is a token Privy issued to the user
-  for DyorHQ's app, checked with Privy's ES256 key (issuer `privy.io`, audience the app id). The first call makes the
-  wallet at Privy, owned by the user, with an idempotency key; later calls read the kept row. 401
-  `privy_token_invalid`; 5 a minute per user, 10 per IP.
-- **`POST /v1/privy/sign`** `{walletId, hash, expiresAt, authorization}` → `{signature}` (0x and 128 hex). The phone
-  authorized the exact raw_sign request with the user's own Privy key: URL `https://api.privy.io/v1/wallets/<walletId>/raw_sign`,
-  body `{params: {hash}}`, headers `privy-app-id` and `privy-request-expiry: <expiresAt>`. The API adds the app secret
-  and nothing else, and answers only a signature that verifies for the wallet's address. `hash` is 0x and 64 lowercase
-  hex; `expiresAt` (ms) at most 5 minutes ahead. 404 for a wallet DyorHQ didn't make, 403 `privy_refused` when Privy
-  refuses the authorization, 502 `privy_bad_signature`; 30 a minute per wallet, 60 per IP.
-
 **What the phone does.** It renews the session before the access token ends (10 minutes before `expiresAt` while the
 app is active). On a 401 to a request that carried the token, `LiteAPI` runs one renewal, shared by every request
 refused meanwhile, and tries each of them once more. A renewal is `auth/refresh` with the stored refresh token, then,
@@ -261,7 +242,7 @@ media base, the RPC and explorer links).
 | `limits` *added* | `{momentMaxEditions, momentWindowSecs: [min, max], collectMax, launchName: [min, max], launchSymbol: [min, max], uriMax, uploadBytes}` | What the server accepts. `launchName` is UTF-8 bytes. |
 | `pricing` *added* | `Pricing` | §8. |
 | `inviteRequired` *added* | boolean | Whether a first sign-in needs an invite code (§2): false on testnet, true on mainnet. Older servers send none and always ask for one. |
-| `privyWallets` *added* | boolean | Whether accounts that sign in with Privy can have a Stellar wallet (§2, `/v1/privy/*`). Older servers send none: no. |
+| `privyWallets` *added* | boolean | Whether accounts that sign in with Privy (Apple, Google, an email code, a Privy passkey) may use Stellar: `LITE_PRIVY_WALLETS` on (the default) or off. Their phone makes its own Privy Stellar wallet and signs with it talking to Privy directly; the API is never in that path, and such an account signs in with SEP-53 like any other (§2). Older servers send none: no. |
 
 ---
 
@@ -724,9 +705,6 @@ The codes the phone words, and the HTTP status each comes with. Copy is in the S
 | 401 `unauthorized` | a Bearer token that is invalid or expired | none: the phone renews and retries once (§2) |
 | 401 `refresh_invalid` / `refresh_reused` | a refresh token that is unknown, expired or revoked / already used (its family is revoked) | none: a silent sign-in (seed accounts) or the public view (passkey accounts) |
 | 400 `address_required` | a viewer route about an account, with neither a token nor `?address=` | none (a phone bug) |
-| 503 `privy_unavailable` | Privy wallets off, or Privy down | Stellar isn't available for this sign-in right now. Try again later. |
-| 403 `privy_refused` / 502 `privy_bad_signature` | Privy refused the phone's authorization / its signature didn't verify | Couldn't sign with your Privy wallet. Try again. |
-| 401 `privy_token_invalid` | a Privy token that doesn't verify or has expired | none: the phone renews its Privy session and asks once more |
 
 Every %@ is in the error's `detail`, so a refusal can be worded from the error alone:
 
