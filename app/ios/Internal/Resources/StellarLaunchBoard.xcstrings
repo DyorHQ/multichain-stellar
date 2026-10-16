@@ -297,31 +297,31 @@
         }
       }
     },
-    "Received: creator fees you claimed. Claimable: creator fees waiting in the launchpad. Holder rewards and fees owed to you from before a fee recipient change are claims of their own. Claim All sends one transaction per claim, one after another, each with its own network fee." : {
-      "comment" : "Under the fee tiles and claims of My Launchpad on Stellar: what Received and Claimable count, which other claims show, and how Claim All runs",
+    "Received: creator fees you claimed. Claimable: creator fees you can claim now, those owed to you from before a fee recipient change included. Holder rewards are claims of their own. Claim All sends one transaction per claim, one after another, each with its own network fee." : {
+      "comment" : "Under the fee tiles and claims of My Launchpad on Stellar: what Received and Claimable count (Claimable includes the fees owed from before a fee recipient change), that holder rewards are claimed apart, and how Claim All runs",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Recibido: comisiones del creador que reclamaste. Reclamable: comisiones del creador que esperan en el launchpad. Las recompensas para holders y las comisiones que se te deben de antes de un cambio de destinatario son reclamos aparte. Reclamar todo envía una transacción por reclamo, una tras otra, cada una con su propia comisión de red."
+            "value" : "Recibido: comisiones del creador que reclamaste. Reclamable: comisiones del creador que puedes reclamar ahora, incluidas las que se te deben de antes de un cambio de destinatario. Las recompensas para holders son reclamos aparte. Reclamar todo envía una transacción por reclamo, una tras otra, cada una con su propia comisión de red."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Reçu : frais du créateur que vous avez réclamés. À réclamer : frais du créateur en attente dans le launchpad. Les récompenses des détenteurs et les frais qui vous sont dus d'avant un changement de bénéficiaire sont des réclamations à part. Tout réclamer envoie une transaction par réclamation, l'une après l'autre, chacune avec ses propres frais de réseau."
+            "value" : "Reçu : frais du créateur que vous avez réclamés. À réclamer : frais du créateur que vous pouvez réclamer maintenant, y compris ceux qui vous sont dus d'avant un changement de bénéficiaire. Les récompenses des détenteurs sont des réclamations à part. Tout réclamer envoie une transaction par réclamation, l'une après l'autre, chacune avec ses propres frais de réseau."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "받은 금액: 내가 수령한 크리에이터 수수료예요. 수령 가능: 런치패드에서 기다리는 크리에이터 수수료예요. 홀더 보상과 수수료 수령인 변경 전부터 받을 수수료는 따로 수령해요. 모두 수령은 수령마다 거래를 하나씩 차례로 보내며, 거래마다 네트워크 수수료가 따로 있어요."
+            "value" : "받은 금액: 내가 수령한 크리에이터 수수료예요. 수령 가능: 지금 수령할 수 있는 크리에이터 수수료로, 수수료 수령인 변경 전부터 받을 수수료도 포함돼요. 홀더 보상은 따로 수령해요. 모두 수령은 수령마다 거래를 하나씩 차례로 보내며, 거래마다 네트워크 수수료가 따로 있어요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已收到：你已领取的创作者费用。可领取：在 Launchpad 中等待领取的创作者费用。持有者奖励以及费用接收人变更前欠你的费用会单独领取。全部领取会为每笔领取依次发送一笔交易，每笔都有自己的网络费用。"
+            "value" : "已收到：你已领取的创作者费用。可领取：你现在可以领取的创作者费用，包括费用接收人变更前欠你的费用。持有者奖励会单独领取。全部领取会为每笔领取依次发送一笔交易，每笔都有自己的网络费用。"
           }
         }
       }

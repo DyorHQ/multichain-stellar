@@ -29,11 +29,8 @@ struct StellarLaunchpadView: View {
     @State private var showProfile = false
     @State private var query = ""
     @State private var sort: LaunchSort = .newest
-    /// The launch pages over the board.
-    @State private var path: [StellarLaunchPage] = []
-    /// The coin Create just launched, whose page opens once the board lists it (`openLaunched`); nil once it opened, or
-    /// when another page opened first.
-    @State private var launchedToken: String?
+    /// The launch pages over the board, and the wait for the coin Create just launched.
+    @State private var pages = StellarLaunchBoardPages()
 
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -64,7 +61,7 @@ struct StellarLaunchpadView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack(path: $pages.path) {
             board
             .navigationTitle(tr("Launch"))
             .navigationDestination(for: StellarLaunchPage.self) { page in
@@ -95,27 +92,23 @@ struct StellarLaunchpadView: View {
             }
             // Another account can take over in place without the tabs being rebuilt: the pages over the board were the
             // previous account's, so they go, and so does the wait for a coin it launched.
-            .onChange(of: account.address) { _, _ in
-                path = []
-                launchedToken = nil
-            }
+            .onChange(of: account.address) { _, _ in pages.reset() }
             .overlay { if firstLoad { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showCreate) {
                 // After a launch, Done opens the new coin's page over the board (§8.10.5 L), as View does from the review.
                 StellarCreateLaunchView { token in
-                    if let token { launchedToken = token } else { reload() }
+                    if let token { pages.launched(token) } else { reload() }
                 }
             }
-            .task(id: launchedToken) { await openLaunched() }
-            // Any page opened or closed meanwhile (the review's View opens the coin's own, a card's, a notification's): the
-            // wait for the new coin's row ends there.
-            .onChange(of: path) { _, _ in launchedToken = nil }
+            // Runs while the board waits for that coin: a page opened or closed meanwhile ends the wait, and so this task
+            // (`StellarLaunchBoardPages.path`).
+            .task(id: pages.launchedToken) { await openLaunched() }
             .sheet(isPresented: $showProfile) { StellarLaunchpadProfileView() }
             // A coin a notification, My Launchpad or Create named opens over the board, also when the tab is built for it.
             .onChange(of: router.pendingStellar, initial: true) { _, pending in
                 guard case .launch(let token?) = pending else { return }
                 router.pendingStellar = nil
-                open(.token(token))
+                pages.open(.token(token))
             }
             .onAppear {
                 // The board saved for the account when last read in full is in the first frame the tab draws, never a
@@ -131,20 +124,13 @@ struct StellarLaunchpadView: View {
         model.savedAt != nil ? .token(coin.token) : .launch(coin)
     }
 
-    /// Pushes `page`, unless the coin's page is already on top.
-    private func open(_ page: StellarLaunchPage) {
-        if path.last?.token != page.token { path.append(page) }
-    }
-
-    /// The coin Create launched opens over the board: its row once the board lists it, else, after the board's reads, its
-    /// token, so its page reads it (`StellarLaunchBoardModel.launched`).
+    /// The coin Create launched opens over the board: its row once the board itself lists it, whatever the search on
+    /// screen, else, after the board's reads, its token, so its page reads it (`StellarLaunchBoardModel.launched`).
     private func openLaunched() async {
-        guard let token = launchedToken else { return }
-        var row: StellarLaunch?
-        if let store { row = await model.launched(token, store: store, request: request, owner: account.address) }
-        guard !Task.isCancelled, launchedToken == token else { return }
-        open(StellarLaunchBoardModel.launchedPage(token, row: row))
-        launchedToken = nil
+        await pages.openLaunched { token in
+            guard let store else { return nil }
+            return await model.launched(token, store: store, sort: request.sort, owner: account.address)
+        }
     }
 
     private var board: some View {
@@ -338,6 +324,56 @@ enum StellarLaunchPage: Hashable {
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(token) }
+}
+
+/// The pages over Stellar's Launch board, and the wait for the coin Create just launched: Create's Done hands the board
+/// the coin (`launched`), and its page opens over the board once the board lists it (`openLaunched`, the board's task for
+/// `launchedToken`). Any page opened or closed meanwhile (the review's View opens the coin's own page, a card its coin's,
+/// a notification its own, Back closes one) ends the wait there, and a coin's page already on top is never pushed again.
+@Observable
+@MainActor
+final class StellarLaunchBoardPages {
+    private var pages: [StellarLaunchPage] = []
+    /// The coin Create just launched, while the board waits to list it; nil once its page opened, or when another page
+    /// opened or closed first.
+    private(set) var launchedToken: String?
+
+    /// The navigation stack's path. Any change to it, the user's or `open`'s, ends the wait for a launched coin.
+    var path: [StellarLaunchPage] {
+        get { pages }
+        set {
+            guard newValue != pages else { return }
+            pages = newValue
+            launchedToken = nil
+        }
+    }
+
+    /// Pushes `page`, unless the coin's page is already on top.
+    func open(_ page: StellarLaunchPage) {
+        if pages.last?.token != page.token { path.append(page) }
+    }
+
+    /// Create launched `token` and closed: its page opens once the board lists it, unless it is on top already (View).
+    func launched(_ token: String) {
+        guard pages.last?.token != token else { return }
+        launchedToken = token
+    }
+
+    /// Another account took over in place: the pages were the previous account's, and so was the wait.
+    func reset() {
+        pages = []
+        launchedToken = nil
+    }
+
+    /// Opens the coin Create launched: its row once `find` gives it (the board's reads), else its token, so its page reads
+    /// it. Nothing opens once the wait has ended (another page opened or closed, or the task was cancelled).
+    func openLaunched(find: (String) async -> StellarLaunch?) async {
+        guard let token = launchedToken else { return }
+        let row = await find(token)
+        guard !Task.isCancelled, launchedToken == token else { return }
+        open(StellarLaunchBoardModel.launchedPage(token, row: row))
+        launchedToken = nil
+    }
 }
 
 /// One coin in Stellar's discovery grid: an image-forward card with its badge, name, market cap and, while it hasn't
@@ -560,11 +596,14 @@ final class StellarLaunchBoardModel {
     nonisolated static let launchedReads = 6
     nonisolated static let launchedPause: Duration = .seconds(2)
 
-    /// The row of `token`, a coin just launched, once the board lists it: the board is read again, as `request` asks, until
-    /// it does, at most `launchedReads` times. Nil when it never did, or the wait was cancelled.
-    func launched(_ token: String, store: LiteStore, request: Request, owner: Address?) async -> StellarLaunch? {
-        await Self.firstRow(attempts: Self.launchedReads, pause: Self.launchedPause) {
-            await self.load(store: store, request: request, owner: owner)
+    /// The row of `token`, a coin just launched, once the board lists it: the board itself is read again, Explore in
+    /// `sort` and without the search on screen (a new coin the search doesn't match is still listed), until it does, at
+    /// most `attempts` times, `pause` apart. Nil when it never did, or the wait was cancelled.
+    func launched(_ token: String, store: LiteStore, sort: StellarLaunchMath.Sort, owner: Address?, attempts: Int = launchedReads,
+                  pause: Duration = launchedPause) async -> StellarLaunch? {
+        let unsearched = Request(sort: sort, query: nil)
+        return await Self.firstRow(attempts: attempts, pause: pause) {
+            await self.load(store: store, request: unsearched, owner: owner)
             return Self.row(token, in: [self.board] + (self.search.map { [$0.lists] } ?? []))
         }
     }

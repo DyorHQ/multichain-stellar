@@ -176,11 +176,12 @@ struct StellarLaunchpadProfileView: View {
         return values.isEmpty ? nil : values.reduce(0, +)
     }
 
-    /// Fees: the creator fees the account earned (Total), claimed (Received) and waiting in the launchpad (Claimable), each
-    /// per quote asset with its dollar value at today's prices; then a row for each claim waiting, and Claim All.
+    /// Fees: the creator fees the account earned (Total), claimed (Received) and can claim now (Claimable: what its claim
+    /// rows pay, owed fees included), each per quote asset with its dollar value at today's prices; then a row for each
+    /// claim waiting, and Claim All.
     @ViewBuilder private var claimSection: some View {
-        let fees = model.mine.map { mine in StellarLaunchFeeLines(fees: mine.fees, code: code) }
         let claims = self.claims
+        let fees = model.mine.map { mine in StellarLaunchFeeLines(fees: mine.fees, claims: claims, code: code) }
         // Claim All sends only what the latest read found: a claim as last read is claimed on its own row.
         let current = StellarLaunchClaim.claimAll(claims)
         Section {
@@ -214,7 +215,7 @@ struct StellarLaunchpadProfileView: View {
             Text("Fees")
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
-                Paragraph(LocalizedStringResource("Received: creator fees you claimed. Claimable: creator fees waiting in the launchpad. Holder rewards and fees owed to you from before a fee recipient change are claims of their own. Claim All sends one transaction per claim, one after another, each with its own network fee.", table: "StellarLaunchBoard", comment: "Under the fee tiles and claims of My Launchpad on Stellar: what Received and Claimable count, which other claims show, and how Claim All runs"))
+                Paragraph(LocalizedStringResource("Received: creator fees you claimed. Claimable: creator fees you can claim now, those owed to you from before a fee recipient change included. Holder rewards are claims of their own. Claim All sends one transaction per claim, one after another, each with its own network fee.", table: "StellarLaunchBoard", comment: "Under the fee tiles and claims of My Launchpad on Stellar: what Received and Claimable count (Claimable includes the fees owed from before a fee recipient change), that holder rewards are claimed apart, and how Claim All runs"))
                 if AppNetwork.stellar.isTestnet {
                     Paragraph(LocalizedStringResource("Dollar values use mainnet market prices. Testnet assets have no value.", table: "StellarLaunchBoard", comment: "Under My Launchpad's dollar figures on Stellar testnet: they come from real mainnet prices, while testnet assets themselves are worth nothing"))
                 }
@@ -456,6 +457,16 @@ struct StellarLaunchClaim: Identifiable, Equatable {
     /// Every figure it shows was read in the latest load; false for one kept from an earlier read (or from what was
     /// saved), which says "As last read" and stays out of Claim All.
     let current: Bool
+    /// The creator fees it pays, in their quote asset: a coin's, or those owed to the account; nil for holder rewards. My
+    /// Launchpad's Claimable tile adds these up.
+    var fee: Fee? = nil
+
+    struct Fee: Equatable {
+        /// The quote asset's id, as the API names it ("XLM", "USDC", or a contract it doesn't list).
+        let quote: String
+        /// In the quote asset's base units.
+        let units: Int64
+    }
 
     var id: String {
         switch kind {
@@ -599,7 +610,8 @@ struct StellarLaunchClaim: Identifiable, Equatable {
             if StellarLaunchBoardModel.isRetired(coin) {
                 guard serverUnits > 0 else { continue }
                 retired.append(StellarLaunchClaim(kind: .creator(token: coin.token, symbol: coin.symbol, retired: true),
-                                                  amount: StellarFormat.amount(serverUnits, code: code(fees.quote)), usd: fees.unclaimedUsd, current: mineCurrent))
+                                                  amount: StellarFormat.amount(serverUnits, code: code(fees.quote)), usd: fees.unclaimedUsd, current: mineCurrent,
+                                                  fee: Fee(quote: fees.quote, units: serverUnits)))
                 continue
             }
             let state = states[coin.token]
@@ -609,7 +621,8 @@ struct StellarLaunchClaim: Identifiable, Equatable {
             live.append(StellarLaunchClaim(kind: .creator(token: coin.token, symbol: coin.symbol, retired: false),
                                            amount: StellarFormat.amount(units, code: state?.quote.code ?? code(fees.quote)),
                                            usd: units == serverUnits ? fees.unclaimedUsd : nil,
-                                           current: state == nil ? mineCurrent : fresh.contains(coin.token)))
+                                           current: state == nil ? mineCurrent : fresh.contains(coin.token),
+                                           fee: Fee(quote: state?.quote.id ?? fees.quote, units: units)))
         }
         var claims = live + retired
         let coins = mine.held.map(\.launch) + mine.created.map(\.launch)
@@ -640,7 +653,7 @@ struct StellarLaunchClaim: Identifiable, Equatable {
         for contract in assets {
             guard let found = owed[contract], found.units > 0 else { continue }
             claims.append(StellarLaunchClaim(kind: .owed(asset: found.asset, units: found.units), amount: StellarFormat.amount(found.units, code: found.asset.code),
-                                             usd: nil, current: found.current))
+                                             usd: nil, current: found.current, fee: Fee(quote: found.asset.id, units: found.units)))
         }
         return claims
     }
@@ -666,8 +679,9 @@ struct StellarRewardLine: Equatable {
     let code: String
 }
 
-/// My Launchpad's fee tiles: the creator fees of the coins the account launched, per quote asset as the server totals
-/// them (XLM first).
+/// My Launchpad's fee tiles, per quote asset (XLM first, in the server's order): the creator fees the account claimed
+/// (Received, as the server totals them), those it can claim now (Claimable, what its claim rows pay), and the two
+/// together (Total).
 struct StellarLaunchFeeLines: Equatable {
     struct Line: Identifiable, Equatable {
         /// The quote asset's id.
@@ -681,22 +695,60 @@ struct StellarLaunchFeeLines: Equatable {
     let received: [Line]
     let claimable: [Line]
 
-    init(fees: StellarMyLaunchpad.Fees, code: (String) -> String) {
+    /// Received is the server's figure for each quote asset. Claimable is what `claims`, My Launchpad's claim rows, pay in
+    /// it (`StellarLaunchClaim.fee`): a coin's creator fees only while the account is its fee recipient, whatever the
+    /// server books for a coin whose fees now go to someone else, and the fees owed to the account from before a recipient
+    /// change. A quote asset only owed fees are in comes after the server's. Dollar values: the server's for its own
+    /// amount, otherwise its price for the quote asset applied to the amount.
+    init(fees: StellarMyLaunchpad.Fees, claims: [StellarLaunchClaim], code: (String) -> String) {
         func line(_ id: String, _ units: Int64, _ usd: Double?) -> Line { Line(id: id, amount: StellarFormat.amount(units, code: code(id)), usd: usd) }
+        var owing: [String: Int64] = [:]
+        var quotes = fees.byQuote.map(\.quote)
+        for case let fee? in claims.map(\.fee) {
+            if !quotes.contains(fee.quote) { quotes.append(fee.quote) }
+            owing[fee.quote] = Self.sum(owing[fee.quote] ?? 0, fee.units)
+        }
         var total: [Line] = []
         var received: [Line] = []
         var claimable: [Line] = []
-        for quote in fees.byQuote {
-            let got = Int64(quote.received) ?? 0
-            let waiting = Int64(quote.claimable) ?? 0
-            let (sum, overflow) = got.addingReportingOverflow(waiting)
-            total.append(line(quote.quote, overflow ? .max : sum, quote.receivedUsd.flatMap { r in quote.claimableUsd.map { r + $0 } }))
-            received.append(line(quote.quote, got, quote.receivedUsd))
-            claimable.append(line(quote.quote, waiting, quote.claimableUsd))
+        for quote in quotes {
+            let server = fees.byQuote.first { $0.quote == quote }
+            let got = server.flatMap { Int64($0.received) } ?? 0
+            let gotUsd: Double? = if let server { server.receivedUsd } else { 0 }
+            let waiting = owing[quote] ?? 0
+            let waitingUsd: Double?
+            if let server, Int64(server.claimable) == waiting {
+                waitingUsd = server.claimableUsd
+            } else if waiting == 0 {
+                waitingUsd = 0
+            } else {
+                waitingUsd = Self.usdPerUnit(server, claims: claims.filter { $0.fee?.quote == quote }).map { Double(waiting) * $0 }
+            }
+            total.append(line(quote, Self.sum(got, waiting), gotUsd.flatMap { r in waitingUsd.map { r + $0 } }))
+            received.append(line(quote, got, gotUsd))
+            claimable.append(line(quote, waiting, waitingUsd))
         }
         self.total = total
         self.received = received
         self.claimable = claimable
+    }
+
+    private static func sum(_ a: Int64, _ b: Int64) -> Int64 {
+        let (value, overflow) = a.addingReportingOverflow(b)
+        return overflow ? .max : value
+    }
+
+    /// Dollars per base unit of a quote asset, from the server's figures for it: its claimable fees, else its received
+    /// ones, else a claim's (a coin's creator fees keep the server's dollar figure while they are the server's amount).
+    private static func usdPerUnit(_ server: StellarMyLaunchpad.QuoteFees?, claims: [StellarLaunchClaim]) -> Double? {
+        func per(_ usd: Double?, _ units: Int64?) -> Double? {
+            guard let usd, let units, units > 0 else { return nil }
+            return usd / Double(units)
+        }
+        if let rate = per(server?.claimableUsd, server.flatMap { Int64($0.claimable) }) ?? per(server?.receivedUsd, server.flatMap { Int64($0.received) }) {
+            return rate
+        }
+        return claims.lazy.compactMap { per($0.usd, $0.fee?.units) }.first
     }
 
     /// The tile's dollar value: the sum of the lines that have one; nil when none has.
