@@ -27,7 +27,7 @@
 #   local-stack.sh start [options]   idempotent: initdb once, the new migrations, then whatever isn't running
 #     --no-loop                    no indexer loop, and LITE_KEEPER=off: a package's stack never races the shared
 #                                  sponsor's or keeper's sequence number (LITE_KEEPER=off alone keeps the loop)
-#     --deployment <name>          testnet (the default) or testnet-qa (needs deployments/testnet-qa.json)
+#     --deployment <name>          testnet (the default) or testnet-qa (needs deployments/testnet-qa.json or testnet-qa-v2.json)
 #     --activation <mode>          friendbot (testnet's default) or sponsored, which rehearses mainnet's setup
 #     --short-sessions             access tokens last 120 s and refresh tokens 600 s, so renewal QA runs in minutes
 #     --invite-required            a first sign-in needs an invite, as on mainnet (LITE_INVITE_REQUIRED=1)
@@ -279,8 +279,11 @@ start_options() {
   case "$DEPLOYMENT" in
     testnet) ;;
     testnet-qa)
+      # testnet-qa is served where it was made: its v1 file (deploy-contracts.ts), its v2 file (deploy-contracts-v2.ts),
+      # or both (deployments/index.ts reads each where it exists).
       [ -f "$ROOT/backend/supabase/functions/_shared/deployments/testnet-qa.json" ] ||
-        die "--deployment testnet-qa: no deployments/testnet-qa.json here (deploy-contracts.ts --deployment testnet-qa makes it)"
+        [ -f "$ROOT/backend/supabase/functions/_shared/deployments/testnet-qa-v2.json" ] ||
+        die "--deployment testnet-qa: no deployments/testnet-qa.json or testnet-qa-v2.json here (deploy-contracts.ts or deploy-contracts-v2.ts --deployment testnet-qa makes them)"
       ;;
     *) die "--deployment is testnet or testnet-qa: the local stack runs on testnet only" ;;
   esac
