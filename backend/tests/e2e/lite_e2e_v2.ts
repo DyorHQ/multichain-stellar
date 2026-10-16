@@ -610,8 +610,10 @@ async function keeperOr<R>(what: string, done: () => Promise<R | null>, act: () 
 
 /** A lite.keeper_skip row (F5, V5), inserted before the step the keeper could race; the run deletes it at the end. */
 async function keeperSkip(r: Run, kind: "launch" | "moment", target: string, jobs: string[], why: string): Promise<void> {
+  // The jobs as a text[] literal (fixed names): postgres.js serializes sql.array() as plain text while its array types
+  // are still loading, which is when the run's first query goes (2026-10-16).
   const [row] = await r.db`
-    insert into lite.keeper_skip (kind, target, jobs, note) values (${kind}, ${target}, ${r.db.array(jobs)}, ${`${NOTE}: ${why}`})
+    insert into lite.keeper_skip (kind, target, jobs, note) values (${kind}, ${target}, ${`{${jobs.join(",")}}`}::text[], ${`${NOTE}: ${why}`})
     returning id`;
   r.skips.push(Number(row.id));
   say(`    · keeper_skip ${kind} ${short(target)}: ${jobs.join(", ")} (${why})`);
@@ -643,8 +645,12 @@ async function balance(r: Run, sac: string, who: string): Promise<bigint> {
 async function usdcTo(r: Run, to: Actor, amount: bigint): Promise<void> {
   const bank = r.usdc.bank;
   if (!bank) throw new Error("internal: no USDC was acquired for a USDC journey");
-  const plan = await api(r, bank.token, "POST", "/send", { asset: "USDC", to: to.address, amount: amount.toString() });
-  await runPlan(r, bank, plan);
+  // One send at a time, each built after the last settled: a plan's transaction carries the bank's next sequence
+  // number when it is built, so plans built side by side would all carry the same one.
+  await serial(`send ${bank.address}`, async () => {
+    const plan = await api(r, bank.token, "POST", "/send", { asset: "USDC", to: to.address, amount: amount.toString() });
+    await runPlan(r, bank, plan);
+  });
 }
 
 /** testnet-qa's QA asset for `to`: its trustline, then a payment from the QA issuer. */
@@ -1002,6 +1008,13 @@ async function launchedAndCompleted(r: Run, s: LaunchSpec, creator: Phone, buyer
   if (s.mode) await setMode(r, token, s.mode);
   const own = await bought(r, creator, token, s.creatorBuy, { afterSnipe: false, extra });
   if (BigInt(own.snipeFee ?? "0") !== 0n) throw new Error(`the creator's buy paid a snipe tax of ${own.snipeFee}`);
+  // With holder sharing, the creator's buy queued the launch's first reward, released from the next ledger. A buy
+  // simulated before that ledger writes no holder entry for its buyer (launch-token-v2 writes them lazily, while no
+  // reward is released) and traps on chain when the release runs first (2026-10-16): the buyer waits a ledger.
+  if (s.sharing) {
+    const at = await r.chain.latestLedger();
+    await until("the ledger after the creator's buy", WAIT.account, async () => ((await r.chain.latestLedger()) > at ? true : null));
+  }
   if (s.skip) await keeperSkip(r, "launch", token, s.skip, `${s.journey}: before the curve completes`);
   await bought(r, buyer, token, s.buyBudget, { afterSnipe: true, extra });
   const st = await launchState(r, token, buyer);
@@ -1009,11 +1022,22 @@ async function launchedAndCompleted(r: Run, s: LaunchSpec, creator: Phone, buyer
   return { token, symbol, creator, buyer, quote: quoteOf(r, s.quote).contract, extra };
 }
 
-/** A phase action as the phone (graduate, graduate_fallback, mark_stuck, rescue): its return value. */
+/** The queue of the run's steps that may create a Soroswap pair. The factory stores each new pair under
+ *  PairAddressesNIndexed(<pairs so far>), so a graduation simulated before another pair lands traps on chain (a key
+ *  outside its footprint, 2026-10-16): the run's own graduations go one at a time, each built after the last settled.
+ *  The stack's keeper and other testnet users can still race one; that is the app's retry (the step fails, nothing
+ *  moves). */
+const PAIRS = "soroswap pair";
+
+/** A phase action as the phone (graduate, graduate_fallback, mark_stuck, rescue): its return value. A graduation is
+ *  built and sent in the PAIRS queue. */
 async function phased(r: Run, p: Phone, l: Launched, action: string): Promise<unknown> {
-  const plan = await api(r, p.token, "POST", "/launches/build", { action, token: l.token });
-  const [{ status }] = await runPlan(r, p, plan, l.extra);
-  return status.returnValue;
+  const go = async () => {
+    const plan = await api(r, p.token, "POST", "/launches/build", { action, token: l.token });
+    const [{ status }] = await runPlan(r, p, plan, l.extra);
+    return status.returnValue;
+  };
+  return action === "graduate" || action === "graduate_fallback" ? await serial(PAIRS, go) : await go();
 }
 
 /** A phase action refused before it opens: 409 not_available, with when it opens. */
@@ -1134,14 +1158,14 @@ async function journeyLaunch(r: Run): Promise<string> {
   }
   if ((await balance(r, l.token, treasury)) <= 0n) throw new Error("the treasury holds none of the launch tokens its harvest share paid it");
 
-  // The creator's curve fees, paid out by anyone to the current recipient.
-  const fees = BigInt(rewarded.creatorFees);
-  if (fees <= 0n) throw new Error("no creator fees are booked");
-  const [{ status: claim }] = await runPlan(r, creator, await api(r, creator.token, "POST", "/launches/build", { action: "claim", token: l.token }));
-  if (BigInt(claim.returnValue) !== fees) throw new Error(`the creator's claim paid ${claim.returnValue}, not the ${units(fees)} USDC booked`);
+  // With holder sharing the creator's part of every curve fee goes to the holders (launchpad-v2 split_fees, §5 of the
+  // design: `holder_sharing && creator_part > 0` → notify_reward), so nothing is booked for the creator and the claim
+  // is refused before it is built. The creator's booked fees and claim are the fallback journey's (sharing off).
+  if (BigInt(rewarded.creatorFees) !== 0n) throw new Error(`a sharing launch booked ${rewarded.creatorFees} creator fees; its creator part goes to the holders`);
+  refusedNamed(await call(r, creator.token, "POST", "/launches/build", { action: "claim", token: l.token }), "launchpad-v2", "NothingToClaim", "the creator's claim on a sharing launch");
   const swept = await protocolSwept(r, l);
   return `${l.symbol}: graduated on Soroswap by the ${g.who}; harvest by the ${harvest}; holder claimed ${units(inQuote)} USDC and ${units(inToken)} ${l.symbol}; ` +
-    `creator claimed ${units(fees)} USDC; the treasury earns no rewards; ${swept}`;
+    `no creator fees on a sharing launch (claim refused); the treasury earns no rewards; ${swept}`;
 }
 
 /** The failing venue (mode 0) → stuck → graduate_fallback refused before fallback_delay → the fallback; then, with
@@ -1526,7 +1550,7 @@ async function journeyMoment(r: Run): Promise<string> {
   const { value: grad, by } = await keeperOr("the Moment's graduation", async () => {
     const s = await momentStatus(r, nft, "a graduated Moment");
     return s.state === "graduated" ? s : null;
-  }, () => momentAction(r, b, { action: "graduate", nft }));
+  }, () => serial(PAIRS, () => momentAction(r, b, { action: "graduate", nft })));
   const coin = grad.coin;
   const pool = grad.pool;
   const startsAt = Date.parse(grad.graduatedAt) / 1000;
@@ -2034,24 +2058,27 @@ async function main(): Promise<number> {
   say(`  venues: Soroswap ${r.ids.venues.soroswap}, QaFail ${r.ids.venues.qaFail}${r.ids.venues.aquarius === null ? "" : `, Aquarius ${r.ids.venues.aquarius}`}`);
   try {
     journeys = await acquireUsdc(r, journeys, results);
+    // Each journey's outcome is told as it ends, a failure too: the others may run on for most of an hour.
     const settled = await Promise.allSettled(journeys.map(async (j) => {
       say(`▶ ${j}`);
-      const detail = await RUNNERS[j](r);
-      say(`✓ ${j}: ${detail}`);
-      return detail;
+      try {
+        const detail = await RUNNERS[j](r);
+        say(`✓ ${j}: ${detail}`);
+        return detail;
+      } catch (e) {
+        say(`✗ ${j}: ${(e as Error)?.message ?? e}`);
+        throw e;
+      }
     }));
     settled.forEach((s, i) => {
       const journey = journeys[i];
       if (s.status === "fulfilled") results.push({ journey, outcome: "PASS", detail: s.value });
-      else {
-        results.push({ journey, outcome: "FAIL", detail: String((s.reason as Error)?.message ?? s.reason) });
-        say(`✗ ${journey}: ${(s.reason as Error)?.message ?? s.reason}`);
-      }
+      else results.push({ journey, outcome: "FAIL", detail: String((s.reason as Error)?.message ?? s.reason) });
     });
   } catch (e) {
     for (const j of journeys) if (!results.some((x) => x.journey === j)) results.push({ journey: j, outcome: "FAIL", detail: `setup: ${(e as Error).message}` });
   } finally {
-    if (r.skips.length) await r.db`delete from lite.keeper_skip where id = any(${r.db.array(r.skips)})`;
+    if (r.skips.length) await r.db`delete from lite.keeper_skip where id = any(${`{${r.skips.join(",")}}`}::bigint[])`;
     await r.db.end();
   }
   results.sort((a, b) => JOURNEYS.indexOf(a.journey) - JOURNEYS.indexOf(b.journey));
