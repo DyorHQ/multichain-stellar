@@ -1,0 +1,122 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ locked" : {
+      "comment" : "Swap on Stellar, after the XLM balance under 'You Pay': how much of it Stellar keeps in the account (its minimum balance), which can't be swapped. The value is an amount of XLM (1.5)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ bloqueados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ bloqués"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 잠김"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已锁定"
+          }
+        }
+      }
+    },
+    "Balance %@ XLM, of which %@ XLM is locked as Stellar's minimum balance" : {
+      "comment" : "VoiceOver: the XLM balance under Swap's 'You Pay' on Stellar. The values are amounts of XLM: the balance, then the part Stellar keeps in the account as its minimum balance. Stellar and XLM are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saldo de %1$@ XLM, de los cuales %2$@ XLM están bloqueados como saldo mínimo de Stellar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solde de %1$@ XLM, dont %2$@ XLM bloqués comme solde minimum de Stellar"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "잔액 %1$@ XLM 중 %2$@ XLM은 Stellar 최소 잔액으로 잠겨 있어요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "余额 %1$@ XLM，其中 %2$@ XLM 作为 Stellar 最低余额被锁定"
+          }
+        }
+      }
+    },
+    "Enabling %@ holds %@ XLM. It's part of this review." : {
+      "comment" : "Swap on Stellar, under 'You Receive', when the account hasn't enabled the asset it buys (a Stellar trustline): enabling it is a step of the same review and keeps this much of the account's XLM. The values are the asset's code (USDC) and an amount of XLM (0.5). XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar %1$@ retiene %2$@ XLM. Forma parte de esta revisión."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer %1$@ bloque %2$@ XLM. Cela fait partie de ce récapitulatif."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@을(를) 활성화하면 %2$@ XLM이 보관돼요. 이번 검토에 포함돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 %1$@ 会占用 %2$@ XLM，已包含在本次确认中。"
+          }
+        }
+      }
+    },
+    "This coin trades on its Launch page until it graduates." : {
+      "comment" : "Swap on Stellar, when one side is a DyorHQ coin still on its launchpad's curve: no venue can swap it yet, it trades on its Launch page",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta moneda se opera en su página de lanzamiento hasta que se gradúe."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce jeton s'échange sur sa page de lancement jusqu'à ce qu'il soit gradué."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 코인은 졸업할 때까지 런칭 페이지에서 거래돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该币毕业前在其发射页面交易。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

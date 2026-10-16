@@ -282,6 +282,33 @@ final class LiteStoreTests: XCTestCase {
         XCTAssertEqual(tally.prompts, 0)
     }
 
+    /// A screen's own activity list (Swap History) never stands in for the shared one: Portfolio and the add-funds card
+    /// read `activity` again only while its status isn't `.read`, so a filtered read kept there would leave them showing
+    /// one screen's filters.
+    func testAScreensOwnActivityReadLeavesTheSharedListAlone() async throws {
+        let (_, store) = try await readySession(keys: TestAccount.seedKeys(appLock: false, tally: tally))
+        let swaps = await store.readActivity(kind: "swap", period: .day)
+        XCTAssertEqual(swaps.status, .read)
+        XCTAssertFalse(swaps.items.isEmpty)
+        XCTAssertTrue(store.activity.isEmpty, "the shared list wasn't read")
+        XCTAssertEqual(store.status(.activity), .unread, "and doesn't say it was")
+        await store.refreshActivity()
+        let shared = store.activity
+        _ = await store.readActivity(kind: "swap", period: .week)
+        XCTAssertEqual(store.activity, shared)
+        XCTAssertEqual(store.status(.activity), .read)
+
+        // A passkey account with no session: the sign-in row, with no prompt and no part marked.
+        server.forget()
+        let (passkey, publicStore) = try await readySession(keys: TestAccount.passkeyKeys(tally: tally), saved: false)
+        XCTAssertEqual(passkey.access, .publicView)
+        let none = await publicStore.readActivity(kind: "swap")
+        XCTAssertEqual(none.status, .needsSignIn)
+        XCTAssertTrue(none.items.isEmpty)
+        XCTAssertEqual(publicStore.status(.activity), .unread)
+        XCTAssertEqual(tally.prompts, 0, "reads never prompt")
+    }
+
     /// Today's screens, hosted by the app's seams, in the public view: Home's Activity card offers the sign-in instead of
     /// reading forever, asks nothing until it is tapped, and lists the history once signed in.
     func testTheActivityCardOffersTheSignInInThePublicView() async throws {

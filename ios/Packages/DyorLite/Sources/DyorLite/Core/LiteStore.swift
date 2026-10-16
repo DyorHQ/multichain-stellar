@@ -172,6 +172,20 @@ public final class LiteStore {
         }
     }
 
+    /// The account's activity for one screen's own list (Swap History's swaps over a range), read as `refreshActivity`
+    /// reads it but kept out of `activity` and its status, so what another screen lists stays that screen's read.
+    /// `.needsSignIn`: a passkey account with no session, and nothing asks; `.failed`: `lastError` says why.
+    public func readActivity(section: String? = nil, kind: String? = nil, period: VolumePeriodKey? = nil) async
+        -> (items: [StellarActivityItem], status: LiteReadStatus) {
+        do {
+            return (try await history(nil) { try await self.api.activity(section: section, kind: kind, period: period) }, .read)
+        } catch LiteAPIError.notSignedIn where session?.needsSignIn == true {
+            return ([], .needsSignIn)
+        } catch {
+            return ([], .failed)
+        }
+    }
+
     /// Portfolio over `period` (DyorHQ's history).
     public func refreshPortfolio(_ period: VolumePeriodKey) async {
         guard let portfolio = try? await history(.portfolio, { try await self.api.portfolio(period: period) }) else { return }
@@ -276,24 +290,28 @@ public final class LiteStore {
     }
 
     /// A read of DyorHQ's history (a session route). With no session a seed account signs in silently first; a passkey
-    /// account that can't renew by itself reports `.needsSignIn` for `part`, and nothing asks.
-    private func history<T>(_ part: LitePart, _ read: () async throws -> T) async throws -> T {
+    /// account that can't renew by itself reports `.needsSignIn` for `part`, and nothing asks. A read for one screen's own
+    /// list names no part: `parts` stays as the shared reads left it.
+    private func history<T>(_ part: LitePart?, _ read: () async throws -> T) async throws -> T {
+        func mark(_ status: LiteReadStatus) {
+            if let part { parts[part] = status }
+        }
         if let session, session.access == .publicView {
             if session.needsSignIn {
-                parts[part] = .needsSignIn
+                mark(.needsSignIn)
                 throw LiteAPIError.notSignedIn
             }
             try? await session.renew()
         }
         do {
             let value = try await read()
-            parts[part] = .read
+            mark(.read)
             return value
         } catch LiteAPIError.notSignedIn where session?.needsSignIn == true {
-            parts[part] = .needsSignIn
+            mark(.needsSignIn)
             throw LiteAPIError.notSignedIn
         } catch {
-            parts[part] = .failed
+            mark(.failed)
             report(error)
             throw error
         }
