@@ -1,7 +1,8 @@
 // The Stellar launch page and Create (docs/DESIGN-stellar-parity.md §8.10.2, §8.10.3; docs/DESIGN-stellar-contracts-v2.md
 // §21): the phase each v2 status reads as, the holders' minimum and its footnote, the price chart's points, the create
-// screen's name, description, links, ticker, XLM shortage, preview and durations, actions waiting for the coin's row, and
-// the source rules the Lite launch screens keep.
+// screen's name, description, links, ticker, XLM shortage, preview (read again for another account or once XLM is added)
+// and durations, actions waiting for the coin's row, no phase shown before anything is read, a retired launch known from
+// its row, and the source rules the Lite launch screens keep.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -16,14 +17,14 @@ final class StellarLaunchTests: XCTestCase {
 
     private static let soroswap = #"{"id": 0, "kind": "Soroswap", "name": "Soroswap", "executor": "CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526", "enabled": true, "feeFraction": 0}"#
 
-    /// launchpad-v2's `status` for a launch in `phase`, delayed or not.
-    private func status(_ phase: String, stuck: Bool = false) throws -> StellarLaunchStatusV2 {
+    /// launchpad-v2's `status` for a launch in `phase`, delayed or not, its graduation open or not.
+    private func status(_ phase: String, stuck: Bool = false, graduate: Bool = false) throws -> StellarLaunchStatusV2 {
         try decode(StellarLaunchStatusV2.self, """
             {"token": "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5", "phase": "\(phase)", "completedAt": null, "stuck": \(stuck),
              "stuckSince": null, "markStuckAt": null, "fallbackAt": null, "rescueAdminAt": null, "rescuePublicAt": null,
              "venue": \(Self.soroswap), "fallback": \(Self.soroswap), "venueLocked": false, "fallbackAllowed": false, "pool": null,
              "graduatedVenue": null, "refund": null, "failure": null,
-             "actions": {"buy": false, "sell": false, "graduate": false, "graduateFallback": false, "markStuck": false, "rescue": false, "refund": false}}
+             "actions": {"buy": false, "sell": false, "graduate": \(graduate), "graduateFallback": false, "markStuck": false, "rescue": false, "refund": false}}
             """)
     }
 
@@ -48,7 +49,41 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertEqual(StellarLaunchDetailView.phase(try status("completed", stuck: true), coin: nil), .delayed)
         XCTAssertEqual(StellarLaunchDetailView.phase(try status("graduated"), coin: nil), .graduated)
         XCTAssertEqual(StellarLaunchDetailView.phase(try status("rescued"), coin: nil), .refund, "a rescued launch is in refund mode")
-        XCTAssertEqual(StellarLaunchDetailView.phase(nil, coin: nil), .bonding, "a retired launch with no row yet")
+        XCTAssertNil(StellarLaunchDetailView.phase(nil, coin: nil), "neither read yet: no phase, ticket or graduation shown as fact")
+    }
+
+    /// A launch's board row: on its curve, full, or graduated, on launchpad `generation`.
+    private func row(completed: Bool = false, graduated: Bool = false, generation: Int? = 2) throws -> StellarLaunch {
+        try decode(StellarLaunch.self, """
+            {"token": "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5", "creator": "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+             "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", "name": "E2E Cat", "symbol": "ECAT", "uri": "",
+             "supply": "10000000000000000", "quoteReserve": "0", "tokenReserve": "0", "realQuote": "0", "threshold": "43245553200",
+             "progress": 0, "completed": \(completed), "graduated": \(graduated), "volume": "0", "trades": 0, "createdAt": "2026-10-15T10:00:00Z",
+             "generation": \(generation.map(String.init) ?? "null")}
+            """)
+    }
+
+    func testARowReadBeforeTheStateGivesItsPhase() throws {
+        XCTAssertEqual(StellarLaunchDetailView.phase(nil, coin: try row()), .bonding)
+        XCTAssertEqual(StellarLaunchDetailView.phase(nil, coin: try row(completed: true)), .graduating)
+        XCTAssertEqual(StellarLaunchDetailView.phase(nil, coin: try row(completed: true, graduated: true)), .graduated)
+        XCTAssertEqual(StellarLaunchDetailView.phase(try status("rescued"), coin: try row(completed: true)), .refund, "the state, once read, says")
+    }
+
+    func testARetiredLaunchIsKnownFromItsRowOrOnceTheStateIsRead() throws {
+        typealias Page = StellarLaunchDetailView
+        XCTAssertTrue(Page.isRetired(generation: 1, stateRead: false, state: nil), "the row's generation says before the state is read")
+        XCTAssertFalse(Page.isRetired(generation: 2, stateRead: true, state: nil))
+        XCTAssertFalse(Page.isRetired(generation: nil, stateRead: false, state: nil), "unread, or its read failed: not known, so not v1's")
+        XCTAssertTrue(Page.isRetired(generation: nil, stateRead: true, state: nil), "launchpad v2 doesn't know it")
+    }
+
+    func testGraduateWaitsForLaunchpadV2sState() throws {
+        typealias Page = StellarLaunchDetailView
+        XCTAssertFalse(Page.offersGraduate(retired: false, status: nil), "the state unread or its read failed: v1 or v2 isn't known")
+        XCTAssertFalse(Page.offersGraduate(retired: false, status: try status("completed")), "v2 says its graduation isn't open")
+        XCTAssertTrue(Page.offersGraduate(retired: false, status: try status("completed", graduate: true)))
+        XCTAssertTrue(Page.offersGraduate(retired: true, status: nil), "a retired launch graduates on v1")
     }
 
     func testHoldersShowAMinimumWithItsFootnoteWhenIncomplete() {
@@ -161,6 +196,27 @@ final class StellarLaunchTests: XCTestCase {
                      "Paired with just changed: the XLM preview's Max and shortfall aren't USDC's")
         XCTAssertNil(StellarCreateLaunchView.preview(read, quote: xlm, venue: 1), "nor another venue's")
         XCTAssertNil(StellarCreateLaunchView.preview(nil, quote: xlm, venue: 0))
+    }
+
+    func testXLMAddedOrAnotherAccountReadsThePreviewAgain() throws {
+        func account(xlm: String, exists: Bool = true, address: String = "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+                     usdcFirst: Bool = false) throws -> AccountView {
+            let xlmRow = #"{"asset": "XLM", "code": "XLM", "name": "Stellar Lumens", "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", "decimals": 7, "balance": "\#(xlm)", "enabled": true}"#
+            let usdcRow = #"{"asset": "USDC", "code": "USDC", "name": "USD Coin", "contract": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA", "decimals": 7, "balance": "20000000", "enabled": true}"#
+            return try decode(AccountView.self, """
+                {"address": "\(address)", "exists": \(exists), "network": "testnet", "activation": "friendbot",
+                 "balances": [\(usdcFirst ? "\(usdcRow), \(xlmRow)" : "\(xlmRow), \(usdcRow)")], "sponsor": ""}
+                """)
+        }
+        typealias Create = StellarCreateLaunchView
+        let short = Create.accountKey(try account(xlm: "50000000"))
+        XCTAssertNotEqual(short, Create.accountKey(try account(xlm: "100000000000")), "Fund with Friendbot changes the key")
+        XCTAssertEqual(short, Create.accountKey(try account(xlm: "50000000")), "the same balances read again change nothing")
+        XCTAssertEqual(short, Create.accountKey(try account(xlm: "50000000", usdcFirst: true)), "nor the same balances in another order")
+        XCTAssertNotEqual(short, Create.accountKey(try account(xlm: "50000000", address: "GDQNY3PBOJOKYZSRMK2S7LHHGWZIUISD4QORETLMXEWXBI7KFZZMKTL3")),
+                          "another account with the same balances")
+        XCTAssertNotEqual(Create.accountKey(try account(xlm: "0", exists: false)), Create.accountKey(try account(xlm: "0")), "the account activated")
+        XCTAssertEqual(Create.accountKey(nil), "")
     }
 
     func testTheReviewsFallbackWaitsForAVenueLockedLaunchsLockedFallback() throws {

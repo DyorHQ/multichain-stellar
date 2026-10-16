@@ -86,12 +86,27 @@ struct StellarLaunchDetailView: View {
     /// the notification, so nothing opens while the page has none.
     static func canAct(canSign: Bool, symbol: String) -> Bool { canSign && !symbol.isEmpty }
 
-    private var isRetired: Bool { stateRead && state == nil }
+    /// On the retired v1 launchpad: the row's generation says, else launchpad v2 not knowing the launch once its state
+    /// was read.
+    private var isRetired: Bool { Self.isRetired(generation: coin?.generation, stateRead: stateRead, state: state) }
 
-    private var phase: Phase { Self.phase(state?.status, coin: coin) }
+    static func isRetired(generation: Int?, stateRead: Bool, state: StellarLaunchStateV2?) -> Bool {
+        if let generation { return generation == 1 }
+        return stateRead && state == nil
+    }
 
-    /// The phase launchpad v2's `status` says; for a retired launch (no status), the one its row says.
-    static func phase(_ status: StellarLaunchStatusV2?, coin: StellarLaunch?) -> Phase {
+    /// Graduate, like every other action, waits for launchpad v2's state to say its graduation is open; a retired launch
+    /// graduates on v1. While neither is known (the state unread, or its read failed) there is no Graduate, so no plan is
+    /// built for the wrong launchpad.
+    static func offersGraduate(retired: Bool, status: StellarLaunchStatusV2?) -> Bool {
+        retired || status?.actions.graduate == true
+    }
+
+    private var phase: Phase? { Self.phase(state?.status, coin: coin) }
+
+    /// The phase launchpad v2's `status` says; until it is read (and for a retired launch, which has none), the one its
+    /// row says. Nil while neither is read: the page shows no phase, ticket or graduation as fact (§8.10.2).
+    static func phase(_ status: StellarLaunchStatusV2?, coin: StellarLaunch?) -> Phase? {
         if let status {
             switch status.phase {
             case "graduated": return .graduated
@@ -100,8 +115,9 @@ struct StellarLaunchDetailView: View {
             default: return .bonding
             }
         }
-        if coin?.graduated == true { return .graduated }
-        return coin?.completed == true ? .graduating : .bonding
+        guard let coin else { return nil }
+        if coin.graduated { return .graduated }
+        return coin.completed ? .graduating : .bonding
     }
 
     // MARK: Figures
@@ -190,10 +206,12 @@ struct StellarLaunchDetailView: View {
             headerSection
             statsSection
             chartSection
+            // No ticket or graduation while neither the coin's row nor its state is read: its phase isn't known yet.
             switch phase {
-            case .bonding: ticketSection
-            case .refund: refundSection
-            case .graduating, .delayed, .graduated: graduationSection
+            case .bonding?: ticketSection
+            case .refund?: refundSection
+            case .graduating?, .delayed?, .graduated?: graduationSection
+            case nil: EmptyView()
             }
             if tokenBalance > 0 { holdingsSection }
             if let rewards = state?.rewards, rewards.sharing { rewardsSection(rewards) }
@@ -267,10 +285,12 @@ struct StellarLaunchDetailView: View {
         }
     }
 
-    /// The phase, as the board's badges and Monad's header word it, and the retired launchpad's mark.
+    /// The phase, as the board's badges and Monad's header word it, and the retired launchpad's mark; "—" until the
+    /// coin's row or its state is read.
     private var statusLine: String {
         let title: String
         switch phase {
+        case nil: return "—"
         case .bonding: title = LaunchPhase.bonding.title
         case .graduating: title = liteTr(LocalizedStringResource("Graduating", table: "StellarLaunch", comment: "[tight] A Stellar launch's phase: its curve is full and it graduates into its pool within minutes"))
         case .delayed: title = liteTr(StellarLaunchWords.graduationDelayed)
@@ -533,7 +553,7 @@ struct StellarLaunchDetailView: View {
             case .delayed:
                 delayedRows
             default:
-                if state?.status.actions.graduate != false || isRetired {
+                if Self.offersGraduate(retired: isRetired, status: state?.status) {
                     Button("Graduate", systemImage: "arrow.up.forward.circle") { Haptics.tap(); review = .graduate(fallback: false) }
                         .disabled(!canAct)
                 }
