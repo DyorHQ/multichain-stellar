@@ -31,7 +31,7 @@ import {
 import postgres from "postgres";
 import { DURATION_SETS_V2, parseDeploymentV2 } from "../../supabase/functions/_shared/deployments/index.ts";
 import { contractAllowlist, NetworkConfig, TESTNET, withDeployment, withDeploymentV2 } from "../../supabase/functions/_shared/networks.ts";
-import { FeeCaps, Intent, V2PinSource, v2Pins, verifyFeePayer, verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
+import { FeeCaps, Intent, runtimeWasmHashOf, V2PinSource, v2Pins, verifyFeePayer, verifyTransaction } from "../../supabase/functions/_shared/verify.ts";
 import { SEP53_PREFIX, sha256 } from "../../supabase/functions/_shared/auth.ts";
 
 const PASS = TESTNET.passphrase;
@@ -317,6 +317,7 @@ const u128 = (n: bigint) => nativeToScVal(n, { type: "u128" });
 const u32 = (n: number) => nativeToScVal(n, { type: "u32" });
 const u64 = (n: bigint) => nativeToScVal(n, { type: "u64" });
 const addr = (a: string) => new Address(a).toScVal();
+const addrVal = addr;
 const str = (s: string) => nativeToScVal(s, { type: "string" });
 /** A contract call whose root authorization is the call itself, with `subs` beneath it. */
 const invoke = (ic: xdr.InvokeContractArgs, subs: xdr.SorobanAuthorizedInvocation[] = [], extra: xdr.SorobanAuthorizationEntry[] = []) =>
@@ -596,6 +597,60 @@ const syn: Synthetic[] = [
   syn.push(["approve within cap", tx([invoke(ic)]), callIntent("approve", USDC, "approve", { [USDC]: "500" })]);
 }
 
+// The authorization tree holds only the call itself and the user's own token spends beneath it: a nested call that is
+// not a spend (a Blend withdrawal to a third party), a second root (any call, a token transfer to the confirmed
+// address included) or a spend of another account's tokens is refused, whatever the outflow.
+{
+  const withdraw = call(POOL, "submit", [addr(user), addr(user), addr(third), xdr.ScVal.scvVec([])]);
+  const pathSwap = (path: string[], minOut = 1n) => call(ROUTER, "swap_exact_tokens_for_tokens", [i128(100n), i128(minOut), xdr.ScVal.scvVec(path.map(addr)), addr(user), u64(9n)]);
+  /** A token nobody pins: anyone can open a Soroswap pair for it, so a route through it runs its code. */
+  const UNLISTED = StrKey.encodeContract(Buffer.alloc(32, 0x55));
+  const aqua = (hops: [string, string, string][], outMin = 10n) =>
+    call(AQUARIUS, "swap_chained", [
+      addr(user),
+      xdr.ScVal.scvVec(hops.map(([a, b, out]) => xdr.ScVal.scvVec([xdr.ScVal.scvVec([addr(a), addr(b)]), xdr.ScVal.scvBytes(Buffer.alloc(32, 3)), addr(out)]))),
+      addr(XLM),
+      u128(100n),
+      u128(outMin),
+    ]);
+  const aquaIntent = (min = "10") => ({ ...callIntent("swap", AQUARIUS, "swap_chained", { [XLM]: "100" }), receive: { [USDC]: min } });
+  syn.push(
+    ["swap with a non-token call nested under its own authorization", tx([invoke(swapCall(100n), [pull(XLM, ROUTER, 100n), inv(withdraw)])]), swapIntent(100n)],
+    ["swap with a non-token call nested under a token spend", tx([invoke(swapCall(100n), [inv(call(XLM, "transfer", [addr(user), addr(ROUTER), i128(100n)]), [inv(withdraw)])])]), swapIntent(100n)],
+    ["swap with a second root authorizing another call", tx([invoke(swapCall(100n), [pull(XLM, ROUTER, 100n)], [src(inv(withdraw))])]), swapIntent(100n)],
+    ["swap with a second root transferring to the confirmed address", tx([invoke(swapCall(100n), [pull(XLM, ROUTER, 100n)], [src(pull(USDC, friend, 5n))])]), { ...swapIntent(100n), spend: { [XLM]: "100", [USDC]: "5" }, to: friend }],
+    ["swap with a nested spend of another account's tokens", tx([invoke(swapCall(100n), [pull(XLM, ROUTER, 100n), inv(call(USDC, "transfer", [addr(third), addr(friend), i128(5n)]))])]), swapIntent(100n)],
+    ["swap with a nested spend with extra arguments", tx([invoke(swapCall(100n), [inv(call(XLM, "transfer", [addr(user), addr(ROUTER), i128(100n), u32(1)]))])]), swapIntent(100n)],
+    ["blend submit with a nested withdrawal", tx([invoke(call(POOL, "submit", [addr(user), addr(user), addr(user), xdr.ScVal.scvVec([])]), [pull(USDC, POOL, 50n), inv(withdraw)])]), callIntent("earn_deposit", POOL, "submit", { [USDC]: "50" })],
+    // Every token a swap's route runs is listed; the token sold and the token bought may be the user's own choice.
+    ["soroswap through an unlisted middle token", tx([invoke(pathSwap([XLM, UNLISTED, USDC]), [pull(XLM, ROUTER, 100n)])]), swapIntent(100n)],
+    ["soroswap through a listed middle token ok", tx([invoke(pathSwap([XLM, USDC, USDC]), [pull(XLM, ROUTER, 100n)])]), swapIntent(100n)],
+    ["soroswap to an unlisted token the intent quotes ok", tx([invoke(pathSwap([XLM, USDC, UNLISTED]), [pull(XLM, ROUTER, 100n)])]), { ...swapIntent(100n), receive: { [UNLISTED]: "1" } }],
+    ["soroswap to an unlisted token the intent doesn't quote", tx([invoke(pathSwap([XLM, UNLISTED]), [pull(XLM, ROUTER, 100n)])]), swapIntent(100n)],
+    ["soroswap from an unlisted token the intent spends ok", tx([invoke(pathSwap([UNLISTED, XLM, USDC]), [pull(UNLISTED, ROUTER, 100n)])]), { ...swapIntent(100n), spend: { [UNLISTED]: "100" } }],
+    ["aquarius through an unlisted hop token", tx([invoke(aqua([[XLM, UNLISTED, UNLISTED], [UNLISTED, USDC, USDC]]), [pull(XLM, AQUARIUS, 100n)])]), aquaIntent()],
+    ["aquarius through listed hops ok", tx([invoke(aqua([[XLM, USDC, USDC], [USDC, XLM, USDC]]), [pull(XLM, AQUARIUS, 100n)])]), aquaIntent()],
+    // A trade's minimum is positive wherever the call encodes one, whatever the intent quotes; a path payment needs one.
+    ["soroswap with no minimum", tx([invoke(pathSwap([XLM, USDC], 0n), [pull(XLM, ROUTER, 100n)])]), swapIntent(100n, ROUTER, 0n)],
+    ["aquarius with no minimum", tx([invoke(aqua([[XLM, USDC, USDC]], 0n), [pull(XLM, AQUARIUS, 100n)])]), aquaIntent("0")],
+    [
+      "curve buy with no minimum",
+      tx([invoke(call(LAUNCHPAD, "buy", [addr(user), addr(TOKEN), i128(1_000n), i128(0n)]), [pull(XLM, LAUNCHPAD, 1_000n)])]),
+      callIntent("launch_buy", LAUNCHPAD, "buy", { [XLM]: "1000" }, { receive: { [TOKEN]: "0" } }),
+    ],
+    [
+      "curve sell with no minimum",
+      tx([invoke(call(LAUNCHPAD, "sell", [addr(user), addr(TOKEN), i128(500n), i128(0n)]), [pull(TOKEN, LAUNCHPAD, 500n)])]),
+      callIntent("launch_sell", LAUNCHPAD, "sell", { [TOKEN]: "500" }, { receive: { [XLM]: "0" } }),
+    ],
+    [
+      "path payment without a quoted minimum",
+      tx([Operation.pathPaymentStrictSend({ sendAsset: Asset.native(), sendAmount: "10", destination: user, destAsset: USDC_ASSET, destMin: "0.9", path: [] })]),
+      { kind: "swap", summary: "", spend: { [XLM]: "100000000" }, ops: ["pathPaymentStrictSend"] },
+    ],
+  );
+}
+
 // ------------------------------------------------------------------------------------------------ v2 (§20.4)
 // Judged against V2_FIXTURE's pins: launchpad-v2, moments-v2, the lp-locker, exec-soroswap and the graduator, and the
 // runtime WASM hashes of launch-token-v2, moment-nft and moment-coin. Aquarius is off (decision O7), and qa-exec-fail
@@ -683,17 +738,18 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
       token_wasm_hash: bytes(o.wasm ?? HASHES.launchTokenV2),
       durations: durations(o.durations ?? LAUNCH_DURATIONS),
     });
-  const params = (o: { initialBuy?: bigint; minOut?: bigint; symbol?: string; venue?: number } = {}) =>
+  type ParamsChange = { initialBuy?: bigint; minOut?: bigint; symbol?: string; venue?: number; recipient?: string; exempt?: string[]; creatorFeeBps?: number; holderSharing?: boolean };
+  const params = (o: ParamsChange = {}) =>
     struct({
       quote: addr(XLM),
       name: str("Deploy"),
       symbol: str(o.symbol ?? "DPLY"),
       uri: str("https://x.test/m.json"),
-      creator_fee_bps: u32(100),
+      creator_fee_bps: u32(o.creatorFeeBps ?? 100),
       venue: u32(o.venue ?? 0),
-      holder_sharing: bool(true),
-      creator_fee_recipient: xdr.ScVal.scvVoid(),
-      snipe_exempt: vec([]),
+      holder_sharing: bool(o.holderSharing ?? true),
+      creator_fee_recipient: o.recipient ? addr(o.recipient) : xdr.ScVal.scvVoid(),
+      snipe_exempt: vec((o.exempt ?? []).map(addr)),
       initial_buy: i128(o.initialBuy ?? 0n),
       min_tokens_out: i128(o.minOut ?? 0n),
       nonce: u64(7n),
@@ -706,8 +762,14 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
         ...(o.buy ? [pull(XLM, o.buyTo ?? PAD2, o.buy)] : []),
       ]),
     ]);
-  const launchIntent = (spend: bigint, receive?: Record<string, string>) =>
-    callIntent("launch_create", PAD2, "launch", { [XLM]: spend.toString() }, receive ? { receive } : {});
+  /** A launch's intent, showing what the user chose as launchpad_v2.ts's builder does: the creator-fee recipient (the
+   *  user unless `to` names one), the snipe exemptions, the creator fee and holder sharing. */
+  const launchIntent = (spend: bigint, receive?: Record<string, string>, o: { to?: string; display?: Record<string, string | number | boolean> } = {}) =>
+    callIntent("launch_create", PAD2, "launch", { [XLM]: spend.toString() }, {
+      ...(receive ? { receive } : {}),
+      ...(o.to ? { to: o.to } : {}),
+      display: { recipient: o.to ?? user, snipeExempt: "", creatorFeeBps: 100, holderSharing: true, ...o.display },
+    });
   const BUY = 50_000_000n;
   const withBuy = { params: { initialBuy: BUY, minOut: 4_000n }, buy: BUY };
 
@@ -752,6 +814,9 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
     });
   const publish = (o: { who?: string; terms?: MomentTermsChange; symbol?: string } = {}) =>
     tx([invoke(call(MOMENTS2, "publish", [addr(o.who ?? user), publishParams(o.symbol), momentTerms(o.terms)]))]);
+  /** A publish's intent, showing the price, creator allocation and window as moments_v2.ts's builder does. */
+  const publishIntent = (display: Record<string, string | number> = {}) =>
+    callIntent("moment_publish", MOMENTS2, "publish", {}, { display: { price: "10000000", allocationBps: 500, windowSecs: 86_400, ...display } });
   const collect = (who: string, max: bigint, pulled = 20_000n) =>
     tx([invoke(call(MOMENTS2, "collect", [addr(who), addr(NFT), u32(2), i128(max)]), [pull(USDC, MOMENTS2, pulled)])]);
   const collectIntent = callIntent("moment_collect", MOMENTS2, "collect", { [USDC]: "20000" });
@@ -788,6 +853,37 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
       "v1 launch arguments on the v2 launchpad",
       tx([invoke(call(PAD2, "launch", [addr(user), addr(XLM), str("Deploy"), str("DPLY"), str("https://x.test/m.json"), u32(100), i128(0n), i128(0n)]))]),
       callIntent("launch_create", PAD2, "launch"),
+    ],
+    // What the user chose: the creator-fee recipient is the confirmed one (intent.to) or the user, and the
+    // exemptions, creator fee and sharing are the ones shown.
+    ["v2 launch creator fees to a third party", launch({ params: { recipient: third } }), launchIntent(FEE)],
+    ["v2 launch creator fees to the user named ok", launch({ params: { recipient: user } }), launchIntent(FEE)],
+    ["v2 launch creator fees to the confirmed recipient ok", launch({ params: { recipient: friend } }), launchIntent(FEE, undefined, { to: friend })],
+    ["v2 launch creator fees to another than the confirmed recipient", launch({ params: { recipient: third } }), launchIntent(FEE, undefined, { to: friend })],
+    ["v2 launch creator fees to the user when a recipient was confirmed", launch(), launchIntent(FEE, undefined, { to: friend })],
+    ["v2 launch showing another recipient", launch(), launchIntent(FEE, undefined, { display: { recipient: third } })],
+    ["v2 launch with a snipe exemption not shown", launch({ params: { exempt: [third] } }), launchIntent(FEE)],
+    ["v2 launch with its snipe exemptions shown ok", launch({ params: { exempt: [friend, third] } }), launchIntent(FEE, undefined, { display: { snipeExempt: `${friend},${third}` } })],
+    ["v2 launch with snipe exemptions in another order", launch({ params: { exempt: [third, friend] } }), launchIntent(FEE, undefined, { display: { snipeExempt: `${friend},${third}` } })],
+    ["v2 launch with another creator fee", launch({ params: { creatorFeeBps: 500 } }), launchIntent(FEE)],
+    ["v2 launch with holder sharing other than shown", launch({ params: { holderSharing: false } }), launchIntent(FEE)],
+    ["v2 launch without its settings shown", launch(), callIntent("launch_create", PAD2, "launch", { [XLM]: FEE.toString() })],
+    ["v2 launch initial buy with no minimum", launch({ ...withBuy, params: { initialBuy: BUY, minOut: 0n } }), launchIntent(FEE + BUY, { [TOKEN2]: "0" })],
+    [
+      "v2 launch with a non-token call nested under its own authorization",
+      tx([invoke(call(PAD2, "launch", [addr(user), params(), terms()]), [pull(XLM, PAD2, FEE), inv(call(PAD2, "transfer_creator_fee_recipient", [addr(TOKEN2), addr(third)]))])]),
+      launchIntent(FEE),
+    ],
+    [
+      "v2 curve buy with a creator-fee recipient change as a second root",
+      tx([invoke(call(PAD2, "buy", [addr(user), addr(TOKEN2), i128(1_000n), i128(4_000n)]), [pull(XLM, PAD2, 1_000n)], [src(inv(call(PAD2, "transfer_creator_fee_recipient", [addr(TOKEN2), addr(third)])))])]),
+      callIntent("launch_buy", PAD2, "buy", { [XLM]: "1000" }, { receive: { [TOKEN2]: "4000" } }),
+    ],
+    [
+      "v2 claim rewards with a second root",
+      tx([invoke(call(TOKEN2, "claim", [addr(user)]), [], [src(inv(call(POOL, "submit", [addr(user), addr(user), addr(third), xdr.ScVal.scvVec([])])))])]),
+      callIntent("launch_claim_rewards", TOKEN2, "claim"),
+      runtime(TOKEN2, HASHES.launchTokenV2),
     ],
     ["v2 curve buy ok", tx([invoke(call(PAD2, "buy", [addr(user), addr(TOKEN2), i128(1_000n), i128(4_000n)]), [pull(XLM, PAD2, 1_000n)])]), callIntent("launch_buy", PAD2, "buy", { [XLM]: "1000" }, { receive: { [TOKEN2]: "4000" } })],
 
@@ -830,15 +926,19 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
     ["v2 moment coin transfer to another to", tx([invoke(call(COIN, "transfer", [addr(user), addr(third), i128(100n)]))]), callIntent("payment", COIN, "transfer", { [COIN]: "100" }, { to: friend }), runtime(COIN, HASHES.momentCoin)],
 
     // moments-v2.
-    ["v2 moments publish ok", publish(), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish for another creator", publish({ who: third }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with another graduator", publish({ terms: { graduator: EVIL } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with another executor", publish({ terms: { executor: QA_VENUE.executor } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with another locker", publish({ terms: { locker: EVIL } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with another NFT WASM", publish({ terms: { nft: UNKNOWN_WASM } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with another coin WASM", publish({ terms: { coin: UNKNOWN_WASM } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with durations other than the pins", publish({ terms: { durations: { ...MOMENTS_DURATIONS, pending_backstop: 86_400 } } }), callIntent("moment_publish", MOMENTS2, "publish")],
-    ["v2 moments publish with a ticker that is too long", publish({ symbol: "ABCDEFGHIJK" }), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish ok", publish(), publishIntent()],
+    ["v2 moments publish for another creator", publish({ who: third }), publishIntent()],
+    ["v2 moments publish with another graduator", publish({ terms: { graduator: EVIL } }), publishIntent()],
+    ["v2 moments publish with another executor", publish({ terms: { executor: QA_VENUE.executor } }), publishIntent()],
+    ["v2 moments publish with another locker", publish({ terms: { locker: EVIL } }), publishIntent()],
+    ["v2 moments publish with another NFT WASM", publish({ terms: { nft: UNKNOWN_WASM } }), publishIntent()],
+    ["v2 moments publish with another coin WASM", publish({ terms: { coin: UNKNOWN_WASM } }), publishIntent()],
+    ["v2 moments publish with durations other than the pins", publish({ terms: { durations: { ...MOMENTS_DURATIONS, pending_backstop: 86_400 } } }), publishIntent()],
+    ["v2 moments publish at another price", publish(), publishIntent({ price: "1" })],
+    ["v2 moments publish with another allocation", publish(), publishIntent({ allocationBps: 1_000 })],
+    ["v2 moments publish with another window", publish(), publishIntent({ windowSecs: 3_600 })],
+    ["v2 moments publish without its settings shown", publish(), callIntent("moment_publish", MOMENTS2, "publish")],
+    ["v2 moments publish with a ticker that is too long", publish({ symbol: "ABCDEFGHIJK" }), publishIntent()],
     ["v2 moments collect ok", collect(user, 20_000n), collectIntent],
     ["v2 moments collect from another account", collect(third, 20_000n), collectIntent],
     ["v2 moments collect with max_total above the spend", collect(user, 20_001n), collectIntent],
@@ -876,6 +976,60 @@ for (const [name, t, intent, extra] of syn) {
 
 await Deno.mkdir(out, { recursive: true });
 await Deno.writeTextFile(`${out}verifier.json`, JSON.stringify(vectors, null, 1) + "\n");
+
+// ------------------------------------------------------------------------------------------------ runtime provenance
+// Instance ledger entries (LedgerEntryData, as getLedgerEntries answers) and the WASM hash each counts by
+// (verify.ts runtimeWasmHashOf, StellarCore RuntimeProvenance), against V2_FIXTURE's pins: an instance of a pinned v2
+// runtime WASM counts only when the pinned singleton created it, and only as the contract asked for.
+{
+  const { launchpadV2: PAD2, momentsV2: MOMENTS2 } = V2_FIXTURE.contracts;
+  const HASHES = V2_FIXTURE.runtimeWasmHashes;
+  const pins = { launchpad: PAD2, moments: MOMENTS2, runtimeWasmHashes: HASHES };
+  const TOKEN2 = fixed(0x47);
+  const slot = (name: string, val: xdr.ScVal) => new xdr.ScMapEntry({ key: xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(name)]), val });
+  const metadata = new xdr.ScMapEntry({
+    key: xdr.ScVal.scvSymbol("METADATA"),
+    val: xdr.ScVal.scvMap([new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("decimal"), val: nativeToScVal(7, { type: "u32" }) })]),
+  });
+  const instance = (owner: string, wasm: string | null, storage: xdr.ScMapEntry[] | null) =>
+    xdr.LedgerEntryData.contractData(
+      new xdr.ContractDataEntry({
+        ext: new xdr.ExtensionPoint(0),
+        contract: new Address(owner).toScAddress(),
+        key: xdr.ScVal.scvLedgerKeyContractInstance(),
+        durability: xdr.ContractDataDurability.persistent(),
+        val: xdr.ScVal.scvContractInstance(
+          new xdr.ScContractInstance({
+            executable: wasm ? xdr.ContractExecutable.contractExecutableWasm(Buffer.from(wasm, "hex")) : xdr.ContractExecutable.contractExecutableStellarAsset(),
+            storage,
+          }),
+        ),
+      }),
+    );
+  const cases: [string, xdr.LedgerEntryData, string][] = [
+    ["launch token created by the pinned launchpad", instance(TOKEN2, HASHES.launchTokenV2, [metadata, slot("Launchpad", addrVal(PAD2)), slot("Locker", addrVal(fixed(0x43)))]), TOKEN2],
+    ["launch token created by another launchpad", instance(TOKEN2, HASHES.launchTokenV2, [slot("Launchpad", addrVal(EVIL))]), TOKEN2],
+    ["launch token naming no launchpad", instance(TOKEN2, HASHES.launchTokenV2, null), TOKEN2],
+    ["launch token whose launchpad is stored under a bare symbol", instance(TOKEN2, HASHES.launchTokenV2, [new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol("Launchpad"), val: addrVal(PAD2) })]), TOKEN2],
+    ["launch token naming the launchpad as its minter", instance(TOKEN2, HASHES.launchTokenV2, [slot("Minter", addrVal(PAD2))]), TOKEN2],
+    ["moment NFT minted by the pinned moments", instance(fixed(0x48), HASHES.momentNft, [slot("Minter", addrVal(MOMENTS2)), slot("Creator", addrVal(user)), slot("Minted", nativeToScVal(0, { type: "u32" }))]), fixed(0x48)],
+    ["moment coin minted by the pinned moments", instance(fixed(0x49), HASHES.momentCoin, [metadata, slot("Minter", addrVal(MOMENTS2))]), fixed(0x49)],
+    ["moment coin minted by the launchpad", instance(fixed(0x49), HASHES.momentCoin, [slot("Minter", addrVal(PAD2))]), fixed(0x49)],
+    ["moment NFT minted by an account", instance(fixed(0x48), HASHES.momentNft, [slot("Minter", addrVal(third))]), fixed(0x48)],
+    ["entry of another contract than the one asked for", instance(fixed(0x4b), HASHES.launchTokenV2, [slot("Launchpad", addrVal(PAD2))]), TOKEN2],
+    ["a Stellar Asset Contract", instance(USDC, null, null), USDC],
+    ["v1 launch token, as read", instance(TOKEN, WASM, [slot("Launchpad", addrVal(EVIL))]), TOKEN],
+    ["an unknown WASM, as read", instance(fixed(0x4b), "ee".repeat(32), null), fixed(0x4b)],
+  ];
+  const runtimeVectors = cases.map(([name, entry, contract]) => ({
+    name,
+    entry: entry.toXDR("base64"),
+    contract,
+    pins: { launchpadV2: PAD2, momentsV2: MOMENTS2, runtimeWasmHashes: HASHES, launchTokenWasmHash: WASM },
+    expect: runtimeWasmHashOf(entry, contract, pins),
+  }));
+  await Deno.writeTextFile(`${out}runtime.json`, JSON.stringify(runtimeVectors, null, 1) + "\n");
+}
 
 // ------------------------------------------------------------------------------------------------ keys & ids
 const msg = "DyorHQ Lite sign-in\nNetwork: testnet\nAddress: " + user + "\nNonce: abc\nIssued: 2026-10-11T00:00:00Z";

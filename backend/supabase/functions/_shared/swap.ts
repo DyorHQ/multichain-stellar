@@ -212,6 +212,10 @@ export async function buildSwap(user: string, quoteId: string, venue?: Venue) {
   const routes = quoted.map((r) => ({ ...r, minOut: r.minOut ?? minOut(r.amountOut, req.slippageBps ?? 100) }));
   const route = venue ? routes.find((r) => r.venue === venue) : routes[0];
   if (!route) throw bad("bad_arg", `This quote has no ${VENUE_NAMES[venue!]} route.`);
+  // A swap always names a minimum above 0 (both verifiers refuse one of 0): an output that rounds to nothing is refused.
+  if (!/^[0-9]+$/.test(String(route.minOut)) || BigInt(route.minOut) <= 0n) {
+    throw bad("bad_amount", "This amount is too small to swap: the least it would bring rounds to 0.");
+  }
   const sell = await resolveAsset(req.sell);
   const buy = await resolveAsset(req.buy);
   const account = await holder(user, buy);

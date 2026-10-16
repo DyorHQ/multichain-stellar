@@ -65,7 +65,7 @@ const { ApiError } = await import("../../supabase/functions/_shared/http.ts");
 const { createPlan, registerBuilder, verifyContext } = await import("../../supabase/functions/_shared/plans.ts");
 type StepSpec = import("../../supabase/functions/_shared/plans.ts").StepSpec;
 const { feeEstimates } = await import("../../supabase/functions/_shared/fees.ts");
-const { verifyTransaction } = await import("../../supabase/functions/_shared/verify.ts");
+const { verifyTransaction, VerifyError } = await import("../../supabase/functions/_shared/verify.ts");
 const v2 = await import("../../supabase/functions/_shared/launchpad_v2.ts");
 
 // As the API registers them with its routes (CT-18).
@@ -680,7 +680,7 @@ Deno.test("Max with subentries and an open offer selling XLM keeps both back (V1
   // (2 + 3 + 1) × 0.5 XLM.
   assertEquals([p.xlm.minBalance, p.xlm.sellingLiabilities], ["30000000", "250000000"]);
   assertEquals(leftBehind("100.0000000", p.maxInitialBuy), 30_000_000n + 250_000_000n + 100_000_000n + fees + v2.LAUNCH_XLM_BUFFER);
-  const spec = (initialBuy: bigint) => ({ kind: v2.LAUNCH_V2_STEPS.create, quote: XLM, venue: 0, name: "E2E Cat", symbol: "ECAT", uri: "", creatorFeeBps: 100, holderSharing: true, recipient: null, exempt: [], initialBuy: initialBuy.toString(), minOut: "0", nonce: "7" });
+  const spec = (initialBuy: bigint) => ({ kind: v2.LAUNCH_V2_STEPS.create, quote: XLM, venue: 0, name: "E2E Cat", symbol: "ECAT", uri: "", creatorFeeBps: 100, holderSharing: true, recipient: null, exempt: [], initialBuy: initialBuy.toString(), minOut: "1", nonce: "7" });
   const atMax = await v2.launchCreateStepV2(ME, spec(BigInt(p.maxInitialBuy)));
   assertEquals(atMax.intent.spend, { [XLM]: (100_000_000n + BigInt(p.maxInitialBuy)).toString() });
   const err = await rejects(() => v2.launchCreateStepV2(ME, spec(BigInt(p.maxInitialBuy) + 1n)));
@@ -694,7 +694,7 @@ Deno.test("Max is priced at Max: a buy that completes the curve costs more to ru
   world.account = { xlm: "1000.0000000" };
   const p = await v2.launchPreviewV2(ME, { quote: "XLM" });
   assertEquals(p.xlm.fees, TX_FEE(SIM_FEE + 200_000).toString());
-  const built = await v2.launchCreateStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.create, quote: XLM, venue: 0, name: "N".repeat(32), symbol: "S".repeat(10), uri: "", creatorFeeBps: 0, holderSharing: true, recipient: null, exempt: [], initialBuy: p.maxInitialBuy, minOut: "0", nonce: "9" });
+  const built = await v2.launchCreateStepV2(ME, { kind: v2.LAUNCH_V2_STEPS.create, quote: XLM, venue: 0, name: "N".repeat(32), symbol: "S".repeat(10), uri: "", creatorFeeBps: 0, holderSharing: true, recipient: null, exempt: [], initialBuy: p.maxInitialBuy, minOut: "1", nonce: "9" });
   assertEquals(BigInt(built.tx.fee), TX_FEE(SIM_FEE + 200_000));
 });
 
@@ -786,6 +786,55 @@ Deno.test("create in USDC: the XLM fee and the USDC buy are each declared; a rec
   assertStep(noBuy, PAD, "launch");
   assertEquals([noBuy.intent.spend, noBuy.intent.receive, noBuy.intent.display!.recipient], [{ [XLM]: "100000000" }, undefined, NEXT]);
   assertEquals((callOf(noBuy.tx).args[1] as any).creator_fee_recipient, NEXT);
+});
+
+/** The verifier's reason for refusing `intent` with `tx`; null when it passes. */
+function refusal(tx: Transaction, intent: any): string | null {
+  try {
+    verifyTransaction(tx, intent, ctx());
+    return null;
+  } catch (err) {
+    if (!(err instanceof VerifyError)) throw err;
+    return err.message;
+  }
+}
+
+Deno.test("create binds what the user typed: the recipient in intent.to, the exemptions, fee and sharing shown; a server that changes one is refused", async () => {
+  reset();
+  const named = await v2.launchCreateStepV2(ME, { ...CREATE, recipient: NEXT, exempt: [G(9), G(10)] });
+  assertEquals([named.intent.to, named.intent.display!.recipient, named.intent.display!.snipeExempt], [NEXT, NEXT, `${G(9)},${G(10)}`]);
+  assertEquals(refusal(named.tx, named.intent), null);
+  const own = await v2.launchCreateStepV2(ME, CREATE);
+  assertEquals([own.intent.to, own.intent.display!.recipient, own.intent.display!.snipeExempt], [undefined, ME, G(9)]);
+  assertEquals(refusal(own.tx, own.intent), null);
+  // The fees to a recipient the user didn't confirm; another recipient shown; an exemption, fee or sharing not shown.
+  const fees = "the creator fees go to another address than the one you confirmed";
+  const settings = "the launch settings are not the ones shown";
+  assertEquals(refusal(named.tx, { ...named.intent, to: undefined }), fees);
+  assertEquals(refusal(named.tx, { ...named.intent, to: G(11), display: { ...named.intent.display, recipient: G(11) } }), fees);
+  assertEquals(refusal(own.tx, { ...own.intent, to: NEXT, display: { ...own.intent.display, recipient: NEXT } }), fees);
+  assertEquals(refusal(own.tx, { ...own.intent, display: { ...own.intent.display, recipient: NEXT } }), fees);
+  assertEquals(refusal(own.tx, { ...own.intent, display: { ...own.intent.display, snipeExempt: "" } }), settings);
+  assertEquals(refusal(own.tx, { ...own.intent, display: { ...own.intent.display, creatorFeeBps: 0 } }), settings);
+  assertEquals(refusal(own.tx, { ...own.intent, display: { ...own.intent.display, holderSharing: false } }), settings);
+});
+
+Deno.test("a minimum is never defaulted to 0: create with a buy, buy and sell refuse a request without one (400)", async () => {
+  reset();
+  for (const minOut of [undefined, "0"]) {
+    const create = await rejects(() => v2.launchCreateStepV2(ME, { ...CREATE, minOut }));
+    assertEquals([create.status, create.code], [400, "bad_amount"], `create ${minOut}`);
+    for (const kind of [v2.LAUNCH_V2_STEPS.buy, v2.LAUNCH_V2_STEPS.sell]) {
+      const err = await rejects(() => v2.LAUNCH_V2_BUILDERS[kind](ME, { kind, token: TOKEN, amount: "500000000", minOut }));
+      assertEquals([err.status, err.code], [400, "bad_amount"], `${kind} ${minOut}`);
+    }
+    const plan = await rejects(() => v2.buildLaunchV2(ME, { action: "create", name: "E2E Cat", symbol: "ECAT", quote: "XLM", amount: "500000000", minOut }));
+    assertEquals([plan.status, plan.code], [400, "bad_amount"], `plan ${minOut}`);
+  }
+  assert(!calls.includes("launch") && !calls.includes("buy") && !calls.includes("sell"), "nothing simulated");
+  // Without a buy there is no minimum to give.
+  const noBuy = await v2.launchCreateStepV2(ME, { ...CREATE, initialBuy: "0", minOut: undefined });
+  assertEquals((callOf(noBuy.tx).args[1] as any).min_tokens_out, 0n);
 });
 
 Deno.test("create refuses terms the app doesn't pin: a fee above 10 XLM or not in XLM, another locker, other durations, an unpinned executor", async () => {
