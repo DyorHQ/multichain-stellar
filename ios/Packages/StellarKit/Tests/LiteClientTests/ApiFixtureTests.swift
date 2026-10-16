@@ -33,7 +33,7 @@ final class ApiFixtureTests: XCTestCase {
     }
 
     // The bodies LiteAPI unwraps (its own wrappers are private). A list comes under one of these keys.
-    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let anchors: [T]?; let results: [T]?; let view: String? }
+    private struct Listed<T: Codable>: Codable { let moments: [T]?; let editions: [T]?; let items: [T]?; let positions: [T]?; let results: [T]?; let view: String? }
     private struct EarnMarkets: Codable { let markets: [EarnMarket]; let note: String? }
     private struct Metadata: Codable { let uri: String; let posterUrl: String? }
     private struct Active: Codable { let status: String; let account: AccountView }
@@ -77,12 +77,11 @@ final class ApiFixtureTests: XCTestCase {
         "market-history": (roundTrip(StellarPriceHistory.self), []),
         "assets": (roundTrip(Listed<StellarAssetResult>.self), []),
         "prices": (roundTrip(StellarPrices.self), []),
-        // StellarHoldings (Models+Portfolio.swift) and StellarLaunchBoard (Models+Launch.swift) don't keep `view` yet.
-        "holdings": (roundTrip(StellarHoldings.self), ["view"]),
+        "holdings": (roundTrip(StellarHoldings.self), []),
         "holdings.partial": (roundTrip(StellarHoldings.self), []),
-        "holdings.public": (roundTrip(StellarHoldings.self), ["view"]),
+        "holdings.public": (roundTrip(StellarHoldings.self), []),
         "portfolio": (roundTrip(StellarPortfolio.self), []),
-        "launches": (roundTrip(StellarLaunchBoard.self), ["view"]),
+        "launches": (roundTrip(StellarLaunchBoard.self), []),
         "launches.legacy": (roundTrip(StellarLaunchBoard.self), []),
         "launch": (roundTrip(StellarLaunchDetail.self), []),
         "launch.legacy": (roundTrip(StellarLaunchDetail.self), []),
@@ -102,6 +101,12 @@ final class ApiFixtureTests: XCTestCase {
         "moments-owned.legacy": (roundTrip(Listed<StellarEdition>.self), []),
         "moments-owned.public": (roundTrip(Listed<StellarEdition>.self), []),
         "moments-mine": (roundTrip(StellarMomentsMine.self), []),
+        "moments-v2": (roundTrip(StellarMomentFeedV2.self), []),
+        "moment-v2": (roundTrip(StellarMomentDetailV2.self), []),
+        "moment-v2.public": (roundTrip(StellarMomentDetailV2.self), []),
+        "moments-v2-owned": (roundTrip(StellarOwnedMomentsV2.self), []),
+        "moments-v2-owned.public": (roundTrip(StellarOwnedMomentsV2.self), []),
+        "moments-v2-mine": (roundTrip(StellarMyMomentsV2.self), []),
         "moment-metadata": (roundTrip(Metadata.self), []),
         "moment-metadata.legacy": (roundTrip(Metadata.self), []),
         "media-upload-url": (roundTrip(UploadTicket.self), []),
@@ -120,8 +125,6 @@ final class ApiFixtureTests: XCTestCase {
         "bridge-status": (roundTrip(BridgeStatus.self), ["route"]),
         "bridge-source": (roundTrip(AnyJSON.self), []),
         "bridge-claimed": (roundTrip(AnyJSON.self), []),
-        "cash-anchors": (roundTrip(Listed<AnchorInfo>.self), []),
-        "cash-track": (roundTrip(AnyJSON.self), []),
         "error": (roundTrip(ErrorEnvelope.self), []),
         "error.legacy": (roundTrip(ErrorEnvelope.self), []),
         "error-contract": (roundTrip(ErrorEnvelope.self), []),
@@ -172,7 +175,7 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(account.firstFunding?.starterSwap, "unavailable")
         XCTAssertEqual(account.xlm?.spendable, "99985000000")
         XCTAssertEqual(account.xlm?.reserves.subentries, 1)
-        XCTAssertEqual(account.firstFunding?.faucet?.usedToday, false)
+        XCTAssertEqual(account.firstFunding?.faucet?.claimed, false)
         XCTAssertEqual(account.balances.last?.kind, "launch")
         XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).xlm)
         XCTAssertNil(try ApiFixtures.decode("account.legacy", as: AccountView.self).view)
@@ -204,8 +207,10 @@ final class ApiFixtureTests: XCTestCase {
         let board = try ApiFixtures.decode("launches", as: StellarLaunchBoard.self)
         XCTAssertEqual(board.counts?.explore, 12)
         XCTAssertEqual(board.launches.map(\.phase), ["completed", "curve"])
+        XCTAssertEqual(board.view, "owner")
         let oldBoard = try ApiFixtures.decode("launches.legacy", as: StellarLaunchBoard.self)
         XCTAssertNil(oldBoard.counts)
+        XCTAssertNil(oldBoard.view)
         XCTAssertNil(oldBoard.launches[0].marketCapQuote)
 
         let launch = try ApiFixtures.decode("launch", as: StellarLaunchDetail.self)
@@ -270,10 +275,13 @@ final class ApiFixtureTests: XCTestCase {
         XCTAssertEqual(account.xlm?.spendable, "99985000000")
         XCTAssertEqual(account.firstFunding?.needsXlm, false)
         XCTAssertNil(account.firstFunding?.starterSwap)
-        XCTAssertNil(account.firstFunding?.faucet?.usedToday)
+        XCTAssertNil(account.firstFunding?.faucet?.claimed)
         XCTAssertEqual(account.firstFunding?.faucet?.amount, "10000")
 
         let holdings = try ApiFixtures.decode("holdings.public", as: StellarHoldings.self)
+        XCTAssertEqual(holdings.view, "public")
+        XCTAssertEqual(try ApiFixtures.decode("holdings", as: StellarHoldings.self).view, "owner")
+        XCTAssertNil(try ApiFixtures.decode("holdings.partial", as: StellarHoldings.self).view)
         XCTAssertEqual(holdings.earn.first?.supplied, "1000012340")
         XCTAssertNil(holdings.earn.first?.earned)
         XCTAssertEqual(holdings.earn.first?.earnedComplete, false)
@@ -444,7 +452,6 @@ final class LiteAPIRouteTests: XCTestCase {
         }
         try await expect("GET", "/v1/tx/abc", fixture: "tx-status") { _ = try await $0.txStatus("abc") }
         try await expect("GET", "/v1/launches/CTOKEN", fixture: "launch") { _ = try await $0.launch("CTOKEN", candles: nil) }
-        try await expect("GET", "/v1/cash/anchors?country=GH", fixture: "cash-anchors") { _ = try await $0.anchors(country: "GH") }
     }
 
     /// A pasted value stays one path segment: it can't add a query, a fragment or a route of its own.

@@ -35,6 +35,7 @@ const ROUTES: [string, string, boolean][] = [
   ["POST /v1/auth/refresh", "/v1/auth/refresh", true],
   ["POST /v1/auth/signout", "/v1/auth/signout", true],
   ["GET /v1/config", "/v1/config", true],
+  ["GET /v1/fees", "/v1/fees", true],
   ["GET /v1/account", "/v1/account", false],
   ["POST /v1/account/activate", "/v1/account/activate", false],
   ["POST /v1/account/trust", "/v1/account/trust", false],
@@ -46,50 +47,78 @@ const ROUTES: [string, string, boolean][] = [
   ["GET /v1/tx/:hash", `/v1/tx/${"ab".repeat(32)}`, false],
   ["POST /v1/swap/quote", "/v1/swap/quote", false],
   ["POST /v1/swap/build", "/v1/swap/build", false],
-  // Public once it reads the reference cache (§6.6); until then its handler signs in. So do economics (WP-14) and
-  // Earn's markets and history (WP-15) until those packages serve them without a session.
-  ["GET /v1/prices", "/v1/prices", false],
+  // Market data reads the reference cache and needs no session (§6.6), nor do the launchpad's economics (§6.9) or
+  // Earn's markets and rate history (§6.10).
+  ["GET /v1/markets", "/v1/markets", true],
+  ["GET /v1/markets/:id", "/v1/markets/XLM", true],
+  ["GET /v1/markets/:id/history", "/v1/markets/XLM/history", true],
+  ["GET /v1/prices", "/v1/prices", true],
+  ["GET /v1/assets", "/v1/assets", false],
   ["GET /v1/launches", "/v1/launches", false],
   ["GET /v1/launches/:token", `/v1/launches/${TOKEN}`, false],
   ["POST /v1/launches/:token/quote", `/v1/launches/${TOKEN}/quote`, false],
   ["POST /v1/launches/build", "/v1/launches/build", false],
   ["POST /v1/launches/metadata", "/v1/launches/metadata", false],
-  ["GET /v1/economics", "/v1/economics", false],
+  ["GET /v1/economics", "/v1/economics", true],
   ["GET /v1/launchpad/me", "/v1/launchpad/me", false],
-  ["GET /v1/earn/markets", "/v1/earn/markets", false],
+  ["GET /v1/earn/markets", "/v1/earn/markets", true],
   ["GET /v1/earn/positions", "/v1/earn/positions", false],
   ["POST /v1/earn/build", "/v1/earn/build", false],
-  ["GET /v1/earn/history", "/v1/earn/history", false],
+  ["GET /v1/earn/history", "/v1/earn/history", true],
   ["GET /v1/moments", "/v1/moments", false],
   ["GET /v1/moments/owned", "/v1/moments/owned", false],
   ["GET /v1/moments/mine", "/v1/moments/mine", false],
+  // Contracts v2's Moments, keyed by their NFT address, read as the indexer recorded them.
+  ["GET /v1/moments/v2", "/v1/moments/v2", false],
+  ["GET /v1/moments/v2/owned", "/v1/moments/v2/owned", false],
+  ["GET /v1/moments/v2/mine", "/v1/moments/v2/mine", false],
+  ["GET /v1/moments/v2/:nft", `/v1/moments/v2/${TOKEN}`, false],
   ["GET /v1/moments/:id", "/v1/moments/7", false],
   ["POST /v1/moments/metadata", "/v1/moments/metadata", false],
   ["POST /v1/moments/build", "/v1/moments/build", false],
   ["POST /v1/media/upload-url", "/v1/media/upload-url", false],
   ["PUT /v1/local-media/upload/:token", "/v1/local-media/upload/t0k3n", true],
   ["GET /v1/local-media/lite-media/*path", "/v1/local-media/lite-media/uploads/GABC/1.jpg", true],
+  // Contracts v2's own routes (lite/index.ts): a launch's preview and live state, a Moment's live status (public) and an
+  // account's vesting in it.
+  ["POST /v1/launches/preview", "/v1/launches/preview", false],
+  ["GET /v1/launches/:token/state", `/v1/launches/${TOKEN}/state`, false],
+  ["GET /v1/moments/:nft/status", `/v1/moments/${TOKEN}/status`, true],
+  ["GET /v1/moments/:nft/vesting", `/v1/moments/${TOKEN}/vesting`, false],
   ["POST /v1/bridge/quote", "/v1/bridge/quote", false],
   ["POST /v1/bridge/start", "/v1/bridge/start", false],
   ["POST /v1/bridge/:id/source", `/v1/bridge/${ID}/source`, false],
   ["POST /v1/bridge/:id/claimed", `/v1/bridge/${ID}/claimed`, false],
   ["GET /v1/bridge/:id", `/v1/bridge/${ID}`, false],
-  ["GET /v1/cash/anchors", "/v1/cash/anchors", false],
-  ["POST /v1/cash/track", "/v1/cash/track", false],
+  ["GET /v1/holdings", "/v1/holdings", false],
+  ["GET /v1/portfolio", "/v1/portfolio", false],
   ["GET /v1/activity", "/v1/activity", false],
 ];
 
+/** Viewer routes whose handlers serve the public view (§6.0) of the account ?address= names: 400 address_required
+ *  without it. Earn's positions read Blend's pools and a v2 Moment's vesting reads moments-v2, which the route harness
+ *  can't reach: earn.test.ts and moments_v2.test.ts cover their public views with stand-ins. */
+const PUBLIC_VIEWS = ["GET /v1/account", "GET /v1/holdings", "GET /v1/earn/positions", "GET /v1/moments/owned", "GET /v1/moments/v2/owned", "GET /v1/moments/:nft/vesting"];
+/** The public views the route harness itself can serve. */
+const HARNESS_PUBLIC_VIEWS = PUBLIC_VIEWS.filter((spec) => spec !== "GET /v1/earn/positions" && spec !== "GET /v1/moments/:nft/vesting");
+
+/** Viewer routes whose handlers serve the public view (§6.0) and need no ?address=: what each answers with neither a
+ *  token nor ?address= (the route harness has no launch at TOKEN, no Moment 7 and no v2 Moment at TOKEN; the asset
+ *  search with no q lists the registry; a v2 launch's state is read live from launchpad-v2, which the harness can't
+ *  reach: 500, as earn-markets-rpc-down records for a route whose RPC is down). */
+const PUBLIC_BOARDS: Record<string, number> = {
+  "GET /v1/assets": 200,
+  "GET /v1/launches": 200,
+  "GET /v1/launches/:token": 404,
+  "GET /v1/moments": 200,
+  "GET /v1/moments/v2": 200,
+  "GET /v1/moments/v2/:nft": 404,
+  "GET /v1/moments/:id": 404,
+  "GET /v1/launches/:token/state": 500,
+};
+
 /** Registered in their final place, answering 501 until written. */
-const NOT_WRITTEN = [
-  "GET /v1/recipient/:address",
-  "POST /v1/launches/metadata",
-  "GET /v1/economics",
-  "GET /v1/launchpad/me",
-  "GET /v1/earn/history",
-  "GET /v1/moments/mine",
-  "PUT /v1/local-media/upload/:token",
-  "GET /v1/local-media/lite-media/*path",
-];
+const NOT_WRITTEN: string[] = [];
 
 function request(spec: string, path: string, token: string | null): Request {
   const method = spec.split(" ")[0];
@@ -140,16 +169,24 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  Deno.test("Moments' static paths never reach /v1/moments/:id", async () => {
+  Deno.test("Moments' static paths never reach /v1/moments/:id, and v2's never reach a v2 Moment's own", async () => {
     assertEquals(router.match("GET", "/v1/moments/owned")?.spec, "GET /v1/moments/owned");
     assertEquals(router.match("GET", "/v1/moments/mine")?.spec, "GET /v1/moments/mine");
+    assertEquals(router.match("GET", "/v1/moments/v2")?.spec, "GET /v1/moments/v2");
+    assertEquals(router.match("GET", "/v1/moments/v2/owned")?.spec, "GET /v1/moments/v2/owned");
+    assertEquals(router.match("GET", "/v1/moments/v2/mine")?.spec, "GET /v1/moments/v2/mine");
+    assertEquals(router.match("GET", `/v1/moments/${TOKEN}/status`)?.spec, "GET /v1/moments/:nft/status");
+    const ownedV2 = await handle(request("GET /v1/moments/v2/owned", "/v1/moments/v2/owned", token));
+    assertEquals([ownedV2.status, await ownedV2.json()], [200, { moments: [], view: "owner" }]);
+    const mineV2 = await handle(request("GET /v1/moments/v2/mine", "/v1/moments/v2/mine", token));
+    assertEquals([mineV2.status, await mineV2.json()], [200, { created: [], collected: [], totals: { editions: 0, moments: 0, spentByQuote: {}, earnedByQuote: {} } }]);
     const owned = await handle(request("GET /v1/moments/owned", "/v1/moments/owned", token));
-    assertEquals([owned.status, await owned.json()], [200, { editions: [] }]);
+    assertEquals([owned.status, await owned.json()], [200, { editions: [], view: "owner" }]);
     const mine = await handle(request("GET /v1/moments/mine", "/v1/moments/mine", token));
-    assertEquals([mine.status, (await mine.json()).error.code], [501, "not_implemented"]);
+    assertEquals([mine.status, await mine.json()], [200, { created: [], collected: [], totals: { editions: 0, moments: 0, spentByQuote: {}, earnedByQuote: {} } }]);
   });
 
-  Deno.test("public: sign-in, config, fees, market data, economics, Earn's markets and history; nothing else", () => {
+  Deno.test("public: sign-in, config, fees, market data, economics, Earn's markets and history, a v2 Moment's status; nothing else", () => {
     const open = [
       "POST /v1/auth/verify",
       "POST /v1/auth/refresh",
@@ -163,10 +200,12 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "GET /v1/economics",
       "GET /v1/earn/markets",
       "GET /v1/earn/history",
+      "GET /v1/moments/:nft/status",
     ];
     for (const r of open) assert(isPublic(r) && !isViewer(r), r);
     const closed = ["GET /v1/assets", "GET /v1/holdings", "GET /v1/portfolio", "GET /v1/feesx", "GET /v1/marketsx", "GET /v1/configs", "GET /v1/account"];
-    for (const r of [...closed, "GET /v1/economicsx", "GET /v1/earn/positions", "POST /v1/earn/build", "GET /v1/earn/historyx", "GET /v1/earn/markets/x"]) {
+    const v2 = ["GET /v1/moments/v2", "GET /v1/moments/:nft/vesting", "GET /v1/moments/:nft/statusx", "GET /v1/launches/:token/state"];
+    for (const r of [...closed, ...v2, "GET /v1/economicsx", "GET /v1/earn/positions", "POST /v1/earn/build", "GET /v1/earn/historyx", "GET /v1/earn/markets/x"]) {
       assert(!isPublic(r), r);
     }
     for (const [spec, , open] of ROUTES) if (open) assert(isPublic(spec), spec);
@@ -183,6 +222,11 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "GET /v1/moments",
       "GET /v1/moments/:id",
       "GET /v1/assets",
+      "GET /v1/launches/:token/state",
+      "GET /v1/moments/:nft/vesting",
+      "GET /v1/moments/v2",
+      "GET /v1/moments/v2/owned",
+      "GET /v1/moments/v2/:nft",
     ];
     for (const r of viewers) assert(isViewer(r) && !isPublic(r), r);
     const sessions = [
@@ -199,6 +243,10 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "GET /v1/accounts",
       "GET /v1/account/x",
       "GET /v1/launches/:token/x",
+      "GET /v1/moments/v2/mine",
+      "GET /v1/moments/v2/:nft/x",
+      "POST /v1/launches/preview",
+      "POST /v1/moments/v2",
     ];
     for (const r of sessions) assert(!isViewer(r) && !isPublic(r), r);
   });
@@ -206,7 +254,7 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
   Deno.test("every route's class is the API contract's (_shared/contract.ts Routes)", async () => {
     const source = await Deno.readTextFile(new URL("../../supabase/functions/_shared/contract.ts", import.meta.url));
     const contract = new Map([...source.matchAll(/"([A-Z]+ \/v1\/[^"]+)":\s*\{\s*auth:\s*"(\w+)"/g)].map((m) => [m[1], m[2]]));
-    assert(contract.size > 50, `${contract.size} routes in the contract`);
+    assert(contract.size >= 50, `${contract.size} routes in the contract`);
     const classOf = (spec: string) => (isPublic(spec) ? "public" : isViewer(spec) ? "viewer" : "session");
     for (const [spec, auth] of contract) {
       // The local media stand-in's upload carries its own signed token: public, as far as the session check goes.
@@ -219,14 +267,40 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     }
   });
 
-  // Viewer routes pass the guard without a header, but until their packages serve the public view (WP-10, WP-14,
-  // WP-15, WP-16, WP-18) their handlers still ask for a session, as before.
-  Deno.test("without a session, every route answers 401 but the open ones", async () => {
+  // Viewer routes pass the guard without a header and serve the public view. Those about an account (PUBLIC_VIEWS) need
+  // ?address= there; the asset search, the launch and Moments boards and their pages (PUBLIC_BOARDS) need none.
+  Deno.test("without a session, every route answers 401 but the open ones, the public views and the public boards", async () => {
     for (const [spec, path, open] of ROUTES) {
       const res = await quietly(() => handle(request(spec, path, null)));
       const text = await res.text();
-      if (open) assertNotEquals(res.status, 401, spec);
+      if (PUBLIC_VIEWS.includes(spec)) assertEquals([res.status, JSON.parse(text).error.code], [400, "address_required"], spec);
+      else if (Object.hasOwn(PUBLIC_BOARDS, spec)) assertEquals(res.status, PUBLIC_BOARDS[spec], spec);
+      else if (open) assertNotEquals(res.status, 401, spec);
       else assertEquals([res.status, JSON.parse(text).error.message], [401, "Sign in on Stellar to continue."], spec);
+    }
+  });
+
+  Deno.test("public views: ?address= with no token gets the public view, cached 15 s", async () => {
+    for (const spec of HARNESS_PUBLIC_VIEWS) {
+      const [, path] = ROUTES.find(([s]) => s === spec)!;
+      const res = await quietly(() => handle(request(spec, `${path}?address=${OTHER.publicKey()}`, null)));
+      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], spec);
+    }
+  });
+
+  Deno.test("the Moments feed and an account's editions: the public view with no token, cached 15 s; with a token, the owner's", async () => {
+    for (const path of ["/v1/moments", `/v1/moments?address=${OTHER.publicKey()}`, `/v1/moments/owned?address=${OTHER.publicKey()}`]) {
+      const res = await quietly(() => handle(request("GET /v1/moments", path, null)));
+      assertEquals([res.status, res.headers.get("cache-control"), (await res.json()).view], [200, "public, max-age=15", "public"], path);
+    }
+    for (const path of ["/v1/moments", "/v1/moments/owned"]) {
+      const owner = await quietly(() => handle(request("GET /v1/moments", path, token)));
+      assertEquals([owner.status, owner.headers.get("cache-control"), (await owner.json()).view], [200, "no-store", "owner"], path);
+    }
+    // The local media stand-in answers only on a local testnet stack: here it isn't configured.
+    for (const [spec, path] of ROUTES.filter(([s]) => s.includes("local-media"))) {
+      const res = await quietly(() => handle(request(spec, path, null)));
+      assertEquals([res.status, (await res.json()).error.code], [404, "not_found"], spec);
     }
   });
 
@@ -291,6 +365,19 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
     assertEquals(missing.status, 400);
   });
 
+  Deno.test("a POST body that is JSON but not an object is 400 bad_arg on every route that reads one (sign-in reads it as no fields)", async () => {
+    const other = await signJwt({ sub: OTHER.publicKey(), net: "testnet", aud: "dyorhq-lite", iss: "dyorhq-lite", exp: 4_102_444_800, iat: 1_760_400_000 });
+    const bodyless = ["POST /v1/account/activate", "POST /v1/account/faucet", "POST /v1/plans/:plan/steps/:step/build"];
+    const reading = ROUTES.filter(([spec, , open]) => spec.startsWith("POST ") && !open && !bodyless.includes(spec) && !NOT_WRITTEN.includes(spec));
+    assert(reading.length >= 15, `${reading.length} routes`);
+    for (const [spec, path] of reading) {
+      for (const body of ["null", "[]", '"x"', "7"]) {
+        const res = await quietly(() => handle(new Request(`http://127.0.0.1/functions/v1/lite${path}`, { method: "POST", headers: { authorization: `Bearer ${other}` }, body })));
+        assertEquals([res.status, (await res.json()).error.code], [400, "bad_arg"], `${spec} ${body}`);
+      }
+    }
+  });
+
   Deno.test("routes not written yet answer 501, after the session check", async () => {
     for (const spec of NOT_WRITTEN) {
       const [, path] = ROUTES.find(([s]) => s === spec)!;
@@ -319,7 +406,6 @@ if (Deno.env.get("ROUTES_RECORD") === "1") {
       "assets",
       "contracts",
       "allowlist",
-      "anchors",
       "bridge",
       "flags",
       "minBuild",

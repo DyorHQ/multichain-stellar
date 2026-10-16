@@ -1,0 +1,563 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ per edition" : {
+      "comment" : "A row of Stellar activity, under a published Moment: what one edition costs. The value is an amount with its code (1.5 USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ por edición"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ par édition"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션당 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每版 %@"
+          }
+        }
+      }
+    },
+    "%@ to %@" : {
+      "comment" : "A row of Stellar activity, under a send: the amount with its code (12.5 XLM), then the short address it went to (GBQ4…7ZKD)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ to %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ a %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ à %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$@에게 %1$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 至 %2$@"
+          }
+        }
+      }
+    },
+    "Blend test" : {
+      "comment" : "[tight] A badge on Blend's test USDC: a test token only the Blend lending protocol's testnet pool uses, not Circle's USDC. Blend is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prueba de Blend"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Blend"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 테스트"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 测试"
+          }
+        }
+      }
+    },
+    "Bridged %@" : {
+      "comment" : "A row of Stellar activity: the account moved this asset between Monad and Stellar. The value is its code (USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transferiste %@ por puente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ transféré par pont"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 브리지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已跨链转移 %@"
+          }
+        }
+      }
+    },
+    "DyorHQ Launch" : {
+      "comment" : "[tight] A Stellar coin's badge: launched on the DyorHQ launchpad. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Launch"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Launch"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 런칭"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 发射"
+          }
+        }
+      }
+    },
+    "Enabled %@" : {
+      "comment" : "A row of Stellar activity: the account enabled this asset (a Stellar trustline), so it can hold it. The value is its code (USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ activé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 사용 설정됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已启用 %@"
+          }
+        }
+      }
+    },
+    "Fee %@" : {
+      "comment" : "A row of Stellar activity: the network fee the account paid for this transaction. The value is an amount in XLM (0.0154 XLM)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisión %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "费用 %@"
+          }
+        }
+      }
+    },
+    "Fee paid by DyorHQ" : {
+      "comment" : "A row of Stellar activity: DyorHQ paid this transaction's network fee (a new account's setup, or a first swap into XLM). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisión pagada por DyorHQ"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais payés par DyorHQ"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 DyorHQ 부담"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "费用由 DyorHQ 支付"
+          }
+        }
+      }
+    },
+    "Funded with Friendbot" : {
+      "comment" : "A row of Stellar activity: the account got its one grant of free test XLM from Friendbot, the Stellar test network's faucet. Friendbot is a name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondeada con Friendbot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Financé avec Friendbot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friendbot으로 충전됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已通过 Friendbot 充值"
+          }
+        }
+      }
+    },
+    "Not the real %@" : {
+      "comment" : "[tight] A warning badge on a Stellar look-alike token: the value is the code it imitates (USDC), never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No es el %@ real"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas le vrai %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "진짜 %@ 아님"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "非真正的 %@"
+          }
+        }
+      }
+    },
+    "Restored data" : {
+      "comment" : "A row of Stellar activity: the account paid to bring back data the Stellar network had archived",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restauraste datos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Données restaurées"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "데이터 복원"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已恢复数据"
+          }
+        }
+      }
+    },
+    "Sent %@" : {
+      "comment" : "A row of Stellar activity: the account sent this asset to another account. The value is its code (XLM, USDC), never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ envoyé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 보냄"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已发送 %@"
+          }
+        }
+      }
+    },
+    "Set up your account" : {
+      "comment" : "A row of Stellar activity: the account was created on the Stellar network",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Configuraste tu cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Compte configuré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정 설정 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已设置你的账户"
+          }
+        }
+      }
+    },
+    "Sign in again to see your Stellar history." : {
+      "comment" : "In place of the account's Stellar history (volume, portfolio, activity) when its session has ended: the history needs a sign-in. Stellar is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuelve a iniciar sesión para ver tu historial de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnectez-vous pour voir votre historique Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 기록을 보려면 다시 로그인하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请重新登录以查看你的 Stellar 记录。"
+          }
+        }
+      }
+    },
+    "Sign in with your passkey" : {
+      "comment" : "Button: sign in to DyorHQ on Stellar with the account's passkey (one passkey prompt), to see its history",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicia sesión con tu llave de acceso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se connecter avec votre clé d'accès"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "패스키로 로그인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用你的通行密钥登录"
+          }
+        }
+      }
+    },
+    "Sold out" : {
+      "comment" : "[tight] A Stellar Moment's badge: every edition of it was collected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agotado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Épuisé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "매진"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已售罄"
+          }
+        }
+      }
+    },
+    "Supplied %@" : {
+      "comment" : "A row of Stellar activity: the account lent this asset on Earn (Blend). The value is its code (XLM, USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depositaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ fourni"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 공급"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已存入 %@"
+          }
+        }
+      }
+    },
+    "View on StellarExpert" : {
+      "comment" : "A menu item and a link: opens this address, contract or transaction on StellarExpert, a Stellar block explorer. StellarExpert is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver en StellarExpert"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir sur StellarExpert"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "StellarExpert에서 보기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 StellarExpert 上查看"
+          }
+        }
+      }
+    },
+    "Withdrew %@" : {
+      "comment" : "A row of Stellar activity: the account took this asset back from Earn (Blend). The value is its code (XLM, USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiraste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ retiré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 인출"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取出 %@"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

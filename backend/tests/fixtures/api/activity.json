@@ -83,7 +83,7 @@
       "type": "cash",
       "id": "d77e0470-cc55-4be3-af10-ba7f5dbd99f0",
       "kind": "deposit",
-      "summary": "Added USDC",
+      "summary": "Transaction",
       "amount": "50",
       "display": {
         "asset": "USDC"
@@ -98,8 +98,8 @@
       "ref": null,
       "symbol": "USDC",
       "name": "USD Coin",
-      "title": "Added USDC",
-      "subtitle": "Stellar Test Anchor",
+      "title": "Transaction",
+      "subtitle": "50 USDC",
       "usd": 50
     }
   ]

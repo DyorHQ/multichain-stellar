@@ -38,7 +38,7 @@
           "type": "cash",
           "id": "5d0c1b7e-0000-4000-8000-000000000003",
           "kind": "deposit",
-          "summary": "Added USDC",
+          "summary": "Transaction",
           "amount": null,
           "display": {
             "asset": "USDC"

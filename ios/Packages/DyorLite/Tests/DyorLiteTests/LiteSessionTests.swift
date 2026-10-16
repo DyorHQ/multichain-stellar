@@ -2,488 +2,655 @@
 import StellarKit
 import XCTest
 
-/// `LiteSession`'s plan and setup run against a test double of the API: what each step does to the state and the
-/// checklist, which server answers map to which failures, and when the run's signer lives and goes (one unlock per run).
+/// `LiteSession` without access gating (docs/DESIGN-stellar-parity.md §1.1 decision 6, §7.2, §8.14), against a fake
+/// server with the real `LiteAPI`, and key providers that count every prompt and every Keychain read: nothing prompts
+/// to resume, renew, recover from a 401 or read; renewal goes refresh token → silent sign-in → public view; no locked
+/// state exists; App Lock is asked once per run and only when it applies; a passkey setup is one ceremony; no signer
+/// outlives a run or the background; Sign out makes the next switch a sign-in.
 @MainActor
 final class LiteSessionTests: XCTestCase {
-    private var signer: StellarSigner!
-    private var backend: FakeBackend!
+    private var server: FakeLite!
+    private var backend: TestBackend!
     private var vault: MemoryVault!
     private var defaults: UserDefaults!
-    private var prompts: Counter!
+    /// The test's own defaults, removed after it.
+    private var suite = ""
+    private var tally: Tally!
 
     override func setUp() async throws {
-        signer = try StellarSigner(seed: Array(repeating: 7, count: 32))
-        backend = FakeBackend()
+        server = FakeLite()
+        server.serve()
+        backend = TestBackend(api: server.api())
+        backend.afterRun = { [server] plan in if plan.planId == "setup" { server?.update { $0.usdc = true } } }
         vault = MemoryVault()
-        defaults = UserDefaults(suiteName: "lite.session.tests.\(UUID().uuidString)")
-        prompts = Counter()
+        suite = "lite.session.tests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suite)
+        tally = Tally()
     }
 
-    private func session(address: String?? = .none, unlock: (@Sendable (String) async throws -> LiteSession.UnlockResult)? = nil) -> LiteSession {
-        let signer = self.signer!
-        let prompts = self.prompts!
-        let keys = TestKeys(signer: signer)
-        let env = LiteEnvironment(apiURL: URL(string: "http://127.0.0.1:9/lite")!, pinned: .testnet, buildNumber: 23)
-        return LiteSession(env: env, stellarAddress: address ?? signer.address, monad: nil, keys: nil, backend: backend, vault: vault,
-                           defaults: defaults, unlock: unlock ?? { _ in
-                               await prompts.increment()
-                               return .init(keys: keys, signer: signer)
-                           })
+    override func tearDown() async throws {
+        server.stop()
+        defaults.removePersistentDomain(forName: suite)
     }
 
-    private func steps(_ session: LiteSession) -> [LiteSession.Step] { session.steps.map(\.step) }
-    private func status(_ session: LiteSession, _ step: LiteSession.Step) -> LiteSession.StepStatus? { session.steps.first { $0.step == step }?.status }
+    private var seedAddress: String { TestAccount.seedSigner.address }
+
+    /// A seed account's session (its seed is on this iPhone): `appLock` is App Lock's setting.
+    private func seedSession(appLock: Bool = true) -> LiteSession {
+        LiteSession(env: env, stellarAddress: seedAddress, monad: nil, keys: TestAccount.seedKeys(appLock: appLock, tally: tally), setupKey: nil,
+                    backend: backend, vault: vault, defaults: defaults)
+    }
+
+    /// A passkey account's session: its address known once set up on this iPhone, nil before its first ceremony.
+    private func passkeySession(known: Bool = false, ceremonyFails: Error? = nil) -> LiteSession {
+        LiteSession(env: env, stellarAddress: known ? TestAccount.passkeyAddress : nil, monad: nil,
+                    keys: known ? TestAccount.passkeyKeys(tally: tally) : nil, setupKey: TestAccount.setupKey(tally: tally, failing: ceremonyFails),
+                    backend: backend, vault: vault, defaults: defaults)
+    }
+
+    private var env: LiteEnvironment { LiteEnvironment(apiURL: server.base, pinned: .testnet, buildNumber: 23) }
+
+    private func activate(_ address: String) { defaults.set(true, forKey: LiteSession.activatedKey(address)) }
+    private var refreshes: Int { server.paths.filter { $0 == "POST /v1/auth/refresh" }.count }
+    private var authCalls: [String] { server.paths.filter { $0.contains("/v1/auth/") } }
+    private func steps(_ s: LiteSession) -> [LiteSession.Step] { s.steps.map(\.step) }
+    private func status(_ s: LiteSession, _ step: LiteSession.Step) -> LiteSession.StepStatus? { s.steps.first { $0.step == step }?.status }
 
     // MARK: - plan()
 
-    func testPlanIsLocalAndFollowsTheSessionAndTheSetupCache() async throws {
-        let now = Date(timeIntervalSince1970: 2_000_000_000)
-        var s = session(address: .some(nil))
-        s.now = { now }
-        XCTAssertEqual(s.plan(), .setup([.unlock, .signIn, .setUp]), "no address yet: everything")
-
-        s = session()
-        s.now = { now }
-        XCTAssertEqual(s.plan(), .setup([.unlock, .signIn, .setUp]), "an address, no session, not set up")
-
-        vault.save(token: "t", expiresAt: now.addingTimeInterval(3600), account: signer.address, network: "testnet")
-        XCTAssertEqual(s.plan(), .setup([.setUp]), "signed in, not set up")
-
-        defaults.set(true, forKey: LiteSession.activatedKey(signer.address))
-        XCTAssertEqual(s.plan(), .instant, "signed in for an hour, set up")
-
-        vault.save(token: "t", expiresAt: now.addingTimeInterval(4 * 60), account: signer.address, network: "testnet")
-        XCTAssertEqual(s.plan(), .setup([.unlock, .signIn]), "under 5 minutes left: sign in again")
-
-        vault.erase(account: signer.address, network: "testnet")
-        XCTAssertEqual(s.plan(), .setup([.unlock, .signIn]), "the 12-hour session ended")
-
-        let calls = await backend.calls
-        let unlocked = await prompts.value
-        XCTAssertEqual(calls, [], "plan() never reaches the network")
-        XCTAssertEqual(unlocked, 0, "plan() never prompts")
+    func testPlanIsLocalNeverPromptsAndIsInstantOnceSetUp() async throws {
+        let passkey = passkeySession()
+        XCTAssertEqual(passkey.plan(), .setup([.signIn, .setUp]), "a passkey account before its first ceremony")
+        let s = seedSession()
+        XCTAssertEqual(s.plan(), .setup([.signIn, .setUp]), "not set up on this iPhone")
+        activate(seedAddress)
+        XCTAssertEqual(s.plan(), .instant, "set up here: instant, with no session at all")
+        vault.save(server.issueSession(lifetime: -60), account: seedAddress, network: "testnet")
+        XCTAssertEqual(s.plan(), .instant, "an ended session changes nothing (no 12-hour lock)")
+        defaults.set(true, forKey: LiteSession.signedOutKey(seedAddress))
+        XCTAssertEqual(s.plan(), .setup([.signIn]), "after Sign out of Stellar: the sign-in only")
+        XCTAssertEqual(server.seen.count, 0, "plan() never reaches the network")
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
     }
 
-    // MARK: - The first switch
+    // MARK: - Seed accounts' setup
 
-    func testFirstSwitchTakesOneUnlockThroughInviteAndSetup() async throws {
-        await backend.queue(signIns: [.failure(Self.error(403, "not_invited")), .failure(Self.error(403, "bad_invite")), .success(Self.auth())])
-        await backend.queue(accounts: [.success(Self.account(exists: false, usdc: false)), .success(Self.account(exists: true, usdc: true))])
-        let s = session()
-
+    func testASeedSetupSignsInSilentlyAndAsksAppLockOnceAtSetUp() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        let s = seedSession(appLock: true)
         await s.run()
-        XCTAssertEqual(s.state, .waiting(.invite))
-        XCTAssertEqual(steps(s), [.unlock, .invite, .setUp], "the invite takes the sign-in's place")
-        XCTAssertEqual(status(s, .unlock), .done)
-        XCTAssertEqual(status(s, .invite), .needsYou)
-        XCTAssertTrue(s.holdsSigner)
-
-        await s.join(invite: " dyor-abcde-fghij ")
-        XCTAssertEqual(s.state, .failed(.invite, .inviteRejected))
-        XCTAssertEqual(status(s, .invite), .failed(.inviteRejected))
-
-        await s.join(invite: "DYOR-ABCDE-FGHJK")
         XCTAssertEqual(s.state, .waiting(.setUp))
-        XCTAssertEqual(steps(s), [.unlock, .signIn, .setUp])
+        XCTAssertEqual(steps(s), [.signIn, .setUp])
         XCTAssertEqual(status(s, .signIn), .done)
-        XCTAssertEqual(status(s, .setUp), .needsYou)
-        XCTAssertNotNil(s.store, "signed in: the store exists")
+        XCTAssertEqual(tally.prompts, 0, "the sign-in is silent")
+        XCTAssertEqual(tally("seedRead"), 1, "one read of the seed, for the sign-in's one signature")
+        XCTAssertFalse(s.holdsSigner, "nothing is held while the run waits for the tap")
+        XCTAssertEqual(s.access, .session)
+        // The Enable USDC step's price before the tap: its estimate and the base reserve it holds.
+        XCTAssertEqual(s.setupFee?.userMax, 10_000)
+        XCTAssertEqual(s.setupFee?.newReserves, 1)
+        XCTAssertEqual(s.baseReserve, 5_000_000)
 
         await s.setUp()
-        XCTAssertEqual(s.state, .ready)
-        XCTAssertEqual(s.steps.map(\.status), [.done, .done, .done])
-        XCTAssertFalse(s.holdsSigner, "the run ended: the signer is gone")
-
-        let unlocked = await prompts.value
-        let invites = await backend.invites
-        let activations = await backend.activations
-        XCTAssertEqual(unlocked, 1, "one unlock for the whole run")
-        XCTAssertEqual(invites, [nil, "DYOR-ABCDE-FGHIJ", "DYOR-ABCDE-FGHJK"], "each sign-in is a fresh signature; codes are trimmed and capitalized")
-        XCTAssertEqual(activations, 1)
-        XCTAssertTrue(defaults.bool(forKey: LiteSession.activatedKey(signer.address)), "set up: cached")
-        XCTAssertNotNil(vault.load(account: signer.address, network: "testnet"), "the session is saved")
-        XCTAssertEqual(s.plan(), .instant, "the next switch is instant")
+        XCTAssertEqual(s.state, .ready, "\(s.steps)")
+        XCTAssertEqual(s.steps.map(\.status), [.done, .done])
+        XCTAssertEqual(tally("appLock"), 1, "App Lock once, at the Set Up tap")
+        XCTAssertEqual(tally("seedRead"), 2, "the Enable USDC signature read the seed for itself")
+        XCTAssertEqual(backend.plans, ["setup"])
+        XCTAssertEqual(backend.signatures, 1)
+        XCTAssertFalse(s.holdsSigner)
+        XCTAssertEqual(s.home, .ready)
+        XCTAssertNotNil(s.store)
+        XCTAssertEqual(s.plan(), .instant)
+        XCTAssertTrue(defaults.bool(forKey: LiteSession.activatedKey(seedAddress)))
+        XCTAssertNotNil(vault.load(account: seedAddress, network: "testnet")?.refreshToken, "the refresh token is kept")
     }
 
-    func testAnAccountAlreadySetUpCompletesWithoutAsking() async throws {
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
+    func testASeedSetupWithAppLockOffNeverPrompts() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        let s = seedSession(appLock: false)
         await s.run()
+        await s.setUp()
         XCTAssertEqual(s.state, .ready)
-        XCTAssertEqual(status(s, .setUp), .done)
-        let activations = await backend.activations
-        XCTAssertEqual(activations, 0)
+        XCTAssertEqual(tally.prompts, 0)
     }
 
-    func testASavedSessionNeedsNoUnlockToFinishTheSetupCheck() async throws {
-        vault.save(token: "t", expiresAt: Date().addingTimeInterval(3600), account: signer.address, network: "testnet")
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
-        XCTAssertEqual(s.plan(), .setup([.setUp]))
+    func testAnInviteIsAskedOnlyWhenTheServerWantsOneAndNothingIsHeldMeanwhile() async throws {
+        server.update { $0.invited = false }
+        let s = seedSession()
         await s.run()
+        XCTAssertEqual(s.state, .waiting(.invite))
+        XCTAssertEqual(steps(s), [.invite, .setUp], "the invite takes the sign-in's place")
+        XCTAssertFalse(s.holdsSigner)
+
+        await s.join(invite: " dyor-wrong ")
+        XCTAssertEqual(s.state, .failed(.invite, .inviteRejected))
+        await s.join(invite: "dyor-good")
+        XCTAssertEqual(s.state, .ready, "already set up: the run ends")
+        XCTAssertEqual(server.seen.filter { $0.path == "/v1/auth/verify" }.map { $0.json["inviteCode"] }, [nil, "DYOR-WRONG", "DYOR-GOOD"],
+                       "each sign-in is a fresh signature; codes are trimmed and capitalized")
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    // MARK: - Passkey accounts' setup
+
+    func testAPasskeySetupIsOneCeremonyFromSignInToEnable() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        let s = passkeySession()
+        await s.run()
+        XCTAssertEqual(s.state, .waiting(.setUp), "the Set Up tap comes first")
+        XCTAssertEqual(steps(s), [.signIn, .setUp])
+        XCTAssertEqual(status(s, .signIn), .pending)
+        XCTAssertEqual(tally.prompts, 0, "nothing asked before the tap")
+        XCTAssertNotNil(s.setupFee, "priced before the tap")
+
+        await s.setUp(invite: nil)
+        XCTAssertEqual(s.state, .ready, "\(s.steps)")
+        XCTAssertEqual(tally("ceremony"), 1)
+        XCTAssertEqual(tally.prompts, 1, "exactly one passkey prompt for the sign-in and Enable USDC")
+        XCTAssertEqual(backend.signatures, 1, "its signer signed the Enable USDC step too")
+        XCTAssertEqual(s.address, TestAccount.passkeyAddress, "the ceremony gave the address")
+        XCTAssertEqual(s.methodLabel, "Passkey")
+        XCTAssertFalse(s.holdsSigner, "dropped once the run ended")
+        XCTAssertEqual(tally("appLock"), 0, "a passkey account never gets App Lock")
+        XCTAssertEqual(tally("reason:\(tr("Set up your Stellar account"))"), 1)
+    }
+
+    func testAPasskeyAccountAskedForAnInviteRunsANewCeremonyWithTheCode() async throws {
+        server.update { $0.invited = false }
+        let s = passkeySession()
+        await s.run()
+        await s.setUp(invite: nil)
+        XCTAssertEqual(s.state, .waiting(.invite))
+        XCTAssertFalse(s.holdsSigner, "the run kept nothing while it waits for the code")
+        await s.join(invite: "DYOR-GOOD")
         XCTAssertEqual(s.state, .ready)
-        XCTAssertFalse(s.steps.contains { $0.step == .unlock }, "an unlock the run never needed isn't listed")
-        let unlocked = await prompts.value
-        let restored = await backend.restored
-        XCTAssertEqual(unlocked, 0)
-        XCTAssertEqual(restored, ["t"])
+        XCTAssertEqual(tally("ceremony"), 2, "the next tap asks for the passkey again")
+    }
+
+    func testGoingToTheBackgroundEndsAPasskeyRunAndItsSigner() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        backend.stepPause = 2
+        let s = passkeySession()
+        await s.run()
+        let run = Task { await s.setUp(invite: nil) }
+        await waitUntil { s.holdsSigner && self.backend.plans == ["setup"] }
+        XCTAssertTrue(s.holdsSigner, "the run holds its signer only while it runs")
+        s.appDidEnterBackground()
+        XCTAssertFalse(s.holdsSigner, "no signer survives the background")
+        XCTAssertEqual(s.state, .failed(.setUp, .cancelled))
+        XCTAssertEqual(LiteSession.Failure.cancelled.errorDescription, tr("Not finished. Try again."))
+        await run.value
+        XCTAssertEqual(backend.signatures, 0, "the step couldn't sign once the signer was gone")
+        XCTAssertNotEqual(s.home, .ready)
+    }
+
+    func testACeremonyForAnotherAccountIsRefused() async throws {
+        let other = try StellarSigner(seed: Array(repeating: 9, count: 32))
+        let s = LiteSession(env: env, stellarAddress: TestAccount.passkeyAddress, monad: nil, keys: nil,
+                            setupKey: { _ in .init(keys: WatchOnlyKeyProvider(address: other.address), signer: other) },
+                            backend: backend, vault: vault, defaults: defaults)
+        await s.run()
+        await s.setUp()
+        XCTAssertEqual(s.state, .failed(.signIn, .otherAccountsKey))
+        XCTAssertFalse(s.holdsSigner)
+    }
+
+    // MARK: - Launch, renewal, 401s and reads: never a prompt
+
+    func testResumeAtLaunchIsReadyAtOnceAndNeverPrompts() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        XCTAssertEqual(s.state, .ready)
+        XCTAssertEqual(s.home, .ready)
+        XCTAssertEqual(s.access, .session)
+        XCTAssertNotNil(s.store)
+        XCTAssertFalse(server.paths.contains { $0.contains("/v1/auth/") }, "a live session needs no auth call")
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
+    }
+
+    func testAnEndedSessionRenewsWithItsRefreshTokenFirst() async throws {
+        activate(seedAddress)
+        let saved = server.issueSession(lifetime: -3600)
+        vault.save(saved, account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        XCTAssertEqual(s.home, .ready, "ready from the first frame, whatever the session")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertTrue(server.paths.contains("POST /v1/auth/refresh"))
+        XCTAssertFalse(server.paths.contains("POST /v1/auth/challenge"), "the refresh token was enough")
+        XCTAssertEqual(server.seen.first { $0.path == "/v1/auth/refresh" }?.json["refreshToken"], saved.refreshToken)
+        XCTAssertNotEqual(vault.load(account: seedAddress, network: "testnet")?.refreshToken, saved.refreshToken, "the rotated token is kept")
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
+    }
+
+    func testRenewalGoesRefreshThenSilentSignInForASeedAccount() async throws {
+        activate(seedAddress)
+        var saved = server.issueSession(lifetime: -3600)
+        // A refresh token the server no longer knows (revoked, or 30 days unused).
+        saved = LiteSavedSession(token: saved.token, expiresAt: saved.expiresAt, refreshToken: "lrt_gone", refreshExpiresAt: saved.refreshExpiresAt)
+        vault.save(saved, account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        let auth = server.paths.filter { $0.contains("/v1/auth/") }
+        XCTAssertEqual(auth, ["POST /v1/auth/refresh", "POST /v1/auth/challenge", "POST /v1/auth/verify"], "refresh first, then the silent sign-in")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 1, "the sign-in's one signature")
+    }
+
+    func testRenewalEndsInThePublicViewForAPasskeyAccount() async throws {
+        activate(TestAccount.passkeyAddress)
+        let saved = server.issueSession(lifetime: -3600)
+        vault.save(LiteSavedSession(token: saved.token, expiresAt: saved.expiresAt, refreshToken: "lrt_gone"), account: TestAccount.passkeyAddress, network: "testnet")
+        let s = passkeySession(known: true)
+        await s.resumeAtLaunch()
+        XCTAssertEqual(server.paths.filter { $0.contains("/v1/auth/") }, ["POST /v1/auth/refresh"], "no sign-in: that would need the passkey")
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertTrue(s.needsSignIn)
+        XCTAssertEqual(s.home, .ready, "the public view is no lock")
+        XCTAssertNil(vault.load(account: TestAccount.passkeyAddress, network: "testnet"), "the dead session goes")
+        XCTAssertEqual(tally.prompts, 0)
+
+        // Its reads still fill, in the public view; DyorHQ's history says it needs a sign-in, and asks nothing.
+        let store = try XCTUnwrap(s.store)
+        await store.refreshAll()
+        XCTAssertNotNil(store.holdings)
+        XCTAssertEqual(store.holdings?.view, "public")
+        XCTAssertEqual(store.account?.view, "public")
+        XCTAssertEqual(store.status(.spot), .read)
+        XCTAssertEqual(store.status(.activity), .needsSignIn)
+        XCTAssertFalse(server.paths.contains("GET /v1/activity"), "a history read isn't even asked")
+        XCTAssertTrue(server.seen.contains { $0.path == "/v1/holdings" && $0.route.contains("address=\(TestAccount.passkeyAddress)") })
+        XCTAssertEqual(tally.prompts, 0)
+
+        // Tapping "Sign in with your passkey": one prompt, then the history reads.
+        try await s.signIn()
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 1)
+        await store.refreshActivity()
+        XCTAssertEqual(store.status(.activity), .read)
+    }
+
+    func testA401RenewsSilentlyAndTheReadGoesThrough() async throws {
+        activate(seedAddress)
+        let saved = server.issueSession()
+        vault.save(saved, account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        // The server ends the session early (a restart, a rotated secret): the next read gets a 401.
+        server.update { $0.tokens[saved.token] = nil }
+        server.forget()
+        let store = try XCTUnwrap(s.store)
+        await store.refreshHoldings()
+        XCTAssertEqual(store.holdings?.view, "owner", "renewed, then read with the new session")
+        XCTAssertEqual(server.paths, ["GET /v1/holdings", "POST /v1/auth/refresh", "GET /v1/holdings"])
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
+    }
+
+    func testRenewalsAtOnceShareOneRefresh() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 5 * 60), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        server.update { $0.slow["/v1/auth/refresh"] = 0.3 }
+        await s.resumeAtLaunch()
+        server.forget()
+        async let a: Void = s.renew()
+        async let b: Void = s.renew()
+        _ = try await (a, b)
+        XCTAssertEqual(server.paths.filter { $0 == "POST /v1/auth/refresh" }.count, 1)
+    }
+
+    func testTheTimerRenewsBeforeTheSessionEndsOnlyWhileTheAppIsInFront() async throws {
+        activate(seedAddress)
+        // Ends 10 minutes and a moment from now: not due at launch, due a moment later.
+        vault.save(server.issueSession(lifetime: LiteSession.renewalLead + 1.5), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        XCTAssertFalse(server.paths.contains("POST /v1/auth/refresh"))
+        await waitUntil(10) { self.server.paths.contains("POST /v1/auth/refresh") }
+        XCTAssertTrue(server.paths.contains("POST /v1/auth/refresh"), "renewed 10 minutes before the end")
+
+        vault.save(server.issueSession(lifetime: LiteSession.renewalLead + 3), account: seedAddress, network: "testnet")
+        let other = seedSession()
+        await other.resumeAtLaunch()
+        other.appDidEnterBackground()
+        server.forget()
+        try await Task.sleep(for: .seconds(4))
+        XCTAssertFalse(server.paths.contains("POST /v1/auth/refresh"), "no renewal in the background")
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// QA's short sessions (`local-stack.sh --short-sessions`: 120-second tokens, §6.14): a token renews half-way
+    /// through, never at once after a renewal, and an action or becoming active doesn't renew one that isn't due.
+    func testShortLivedTokensRenewHalfWayAndNeverBackToBack() async throws {
+        server.update { $0.tokenLifetime = 120 }
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 120), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        // A saved token's lifetime isn't known: within 10 minutes of its end, it renews once at launch.
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(s.lead, 60, accuracy: 1, "half of the new token's 120 seconds")
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertEqual(refreshes, 1, "one renewal never starts the next")
+        try await s.ensureSession()
+        s.appDidBecomeActive()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(refreshes, 1, "an action and becoming active leave a token that isn't due")
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh"])
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// Even a token shorter than the floor: the timer renews again no sooner than `renewalFloor`.
+    func testATokenShorterThanTheFloorIsNotRenewedBackToBack() async throws {
+        server.update { $0.tokenLifetime = 4 }
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 4), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        try await Task.sleep(for: .seconds(3))
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertGreaterThanOrEqual(LiteSession.renewalFloor, 30)
+    }
+
+    func testBecomingActiveRenewsOnlyWhenUnderTenMinutesAreLeft() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(lifetime: 3600), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        s.appDidEnterBackground()
+        s.appDidBecomeActive()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(refreshes, 0, "most of the hour is left: nothing to do")
+
+        // Back from the background 51 minutes later: under 10 minutes are left.
+        s.appDidEnterBackground()
+        s.now = { Date().addingTimeInterval(51 * 60) }
+        s.appDidBecomeActive()
+        await waitUntil { self.refreshes == 1 }
+        XCTAssertEqual(refreshes, 1)
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh"], "the refresh token is enough")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
+    }
+
+    /// A 401 while the timer's renewal is under way waits for that renewal: one refresh between them.
+    func testA401SharesTheTimersRenewalUnderWay() async throws {
+        activate(seedAddress)
+        // Due half a second after launch (10 minutes and half a second before its end).
+        let saved = server.issueSession(lifetime: LiteSession.renewalLead + 0.5)
+        vault.save(saved, account: seedAddress, network: "testnet")
+        server.update { $0.slow["/v1/auth/refresh"] = 1.5 }
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        let store = try XCTUnwrap(s.store)
+        await waitUntil { self.refreshes == 1 }
+        // The timer's refresh is under way; the server refuses the old token meanwhile.
+        server.update { $0.tokens[saved.token] = nil }
+        await store.refreshHoldings()
+        XCTAssertEqual(refreshes, 1, "the timer's renewal served the 401 too")
+        XCTAssertEqual(store.holdings?.view, "owner", "the read went through with the renewed session")
+        XCTAssertEqual(s.access, .session)
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    func testNoLockedStateIsReachable() async throws {
+        activate(seedAddress)
+        let s = seedSession()
+        // No session at all, the server down, the app in the background and back: always ready, never locked.
+        server.update { $0.offline = ["/v1/auth/challenge", "/v1/auth/verify"] }
+        await s.resumeAtLaunch()
+        XCTAssertEqual(s.home, .ready)
+        XCTAssertEqual(s.state, .ready)
+        s.appDidEnterBackground()
+        s.appDidBecomeActive()
+        await s.refreshHome()
+        XCTAssertEqual(s.home, .ready)
+        XCTAssertEqual(s.state, .ready)
+        for state in [s.state] {
+            switch state {
+            case .idle, .running, .waiting, .ready, .unavailable, .failed: break
+            }
+        }
+        for phase in [s.home] {
+            switch phase {
+            case .loading, .ready, .paused: break
+            }
+        }
+        XCTAssertEqual(tally.prompts, 0)
     }
 
     // MARK: - The silent check
 
-    func testAPausedServiceFailsBeforeAnyPrompt() async throws {
-        await backend.queue(configs: [.success(Self.config(enabled: false))])
-        let s = session()
+    func testAPausedServiceOrATooOldBuildFailsBeforeAnyPrompt() async throws {
+        server.update { $0.enabled = false }
+        var s = seedSession()
         await s.run()
         XCTAssertEqual(s.state, .unavailable(.paused))
-        XCTAssertEqual(s.home, .paused(.paused), "Stellar Home shows the paused card")
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 0)
+        XCTAssertEqual(s.home, .paused(.paused))
         XCTAssertFalse(LiteSession.Failure.paused.canRetry)
-    }
 
-    func testABuildTooOldOrAnotherSponsorNeedsAnUpdate() async throws {
-        await backend.queue(configs: [.success(Self.config(minBuild: 24))])
-        var s = session()
+        server.update {
+            $0.enabled = true
+            $0.minBuild = 24
+        }
+        s = seedSession()
         await s.run()
         XCTAssertEqual(s.state, .unavailable(.updateRequired))
 
-        await backend.queue(configs: [.success(Self.config(sponsor: "GDIFFERENTSPONSOR"))])
-        s = session()
+        server.update {
+            $0.minBuild = 1
+            $0.sponsor = "GDIFFERENTSPONSOR"
+        }
+        s = seedSession()
         await s.run()
         XCTAssertEqual(s.state, .unavailable(.updateRequired))
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 0)
+        XCTAssertEqual(tally.prompts, 0)
+        XCTAssertEqual(tally("seedRead"), 0)
     }
 
     func testOfflineAtTheCheckIsRetriedFromTheStart() async throws {
-        await backend.queue(configs: [.failure(LiteAPIError.transport("offline")), .success(Self.config())])
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
+        server.update { $0.offline = ["/v1/config"] }
+        let s = seedSession()
         await s.run()
         XCTAssertEqual(s.state, .failed(nil, .offline))
-        let before = await prompts.value
-        XCTAssertEqual(before, 0)
+        server.update { $0.offline = [] }
         await s.retry()
         XCTAssertEqual(s.state, .ready)
-    }
-
-    // MARK: - Failures and retries
-
-    func testOfflineAtSignInRetriesWithTheSameUnlock() async throws {
-        await backend.queue(signIns: [.failure(LiteAPIError.transport("timed out")), .success(Self.auth())])
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.signIn, .offline))
-        XCTAssertEqual(status(s, .signIn), .failed(.offline))
-        XCTAssertTrue(s.holdsSigner, "a failure retrying can help keeps the run's signer")
-        await s.retry()
-        XCTAssertEqual(s.state, .ready)
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 1)
-    }
-
-    func testServerRefusalsMapToTheirFailures() async throws {
-        await backend.queue(signIns: [.failure(Self.error(403, "access_revoked"))])
-        var s = session()
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.signIn, .accessRevoked))
-        XCTAssertFalse(s.holdsSigner, "retrying can't help: the signer goes at once")
-
-        await backend.queue(signIns: [.failure(Self.error(429, "rate_limited"))])
-        s = session()
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.signIn, .rateLimited))
-
-        await backend.queue(signIns: [.failure(Self.error(401, "unauthorized", "That sign-in expired or was already used. Try again."))])
-        s = session()
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.signIn, .server("That sign-in expired or was already used. Try again.")))
-    }
-
-    func testUnlockFailures() async throws {
-        let cancelled = NSError(domain: "com.apple.LocalAuthentication", code: -2)
-        var s = session(unlock: { _ in throw cancelled })
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.unlock, .cancelled))
-
-        let passkey = NSError(domain: "com.apple.AuthenticationServices.AuthorizationError", code: 1001)
-        s = session(unlock: { _ in throw passkey })
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.unlock, .cancelled))
-
-        s = session(unlock: { _ in throw KeyError.badSeed })
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.unlock, .keyNotOnDevice))
-
-        s = session(unlock: { _ in throw LiteSession.Failure.keyNotOnDevice })
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.unlock, .keyNotOnDevice), "the host may throw a failure as it is")
-
-        // Another account's key: the unlock answers for an address that isn't this account's.
-        let other = try StellarSigner(seed: Array(repeating: 9, count: 32))
-        s = session(unlock: { _ in .init(keys: TestKeys(signer: other), signer: other) })
-        await s.run()
-        XCTAssertEqual(s.state, .failed(.unlock, .otherAccountsKey))
-        XCTAssertNil(s.store)
     }
 
     func testAFailedSetupSaysNothingWasSpentAndRetries() async throws {
-        await backend.queue(accounts: [.success(Self.account(exists: false, usdc: false)), .success(Self.account(exists: true, usdc: true))])
-        await backend.queue(activations: [.failure(PlanRunner.Failure.refused(step: "Enable USDC", reason: "test")), .success(())])
-        let s = session()
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        backend.failure = PlanRunner.Failure.refused(step: "Enable USDC", reason: "test")
+        let s = seedSession()
         await s.run()
         await s.join(invite: "x") // not waiting for an invite: ignored
         XCTAssertEqual(s.state, .waiting(.setUp))
         await s.setUp()
         XCTAssertEqual(s.state, .failed(.setUp, .setUpFailed))
         XCTAssertEqual(LiteSession.Failure.setUpFailed.errorDescription, tr("Couldn't set up your Stellar account. Nothing was spent."))
+        backend.failure = nil
         await s.retry()
         XCTAssertEqual(s.state, .ready)
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 1)
+        XCTAssertEqual(tally("appLock"), 2, "each Set Up is its own confirmed action")
     }
 
-    // MARK: - The signer's life
-
-    func testCancelDropsTheKeyAndKeepsWhatFinished() async throws {
-        await backend.queue(signIns: [.failure(Self.error(403, "not_invited")), .failure(Self.error(403, "not_invited")), .success(Self.auth())])
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
+    /// Enable USDC is user-paid (§4.1): once its transaction reached the network the setup never says nothing was spent.
+    func testASetupStepThatReachedTheNetworkNeverSaysNothingWasSpent() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+        }
+        backend.failureAfterSending = PlanRunner.Failure.failedOnChain(step: "Enable USDC", hash: "h", error: "op_low_reserve")
+        let s = seedSession(appLock: false)
         await s.run()
-        XCTAssertEqual(s.state, .waiting(.invite))
-        s.cancel()
-        XCTAssertEqual(s.state, .idle)
-        XCTAssertFalse(s.holdsSigner)
+        await s.setUp()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(tr("Not enough XLM for Stellar's minimum balance."))))
 
-        await s.run()
-        XCTAssertEqual(s.state, .waiting(.invite), "the next attempt asks for the code again")
-        await s.join(invite: "DYOR-ABCDE-FGHJK")
-        XCTAssertEqual(s.state, .ready)
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 2, "a cancelled run's key is gone: the next one unlocks again")
+        let timedOut = PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")
+        backend.failureAfterSending = timedOut
+        await s.retry()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(LiteErrorText.describe(timedOut))), "sent and not seen yet: it may still land")
+
+        // Sent and confirmed, but the account doesn't read as set up yet.
+        backend.failureAfterSending = nil
+        backend.afterRun = nil
+        await s.retry()
+        XCTAssertEqual(s.state, .failed(.setUp, .server(tr("Your Stellar account isn't ready yet. Try again in a moment."))))
+        XCTAssertEqual(backend.plans, ["setup", "setup", "setup"])
     }
 
-    func testTheSignerGoesAfterIdlingAndTheNextStepUnlocksAgain() async throws {
-        await backend.queue(accounts: [.success(Self.account(exists: false, usdc: false)), .success(Self.account(exists: true, usdc: true))])
-        let s = session()
-        s.idleTimeout = .milliseconds(50)
+    func testTheSetupRunsAtNoMoreThanTheFeeShownBeforeTheTap() async throws {
+        server.update {
+            $0.exists = false
+            $0.usdc = false
+            // The server answers the step with a ceiling 10 times the estimate shown before the tap.
+            $0.plan = FakeLite.plan(id: "setup", steps: [("s1", "trust", "Enable USDC", 100_000)])
+        }
+        let s = seedSession()
         await s.run()
-        XCTAssertEqual(s.state, .waiting(.setUp))
-        XCTAssertTrue(s.holdsSigner)
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertFalse(s.holdsSigner, "dropped after the idle timeout")
-        XCTAssertEqual(status(s, .unlock), .pending, "Unlock again to continue.")
-        XCTAssertEqual(s.state, .waiting(.setUp), "still waiting for the tap")
-
+        XCTAssertEqual(s.setupFee?.userMax, 10_000, "the estimate, before the tap")
         await s.setUp()
         XCTAssertEqual(s.state, .ready)
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 2)
+        XCTAssertEqual(backend.lastFees?.maxFee("s1"), 10_000, "the step must be built within the figure the user saw")
+        XCTAssertEqual(s.setupFee?.userMax, 10_000)
     }
 
-    func testGoingToTheBackgroundDropsTheSigner() async throws {
-        await backend.queue(signIns: [.failure(Self.error(403, "not_invited")), .success(Self.auth())])
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
-        await s.run()
-        XCTAssertTrue(s.holdsSigner)
-        s.appDidEnterBackground()
-        XCTAssertFalse(s.holdsSigner)
-        XCTAssertEqual(status(s, .unlock), .pending)
-        await s.join(invite: "DYOR-ABCDE-FGHJK")
-        XCTAssertEqual(s.state, .ready)
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 2, "Join unlocks first")
-    }
+    // MARK: - Sign out
 
-    // MARK: - Launch, sign-out, a lost session
-
-    func testResumeAtLaunchNeverPrompts() async throws {
-        defaults.set(true, forKey: LiteSession.activatedKey(signer.address))
-        vault.save(token: "saved", expiresAt: Date().addingTimeInterval(3600), account: signer.address, network: "testnet")
-        var s = session()
+    func testSignOutRevokesErasesAndMakesTheNextSwitchASignIn() async throws {
+        activate(seedAddress)
+        let saved = server.issueSession()
+        vault.save(saved, account: seedAddress, network: "testnet")
+        let s = seedSession()
+        var signedOut: String?
+        s.onSignOut = { signedOut = $0 }
         await s.resumeAtLaunch()
-        XCTAssertEqual(s.state, .ready)
-        XCTAssertNotNil(s.store)
-        let restored = await backend.restored
-        XCTAssertEqual(restored, ["saved"])
-
-        vault.save(token: "old", expiresAt: Date().addingTimeInterval(30), account: signer.address, network: "testnet")
-        s = session()
-        await s.resumeAtLaunch()
-        XCTAssertEqual(s.state, .locked, "a session ending within the minute isn't restored")
-        XCTAssertEqual(s.home, .locked)
-
-        await backend.queue(configs: [.success(Self.config(enabled: false))])
-        vault.save(token: "saved", expiresAt: Date().addingTimeInterval(3600), account: signer.address, network: "testnet")
-        s = session()
-        await s.resumeAtLaunch()
-        XCTAssertEqual(s.state, .unavailable(.paused))
-
-        let unlocked = await prompts.value
-        XCTAssertEqual(unlocked, 0)
-    }
-
-    func testSignOutEndsTheSessionAndKeepsTheSetup() async throws {
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
-        await s.run()
-        XCTAssertEqual(s.state, .ready)
         await s.signOut()
-        XCTAssertEqual(s.state, .locked)
-        XCTAssertNil(s.store)
-        XCTAssertNil(vault.load(account: signer.address, network: "testnet"))
-        XCTAssertEqual(s.plan(), .setup([.unlock, .signIn]), "still set up: unlock and sign in again")
-    }
+        XCTAssertEqual(server.seen.last { $0.path == "/v1/auth/signout" }?.json["refreshToken"], saved.refreshToken, "the family is revoked")
+        XCTAssertNil(vault.load(account: seedAddress, network: "testnet"))
+        XCTAssertNil(s.store, "the figures go")
+        XCTAssertEqual(signedOut, seedAddress)
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertNotEqual(s.home, .ready)
 
-    func testALostSessionLocksHome() async throws {
-        await backend.queue(accounts: [.success(Self.account(exists: true, usdc: true))])
-        let s = session()
+        // The next switch: the sign-in only, silent for a seed account; then instant again.
         await s.run()
-        s.store?.report(LiteAPIError.server(status: 401, code: "unauthorized", message: "Your session expired. Sign in again."))
-        XCTAssertEqual(s.state, .locked)
-        XCTAssertEqual(s.home, .locked)
-        XCTAssertNotNil(s.store, "the last figures stay in memory")
-
-        s.store?.report(LiteAPIError.server(status: 403, code: "access_revoked", message: "Access to Stellar was turned off for this account."))
-        XCTAssertEqual(s.state, .locked, "access is judged at the next sign-in once locked")
+        XCTAssertEqual(s.state, .ready)
+        XCTAssertEqual(s.plan(), .instant)
+        XCTAssertEqual(tally.prompts, 0)
     }
+
+    /// Sign out of Stellar while a renewal is under way: the renewal keeps nothing it brings back, and the token it rotated
+    /// in is revoked with the rest; nothing renews the account afterwards.
+    func testSigningOutDuringARenewalStaysSignedOut() async throws {
+        activate(seedAddress)
+        vault.save(server.issueSession(), account: seedAddress, network: "testnet")
+        let s = seedSession()
+        await s.resumeAtLaunch()
+        server.forget()
+        server.update { $0.slow["/v1/auth/refresh"] = 0.6 }
+        let renewing = Task { try? await s.renew() }
+        await waitUntil { self.refreshes == 1 }
+        await s.signOut()
+        await renewing.value
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh", "POST /v1/auth/signout"], "no sign-in in the refresh's place")
+        XCTAssertTrue(defaults.bool(forKey: LiteSession.signedOutKey(seedAddress)))
+        XCTAssertNil(vault.load(account: seedAddress, network: "testnet"))
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertNil(s.store)
+        XCTAssertTrue(server.current.refreshTokens.isEmpty, "the refresh token the renewal rotated in is revoked")
+        let held = await s.api.token
+        XCTAssertNil(held, "the API keeps no session")
+
+        try? await s.renew()
+        XCTAssertEqual(authCalls.count, 2, "a signed-out account doesn't renew")
+        XCTAssertEqual(tally.prompts, 0)
+    }
+
+    /// The same while the server refuses the refresh: a seed account would then sign in silently, but not once it signed
+    /// out.
+    func testARefusedRefreshDuringSignOutStartsNoSignIn() async throws {
+        activate(seedAddress)
+        let saved = server.issueSession(lifetime: -60)
+        vault.save(LiteSavedSession(token: saved.token, expiresAt: saved.expiresAt, refreshToken: "lrt_gone"), account: seedAddress, network: "testnet")
+        server.update { $0.slow["/v1/auth/refresh"] = 0.6 }
+        let s = seedSession()
+        let launching = Task { await s.resumeAtLaunch() }
+        await waitUntil { self.refreshes == 1 }
+        await s.signOut()
+        await launching.value
+        XCTAssertEqual(authCalls, ["POST /v1/auth/refresh", "POST /v1/auth/signout"])
+        XCTAssertTrue(defaults.bool(forKey: LiteSession.signedOutKey(seedAddress)))
+        XCTAssertNil(vault.load(account: seedAddress, network: "testnet"))
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        XCTAssertEqual(s.access, .publicView)
+        XCTAssertEqual(tally("seedRead"), 0, "nothing was signed")
+    }
+
+    func testAPasskeyAccountSignedOutSignsInWithOnePromptAndSpendsNothing() async throws {
+        activate(TestAccount.passkeyAddress)
+        defaults.set(true, forKey: LiteSession.signedOutKey(TestAccount.passkeyAddress))
+        let s = passkeySession(known: true)
+        XCTAssertEqual(s.plan(), .setup([.signIn]))
+        await s.run()
+        XCTAssertEqual(s.state, .ready)
+        XCTAssertEqual(tally.prompts, 1)
+        XCTAssertEqual(backend.plans, [], "already set up: nothing is sent")
+        XCTAssertFalse(s.holdsSigner)
+        XCTAssertEqual(tally("reason:\(tr("Sign in to DyorHQ on Stellar"))"), 1, "the prompt says it only signs in")
+        XCTAssertEqual(tally("reason:\(tr("Set up your Stellar account"))"), 0)
+    }
+
+    // MARK: - Errors
 
     func testFailureCopyAndRetryability() {
         XCTAssertEqual(LiteSession.failure(for: LiteAPIError.transport("x")), .offline)
         XCTAssertEqual(LiteSession.failure(for: URLError(.timedOut)), .offline)
         XCTAssertEqual(LiteSession.failure(for: KeyError.badMnemonic), .otherAccountsKey)
-        XCTAssertEqual(LiteSession.failure(for: Self.error(403, "bad_invite")), .inviteRejected)
-        XCTAssertEqual(LiteSession.failure(for: Self.error(400, "friendbot_slow", "Testnet is slow to create the account. Try again in a minute.")),
+        XCTAssertEqual(LiteSession.failure(for: LiteAPIError.server(status: 403, code: "bad_invite", message: "refused")), .inviteRejected)
+        XCTAssertEqual(LiteSession.failure(for: LiteAPIError.server(status: 400, code: "friendbot_slow", message: "Testnet is slow to create the account. Try again in a minute.")),
                        .server("Testnet is slow to create the account. Try again in a minute."))
-        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")), .setUpFailed)
+        XCTAssertEqual(LiteSession.failure(for: NSError(domain: "com.apple.LocalAuthentication", code: -2)), .cancelled)
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.refused(step: "Enable USDC", reason: "test")), .setUpFailed, "refused before it was sent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: LiteAPIError.decoding("an answer")), .setUpFailed)
+        let timedOut = PlanRunner.Failure.timedOut(step: "Enable USDC", hash: "h")
+        XCTAssertEqual(LiteSession.setUpFailure(for: timedOut), .server(LiteErrorText.describe(timedOut)), "sent: it may still land, its fee is spent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.failedOnChain(step: "Enable USDC", hash: "h", error: "tx_insufficient_balance")),
+                       .server(tr("Not enough XLM for the network fee.")))
+        XCTAssertEqual(LiteSession.setUpFailure(for: PlanRunner.Failure.overLimit(asset: "C"), sent: true),
+                       .server(LiteErrorText.describe(PlanRunner.Failure.overLimit(asset: "C"))), "an earlier step was sent")
+        XCTAssertEqual(LiteSession.setUpFailure(for: LiteSession.Failure.setUpFailed, sent: true), .server(tr("Your Stellar account isn't ready yet. Try again in a moment.")))
         XCTAssertEqual(LiteSession.setUpFailure(for: LiteAPIError.transport("x")), .offline)
         for failure in [LiteSession.Failure.paused, .updateRequired, .accessRevoked, .keyNotOnDevice] { XCTAssertFalse(failure.canRetry) }
         for failure in [LiteSession.Failure.offline, .cancelled, .otherAccountsKey, .inviteRejected, .rateLimited, .setUpFailed, .server("x")] {
             XCTAssertTrue(failure.canRetry)
         }
+        XCTAssertEqual(LiteSession.Failure.needsPasskey, .server(tr("Sign in with your passkey to continue.")))
     }
-
-    // MARK: - Fixtures
-
-    nonisolated static func error(_ status: Int, _ code: String, _ message: String = "refused") -> LiteAPIError {
-        .server(status: status, code: code, message: message)
-    }
-
-    nonisolated static func config(enabled: Bool = true, minBuild: Int = 1, sponsor: String = PinnedContracts.testnet.sponsor) -> LiteConfig {
-        let json = """
-        {"network":"testnet","passphrase":"Test SDF Network ; September 2015","rpcUrl":"http://127.0.0.1:9/rpc",
-         "horizonUrl":"http://127.0.0.1:9/horizon","activation":"friendbot","sponsor":"\(sponsor)","assets":[],
-         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[]},"allowlist":{},"anchors":[],
-         "bridge":{"routes":[],"monad":null},"flags":{"enabled":\(enabled)},"minBuild":\(minBuild)}
-        """
-        return try! JSONDecoder().decode(LiteConfig.self, from: Data(json.utf8))
-    }
-
-    nonisolated static func account(exists: Bool, usdc: Bool) -> AccountView {
-        let json = """
-        {"address":"G","exists":\(exists),"network":"testnet","activation":"friendbot","sponsor":"G","reserves":null,
-         "balances":[{"asset":"USDC","code":"USDC","name":"USD Coin","contract":"C","classic":"USDC:G","decimals":7,
-                      "balance":"0","enabled":\(usdc)}]}
-        """
-        return try! JSONDecoder().decode(AccountView.self, from: Data(json.utf8))
-    }
-
-    nonisolated static func auth(hours: Double = 12) -> AuthResult {
-        let expires = ISO8601DateFormatter.liteUI.string(from: Date().addingTimeInterval(hours * 3600))
-        let json = #"{"token":"jwt","expiresAt":"\#(expires)","tester":{"address":"G","label":null}}"#
-        return try! JSONDecoder().decode(AuthResult.self, from: Data(json.utf8))
-    }
-}
-
-// MARK: - Test doubles
-
-/// The API's answers, queued per call; the last one repeats. As the live backend does, a sign-in or a restore hands
-/// its token to the API the store reads through (here at a closed port: its reads fail as offline, which changes
-/// nothing in the session).
-actor FakeBackend: LiteBackend {
-    nonisolated let api = LiteAPI(baseURL: URL(string: "http://127.0.0.1:9/lite")!)
-    private var configs: [Result<LiteConfig, Error>] = [.success(LiteSessionTests.config())]
-    private var signIns: [Result<AuthResult, Error>] = [.success(LiteSessionTests.auth())]
-    private var accounts: [Result<AccountView, Error>] = [.success(LiteSessionTests.account(exists: true, usdc: true))]
-    private var activationResults: [Result<Void, Error>] = [.success(())]
-    private(set) var calls: [String] = []
-    private(set) var invites: [String?] = []
-    private(set) var restored: [String] = []
-    private(set) var activations = 0
-
-    func queue(configs: [Result<LiteConfig, Error>]) { self.configs = configs }
-    func queue(signIns: [Result<AuthResult, Error>]) { self.signIns = signIns }
-    func queue(accounts: [Result<AccountView, Error>]) { self.accounts = accounts }
-    func queue(activations: [Result<Void, Error>]) { activationResults = activations }
-
-    private func next<T>(_ list: inout [Result<T, Error>]) throws -> T {
-        let result = list.count > 1 ? list.removeFirst() : list[0]
-        return try result.get()
-    }
-
-    func config() async throws -> LiteConfig {
-        calls.append("config")
-        return try next(&configs)
-    }
-
-    func restore(token: String, expiresAt: Date) async {
-        restored.append(token)
-        await api.restore(token: token, expiresAt: expiresAt)
-    }
-
-    func signIn(signer: StellarSigner, invite: String?) async throws -> AuthResult {
-        calls.append("signIn")
-        invites.append(invite)
-        let result = try next(&signIns)
-        await api.restore(token: result.token, expiresAt: Date().addingTimeInterval(3600))
-        return result
-    }
-
-    func account() async throws -> AccountView {
-        calls.append("account")
-        return try next(&accounts)
-    }
-
-    func activate(signer: StellarSigner, config: LiteConfig) async throws {
-        calls.append("activate")
-        activations += 1
-        try next(&activationResults)
-    }
-
-    func signOut() async { calls.append("signOut") }
-}
-
-final class MemoryVault: LiteSessionVault, @unchecked Sendable {
-    private let lock = NSLock()
-    private var items: [String: (token: String, expiresAt: Date)] = [:]
-
-    func load(account: String, network: String) -> (token: String, expiresAt: Date)? {
-        lock.withLock { items["\(network).\(account)"] }
-    }
-
-    func save(token: String, expiresAt: Date, account: String, network: String) {
-        lock.withLock { items["\(network).\(account)"] = (token, expiresAt) }
-    }
-
-    func erase(account: String, network: String) {
-        lock.withLock { _ = items.removeValue(forKey: "\(network).\(account)") }
-    }
-}
-
-actor Counter {
-    private(set) var value = 0
-    func increment() { value += 1 }
-}
-
-struct TestKeys: LiteKeyProvider {
-    let signer: StellarSigner
-    var address: String { signer.address }
-    let canSign = true
-    let methodLabel = "Test"
-    let canExportSecret = false
-    func signer(reason: String) async throws -> StellarSigner { signer }
 }

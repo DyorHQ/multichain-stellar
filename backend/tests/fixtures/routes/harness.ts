@@ -158,15 +158,30 @@ export const routeRows: Responder = (q) => {
   if (q.startsWith("select value from lite.app_config")) return [{ value: { enabled: true, maintenance: false } }];
   if (q.startsWith("update lite.auth_nonces set used_at")) return [];
   if (q.startsWith("select 1 from lite.tx_log where address = ? and kind = 'faucet'")) return [{ "?column?": 1 }];
+  // Friendbot's claim, activation's and the faucet's, is made under this lock per address (account.ts).
+  if (q === "select pg_advisory_xact_lock(hashtextextended(?, 0))") return [{}];
   if (/^select \* from lite\.launches .*order by/.test(q)) return [LAUNCH_ROW];
   if (q === "select * from lite.launches where token = ?") return [];
-  if (q.startsWith("select * from lite.moments order by created_at desc")) return [MOMENT_ROW];
+  // The launch board and a launch's page (launchpad.ts launchQuery): the board lists LAUNCH_ROW, and TOKEN has no page.
+  if (q.startsWith("select l.*, greatest(l.burned, coalesce(b.burned, 0)) as burned_total")) return q.includes("where l.token = ?") ? [] : [LAUNCH_ROW];
+  // The Moments feed lists MOMENT_ROW; nobody holds an edition, published one or collected (moments.ts).
+  if (q.startsWith("select * from lite.moments where listed and title is not null")) return [MOMENT_ROW];
+  if (q.includes("from lite.moment_editions e join lite.moments m")) return [];
+  if (q.startsWith("select * from lite.moments where creator = ?")) return [];
   if (q.includes("from lite.moment_collects c join lite.moments m")) return [];
+  // Contracts v2's Moments (moments_v2_feed.ts): none listed, at TOKEN, held, promised or published.
+  if (q.startsWith("select m.* from lite.moments m where")) return [];
+  if (q.includes("from lite.moment_positions p join lite.moments m")) return [];
+  // Nobody holds a launch token (holdings.ts).
+  if (q.startsWith("select l.*, coalesce(tb.balance, 0) as indexed_balance")) return [];
   if (q === "select * from lite.moments where id = ?") return [];
   if (q.startsWith("update lite.bridge_transfers set dest_tx")) return [];
-  if (q.startsWith("select hash, kind, intent, status, ledger, created_at from lite.tx_log where address = ?")) {
+  // GET /v1/activity (activity.ts): one swap logged before migration 05 (no section, fee or result), a transfer to
+  // Monad and a cash deposit from before decision 7.
+  if (q.startsWith("select hash, address, kind, intent, status, ledger, created_at, section, fee_charged, fee_payer, result from lite.tx_log t where t.address = ?")) {
     return [{
       hash: "ab".repeat(32),
+      address: USER.publicKey(),
       kind: "swap",
       intent: { summary: "Swap 50 XLM for at least 9.5 USDC", display: { venue: "soroswap", sell: "XLM", buy: "USDC" } },
       status: "success",
@@ -174,14 +189,21 @@ export const routeRows: Responder = (q) => {
       created_at: at("2026-10-13T08:00:00.000Z"),
     }];
   }
-  if (q.startsWith("select id, direction, amount, status, created_at from lite.bridge_transfers where address = ?")) {
-    return [{ id: BRIDGE_ID, direction: "stellar_to_monad", amount: "10000000", status: "attesting", created_at: at("2026-10-13T07:30:00.000Z") }];
+  if (q.startsWith("select id, direction, amount, status, source_tx, dest_tx, created_at from lite.bridge_transfers b where b.address = ?")) {
+    return [{ id: BRIDGE_ID, direction: "stellar_to_monad", amount: "10000000", status: "attesting", source_tx: null, dest_tx: null, created_at: at("2026-10-13T07:30:00.000Z") }];
   }
-  if (q.startsWith("select id, anchor, kind, asset, amount, status, created_at from lite.anchor_transfers where address = ?")) {
+  if (q.startsWith("select id, anchor, kind, asset, amount, status, created_at from lite.anchor_transfers c where c.address = ?")) {
     return [{ id: "5d0c1b7e-0000-4000-8000-000000000003", anchor: "testanchor.stellar.org", kind: "deposit", asset: "USDC", amount: null, status: "incomplete", created_at: at("2026-10-13T07:00:00.000Z") }];
   }
   if (q.startsWith("select token, quote, last_price from lite.launches where last_price is not null")) {
     return [{ token: TOKEN, quote: XLM_SAC, last_price: "0.0000333" }];
+  }
+  // The reference cache (migration 06), quoted a moment ago so that every price is current.
+  if (q === "select ref, usd, source, market, change_24h, volume_24h_usd, quoted_at from lite.ref_quotes") {
+    return [
+      { ref: "XLM", usd: "0.1901", source: "kraken", market: "Kraken XLM/USD", change_24h: "-0.0123", volume_24h_usd: "3712345.2", quoted_at: new Date() },
+      { ref: "USDC", usd: "0.9999", source: "kraken", market: "Kraken USDC/USD", change_24h: "0.0001", volume_24h_usd: "912003.5", quoted_at: new Date() },
+    ];
   }
   throw new Error(`unexpected query: ${q}`);
 };
@@ -209,7 +231,7 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "auth-challenge-bad-address", method: "POST", path: "/v1/auth/challenge", body: { address: "not-an-address" }, auth: false },
   { name: "auth-verify-used-nonce", method: "POST", path: "/v1/auth/verify", body: { address: USER.publicKey(), nonce: "n0", signature: "c2ln" }, auth: false },
   { name: "config", method: "GET", path: "/v1/config", auth: false, grown: "the fields of docs/DESIGN-stellar-parity.md §6.2, and public caching" },
-  { name: "account", method: "GET", path: "/v1/account", auth: true },
+  { name: "account", method: "GET", path: "/v1/account", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.4, and the public view without a token" },
   { name: "account-activate-friendbot-down", method: "POST", path: "/v1/account/activate", auth: true },
   { name: "account-trust-native", method: "POST", path: "/v1/account/trust", body: { asset: "XLM" }, auth: true },
   { name: "account-faucet-used", method: "POST", path: "/v1/account/faucet", auth: true },
@@ -219,17 +241,17 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "tx-status-unknown", method: "GET", path: "/v1/tx/nope", auth: true },
   { name: "swap-quote-same-asset", method: "POST", path: "/v1/swap/quote", body: { sell: "XLM", buy: "XLM", amount: "10000000" }, auth: true },
   { name: "swap-build-unknown", method: "POST", path: "/v1/swap/build", body: { quoteId: "nope" }, auth: true },
-  { name: "earn-markets-rpc-down", method: "GET", path: "/v1/earn/markets", auth: true },
-  { name: "earn-positions-rpc-down", method: "GET", path: "/v1/earn/positions", auth: true },
+  { name: "earn-markets-rpc-down", method: "GET", path: "/v1/earn/markets", auth: false },
+  { name: "earn-positions-rpc-down", method: "GET", path: "/v1/earn/positions", auth: true, grown: "the public view without a token (§6.0): 400 address_required without ?address=" },
   { name: "earn-build-bad-action", method: "POST", path: "/v1/earn/build", body: { action: "borrow", pool: "C", asset: "XLM", amount: "1" }, auth: true },
-  { name: "launches", method: "GET", path: "/v1/launches?sort=hot&limit=5", auth: true },
-  { name: "launch-unknown", method: "GET", path: `/v1/launches/${TOKEN}`, auth: true },
+  { name: "launches", method: "GET", path: "/v1/launches?sort=hot&limit=5", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.9, and the public view without a token" },
+  { name: "launch-unknown", method: "GET", path: `/v1/launches/${TOKEN}`, auth: true, grown: "the public view without a token (§6.0): still 404 for a token with no launch" },
   { name: "launch-quote-bad-side", method: "POST", path: `/v1/launches/${TOKEN}/quote`, body: { side: "hold", amount: "1" }, auth: true },
   { name: "launch-build-no-name", method: "POST", path: "/v1/launches/build", body: { action: "create", quote: "XLM", name: "", symbol: "ECAT" }, auth: true },
   { name: "media-upload-bad-type", method: "POST", path: "/v1/media/upload-url", body: { contentType: "text/plain", bytes: 10 }, auth: true },
-  { name: "moments", method: "GET", path: "/v1/moments?limit=5", auth: true },
-  { name: "moments-owned", method: "GET", path: "/v1/moments/owned", auth: true },
-  { name: "moment-unknown", method: "GET", path: "/v1/moments/7", auth: true },
+  { name: "moments", method: "GET", path: "/v1/moments?limit=5", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.9, and the public view without a token" },
+  { name: "moments-owned", method: "GET", path: "/v1/moments/owned", auth: true, grown: "the view (§6.0); without a token, 400 address_required without ?address=" },
+  { name: "moment-unknown", method: "GET", path: "/v1/moments/7", auth: true, grown: "the public view without a token (§6.0): still 404 for an id with no Moment" },
   { name: "moment-metadata-no-title", method: "POST", path: "/v1/moments/metadata", body: { title: "" }, auth: true },
   { name: "moment-build-bad-action", method: "POST", path: "/v1/moments/build", body: { action: "burn" }, auth: true },
   { name: "bridge-quote", method: "POST", path: "/v1/bridge/quote", body: { direction: "stellar_to_monad", amount: "10000000" }, auth: true },
@@ -237,10 +259,8 @@ export const ROUTE_REQUESTS: RouteRequest[] = [
   { name: "bridge-source-bad-hash", method: "POST", path: `/v1/bridge/${BRIDGE_ID}/source`, body: { txHash: "nope" }, auth: true },
   { name: "bridge-claimed-unknown", method: "POST", path: `/v1/bridge/${BRIDGE_ID}/claimed`, body: { txHash: "0x" + "cd".repeat(32) }, auth: true },
   { name: "bridge-status-unknown", method: "GET", path: "/v1/bridge/nope", auth: true },
-  { name: "cash-anchors", method: "GET", path: "/v1/cash/anchors?country=gh", auth: true },
-  { name: "cash-track-unknown-anchor", method: "POST", path: "/v1/cash/track", body: { anchor: "example.com", kind: "deposit", asset: "USDC", anchorTxId: "1" }, auth: true },
-  { name: "activity", method: "GET", path: "/v1/activity", auth: true },
-  { name: "prices", method: "GET", path: "/v1/prices", auth: true, volatile: ["at"] },
+  { name: "activity", method: "GET", path: "/v1/activity", auth: true, grown: "the fields of docs/DESIGN-stellar-parity.md §6.10: section, hash, fees, result, ref, names, words and usd" },
+  { name: "prices", method: "GET", path: "/v1/prices", auth: false, volatile: ["at"] },
   { name: "no-route", method: "GET", path: "/v1/nope", auth: false },
 ];
 

@@ -36,41 +36,6 @@
         }
       }
     },
-    "Balance and activity" : {
-      "comment" : "The side menu on Stellar: what its Home holds, under the row's name",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Balance and activity"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Saldo y actividad"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Solde et activité"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "잔액 및 활동"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "余额与动态"
-          }
-        }
-      }
-    },
     "Changes the network." : {
       "comment" : "VoiceOver hint: what the network control on Home and in Profile does",
       "localizations" : {
@@ -102,41 +67,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "更改网络。"
-          }
-        }
-      }
-    },
-    "Checking your access…" : {
-      "comment" : "The network sheet's sign-in step while it runs",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Checking your access…"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Comprobando tu acceso…"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vérification de votre accès…"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "접근 권한을 확인하는 중…"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在检查你的访问权限…"
           }
         }
       }
@@ -207,41 +137,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "无法设置你的 Stellar 账户。未花费任何费用。"
-          }
-        }
-      }
-    },
-    "Creates your account and adds USDC. DyorHQ pays the network fees and the reserve, so you spend nothing." : {
-      "comment" : "The network sheet's account setup step, before its tap. “Reserve”: the XLM every Stellar account must hold, which DyorHQ pays",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Creates your account and adds USDC. DyorHQ pays the network fees and the reserve, so you spend nothing."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Crea tu cuenta y añade USDC. DyorHQ paga las comisiones de red y la reserva, así que no gastas nada."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Crée votre compte et ajoute l'USDC. DyorHQ paie les frais de réseau et la réserve : vous ne dépensez rien."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "계정을 만들고 USDC를 추가해요. 네트워크 수수료와 준비금은 DyorHQ가 내므로 비용이 들지 않아요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "创建你的账户并添加 USDC。DyorHQ 支付网络费和储备金，因此你无需花费任何费用。"
           }
         }
       }
@@ -382,41 +277,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Stellar 上的 DyorHQ 正在暂停维护。Monad 不受影响。"
-          }
-        }
-      }
-    },
-    "Earn, swap, launch and collect" : {
-      "comment" : "The network sheet: what you can do on Stellar in DyorHQ, under its name. At most 2 lines",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Earn, swap, launch and collect"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gana, intercambia, lanza y colecciona"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Gagnez, échangez, lancez et collectez"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "수익 얻기, 스왑, 런칭, 수집"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "赚取、兑换、发射和收藏"
           }
         }
       }
@@ -767,41 +627,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "观察地址时不可用。"
-          }
-        }
-      }
-    },
-    "On testnet you also get %@ test XLM." : {
-      "comment" : "The network sheet's account setup step, on Stellar's test network. %@ is a number, formatted by the app (10,000)",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "On testnet you also get %@ test XLM."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "En la testnet también recibes %@ XLM de prueba."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sur le testnet, vous recevez aussi %@ XLM de test."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "테스트넷에서는 테스트용 XLM %@개도 받아요."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "在测试网上，你还会获得 %@ 个测试 XLM。"
           }
         }
       }
@@ -1537,146 +1362,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "尝试次数过多。稍等片刻后重试。"
-          }
-        }
-      }
-    },
-    "Unlock again to continue." : {
-      "comment" : "The network sheet's unlock step, after the unlocked key was dropped for being idle: the next step asks for it again",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unlock again to continue."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Vuelve a desbloquear para continuar."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Déverrouillez à nouveau pour continuer."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "계속하려면 다시 잠금 해제하십시오."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "再次解锁以继续。"
-          }
-        }
-      }
-    },
-    "Unlock was cancelled." : {
-      "comment" : "The network sheet's Setup: the passkey or Face ID prompt that unlocks the Stellar key was cancelled",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unlock was cancelled."
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se canceló el desbloqueo."
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Le déverrouillage a été annulé."
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "잠금 해제가 취소되었습니다."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已取消解锁。"
-          }
-        }
-      }
-    },
-    "Unlock your Stellar key" : {
-      "comment" : "A step of the network sheet's Setup, and the reason the passkey or Face ID prompt gives: unlock the account's key on the Stellar network",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unlock your Stellar key"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desbloquea tu clave de Stellar"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Déverrouillez votre clé Stellar"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stellar 키 잠금 해제"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "解锁你的 Stellar 密钥"
-          }
-        }
-      }
-    },
-    "Unlocked" : {
-      "comment" : "[tight] The network sheet's unlock step is done: the Stellar key is unlocked",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Unlocked"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Desbloqueada"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Déverrouillée"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "잠금 해제됨"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已解锁"
           }
         }
       }

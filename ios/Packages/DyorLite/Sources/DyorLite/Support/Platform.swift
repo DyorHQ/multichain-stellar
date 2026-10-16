@@ -1,20 +1,7 @@
 import SwiftUI
 #if canImport(UIKit)
 import CoreImage.CIFilterBuiltins
-import SafariServices
 import UIKit
-
-/// In-app browser for anchors' interactive flows (SEP-24 asks wallets to show them in a web view or popup).
-struct SafariView: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-        let vc = SFSafariViewController(url: url)
-        vc.dismissButtonStyle = .done
-        return vc
-    }
-
-    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
-}
 
 struct QRCodeView: View {
     let text: String
@@ -38,11 +25,6 @@ struct QRCodeView: View {
     }
 }
 #else
-struct SafariView: View {
-    let url: URL
-    var body: some View { Link(destination: url) { Text(verbatim: url.absoluteString) } }
-}
-
 struct QRCodeView: View {
     let text: String
     var body: some View { Image(systemName: "qrcode").resizable().scaledToFit().accessibilityLabel(tr("QR code of your Stellar address")) }

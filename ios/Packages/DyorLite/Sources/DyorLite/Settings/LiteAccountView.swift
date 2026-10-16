@@ -2,8 +2,9 @@ import StellarKit
 import SwiftUI
 
 /// Profile › Network › Stellar account (design spec §3.5): the Stellar address, how it is secured, the network, the
-/// reserves DyorHQ pays, the secret key for accounts that can export it, test XLM, and signing out of Stellar. Pushed
-/// inside Profile's own navigation stack: it has no stack or Close of its own.
+/// secret key for accounts that can export it, and signing out of Stellar. Friendbot's test XLM isn't here: it is
+/// offered in Deposit, once (decision 7). Pushed inside Profile's own navigation stack: it has no stack or Close of its
+/// own.
 @MainActor
 public struct LiteAccountView: View {
     private let session: LiteSession
@@ -11,22 +12,9 @@ public struct LiteAccountView: View {
     @State private var error: String?
     @State private var copied = false
     @State private var confirmSignOut = false
-    @State private var busy = false
     @Environment(\.liteStyle) private var style
 
     public init(session: LiteSession) { self.session = session }
-
-    /// What DyorHQ's reserves for the account hold, in XLM. Horizon's `num_sponsored` (the server's `sponsoredByDyorHQ`,
-    /// backend _shared/stellar.ts) counts base reserves: 2 for an account, 1 for each trustline or other entry. A base
-    /// reserve is 0.5 XLM (Stellar's network setting).
-    static func reserveXLM(_ baseReserves: Int) -> String {
-        "\(StellarAmount.format(Int64(max(0, baseReserves)) * baseReserveStroops, maxFraction: 7)) XLM"
-    }
-
-    static let baseReserveStroops: Int64 = 5_000_000
-
-    private var store: LiteStore? { session.home == .ready ? session.store : nil }
-    private var isTestnet: Bool { session.env.pinned.network.name == "testnet" }
 
     public var body: some View {
         Form {
@@ -52,20 +40,17 @@ public struct LiteAccountView: View {
                         Text(tr("Stellar address"))
                     }
                 }
-                if let method = session.keys?.methodLabel, !method.isEmpty {
+                if let method = session.methodLabel, !method.isEmpty {
                     LabeledContent(tr("Secured by"), value: method)
                 }
                 LabeledContent(tr("Network")) {
                     HStack(spacing: 6) {
                         Text(verbatim: "Stellar")
-                        if isTestnet { TestnetBadge() }
+                        if session.isTestnet { TestnetBadge() }
                     }
                 }
-                if let reserves = store?.account?.reserves {
-                    LabeledContent(tr("Reserves paid by DyorHQ"), value: Self.reserveXLM(reserves.sponsoredByDyorHQ))
-                }
             }
-            if session.keys?.canExportSecret == true {
+            if session.canExportSecret {
                 Section {
                     if let secret {
                         Text(verbatim: secret).font(.footnote.monospaced()).textSelection(.enabled)
@@ -75,26 +60,12 @@ public struct LiteAccountView: View {
                     } else {
                         Button(tr("Show Stellar secret key")) {
                             Task {
-                                do { secret = try await session.signer(reason: tr("Show your Stellar secret key")).secret } catch { self.error = describe(error) }
+                                do { secret = try await session.revealSecret(reason: tr("Show your Stellar secret key")) } catch { self.error = LiteErrorText.describe(error) }
                             }
                         }
                     }
                 } footer: {
                     LiteParagraph(tr("Import it into any Stellar wallet (Freighter, LOBSTR, xBull) to reach the same account."))
-                }
-            }
-            if isTestnet, let store {
-                Section {
-                    Button(tr("Get \(ReceiveSheet.faucetAmount) test XLM")) {
-                        Task {
-                            busy = true
-                            defer { busy = false }
-                            do { try await store.faucet() } catch { self.error = describe(error) }
-                        }
-                    }
-                    .disabled(busy)
-                } footer: {
-                    LiteParagraph(tr("Testnet balances have no value. DyorHQ pays the Stellar network fees."))
                 }
             }
             if let error { Section { LiteInlineError(message: error) } }
@@ -112,14 +83,14 @@ public struct LiteAccountView: View {
             Button(tr("Sign out of Stellar"), role: .destructive) { Task { await session.signOut() } }
             Button(tr("Cancel"), role: .cancel) {}
         } message: {
-            Text(tr("You'll unlock and sign in again to use Stellar. Your Stellar funds stay in your account."))
+            Text(tr("You'll sign in again to use Stellar. Your Stellar funds stay in your account."))
         }
         .onDisappear { secret = nil }
     }
 }
 
-/// Profile › Wallet › Receive while on Stellar: the Stellar address and its QR code (it shows while the session is
-/// locked too: receiving needs no sign-in). Presented as a sheet; it has its own Close.
+/// Profile › Wallet › Receive while on Stellar: the Stellar address and its QR code (receiving needs nothing but the
+/// address). Presented as a sheet; it has its own Close.
 @MainActor
 public struct LiteDepositSheet: View {
     private let session: LiteSession
@@ -128,9 +99,9 @@ public struct LiteDepositSheet: View {
 
     public var body: some View {
         if let address = session.address {
-            ReceiveSheet(address: address, store: session.home == .ready ? session.store : nil)
+            ReceiveSheet(address: address, store: session.store)
         } else {
-            LiteLockedSheet(session: session)
+            LiteRestingSheet(session: session)
         }
     }
 }
@@ -147,13 +118,13 @@ public struct LiteWithdrawSheet: View {
         if session.home == .ready, let store = session.store {
             SendSheet().environment(store)
         } else {
-            LiteLockedSheet(session: session)
+            LiteRestingSheet(session: session)
         }
     }
 }
 
-/// A Stellar sheet that needs the session while it is locked or paused: what Home's card says.
-private struct LiteLockedSheet: View {
+/// A Stellar sheet whose session is paused or still opening: what Home's card says.
+struct LiteRestingSheet: View {
     let session: LiteSession
     @Environment(\.dismiss) private var dismiss
 
@@ -163,7 +134,7 @@ private struct LiteLockedSheet: View {
                 if case .paused(let failure) = session.home {
                     ContentUnavailableView(failure.errorDescription ?? "", systemImage: "pause.circle")
                 } else {
-                    ContentUnavailableView(tr("Unlock to see your Stellar balance."), systemImage: "lock.fill")
+                    ProgressView()
                 }
             }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("Close")) { dismiss() } } }

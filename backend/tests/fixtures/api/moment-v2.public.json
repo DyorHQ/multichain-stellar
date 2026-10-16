@@ -1,0 +1,88 @@
+{
+  "moment": {
+    "generation": 2,
+    "nft": "CA6T2PJ5HU6T2PJ5HU6T2PJ5HU6T2PJ5HU6T2PJ5HU6T2PJ5HU6T2YZ5",
+    "number": 2,
+    "creator": "GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN",
+    "uri": "https://example.supabase.co/storage/v1/object/public/lite-media/moments/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/9b2f6a0e-1c4d-4f43-9c1e-7a6f3c2d1e01.json",
+    "name": "Harbour at dusk",
+    "symbol": "DUSK",
+    "title": "Harbour at dusk",
+    "description": "The last ferry leaving Jamestown.",
+    "place": "Accra",
+    "takenOn": "2026-10-13",
+    "mediaUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/7dedfd8a-9584-4cd0-a43a-cd036723818b.mp4",
+    "mediaType": "video",
+    "posterUrl": "https://example.supabase.co/storage/v1/object/public/lite-media/uploads/GDTCJIP2SGHCVPX6ZMO66KR4E4QIJT7DIGDW7IMCYBY2W3B53B5K3NPN/27601021-cbcb-4512-a8e3-69978e581185.jpg",
+    "price": "50000000",
+    "quote": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+    "quoteCode": "USDC",
+    "priceUsd": 5,
+    "threshold": "200000000",
+    "totalGross": "200000000",
+    "reserve": "150000000",
+    "progress": 0.75,
+    "minted": 3,
+    "collects": 3,
+    "collectors": 2,
+    "creatorAllocBps": 500,
+    "platformBps": 500,
+    "royaltyBps": 500,
+    "deadline": "2026-10-22T09:00:00.000Z",
+    "state": "collecting",
+    "open": true,
+    "coin": null,
+    "pool": null,
+    "durations": {
+      "vestPeriod": 604800,
+      "stuckExpiry": 604800,
+      "pendingBackstop": 2592000,
+      "timelock": 172800,
+      "timelockWindow": 604800,
+      "minWindow": 3600,
+      "maxWindow": 2592000,
+      "harvestInterval": 3600
+    },
+    "publishedAt": "2026-10-15T09:41:00.000Z",
+    "completedAt": null,
+    "graduatedAt": null,
+    "expiredAt": null
+  },
+  "collectors": [
+    {
+      "collector": "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR",
+      "quantity": 1,
+      "firstTokenId": 3,
+      "ts": "2026-10-15T12:00:00.000Z"
+    },
+    {
+      "collector": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+      "quantity": 1,
+      "firstTokenId": 2,
+      "ts": "2026-10-15T11:00:00.000Z"
+    },
+    {
+      "collector": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+      "quantity": 1,
+      "firstTokenId": 1,
+      "ts": "2026-10-15T10:00:00.000Z"
+    }
+  ],
+  "collectorsSummary": {
+    "count": 2,
+    "largest": {
+      "address": "GDWUSKGGFDI4FRXK5EBTRECZSVQSSWJHHJOGH6JWG3AUMFFMQ435DIAG",
+      "editions": 2
+    }
+  },
+  "you": {
+    "editions": [
+      3
+    ],
+    "entitlement": "10000000000000",
+    "claimed": "0",
+    "spent": null
+  },
+  "creatorEarned": "40000000",
+  "view": "public"
+}

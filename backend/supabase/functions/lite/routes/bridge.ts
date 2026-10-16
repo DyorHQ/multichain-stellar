@@ -7,15 +7,13 @@ export function register(router: Router): void {
   router.on("POST /v1/bridge/quote", async ({ req }) => {
     await user(req);
     const body = await readJson<{ direction: string; amount: string }>(req);
-    amountArg(body.amount, "amount");
-    return json(await bridgeQuote(body));
+    return json(await bridgeQuote({ direction: body.direction, amount: amountArg(body.amount, "amount") }));
   });
 
   router.on("POST /v1/bridge/start", async ({ req }) => {
     const u = await user(req);
     const body = await readJson<{ direction: string; amount: string; monadAddress: string }>(req);
-    amountArg(body.amount, "amount");
-    return json(await startBridge(u, body));
+    return json(await startBridge(u, { direction: body.direction, amount: amountArg(body.amount, "amount"), monadAddress: body.monadAddress }));
   });
 
   router.on("POST /v1/bridge/:id/source", async ({ req, params }) => {

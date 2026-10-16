@@ -54,7 +54,7 @@ optional in Swift.
   - **session**: the token is required: DyorHQ's history (`portfolio`, `activity`, `launchpad/me`, `moments/mine`,
     `tx/:hash`) and every write, quote or plan (`account/activate|trust|faucet`, `recipient`, `send`, `plans/*`,
     `tx/submit`, `swap/*`, `earn/build`, the `launches/*` writes and quotes, the `moments/*` writes, `media/*`,
-    `bridge/*`, `cash/*`). Without it: 401 `unauthorized`.
+    `bridge/*`). Without it: 401 `unauthorized`.
 
   Answers other than the public ones and the public views are `no-store`. The local media stand-in (§12, local stack
   only) takes no session token either: its upload carries a signed token of its own, and its reads are the Debug
@@ -139,8 +139,6 @@ one, **session** routes need one. *Owner* is the package that serves the parity 
 | `POST /v1/bridge/:id/source` | session | `{txHash}` | `{id, status}` | `bridge-source` | WP-17 |
 | `POST /v1/bridge/:id/claimed` | session | `{txHash}` | `{id, status}` | `bridge-claimed` | WP-17 |
 | `GET /v1/bridge/:id` | session | | `BridgeStatus` | `bridge-status` | WP-17 |
-| `GET /v1/cash/anchors?country=` | session | | `CashAnchors` | `cash-anchors` | WP-17 |
-| `POST /v1/cash/track` | session | `CashTrackRequest` | `{id}` | `cash-track` | WP-17 |
 
 Error bodies: `error`, `error-contract`, `error.legacy`, `error-refresh-reused`, `error-address-required`.
 `/v1/moments/owned` and `/v1/moments/mine` are registered before `/v1/moments/:id`, so they never reach it.
@@ -206,7 +204,7 @@ stay; DyorHQ's own history is `null`:
 
 | Route | `null` in the public view | Notes |
 |---|---|---|
-| `GET /v1/account?address=` | `firstFunding.starterSwap`, `firstFunding.faucet.usedToday` | `needsXlm` and `suggestXlm` stay: they follow from the ledger. Launch balances are the indexed ones. |
+| `GET /v1/account?address=` | `firstFunding.starterSwap`, `firstFunding.faucet.claimed` | `needsXlm` and `suggestXlm` stay: they follow from the ledger. Launch balances are the indexed ones. |
 | `GET /v1/holdings?address=` | `earn[].deposited`, `withdrawn` and `earned` (with `earnedComplete: false`); `launch[].costBasisUsd` and `pnlUsd` | Balances, Earn `supplied`, editions, prices, totals and `change24h` stay. Launch balances are the indexed ones, with no live `balance()` read (`stale: false`). Cached 15 s per address. |
 | `GET /v1/earn/positions?address=` | `deposited`, `withdrawn` and `earned` (with `earnedComplete: false`) | |
 | `GET /v1/moments/owned?address=` | — | The address's editions. |
@@ -234,14 +232,13 @@ media base, the RPC and explorer links).
 | `assets[]` | `AssetInfo` | `{id, code, name, decimals, contract, classic, note?}`, plus *added* `priceRef` (`XLM`/`USDC`; BUSDC is valued as USDC), `logo` (a bundled logo key or null) and `listed` (false for BUSDC). |
 | `contracts` | object | `launchpad`, `moments` (null when not deployed), `soroswapRouter`, `soroswapFactory`, `aquariusRouter`, `blendPools[] {id, name}`, `cctp {tokenMessengerMinter, messageTransmitter, forwarder, domain}` or null. |
 | `allowlist` | `{role: [C…]}` | The roles the phone pins. |
-| `anchors[]` | `{domain, name, assets, countries, kinds}` | SEP-24 anchors. |
 | `bridge` | `{routes, monad: {chainId, usdc} \| null}` | |
 | `flags` | `{enabled, maintenance?}` | From `lite.app_config`. |
 | `minBuild` | number | Older builds are asked to update. |
 | `deployment` *added* | `{id, launchpad, moments}` | `id` is the deployment's name (`testnet`, `testnet-qa`). |
 | `explorer` *added* | string | StellarExpert's base. Informational: the phone builds links from its pinned network. |
 | `fees` *added* | `{payer, maxFee, maxInclusionPerOp, starterInnerFeeMax, starterSwap, fundingFloor}` | Stroops. `payer` is `user`; `starterSwap` is true only where DyorHQ sponsors one starter swap (mainnet). Informational: the phone enforces its pinned `feePolicy`. |
-| `faucet` *added* | `{amount}` or null | Testnet's faucet, in XLM ("10000"). Null off testnet. |
+| `faucet` *added* | `{amount}` or null | Friendbot's grant on testnet, in XLM ("10000"): one claim per address, ever. Null off testnet. |
 | `limits` *added* | `{momentMaxEditions, momentWindowSecs: [min, max], collectMax, launchName: [min, max], launchSymbol: [min, max], uriMax, uploadBytes}` | What the server accepts. `launchName` is UTF-8 bytes. |
 | `pricing` *added* | `Pricing` | §8. |
 | `inviteRequired` *added* | boolean | Whether a first sign-in needs an invite code (§2): false on testnet, true on mainnet. Older servers send none and always ask for one. |
@@ -284,22 +281,27 @@ spendable  = max(0, balance − minBalance − sellingLiabilities)
 
 The phone recomputes `spendable` from these parts. `firstFunding`: `needsXlm` when spendable < `fees.fundingFloor`
 (0.1 XLM); `suggestXlm` is 2 XLM for a missing account, otherwise 1 XLM plus any reserve the account lacks;
-`starterSwap` is `available | used | unavailable`; `faucet` is `{amount, usedToday}` on testnet, null elsewhere. The
-public view (§2) leaves `starterSwap` and `usedToday` null.
+`starterSwap` is `available | used | unavailable`; `faucet` is `{amount, claimed}` on testnet, null elsewhere:
+`claimed` once the address has had Friendbot's test XLM, by its activation or the faucet (a faucet row in
+`lite.tx_log`). The public view (§2) leaves `starterSwap` and `claimed` null.
 
 **`POST /v1/account/activate`** `{}` → a `PlanView` to run, or `{status: "active", account}` when there is nothing to
 do.
 
 | Account | Answer |
 |---|---|
-| Missing, `friendbot` (testnet) | Friendbot funds it (10,000 test XLM), then a **user-paid** `trust` plan for USDC. |
+| Missing, `friendbot` (testnet) | Friendbot funds it (10,000 test XLM): the address's one claim, logged as its faucet row with Friendbot's transaction. Then a **user-paid** `trust` plan for USDC. 502 `friendbot_failed` when Friendbot doesn't answer; 504 `friendbot_slow` when the account, or the transaction that funded it, doesn't show in time. |
 | Missing, `sponsored` (mainnet; local rehearsal with `LITE_ACTIVATION=sponsored`) | An `activate` plan: DyorHQ creates the account with 0 XLM and sponsors the USDC trustline (`feePayer: sponsor`, `sponsorReason: setup`). |
 | Exists, USDC not enabled | A user-paid `trust` plan. Too little XLM: 409 `not_enough_xlm_for_reserve`. |
 | Exists, USDC enabled | `{status: "active", account}`. |
 
 **`POST /v1/account/trust`** `{asset}` → a user-paid `trust` plan (`reserveDelta: 1`).
 
-**`POST /v1/account/faucet`** `{}` → `{hash}`. Testnet only (400 `testnet_only`), once a day (429 `faucet_used`).
+**`POST /v1/account/faucet`** `{}` → `{hash}`. Testnet only (400 `testnet_only`): Friendbot's 10,000 test XLM for an
+account that already existed (an imported wallet), merged in from a Friendbot-funded temporary account that pays the
+fee (`feePayer: external`). Once per address, ever: 429 `faucet_used` "You already claimed your test XLM." once the
+address has claimed, by this route or by Friendbot's activation. Two claims at once claim once; a merge the network
+refused leaves the claim to make.
 
 **`GET /v1/recipient/:address?asset=`** *added* → `{kind: "account" | "contract", exists, trusts}`. `trusts` is null
 where it doesn't apply (XLM, a contract). An M… address: 400 `muxed_unsupported`.
@@ -523,8 +525,9 @@ sell `{side, quoteOut, fees}`; *added* `baseFee`, `creatorFee` and `refund` (the
 
 **`POST /v1/launches/build`** `{action: create | buy | sell | graduate | claim, token?, quote?, name?, symbol?, uri?,
 creatorFeeBps?, amount?, minOut?}` → `PlanView`. Create: `uri` empty or one this user's metadata call returned, ticker
-`^[A-Z0-9]{2,10}$`, name at most 32 UTF-8 bytes, a reserved-looking ticker 400 `look_alike_symbol`, creator fee 0–1000
-bps. Buy and sell take `minOut` (the app's fixed 1%).
+of 2 to 10 ASCII letters or digits as sent (else 422 `bad_symbol`, before any other check: Soroswap reads a token's
+symbol as UTF-8), upper-cased; name at most 32 UTF-8 bytes, a reserved-looking ticker 400 `look_alike_symbol`, creator
+fee 0–1000 bps. Buy and sell take `minOut` (the app's fixed 1%).
 
 **`GET /v1/economics`** *added* → `{launchpad, moments}`, read live from the contracts (cached 5 minutes); each null
 when not deployed. The admin is never exposed.
@@ -635,10 +638,10 @@ when the asset isn't enabled).
 
 | Field | Notes |
 |---|---|
-| `type` | `tx \| bridge \| cash` |
+| `type` | `tx \| bridge \| cash`. `cash`: only transfers from before cash was removed until mainnet, titled "Transaction". |
 | `id`, `kind`, `status`, `at` | `kind`: an intent kind (§6), a bridge direction, or `deposit`/`withdraw`. |
 | `summary` | The server's English words. |
-| `amount` | Bridge: base units of the sending side's USDC; cash: the anchor's amount as written. |
+| `amount` | Bridge: base units of the sending side's USDC; cash: the amount as its provider wrote it. |
 | `display` | A transaction's intent display, or a cash transfer's `{asset}`. |
 | `section` *added* | `spot \| earn \| launch \| moments \| bridge \| cash \| account` |
 | `hash`, `feeCharged`, `feePayer`, `result {amountOut}` *added* | |
@@ -648,7 +651,7 @@ when the asset isn't enabled).
 
 ---
 
-## 15. Bridge and cash
+## 15. Bridge
 
 **`POST /v1/bridge/quote`** `{direction: "monad_to_stellar" | "stellar_to_monad", amount}` (the sending side's base
 units) → `{route, direction, amountIn, amountOut, fee, etaSeconds, note}`, plus *added* `feeSource: "circle-iris"`
@@ -670,9 +673,8 @@ quotes also carry `depositAddress` and `depositMemo`.
 **`GET /v1/bridge/:id`** → `{id, direction, route, amount, recipient, status, sourceTx, destTx, error, claim?}`. `claim`
 is the Monad step that completes a Stellar → Monad transfer once it is attested.
 
-**`GET /v1/cash/anchors?country=`** → `{anchors: [AnchorInfo]}`. **`POST /v1/cash/track`** `{anchor, kind: "deposit" |
-"withdraw", asset, amount?, anchorTxId, status?}` → `{id}`: records the anchor transfer so activity can show and resume
-it.
+Adding cash and cashing out are removed until mainnet (DESIGN-stellar-parity §1.1, decision 7): there are no cash
+routes.
 
 ---
 
@@ -689,7 +691,9 @@ The codes the phone words, and the HTTP status each comes with. Copy is in the S
 | 429 `sponsor_limit` | a daily, IP or attempt cap on DyorHQ's sponsorship | DyorHQ's free setup is busy today. Try again tomorrow. |
 | 409 `already_set_up` | activation or the starter swap already used | Your account is already set up. |
 | 400 `unsupported_asset` | not a registry id, a launch, a valid `CODE:ISSUER` or a C… token | DyorHQ doesn't support that token on Stellar. |
+| 422 `bad_symbol` | create with a ticker that isn't 2 to 10 ASCII letters or digits | Use 2 to 10 letters or digits for the symbol. |
 | 400 `look_alike_symbol` | create with a reserved-looking ticker | That ticker looks like another token's. Choose another. |
+| 429 `faucet_used` | a second claim of Friendbot's test XLM | You already claimed your test XLM. |
 | 400 `muxed_unsupported` | an M… recipient | Muxed (M…) addresses aren't supported. Use the G… address and the memo you were given. |
 | 409 `recipient_missing` | a non-XLM send to a missing account | This account doesn't exist yet, so it can't receive %@. |
 | 409 `recipient_no_trust` | the recipient hasn't enabled the asset | This account hasn't enabled %@, so it can't receive it. |
@@ -719,10 +723,10 @@ Other codes, shown as the server's message: 400 `bad_json`, `too_large`, `bad_ar
 `bad_asset`, `bad_memo`, `too_small`, `bad_xdr`, `unsigned`, `empty_plan`, `same_asset`, `bad_slippage`, `bad_pool`,
 `bad_action`, `bad_request_type`, `bad_side`, `bad_quote`, `bad_name`, `bad_symbol`, `bad_fee`, `bad_uri`, `bad_title`,
 `bad_media`, `bad_moment`, `bad_quantity`, `bad_editions`, `bad_window`, `bad_type`, `bad_direction`, `bad_hash`,
-`bad_spender`, `bad_anchor`, `bad_kind`, `testnet_only`, `no_friendbot`; 403 `not_invited`, `bad_invite`,
+`bad_spender`, `testnet_only`, `no_friendbot`; 403 `not_invited`, `bad_invite`,
 `access_revoked`; 404 `not_found`, `no_route`; 409 `account_inactive`, `needs_usdc`, `needs_restore`, `not_ready`,
 `not_built`, `already_sent`, `stale_step`, `recipient_inactive`, `recipient_cannot_receive`, `already_uploaded`; 410
-`plan_expired`, `quote_expired`; 429 `rate_limited`, `faucet_used`; 500 `self_check_failed`,
+`plan_expired`, `quote_expired`; 429 `rate_limited`; 500 `self_check_failed`,
 `internal`; 501 `mainnet_route`; 502 `friendbot_failed`, `rpc_unavailable`, `storage_error`, `bridge_quote_failed`;
 503 `not_deployed`, `network_busy`, `storage_unavailable`; 504 `friendbot_slow`. Today's 429 `budget_exhausted` goes
 with the daily sponsored-fee budget when users start paying their own fees.

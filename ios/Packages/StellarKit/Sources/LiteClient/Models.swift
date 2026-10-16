@@ -22,15 +22,6 @@ public struct AssetInfo: Codable, Equatable, Hashable, Sendable, Identifiable {
     public let listed: Bool?
 }
 
-public struct AnchorInfo: Codable, Equatable, Sendable, Identifiable {
-    public let domain: String
-    public let name: String
-    public let assets: [String]
-    public let countries: [String]
-    public let kinds: [String]
-    public var id: String { domain }
-}
-
 public struct LiteConfig: Codable, Equatable, Sendable {
     public struct Contracts: Codable, Equatable, Sendable {
         public struct Pool: Codable, Equatable, Sendable { public let id: String; public let name: String }
@@ -71,7 +62,7 @@ public struct LiteConfig: Codable, Equatable, Sendable {
         public let fundingFloor: String
     }
 
-    /// Testnet's faucet: how much test XLM one tap brings, in XLM.
+    /// Testnet's Friendbot: how much test XLM its one claim per address brings, in XLM.
     public struct Faucet: Codable, Equatable, Sendable {
         public let amount: String
     }
@@ -99,7 +90,6 @@ public struct LiteConfig: Codable, Equatable, Sendable {
     public let assets: [AssetInfo]
     public let contracts: Contracts
     public let allowlist: [String: [String]]
-    public let anchors: [AnchorInfo]
     public let bridge: Bridge
     public let flags: Flags
     public let minBuild: Int
@@ -387,6 +377,8 @@ public struct StellarLaunch: Codable, Equatable, Sendable, Identifiable {
     public let lookAlike: Bool?
     public let graduatedAt: String?
     public let lastTradeAt: String?
+    /// The launchpad generation it was launched on: 1 (retired: shown as Retired) or 2 (live). Nil from older servers.
+    public let generation: Int?
     public var id: String { token }
 }
 
@@ -523,8 +515,8 @@ public struct StellarActivityItem: Codable, Equatable, Sendable, Identifiable {
     public let status: String
     public let at: String
     public let amount: String?
-    /// A transaction's intent display fields, or a cash transfer's asset: what the app words the item from. Absent from
-    /// older servers' payloads.
+    /// A transaction's intent display fields, or the asset of a cash transfer from before cash was removed: what the app
+    /// words the item from. Absent from older servers' payloads.
     public let display: [String: StellarJSON]?
     /// "spot", "earn", "launch", "moments", "bridge", "cash" or "account".
     public let section: String?

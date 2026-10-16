@@ -84,7 +84,7 @@
     "starterSwap": "unavailable",
     "faucet": {
       "amount": "10000",
-      "usedToday": false
+      "claimed": false
     }
   },
   "view": "owner"

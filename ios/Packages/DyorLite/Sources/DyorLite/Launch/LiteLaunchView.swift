@@ -104,7 +104,7 @@ struct LaunchDetailView: View {
     @State private var detail: StellarLaunchDetail?
     @State private var buying = true
     @State private var amount = ""
-    @State private var preview: TradeQuote?
+    @State private var preview: StellarLaunchQuote?
     @State private var busy = false
     @State private var error: String?
     @State private var prepared: PreparedAction?
@@ -143,7 +143,7 @@ struct LaunchDetailView: View {
         do {
             detail = try await store.launchDetail(token)
             error = nil
-        } catch { self.error = describe(error) }
+        } catch { self.error = LiteErrorText.describe(error) }
     }
 
     private func header(_ d: StellarLaunchDetail) -> some View {
@@ -199,12 +199,12 @@ struct LaunchDetailView: View {
                 .onChange(of: amount) { _, _ in preview = nil }
             if let q = preview {
                 if buying {
-                    Text(tr("You get about \(StellarAmount.format(q.tokensOut ?? "0")) \(d.launch.symbol)")).font(.subheadline)
-                    if let s = q.snipeFee, s != "0" {
+                    Text(tr("You get about \(StellarAmount.format(q.out, maxFraction: 4)) \(d.launch.symbol)")).font(.subheadline)
+                    if let s = q.quote.snipeFee, s != "0" {
                         LiteInlineError(message: tr("Opening-seconds anti-snipe fee applies: \(StellarAmount.format(s)) \(quoteCode(d))"))
                     }
                 } else {
-                    Text(tr("You get about \(StellarAmount.format(q.quoteOut ?? "0")) \(quoteCode(d))")).font(.subheadline)
+                    Text(tr("You get about \(StellarAmount.format(q.out, maxFraction: 4)) \(quoteCode(d))")).font(.subheadline)
                 }
             }
             if let error { LiteInlineError(message: error) }
@@ -221,18 +221,13 @@ struct LaunchDetailView: View {
         error = nil
         do {
             guard let q = preview else {
-                preview = try await store.quoteTrade(token: token, buy: buying, amount: units)
+                preview = try await store.launchQuote(token: token, buy: buying, amount: units)
                 return
             }
-            // 2% slippage on the curve quote.
-            let expected = Int64(buying ? (q.tokensOut ?? "0") : (q.quoteOut ?? "0")) ?? 0
-            let minOut = expected * 98 / 100
-            var req = LiteAPI.LaunchRequest(action: buying ? "buy" : "sell", token: token)
-            req.amount = String(units)
-            req.minOut = String(minOut)
-            prepared = try await store.launchPlan(req, spend: (asset: buying ? d.launch.quote : token, amount: units))
+            // The curve's fixed 1% slippage (R11).
+            prepared = try await store.launchTradePlan(token: token, buy: buying, amount: units, minOut: q.minOut)
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 
@@ -241,7 +236,7 @@ struct LaunchDetailView: View {
             LiteParagraph(tr("This launch hit its target and is moving to Soroswap.")).font(.subheadline)
             LitePrimaryButton(title: tr("Graduate now (free)"), busy: busy) {
                 Task {
-                    do { prepared = try await store.launchPlan(LiteAPI.LaunchRequest(action: "graduate", token: token), spend: nil) } catch { self.error = describe(error) }
+                    do { prepared = try await store.graduatePlan(token: token) } catch { self.error = LiteErrorText.describe(error) }
                 }
             }
         }
@@ -257,7 +252,7 @@ struct LaunchDetailView: View {
             .buttonBorderShape(.capsule)
             if d.launch.creator == store.address, let fees = d.curve?.creatorFees, fees != "0" {
                 Button(tr("Claim \(StellarAmount.format(fees)) \(quoteCode(d)) creator fees")) {
-                    Task { prepared = try? await store.launchPlan(LiteAPI.LaunchRequest(action: "claim", token: token), spend: nil) }
+                    Task { prepared = try? await store.claimPlan(tokens: [token]).first }
                 }
             }
         }
@@ -346,15 +341,11 @@ struct CreateLaunchSheet: View {
         defer { busy = false }
         error = nil
         do {
-            var uri = ""
-            if let imageData { uri = try await store.uploadImage(jpeg(imageData), contentType: "image/jpeg") }
-            let buy = StellarAmount.parse(initialBuy) ?? 0
-            var req = LiteAPI.LaunchRequest(action: "create", quote: quote, name: name, symbol: symbol.uppercased(), uri: uri, creatorFeeBps: Int(creatorFee * 100))
-            req.amount = String(buy)
-            req.minOut = "0"
-            prepared = try await store.launchPlan(req, spend: buy > 0 ? (asset: quote, amount: buy) : nil)
+            let form = StellarLaunchForm(name: name, symbol: symbol, quote: quote, creatorFeeBps: Int(creatorFee * 100),
+                                         developerBuy: StellarAmount.parse(initialBuy) ?? 0)
+            prepared = try await store.launchCreatePlan(form, image: imageData.map(jpeg))
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }

@@ -13,7 +13,7 @@
     "body": {
       "error": {
         "code": "faucet_used",
-        "message": "You already got test XLM today.",
+        "message": "You already claimed your test XLM.",
         "detail": null
       }
     }

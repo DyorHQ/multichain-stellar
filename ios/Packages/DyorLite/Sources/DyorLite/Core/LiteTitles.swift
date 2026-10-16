@@ -64,8 +64,9 @@ enum LiteTitles {
             guard let amount = units(d["amount"]) else { return nil }
             return tr("Send \(amount) USDC to Monad")
         case "faucet":
-            // The testnet faucet's log row has no intent: it always tops the account up with 10,000 XLM.
-            return tr("Get \(ReceiveSheet.faucetAmount) test XLM")
+            // Friendbot's one grant of test XLM (decision 7): the faucet's row, and since then the testnet account's
+            // activation by Friendbot, which is logged as that row.
+            return tr("Funded with Friendbot")
         default:
             return nil
         }
@@ -74,11 +75,51 @@ enum LiteTitles {
     /// "3 editions", in the current language's plural.
     static func editions(_ count: Int) -> String { tr("\(count) editions") }
 
+    // MARK: Settled actions
+
+    /// A settled action's notification (§8.15), past tense, in the current language: its title, and its body without
+    /// the network (the host adds " · Stellar testnet"). `results` are the plan's transactions, the last one the action's
+    /// own (what a swap brought).
+    static func settled(_ summary: LiteActionSummary, results: [TxStatus]) -> (title: String, body: String) {
+        switch summary {
+        case let .swap(amountIn, sell, buy, quotedOut):
+            let out = results.last?.result?.amountOut.flatMap { Int64($0) } ?? quotedOut
+            return (tr("Swap complete"), tr("Swapped \("\(amount(amountIn)) \(sell)") → \("\(amount(out)) \(buy)")"))
+        case let .earn(deposit, value, code):
+            return (deposit ? tr("Supplied to Earn") : tr("Withdrawn to Spot"), tr("\(amount(value)) \(code) · Blend"))
+        case let .send(value, code, to):
+            return (tr("Sent"), tr("\(amount(value)) \(code) to \(LiteFormat.short(to))"))
+        case let .enable(code):
+            return (tr("Enabled \(code)"), "")
+        case let .launchCreate(symbol, name):
+            return (tr("Launched $\(symbol)"), name)
+        case let .launchTrade(buy, symbol, value, quoteCode):
+            return buy ? (tr("Bought \(symbol)"), "\(amount(value)) \(quoteCode)") : (tr("Sold \(symbol)"), "\(amount(value)) \(symbol)")
+        case let .launchGraduate(symbol):
+            return (tr("\(symbol) graduated"), "Soroswap")
+        case let .launchClaim(symbol):
+            return (tr("Collected \(symbol) creator fees"), "")
+        case let .publish(title):
+            return (tr("Published \(title)"), "")
+        case let .collect(title, quantity, total, quoteCode):
+            return (tr("Collected \(title)"), tr("\(quantity) editions · \("\(amount(total)) \(quoteCode)")"))
+        case let .bridgeOut(value):
+            return (tr("Sent \(amount(value)) USDC to the bridge"), tr("Claim it on Monad once Circle confirms."))
+        case let .launchV2(_, title, body), let .momentV2(_, title, body):
+            return (title, body)
+        }
+    }
+
+    /// An amount in base units of a 7-decimal Stellar asset, as holdings write it (at most 4 decimals).
+    private static func amount(_ units: Int64) -> String {
+        StellarAmount.format(units, maxFraction: 4)
+    }
+
     // MARK: Activity
 
     /// An Activity row's title: a transaction by its intent; a bridge transfer by its direction (its amount is in base
-    /// units of the sending side's USDC: 6 decimals on Monad, 7 on Stellar); a cash transfer by its kind, with the
-    /// amount the anchor wrote out and the asset when the server says them.
+    /// units of the sending side's USDC: 6 decimals on Monad, 7 on Stellar); a cash transfer from before cash was removed
+    /// until mainnet (decision 7) by the neutral "Transaction".
     static func activity(_ item: StellarActivityItem) -> String? {
         switch item.type {
         case "tx":
@@ -92,17 +133,7 @@ enum LiteTitles {
             default: return nil
             }
         case "cash":
-            let asset = text(item.display?["asset"]).map { $0 == "native" ? "XLM" : $0 }
-            let amount = written(item.amount.map(StellarJSON.string), positive: true)
-            switch (item.kind, amount, asset) {
-            case let ("deposit", amount?, asset?): return tr("Add \(amount) \(asset)")
-            case let ("deposit", nil, asset?): return tr("Add \(asset)")
-            case ("deposit", _, nil): return tr("Add cash")
-            case let ("withdraw", amount?, asset?): return tr("Cash out \(amount) \(asset)")
-            case let ("withdraw", nil, asset?): return tr("Cash out \(asset)")
-            case ("withdraw", _, nil): return tr("Cash out")
-            default: return nil
-            }
+            return tr("Transaction")
         default:
             return nil
         }
@@ -155,9 +186,9 @@ enum LiteTitles {
         return StellarAmount.format(raw, decimals: decimals, maxFraction: 4)
     }
 
-    /// An amount the server or an anchor wrote out ("10.5"), as holdings write it.
-    private static func written(_ value: StellarJSON?, positive: Bool = false) -> String? {
-        guard let text = text(value), let units = StellarAmount.parse(text), !positive || units > 0 else { return nil }
+    /// An amount the server wrote out ("10.5"), as holdings write it.
+    private static func written(_ value: StellarJSON?) -> String? {
+        guard let text = text(value), let units = StellarAmount.parse(text) else { return nil }
         return StellarAmount.format(units, maxFraction: 4)
     }
 

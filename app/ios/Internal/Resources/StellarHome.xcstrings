@@ -1,0 +1,808 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ %@ supplied" : {
+      "comment" : "Stellar Home, My Holdings' Earn tab, under a position: how much is lent. The values are an amount (1,250.5), then the asset's code (XLM), never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ supplied"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ depositados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ fournis"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ %2$@ 공급 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已存入 %1$@ %2$@"
+          }
+        }
+      }
+    },
+    "%@ APY" : {
+      "comment" : "[tight] Stellar Home, My Holdings' Earn tab: a chip with the yearly rate a position earns. %@ is a percentage (3.10%). APY: annual percentage yield",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ APY"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ APY"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "年化 %@"
+          }
+        }
+      }
+    },
+    "Bridge from Monad" : {
+      "comment" : "Stellar Home, the add-funds card: a row that opens the bridge, to move USDC from the user's Monad account to Stellar. Monad is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puente desde Monad"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bridge depuis Monad"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monad에서 브리지하기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 Monad 跨链转入"
+          }
+        }
+      }
+    },
+    "Closed" : {
+      "comment" : "[tight] Stellar Home, My Holdings' Moments tab: the Moment's collecting window has closed or it sold out, so no more editions can be collected (an adjective)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerrado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fermé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已结束"
+          }
+        }
+      }
+    },
+    "Collect a Moment on the Moments tab and your editions appear here." : {
+      "comment" : "Stellar Home, My Holdings' Moments tab when the account holds no edition: how to get one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colecciona un Moment en la pestaña Moments y tus ediciones aparecerán aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collectez un Moment dans l'onglet Moments et vos éditions apparaîtront ici."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments 탭에서 Moment를 수집하면 내 에디션이 여기에 표시돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Moments 标签页收藏 Moment 后，你的份数会显示在这里。"
+          }
+        }
+      }
+    },
+    "Dollar values use mainnet market prices. Testnet assets have no value." : {
+      "comment" : "Stellar Home, under the balance card on Stellar's test network: the dollar figures value test XLM and USDC at the real (mainnet) market's prices, though test assets are worth nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los valores en dólares usan precios de mercado de mainnet. Los activos de testnet no tienen valor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les valeurs en dollars utilisent les prix du marché du mainnet. Les actifs du testnet n'ont aucune valeur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "달러 가치는 메인넷 시장 가격을 사용해요. 테스트넷 자산은 가치가 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美元价值采用主网市场价格。测试网资产没有价值。"
+          }
+        }
+      }
+    },
+    "DyorHQ pays this first swap's network fee." : {
+      "comment" : "Under the starter swap's button on Stellar Home: DyorHQ pays the network fee of the account's first swap into XLM; every later one the user pays. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paga la comisión de red de este primer intercambio."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ paie les frais de réseau de ce premier échange."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 첫 스왑의 네트워크 수수료는 DyorHQ가 내요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 支付这首次兑换的网络费。"
+          }
+        }
+      }
+    },
+    "Earned" : {
+      "comment" : "[tight] Stellar Home, My Holdings' Earn tab: under the interest a position has earned so far, in dollars",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ganado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gagné"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수익"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已赚取"
+          }
+        }
+      }
+    },
+    "Every Stellar transaction pays a small network fee in XLM. Send about %@ XLM to your account." : {
+      "comment" : "Stellar Home, the add-funds card for an account short of XLM. %@ is an amount of XLM (1). XLM and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada transacción en Stellar paga una pequeña comisión de red en XLM. Envía unos %@ XLM a tu cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque transaction Stellar paie de petits frais de réseau en XLM. Envoyez environ %@ XLM sur votre compte."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모든 Stellar 트랜잭션에는 XLM으로 내는 소액의 네트워크 수수료가 들어요. 계정에 약 %@ XLM을 보내세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每笔 Stellar 交易都需要支付少量 XLM 作为网络费。向你的账户发送约 %@ XLM。"
+          }
+        }
+      }
+    },
+    "Fund with Friendbot" : {
+      "comment" : "Stellar Home on the test network: claims Stellar's Friendbot faucet's free test XLM for the account, once per address. Friendbot is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondear con Friendbot"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Financer avec Friendbot"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Friendbot으로 충전"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Friendbot 充值"
+          }
+        }
+      }
+    },
+    "Get %@ free test XLM, once" : {
+      "comment" : "Under Fund with Friendbot on Stellar Home: what the one claim gives. %@ is an amount of XLM (10,000). XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibe %@ XLM de prueba gratis, una sola vez"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recevez %@ XLM de test gratuits, une seule fois"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "무료 테스트 XLM %@개를 한 번 받아요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免费领取 %@ 个测试 XLM，仅限一次"
+          }
+        }
+      }
+    },
+    "Get XLM for network fees" : {
+      "comment" : "Stellar Home, the add-funds card's title for an account that holds other assets but too little XLM: every Stellar transaction pays a small network fee in XLM. XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Consigue XLM para las comisiones de red"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Obtenez des XLM pour les frais de réseau"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크 수수료용 XLM 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "获取用于网络费的 XLM"
+          }
+        }
+      }
+    },
+    "Markets couldn't be loaded just now." : {
+      "comment" : "Stellar Home, Top Tokens: Stellar's markets couldn't be read. A Retry button follows. Stellar is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron cargar los mercados en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de charger les marchés pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 마켓을 불러올 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法加载市场。"
+          }
+        }
+      }
+    },
+    "Moment #%lld" : {
+      "comment" : "Stellar Home, My Holdings' Moments tab: a Moment with no title, named by its number. %lld is the number",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment n.º %lld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment nº %lld"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment #%lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment #%lld"
+          }
+        }
+      }
+    },
+    "No Earn positions" : {
+      "comment" : "Stellar Home, My Holdings' Earn tab when the account lends nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay posiciones de rendimiento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune position de rendement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치 포지션 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无理财仓位"
+          }
+        }
+      }
+    },
+    "No market" : {
+      "comment" : "[tight] Stellar Home, My Holdings' Moments tab, where a value would be: a Stellar Moment's editions have no market, so no price",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin mercado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas de marché"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "시장 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无市场"
+          }
+        }
+      }
+    },
+    "Open" : {
+      "comment" : "[tight] Stellar Home, My Holdings' Moments tab: the Moment's collecting window is open, so editions can still be collected (an adjective)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abierto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvert"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "진행 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "进行中"
+          }
+        }
+      }
+    },
+    "Send about %@ XLM or USDC on Stellar to your account. Funds usually arrive in seconds." : {
+      "comment" : "Stellar Home, the add-funds card on Stellar's main network: how to fund a new account. %@ is an amount of XLM (2). XLM, USDC and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envía unos %@ XLM o USDC en Stellar a tu cuenta. Los fondos suelen llegar en segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyez environ %@ XLM ou des USDC sur Stellar vers votre compte. Les fonds arrivent généralement en quelques secondes."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar에서 약 %@ XLM 또는 USDC를 계정으로 보내세요. 자금은 보통 몇 초 안에 도착해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 上向你的账户发送约 %@ XLM 或 USDC。资金通常几秒内到账。"
+          }
+        }
+      }
+    },
+    "Send test XLM or USDC on the Stellar testnet to your account, or fund it once with Friendbot below." : {
+      "comment" : "Stellar Home, the add-funds card on Stellar's test network, while the account can still claim Friendbot's free test XLM (one claim per address). Friendbot is Stellar's faucet, never translated; XLM, USDC and Stellar neither",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envía XLM o USDC de prueba en la testnet de Stellar a tu cuenta, o fondéala una vez con Friendbot abajo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyez des XLM ou des USDC de test sur le testnet de Stellar vers votre compte, ou financez-le une fois avec Friendbot ci-dessous."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 테스트넷에서 테스트용 XLM 또는 USDC를 계정으로 보내거나, 아래 Friendbot으로 한 번 충전하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 测试网上向你的账户发送测试 XLM 或 USDC，或用下方的 Friendbot 充值一次。"
+          }
+        }
+      }
+    },
+    "Send test XLM or USDC on the Stellar testnet to your account." : {
+      "comment" : "Stellar Home, the add-funds card on Stellar's test network, once the account had Friendbot's free test XLM. XLM, USDC and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envía XLM o USDC de prueba en la testnet de Stellar a tu cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Envoyez des XLM ou des USDC de test sur le testnet de Stellar vers votre compte."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 테스트넷에서 테스트용 XLM 또는 USDC를 계정으로 보내세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 测试网上向你的账户发送测试 XLM 或 USDC。"
+          }
+        }
+      }
+    },
+    "Supply XLM or USDC on the Earn tab to start earning." : {
+      "comment" : "Stellar Home, My Holdings' Earn tab when the account lends nothing: how to start. XLM and USDC are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deposita XLM o USDC en la pestaña Rendimientos para empezar a ganar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fournissez des XLM ou de l'USDC dans l'onglet Rendement pour commencer à gagner."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치 탭에서 XLM 또는 USDC를 공급해 수익을 받기 시작하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在“理财”标签页存入 XLM 或 USDC 即可开始赚取收益。"
+          }
+        }
+      }
+    },
+    "Swap %@ USDC for XLM" : {
+      "comment" : "Stellar Home, the add-funds card: opens the account's first swap, DyorHQ paying its network fee. %@ is an amount of USDC (25). USDC and XLM are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambiar %@ USDC por XLM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échanger %@ USDC contre des XLM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC → XLM 스왑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将 %@ USDC 兑换为 XLM"
+          }
+        }
+      }
+    },
+    "Swap %@ for %@ at the best price across Stellar's venues." : {
+      "comment" : "Stellar Home, the add-funds card once the account is funded: its first trade. The values are asset codes (XLM, then USDC), never translated; Stellar's venues are the exchanges a swap is routed through",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Swap %1$@ for %2$@ at the best price across Stellar's venues."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intercambia %1$@ por %2$@ al mejor precio entre las plataformas de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échangez %1$@ contre %2$@ au meilleur prix parmi les plateformes de Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 거래소 전체에서 가장 좋은 가격으로 %1$@ → %2$@ 스왑하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 各交易场所中以最优价格将 %1$@ 兑换为 %2$@。"
+          }
+        }
+      }
+    },
+    "Switch to %@" : {
+      "comment" : "Stellar Home's balance card while DyorHQ on Stellar is paused: goes back to the Monad network. %@ is the network's name (Monad), never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar a %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Passer à %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@로 전환"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换到 %@"
+          }
+        }
+      }
+    },
+    "Your Earn positions couldn't be read just now." : {
+      "comment" : "Stellar Home, My Holdings' Earn tab before anything was read: what the account lends on Blend couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus posiciones de rendimiento en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos positions de rendement pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 예치 포지션을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的理财仓位。"
+          }
+        }
+      }
+    },
+    "Your Stellar balances couldn't be read just now." : {
+      "comment" : "Stellar Home, My Holdings' Spot tab before anything was read: the account's balances or their prices couldn't be read. A Retry button follows. Stellar is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus saldos de Stellar en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos soldes Stellar pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 Stellar 잔액을 읽을 수 없습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的 Stellar 余额。"
+          }
+        }
+      }
+    },
+    "homeCategory.earn" : {
+      "comment" : "[tight] Stellar Home, one of four categories sharing the card's width: a segment of My Holdings' switch and a label over the balance card's split. Lending XLM or USDC to earn interest, in the place Perps has on Monad",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Earn"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Earn"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Earn"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "理财"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

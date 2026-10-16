@@ -2,37 +2,23 @@
   "request": {
     "method": "GET",
     "path": "/v1/prices",
-    "auth": true
+    "auth": false
   },
   "response": {
     "status": 200,
     "headers": {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+      "cache-control": "public, max-age=30"
     },
     "body": {
       "usd": {
         "XLM": 0.1901,
-        "USDC": 1,
-        "BUSDC": 1,
+        "USDC": 0.9999,
+        "BUSDC": 0.9999,
         "CADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP5KR": 0.000006330330000000001
       },
       "reference": "Mainnet reference prices; testnet assets have no value.",
       "at": "<volatile>"
-    }
-  },
-  "anonymous": {
-    "status": 401,
-    "headers": {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
-    },
-    "body": {
-      "error": {
-        "code": "unauthorized",
-        "message": "Sign in on Stellar to continue.",
-        "detail": null
-      }
     }
   }
 }

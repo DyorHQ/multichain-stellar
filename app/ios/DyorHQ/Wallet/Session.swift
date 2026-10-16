@@ -621,7 +621,12 @@ final class Session {
 
     func signOut() async {
         #if STELLAR_LITE
-        if let address { LiteKeyBootstrap.forget(evm: address) }
+        // The Stellar session signs out first (its refresh tokens revoked, waiting at most 3 s), then everything Stellar
+        // kept for the account goes.
+        if let address {
+            await StellarLiveSession.signOut(owner: address)
+            LiteKeyBootstrap.forget(evm: address)
+        }
         #endif
         WatchOnlyStore.clear()
         ImportedWalletStore.clear()
@@ -647,6 +652,11 @@ final class Session {
     /// device — imported keys, the passkey account record, Perpl and backend tokens, caches,
     /// settings — and signs out. The blockchain is untouched; only the user's own backup can reach the funds again.
     func eraseLocalData() async {
+        #if STELLAR_LITE
+        // The Stellar session signs out first (its refresh tokens revoked, waiting at most 3 s), before the wipe below,
+        // which nothing may suspend; what Stellar kept goes with the wipe (`LiteKeyBootstrap.forget`).
+        if let address { await StellarLiveSession.signOut(owner: address) }
+        #endif
         if let privy, case .authenticated(let user) = await privy.getAuthState() {
             await user.logout()
         }

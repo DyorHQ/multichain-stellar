@@ -2,8 +2,8 @@ import StellarKit
 import SwiftUI
 
 /// Stellar Home, in Monad Home's frame (design spec §3.3): the host's header, the balance card with the network chip
-/// and the serif figure, five actions, My Holdings and Activity. Locked, the card holds the unlock; paused, it says why
-/// and offers Monad.
+/// and the serif figure, four actions, My Holdings and Activity. Paused, the card says why and offers Monad; nothing on
+/// Stellar locks (decision 6).
 @MainActor
 struct LiteHomeView: View {
     let session: LiteSession
@@ -12,12 +12,11 @@ struct LiteHomeView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     enum SheetKind: Identifiable {
-        case cash, send, receive, bridge
+        case send, receive, bridge
         case swap(buy: String?)
 
         var id: String {
             switch self {
-            case .cash: "cash"
             case .send: "send"
             case .receive: "receive"
             case .bridge: "bridge"
@@ -93,7 +92,6 @@ struct LiteHomeView: View {
     @ViewBuilder
     private func sheetContent(_ kind: SheetKind) -> some View {
         switch kind {
-        case .cash: CashSheet()
         case .send: SendSheet()
         case .receive: ReceiveSheet(address: session.address ?? "", store: store)
         case .bridge: BridgeSheet()
@@ -130,7 +128,6 @@ struct LiteHomeView: View {
             chipRow
             switch session.home {
             case .ready, .loading: figure
-            case .locked: locked
             case .paused(let failure): paused(failure)
             }
         }
@@ -169,26 +166,6 @@ struct LiteHomeView: View {
             : tr("Valued at reference prices.")
     }
 
-    /// Locked (the session ended): the placeholder figure, why, and the unlock. The host runs Setup inline.
-    private var locked: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                hero(0).unreadFigure(true)
-                Label {
-                    LiteParagraph(tr("Unlock to see your Stellar balance."))
-                } icon: {
-                    Image(systemName: "lock.fill")
-                }
-                .modifier(LiteParagraphLabel())
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(tr("Stellar balance, locked."))
-            LitePrimaryButton(title: tr("Unlock with \(LiteBiometrics.promptName)"), busy: session.state == .running, action: chrome.unlock)
-        }
-    }
-
     /// Paused for maintenance, or this build is too old: why, and the way back to Monad, which always works.
     private func paused(_ failure: LiteSession.Failure) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -205,7 +182,7 @@ struct LiteHomeView: View {
                 ForEach(LiteHomeAction.all) { tile($0) }
             }
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
-                GridRow { ForEach(LiteHomeAction.all.prefix(3)) { tile($0) } }
+                GridRow { ForEach(LiteHomeAction.all.prefix(2)) { tile($0) } }
                 GridRow { ForEach(LiteHomeAction.all.suffix(2)) { tile($0) } }
             }
         }
@@ -219,7 +196,6 @@ struct LiteHomeView: View {
             case .deposit: sheet = .receive
             case .withdraw: sheet = .send
             case .swap: sheet = .swap(buy: nil)
-            case .cash: sheet = .cash
             }
         }
     }
@@ -258,29 +234,43 @@ struct LiteHomeView: View {
     private func activity(_ store: LiteStore) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(tr("Activity")).font(.headline)
-            if store.loaded.contains(.activity) {
-                if store.activity.isEmpty {
-                    LiteParagraph(tr("Nothing yet. Add cash or swap to get started."))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 0) {
-                        let items = Array(store.activity.prefix(12))
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            LiteActivityRow(item: item)
-                            if index < items.count - 1 { Divider() }
-                        }
+            switch Self.activityCard(store) {
+            case .signIn:
+                LiteSignInRow(session: session) { await store.refreshActivity() }
+            case .empty:
+                LiteParagraph(tr("Nothing yet. Fund your account or swap to get started."))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            case .list:
+                VStack(spacing: 0) {
+                    let items = Array(store.activity.prefix(12))
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        LiteActivityRow(item: item)
+                        if index < items.count - 1 { Divider() }
                     }
                 }
-            } else if store.failed.contains(.activity) {
+            case .failed:
                 retryRow(store.lastError ?? "", store)
-            } else {
+            case .reading:
                 readingRow(tr("Reading your activity…"))
             }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .liteCardBackground()
+    }
+
+    /// What an Activity card shows (Home's, and the activity page's).
+    enum ActivityCard: Equatable { case reading, signIn, empty, list, failed }
+
+    /// From the store's last reads: DyorHQ's history with no session (an account reading in the public view) is the
+    /// sign-in row, whatever a past session read; then the last list read, even after a read that failed; then the
+    /// failure; then an empty list; else the read under way.
+    static func activityCard(_ store: LiteStore) -> ActivityCard {
+        if store.status(.activity) == .needsSignIn { return .signIn }
+        if store.loaded.contains(.activity), !store.activity.isEmpty { return .list }
+        if store.failed.contains(.activity) { return .failed }
+        return store.loaded.contains(.activity) ? .empty : .reading
     }
 
     private func readingRow(_ text: String) -> some View {
@@ -304,9 +294,10 @@ struct LiteHomeView: View {
     }
 }
 
-/// One of the five Home actions: the first three are Monad Home's, for the same jobs.
+/// One of the four Home actions: the first three are Monad Home's, for the same jobs. Adding cash is removed until
+/// mainnet (decision 7).
 struct LiteHomeAction: Identifiable {
-    enum Kind { case bridge, deposit, withdraw, swap, cash }
+    enum Kind { case bridge, deposit, withdraw, swap }
     let id: Kind
     let title: String
     let symbol: String
@@ -317,7 +308,6 @@ struct LiteHomeAction: Identifiable {
             LiteHomeAction(id: .deposit, title: tr("Deposit"), symbol: "creditcard"),
             LiteHomeAction(id: .withdraw, title: tr("Withdraw"), symbol: "arrow.up"),
             LiteHomeAction(id: .swap, title: tr("Swap"), symbol: "arrow.left.arrow.right"),
-            LiteHomeAction(id: .cash, title: tr("Add cash"), symbol: "banknote"),
         ]
     }
 }
@@ -328,7 +318,7 @@ struct LiteHomeTile: View {
     let perform: () -> Void
     /// One height for every symbol, so the tiles and their labels line up.
     @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
-    /// Off while the session is locked or paused: drawn faded, so the card above says why.
+    /// Off while the session is paused or still opening: drawn faded, so the card above says why.
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
@@ -371,15 +361,61 @@ struct LiteHoldingRow: View {
     }
 }
 
+/// DyorHQ's history with no session (an account reading in the public view, §8): why, and the one button that signs in.
+/// Nothing asks until it is tapped (`LiteSession.signIn()`: a passkey account's one ceremony); `then` reads the part
+/// again once signed in.
+struct LiteSignInRow: View {
+    let session: LiteSession?
+    let then: () async -> Void
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LiteParagraph(tr("Sign in again to see your Stellar history."))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await signIn() }
+            } label: {
+                if busy { ProgressView() } else { Text(tr("Sign in")) }
+            }
+            .buttonStyle(.bordered)
+            .disabled(busy || session == nil)
+            if let error { LiteInlineError(message: error) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 8)
+    }
+
+    private func signIn() async {
+        guard let session else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await session.signIn()
+            error = nil
+            await then()
+        } catch {
+            self.error = LiteErrorText.describe(error)
+        }
+    }
+}
+
 /// An activity row: what happened, when, and its status as a word with a symbol.
 struct LiteActivityRow: View {
     let item: StellarActivityItem
     @Environment(\.liteStyle) private var style
 
+    /// The phone's own words for the item; else the server's, while none of its words is a stand-in; else "Transaction".
+    static func title(_ item: StellarActivityItem) -> String {
+        LiteTitles.activity(item) ?? LiteFormat.sentence(item.summary) ?? tr("Transaction")
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: LiteTitles.activity(item) ?? item.summary).font(.subheadline).lineLimit(2)
+                Text(verbatim: Self.title(item)).font(.subheadline).lineLimit(2)
                 Text(verbatim: time).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -414,7 +450,7 @@ struct LiteActivityRow: View {
 
     enum Outcome { case done, pending, failed }
 
-    /// The server's statuses (transactions, bridge transfers, anchor transfers) as three words.
+    /// The server's statuses (transactions and transfers) as three words.
     static func outcome(_ status: String) -> Outcome {
         switch status {
         case "success", "completed": .done
@@ -512,27 +548,32 @@ struct SwapSheet: View {
             if let quote {
                 prepared = try await store.swapPlan(quote)
             } else {
-                quote = try await store.quoteSwap(sell: sell, buy: buy, amount: units, slippageBps: 100)
+                quote = try await store.swapQuote(sell: sell, buy: buy, amount: units, slippageBps: 100)
             }
         } catch {
-            self.error = describe(error)
+            self.error = LiteErrorText.describe(error)
         }
     }
 }
 
 // ------------------------------------------------------------------------------------------------ withdraw & deposit
 
-/// Withdraw: sends an asset to another Stellar address (an exchange, an anchor, a friend).
+/// Withdraw: sends an asset to another Stellar address (an exchange, a friend).
 struct SendSheet: View {
     @Environment(LiteStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @State private var asset = "XLM"
+    @State private var asset: String
     @State private var to = ""
     @State private var amount = ""
     @State private var memo = ""
     @State private var busy = false
     @State private var error: String?
     @State private var prepared: PreparedAction?
+
+    /// `asset`: the one to send at first (a registry id); XLM when nil.
+    init(asset: String? = nil) {
+        _asset = State(initialValue: asset ?? "XLM")
+    }
 
     var body: some View {
         NavigationStack {
@@ -556,7 +597,7 @@ struct SendSheet: View {
                         defer { busy = false }
                         do {
                             prepared = try await store.sendPlan(asset: asset, to: to, amount: StellarAmount.parse(amount) ?? 0, memo: memo.isEmpty ? nil : memo, memoType: memo.allSatisfy(\.isNumber) && !memo.isEmpty ? "id" : "text")
-                        } catch { self.error = describe(error) }
+                        } catch { self.error = LiteErrorText.describe(error) }
                     }
                 }
                 .padding()
@@ -569,13 +610,17 @@ struct SendSheet: View {
     }
 }
 
-/// Deposit: the account's Stellar address and its QR code. Receiving needs no sign-in, so it shows while the session
-/// is locked too (`store` nil); the test XLM needs one.
+/// Deposit: the account's Stellar address and its QR code. Receiving needs nothing but the address, so it shows before
+/// the account's figures are read too (`store` nil). On testnet, an account that never had Friendbot's test XLM (one
+/// that existed before it came to DyorHQ) also gets "Fund with Friendbot", once: the row shows only while the server
+/// says the claim is open (`firstFunding.faucet.claimed` false), in the amount it gives (decision 7).
 struct ReceiveSheet: View {
     let address: String
     let store: LiteStore?
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    @State private var funding = false
+    @State private var funded = false
     @State private var error: String?
     @State private var headerHeight: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
@@ -598,13 +643,12 @@ struct ReceiveSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                if let store, store.isTestnet {
-                    Button(tr("Get \(Self.faucetAmount) test XLM")) {
-                        Task {
-                            do { try await store.faucet() } catch { self.error = describe(error) }
-                        }
-                    }
-                    .font(.footnote)
+                if let store, store.canClaimFriendbot, let amount = Self.faucetAmount(store.config) {
+                    friendbot(store, amount: amount)
+                } else if funded {
+                    Label(tr("Funded with Friendbot"), systemImage: "checkmark.circle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
                 if let error { LiteInlineError(message: error) }
             }
@@ -627,11 +671,44 @@ struct ReceiveSheet: View {
         .liteFormSheet()
     }
 
+    /// "Fund with Friendbot" and what it brings, once. Once claimed, the account is read again and the row goes.
+    private func friendbot(_ store: LiteStore, amount: String) -> some View {
+        VStack(spacing: 6) {
+            Button {
+                Task { await fund(store) }
+            } label: {
+                if funding { ProgressView() } else { Label(tr("Fund with Friendbot"), systemImage: "drop") }
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .disabled(funding)
+            Text(tr("Get \(amount) free test XLM, once"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func fund(_ store: LiteStore) async {
+        funding = true
+        defer { funding = false }
+        error = nil
+        do {
+            try await store.faucet()
+            funded = true
+        } catch {
+            self.error = LiteErrorText.describe(error)
+        }
+    }
+
     /// The header, the content and the home indicator's inset; about 560 until measured.
     private var fitted: CGFloat {
         contentHeight > 0 ? headerHeight + contentHeight + bottomInset : 560
     }
 
-    /// The testnet faucet's 10,000 XLM, in the current language's digits.
-    static var faucetAmount: String { 10_000.formatted(.number.locale(LiteL10n.locale)) }
+    /// Friendbot's grant, as the server's config gives it (`faucet.amount`, in XLM), in the current language's digits;
+    /// nil off testnet and from servers that don't say.
+    static func faucetAmount(_ config: LiteConfig?) -> String? {
+        guard let text = config?.faucet?.amount, let amount = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { return nil }
+        return amount.formatted(.number.locale(LiteL10n.locale))
+    }
 }

@@ -46,7 +46,8 @@
     "poolFeeBps": null,
     "lookAlike": false,
     "graduatedAt": null,
-    "lastTradeAt": "2026-10-14T09:29:00.000Z"
+    "lastTradeAt": "2026-10-14T09:29:00.000Z",
+    "generation": 1
   },
   "curve": {
     "quoteReserve": "289000000000",

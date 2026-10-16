@@ -49,6 +49,10 @@
 	<false/>
 	<key>LITE_API_URL</key>
 	<string>$(LITE_API_URL)</string>
+	<key>LITE_MEDIA_BASE</key>
+	<string>$(LITE_MEDIA_BASE)</string>
+	<key>LITE_RENDER_BASE</key>
+	<string>$(LITE_RENDER_BASE)</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>https</string>
@@ -59,6 +63,8 @@
 	<string>$(DYOR_DEBUG_LAUNCHPAD_FACTORY)</string>
 	<key>LiteDebugForceOn</key>
 	<string>$(DYOR_DEBUG_LITE_FORCE_ON)</string>
+	<key>LitePinned</key>
+	<string>$(DYOR_DEBUG_LITE_PINNED)</string>
 	<key>MemeHook</key>
 	<string>$(DYOR_DEBUG_MEME_HOOK)</string>
 	<key>MomentsBuyback</key>
@@ -83,11 +89,6 @@
 	<string>$(DYOR_DEBUG_MOMENTS_VESTING)</string>
 	<key>MonadRPCURL</key>
 	<string>$(DYOR_DEBUG_RPC_OVERRIDE)</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>DyorHQ uses Face ID to unlock your wallet on this device.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

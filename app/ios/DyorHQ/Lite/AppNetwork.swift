@@ -1,12 +1,11 @@
 // The network the app shows, Monad or Stellar (docs/DESIGN-network-switch.md). Internal builds only (STELLAR_LITE).
 #if STELLAR_LITE
 import DyorKit
-import DyorLite
 import Foundation
 
-/// The network on screen: Monad, build 23's screens, or Stellar, DyorLite's. The user picks it with the network chip on
-/// Home or in Profile; it is remembered per account (`stored(for:)`), and a new account starts on Monad. Never called a
-/// mode on screen: the words are the networks' names.
+/// The network on screen: Monad, build 23's screens, or Stellar, `StellarRootView`'s. The user picks it with the network
+/// chip on Home or in Profile; it is remembered per account (`stored(for:)`), and a new account starts on Monad. Never
+/// called a mode on screen: the words are the networks' names.
 enum AppNetwork: String, CaseIterable, Identifiable, Hashable {
     /// Listed first: the sheet's rows and the push between the two Homes keep this order (Monad leading, Stellar trailing).
     case monad, stellar
@@ -54,38 +53,16 @@ enum AppNetwork: String, CaseIterable, Identifiable, Hashable {
     var summary: String {
         switch self {
         case .monad: return liteTr(LocalizedStringResource("Spot, perps, launches and Moments", table: "Lite", comment: "The network sheet: what DyorHQ does on Monad, under its name. “Moments” is a feature name. At most 2 lines"))
-        case .stellar: return liteTr(LocalizedStringResource("Earn, swap, launch and collect", table: "Lite", comment: "The network sheet: what you can do on Stellar in DyorHQ, under its name. At most 2 lines"))
+        case .stellar: return liteTr(LocalizedStringResource("Launch, swap, earn and collect", table: "StellarShell", comment: "The network sheet: what you can do on Stellar in DyorHQ, under its name, in the order of its tabs (Launch, Earn with its Swap, Moments). At most 2 lines"))
         }
     }
 }
 
-/// Stellar's tabs: Home, Earn, Launch, Moments (§3.3), as the router keeps the selection (`Router.stellarTab`) and the
-/// side menu's Stellar rows open them; DyorLite's tab bar takes them as `LiteTab`.
+/// Stellar's tabs, in the tab bar's order: Home, Launch, Earn and Moments, Earn in Monad's Trade slot (§3.6). The router
+/// keeps the selection (`Router.stellarTab`), and the side menu's Stellar rows open them.
 enum StellarTab: String, CaseIterable, Identifiable, Hashable {
-    case home, earn, launch, moments
+    case home, launch, earn, moments
     var id: String { rawValue }
-
-    init(_ tab: LiteTab) {
-        switch tab {
-        case .home: self = .home
-        case .earn: self = .earn
-        case .launch: self = .launch
-        case .moments: self = .moments
-        }
-    }
-
-    /// DyorLite's tab for it; setting one selects the matching tab (the tab bar's selection, `NetworkRoot`).
-    var liteTab: LiteTab {
-        get {
-            switch self {
-            case .home: return .home
-            case .earn: return .earn
-            case .launch: return .launch
-            case .moments: return .moments
-            }
-        }
-        set { self = StellarTab(newValue) }
-    }
 }
 
 /// Whether the account signed in can switch to Stellar on this iPhone, and if not, why (§2.1). Only asked where the network

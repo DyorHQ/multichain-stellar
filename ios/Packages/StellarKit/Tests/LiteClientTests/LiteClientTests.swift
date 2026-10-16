@@ -17,7 +17,7 @@ final class ContractInspectorTests: XCTestCase {
 ///   LITE_API=http://127.0.0.1:8000/lite LITE_INVITE=DYOR-XXXXX-XXXXX swift test --filter LiteJourney
 /// It is the phone's own code path end to end: derive a key, sign in with an invite, activate, then a swap through
 /// PlanRunner (verify against pinned contracts + the user's limits → sign → submit → confirm), a refusal when the
-/// plan would spend more than confirmed, and SEP-10 + SEP-24 against testanchor.stellar.org.
+/// plan would spend more than confirmed, and Friendbot's one claim: the activation was it, so the faucet refuses.
 final class LiteJourneyTests: XCTestCase {
     func testLiteJourneyOnTestnet() async throws {
         let env = ProcessInfo.processInfo.environment
@@ -71,16 +71,15 @@ final class LiteJourneyTests: XCTestCase {
         XCTAssertGreaterThan(account.balance("USDC"), 0)
         XCTAssertGreaterThan(account.balance(usdc.id), 0)
 
-        // Cash in: SEP-10 with the account key, then a SEP-24 interactive deposit URL.
-        let anchor = AnchorClient(domain: "testanchor.stellar.org", network: .testnet)
-        let toml = try await anchor.toml()
-        let jwt = try await anchor.authenticate(signer: signer, toml: toml)
-        let flow = try await anchor.interactive(deposit: true, assetCode: "USDC", account: signer.address, jwt: jwt, toml: toml)
-        XCTAssertTrue(flow.url.hasPrefix("https://"))
-        let tx = try await anchor.transaction(id: flow.id, jwt: jwt, toml: toml)
-        XCTAssertEqual(tx.kind, "deposit")
-        try await api.trackCash(anchor: "testanchor.stellar.org", deposit: true, asset: "USDC", anchorTxId: flow.id, status: tx.status, amount: nil)
+        // Friendbot's test XLM is one claim per address, ever: the activation was it.
+        XCTAssertEqual(account.firstFunding?.faucet?.claimed, true)
+        do {
+            _ = try await api.faucet()
+            XCTFail("a second claim of test XLM went through")
+        } catch let e as LiteAPIError {
+            XCTAssertEqual(e.code, "faucet_used")
+        }
         let activity = try await api.activity()
-        XCTAssertTrue(activity.contains { $0.type == "cash" })
+        XCTAssertTrue(activity.contains { $0.kind == "faucet" }, "the activation is in Activity as the claim")
     }
 }

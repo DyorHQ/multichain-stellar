@@ -1,0 +1,2137 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ pool fee on DyorHQ's locked liquidity, collected hourly, in both %@ and %@. Each is split %@ DyorHQ, %@ holders or creator. No creator fee after graduation. DyorHQ keeps the %@ it collects; it earns no holder rewards and isn't sold automatically." : {
+      "comment" : "A graduated Stellar coin: what happens to its pool's fees. Values in order: the pool fee (0.3%), the quote asset (XLM), the coin's ticker, DyorHQ's share (50%), the holders' or creator's share (50%), the coin's ticker. DyorHQ is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ pool fee on DyorHQ's locked liquidity, collected hourly, in both %2$@ and %3$@. Each is split %4$@ DyorHQ, %5$@ holders or creator. No creator fee after graduation. DyorHQ keeps the %6$@ it collects; it earns no holder rewards and isn't sold automatically."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisión del pool de %1$@ sobre la liquidez bloqueada de DyorHQ, cobrada cada hora, en %2$@ y en %3$@. Cada una se reparte %4$@ para DyorHQ y %5$@ para los holders o el creador. Sin comisión de creador después de la graduación. DyorHQ conserva los %6$@ que cobra; no gana recompensas de holder y no se venden automáticamente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de pool de %1$@ sur la liquidité verrouillée de DyorHQ, collectés chaque heure, en %2$@ et en %3$@. Chacun est réparti %4$@ pour DyorHQ, %5$@ pour les détenteurs ou le créateur. Pas de frais de créateur après la graduation. DyorHQ garde les %6$@ qu'il collecte ; ils ne gagnent aucune récompense de détenteur et ne sont pas vendus automatiquement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ의 잠긴 유동성에 붙는 %1$@ 풀 수수료는 매시간 %2$@와 %3$@ 두 가지로 수집돼요. 각각 DyorHQ %4$@, 홀더 또는 크리에이터 %5$@로 나뉘어요. 졸업 후에는 크리에이터 수수료가 없어요. DyorHQ는 수집한 %6$@를 보유하며, 홀더 보상을 받지 않고 자동으로 팔지 않아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 锁定流动性的 %1$@ 资金池费用每小时收取一次，以 %2$@ 和 %3$@ 两种形式。每部分按 DyorHQ %4$@、持有者或创作者 %5$@ 分配。毕业后不再收取创作者费用。DyorHQ 保留其收取的 %6$@；这些代币不赚取持有者奖励，也不会被自动卖出。"
+          }
+        }
+      }
+    },
+    "Apply Change" : {
+      "comment" : "Button and review title on a Stellar coin's page: carry out a proposed change of its fee recipient, now that its waiting time is over",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aplicar cambio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Appliquer le changement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "변경 적용"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "执行变更"
+          }
+        }
+      }
+    },
+    "Change Fee Recipient" : {
+      "comment" : "Button, screen and review title on a Stellar coin's page, for the account that receives its creator fees: hand them to another account",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar receptor de comisiones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Changer le destinataire des frais"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 수령인 변경"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更改费用接收方"
+          }
+        }
+      }
+    },
+    "Claim Owed Fees" : {
+      "comment" : "Button and review title on a Stellar coin's page: collect the creator fees earned before its fee recipient changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobrar comisiones adeudadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Récupérer les frais dus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미지급 수수료 받기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取欠付费用"
+          }
+        }
+      }
+    },
+    "Counted from this coin's transfers we've read, so there may be more holders." : {
+      "comment" : "Under a Stellar coin's holder count shown as a minimum (“5+”): some of its transfers couldn't be read yet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Contados a partir de las transferencias de esta moneda que hemos leído, así que puede haber más holders."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comptés à partir des transferts de ce coin que nous avons lus : il peut y avoir plus de détenteurs."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "읽어 온 이 코인의 전송 기록으로 센 숫자라 홀더가 더 있을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "根据我们已读取的该代币转账统计，持有者可能更多。"
+          }
+        }
+      }
+    },
+    "Creator tax is charged on curve trades only. You, or the fee recipient you set, receive it with a share of the curve fee and, after graduation, %@ of the fees its locked %@ liquidity earns (%@ go to DyorHQ). With fee sharing on, holders receive all of it instead." : {
+      "comment" : "The footer of Advanced on Stellar's Launch a Coin screen. The values are shares (50%, 50%) and the graduation venue's name (Soroswap, never translated). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El impuesto del creador solo se cobra en las operaciones de la curva. Lo recibes tú (o el receptor de comisiones que indiques) junto con una parte de la comisión de la curva y, tras la graduación, el %1$@ de las comisiones que genera su liquidez bloqueada en %2$@ (el %3$@ va a DyorHQ). Con el reparto de comisiones activado, los holders lo reciben todo en tu lugar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La taxe du créateur ne s'applique qu'aux échanges de la courbe. Vous la recevez (ou le destinataire des frais que vous choisissez) avec une part des frais de la courbe et, après la graduation, %1$@ des frais que rapporte sa liquidité verrouillée sur %2$@ (%3$@ vont à DyorHQ). Avec le partage des frais activé, ce sont les détenteurs qui reçoivent le tout."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터 세금은 커브 거래에만 붙어요. 나(또는 지정한 수수료 수령인)는 이 세금과 커브 수수료 일부를 받고, 졸업 후에는 %2$@에 잠긴 유동성이 버는 수수료의 %1$@를 받아요(%3$@는 DyorHQ 몫). 수수료 분배를 켜면 대신 홀더가 전부 받아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创作者税仅对曲线交易收取。你（或你设置的费用接收方）会连同部分曲线手续费一起收到它，毕业后还会获得其锁定在 %2$@ 的流动性所赚手续费的 %1$@（%3$@ 归 DyorHQ）。开启手续费分成时，则全部由持有者获得。"
+          }
+        }
+      }
+    },
+    "Curve fee share" : {
+      "comment" : "On a Stellar coin's page, creator fees: the part of every curve trade's fee that goes to the creator (or to holders when fee sharing is on), as a percent of the trade",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parte de la comisión de la curva"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Part des frais de la courbe"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "커브 수수료 몫"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "曲线费用分成"
+          }
+        }
+      }
+    },
+    "Curve fees earned so far stay with the current recipient. Pool fees not yet collected go to the new one." : {
+      "comment" : "On a Stellar coin's page and in the review of a fee recipient change: what a change of the account that receives creator fees does to fees already earned",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las comisiones de la curva ganadas hasta ahora se quedan con el receptor actual. Las comisiones del pool aún no cobradas van al nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les frais de courbe gagnés jusqu'ici restent au destinataire actuel. Les frais de pool pas encore collectés vont au nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금까지 쌓인 커브 수수료는 현재 수령인에게 남아요. 아직 수집되지 않은 풀 수수료는 새 수령인에게 가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前已赚取的曲线费用归当前接收方。尚未收取的资金池费用归新接收方。"
+          }
+        }
+      }
+    },
+    "DEX pools of this coin are excluded from holder rewards once DyorHQ verifies them. Other contracts that hold the coin, such as lending markets and vaults, keep earning rewards that only they can claim." : {
+      "comment" : "Under a Stellar coin's holder rewards: which holders don't earn them. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los pools de DEX de esta moneda quedan excluidos de las recompensas de holder cuando DyorHQ los verifica. Otros contratos que tienen la moneda, como mercados de préstamo y bóvedas, siguen ganando recompensas que solo ellos pueden cobrar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les pools DEX de ce coin sont exclus des récompenses de détenteur dès que DyorHQ les vérifie. Les autres contrats qui détiennent le coin, comme les marchés de prêt et les coffres, continuent de gagner des récompenses qu'eux seuls peuvent récupérer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 코인의 DEX 풀은 DyorHQ가 확인하면 홀더 보상에서 제외돼요. 대출 마켓이나 볼트처럼 이 코인을 보유한 다른 컨트랙트는 계속 보상을 받지만, 그 보상은 해당 컨트랙트만 받을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 核实后，该代币的 DEX 资金池将不再获得持有者奖励。持有该代币的其他合约（如借贷市场和金库）仍会赚取奖励，但只有它们自己能领取。"
+          }
+        }
+      }
+    },
+    "Dollar values use mainnet market prices. Testnet assets have no value." : {
+      "comment" : "Under a Stellar coin's price on its page: its dollar figures come from real mainnet prices of its quote asset, while testnet coins themselves are worth nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los valores en dólares usan precios de mercado de mainnet. Los activos de testnet no tienen valor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les valeurs en dollars utilisent les prix du marché du mainnet. Les actifs du testnet n'ont aucune valeur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "달러 가치는 메인넷 시장 가격을 사용해요. 테스트넷 자산은 가치가 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美元价值采用主网市场价格。测试网资产没有价值。"
+          }
+        }
+      }
+    },
+    "Early-buy tax exemptions" : {
+      "comment" : "In the review of a Stellar launch, beside a number: how many wallets pay no early-buy (snipe) tax on the new coin",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exenciones del impuesto de compra temprana"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exemptions de taxe d'achat anticipé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "초기 매수세 면제"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早期买入税豁免"
+          }
+        }
+      }
+    },
+    "Exempt" : {
+      "comment" : "[tight] On Stellar's Launch a Coin screen, before a wallet's address: it pays no early-buy (snipe) tax on the new coin",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exento"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exempté"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "면제"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免税"
+          }
+        }
+      }
+    },
+    "Fallback after" : {
+      "comment" : "In the review of a Stellar launch: how long after a delay its fallback venue opens",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alternativa tras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repli après"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대체 경로 개방까지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备用场所开放于"
+          }
+        }
+      }
+    },
+    "Fallback on %@" : {
+      "comment" : "On a Stellar coin whose graduation is delayed: when anyone may graduate it on its fallback venue instead. The value is the venue's name (Soroswap)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alternativa en %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repli sur %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 대체 경로"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 备用"
+          }
+        }
+      }
+    },
+    "Fallback venue" : {
+      "comment" : "In the review of a Stellar launch: where the coin graduates if its own venue keeps failing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plataforma alternativa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plateforme de repli"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대체 거래소"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "备用场所"
+          }
+        }
+      }
+    },
+    "Fee recipient (optional)" : {
+      "comment" : "A field on Stellar's Launch a Coin screen: another account to receive the coin's creator fees; empty for the creator",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Receptor de comisiones (opcional)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destinataire des frais (facultatif)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 수령인 (선택)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "费用接收方（可选）"
+          }
+        }
+      }
+    },
+    "Graduate %@" : {
+      "comment" : "Title of the review that graduates a Stellar coin into its pool. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduer %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让 %@ 毕业"
+          }
+        }
+      }
+    },
+    "Graduate on %@" : {
+      "comment" : "Button on a Stellar coin whose graduation is delayed: graduate it on its fallback venue. The value is the venue's name (Soroswap)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduar en %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduer sur %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@에서 졸업"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 毕业"
+          }
+        }
+      }
+    },
+    "Graduates to a %@ pool, liquidity locked forever, once the curve raises %@ %@." : {
+      "comment" : "Footer of the pairing on Stellar's Launch a Coin screen. Values: the venue's name (Soroswap), the raise that completes the curve, and its asset (XLM)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Graduates to a %1$@ pool, liquidity locked forever, once the curve raises %2$@ %3$@."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se gradúa a un pool de %1$@, con la liquidez bloqueada para siempre, cuando la curva recauda %2$@ %3$@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gradue vers un pool %1$@, liquidité verrouillée pour toujours, une fois que la courbe a levé %2$@ %3$@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "커브가 %2$@ %3$@를 모으면 %1$@ 풀로 졸업하고 유동성은 영구히 잠겨요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "曲线筹集到 %2$@ %3$@ 后，毕业进入 %1$@ 资金池，流动性永久锁定。"
+          }
+        }
+      }
+    },
+    "Graduating" : {
+      "comment" : "[tight] A Stellar launch's phase: its curve is full and it graduates into its pool within minutes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduándose"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En graduation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 중"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业中"
+          }
+        }
+      }
+    },
+    "Graduation delayed" : {
+      "comment" : "[tight] A Stellar launch's phase: its curve is full but graduating into its pool failed or took too long; retries, a fallback venue and refunds follow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduación retrasada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduation retardée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 지연"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业延迟"
+          }
+        }
+      }
+    },
+    "Graduation didn't happen in time, so the curve's funds are shared out: each coin you give back is burned and pays the same amount to every holder, whatever the order." : {
+      "comment" : "Footer of a rescued Stellar launch's refund ticket: why refunds are open and that every holder gets the same rate",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La graduación no llegó a tiempo, así que los fondos de la curva se reparten: cada moneda que devuelves se quema y paga la misma cantidad a cada holder, sin importar el orden."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La graduation n'a pas eu lieu à temps, les fonds de la courbe sont donc répartis : chaque coin que vous rendez est brûlé et rapporte le même montant à chaque détenteur, quel que soit l'ordre."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업이 제때 이뤄지지 않아 커브의 자금을 나눠 드려요. 돌려주는 코인은 소각되고, 순서와 상관없이 모든 홀더가 같은 금액을 받아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业未能按时完成，因此曲线资金将被分配：你退回的每枚代币都会被销毁，并按相同金额支付给每位持有者，与先后顺序无关。"
+          }
+        }
+      }
+    },
+    "Graduation grace" : {
+      "comment" : "In the review of a Stellar launch: how long a full curve may take to graduate before anyone can mark it delayed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen de graduación"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Délai de graduation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 유예 기간"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业宽限期"
+          }
+        }
+      }
+    },
+    "Holders also earn part of the pool fees after graduation, in this coin and in %@." : {
+      "comment" : "Under a Stellar coin's holder rewards, and the Share fees with holders setting: after graduation holders also get part of the pool's fees, in the coin and in its quote asset. The value is the quote asset (XLM)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los holders también ganan parte de las comisiones del pool tras la graduación, en esta moneda y en %@."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les détenteurs gagnent aussi une part des frais de pool après la graduation, dans ce coin et en %@."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "졸업 후에는 홀더도 이 코인과 %@로 풀 수수료 일부를 받아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "毕业后，持有者还会以该代币和 %@ 获得部分资金池费用。"
+          }
+        }
+      }
+    },
+    "Mark as Delayed" : {
+      "comment" : "Button and review title on a Stellar coin whose full curve hasn't graduated within its grace period: record the delay, which opens its fallback and refund paths",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcar como retrasada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marquer comme retardée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지연으로 표시"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标记为延迟"
+          }
+        }
+      }
+    },
+    "New launches are paused." : {
+      "comment" : "On Stellar's launch board and Launch a Coin screen: the launchpad takes no new launches for now",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los nuevos lanzamientos están en pausa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouveaux lancements sont en pause."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 런칭이 일시 중지됐어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新发射已暂停。"
+          }
+        }
+      }
+    },
+    "New launches open soon." : {
+      "comment" : "On Stellar's Launch a Coin screen: the network's new launchpad isn't live yet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los nuevos lanzamientos abren pronto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouveaux lancements ouvrent bientôt."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 런칭이 곧 열려요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新发射即将开放。"
+          }
+        }
+      }
+    },
+    "New recipient" : {
+      "comment" : "The account that will receive a Stellar coin's creator fees after a change of its fee recipient",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nuevo receptor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nouveau destinataire"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 수령인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新接收方"
+          }
+        }
+      }
+    },
+    "Not enough XLM: you can spend %@. The rest keeps your account open and pays the network fee." : {
+      "comment" : "Under a Stellar curve buy with XLM, when the amount is more than the account can spend. The value is an amount of XLM. XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No tienes suficiente XLM: puedes gastar %@. El resto mantiene tu cuenta abierta y paga la comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM : vous pouvez dépenser %@. Le reste garde votre compte ouvert et paie les frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM이 부족해요: %@까지 쓸 수 있어요. 나머지는 계정을 유지하고 네트워크 수수료를 내는 데 쓰여요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足：你最多可花费 %@。其余部分用于保持账户开放并支付网络费用。"
+          }
+        }
+      }
+    },
+    "Not enough XLM: you need %@ XLM more. The %@ XLM launch fee, the network fee and your account's minimum balance come first." : {
+      "comment" : "On Stellar's Launch a Coin screen, before the review: the account's XLM doesn't cover the launch. The first value is the XLM missing, the second the launch fee in XLM (10). XLM is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Not enough XLM: you need %1$@ XLM more. The %2$@ XLM launch fee, the network fee and your account's minimum balance come first."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No tienes suficiente XLM: necesitas %1$@ XLM más. Primero van la comisión de lanzamiento de %2$@ XLM, la comisión de red y el saldo mínimo de tu cuenta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM : il vous faut %1$@ XLM de plus. Les frais de lancement de %2$@ XLM, les frais de réseau et le solde minimum de votre compte passent d'abord."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM이 부족해요: %1$@ XLM이 더 필요해요. %2$@ XLM 런칭 수수료, 네트워크 수수료, 계정 최소 잔액이 먼저예요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足：你还需要 %1$@ XLM。需先支付 %2$@ XLM 发射费、网络费用并保留账户最低余额。"
+          }
+        }
+      }
+    },
+    "Open Refunds" : {
+      "comment" : "Button and review title on a Stellar coin stuck past its rescue date: switch it to refunds at one fixed rate for every holder",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir reembolsos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ouvrir les remboursements"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "환불 열기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启退款"
+          }
+        }
+      }
+    },
+    "Owed to you" : {
+      "comment" : "On a Stellar coin's page: the creator fees the viewer earned before its fee recipient changed, still to be claimed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se te debe"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qui vous est dû"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받을 금액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "欠你的"
+          }
+        }
+      }
+    },
+    "Pool fees collected every" : {
+      "comment" : "In the review of a Stellar launch: how often its pool's fees are collected after graduation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones del pool cobradas cada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de pool collectés toutes les"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "풀 수수료 수집 주기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "资金池费用收取间隔"
+          }
+        }
+      }
+    },
+    "Pool fees not collected yet" : {
+      "comment" : "In the review of a Stellar coin's fee recipient change: the pool fees the hourly collections haven't taken yet, which go to the new recipient",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones del pool aún no cobradas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de pool pas encore collectés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 수집되지 않은 풀 수수료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未收取的资金池费用"
+          }
+        }
+      }
+    },
+    "Price from curve trades and the %@ pool" : {
+      "comment" : "VoiceOver: a graduated Stellar coin's price chart, drawn from its curve's trades and then its pool's. The value is the venue's name (Soroswap)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Precio de las operaciones de la curva y del pool de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prix issu des échanges de la courbe et du pool %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "커브 거래와 %@ 풀 기준 가격"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "基于曲线交易和 %@ 资金池的价格"
+          }
+        }
+      }
+    },
+    "Priced in" : {
+      "comment" : "On a Stellar coin's page, About: the asset its curve is priced in (XLM, USDC)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cotizada en"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coté en"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "가격 기준"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计价资产"
+          }
+        }
+      }
+    },
+    "Prices couldn't be read just now." : {
+      "comment" : "On a Stellar coin's page, instead of its chart: the dollar price of the asset it's priced in couldn't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer los precios en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire les prix pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 가격을 읽을 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取价格。"
+          }
+        }
+      }
+    },
+    "Proposed recipient" : {
+      "comment" : "On a Stellar coin's page: the account DyorHQ's admin proposed to receive its creator fees, a change the current recipient can veto. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Receptor propuesto"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destinataire proposé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "제안된 수령인"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提议的接收方"
+          }
+        }
+      }
+    },
+    "Queued rewards are claimable from the next ledger." : {
+      "comment" : "Under a Stellar coin's holder rewards: rewards just paid in are shared out a few seconds later, from the network's next ledger",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las recompensas en cola se pueden cobrar a partir del siguiente ledger."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les récompenses en attente sont récupérables dès le prochain ledger."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대기 중인 보상은 다음 레저부터 받을 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "排队中的奖励可从下一个账本起领取。"
+          }
+        }
+      }
+    },
+    "Reason" : {
+      "comment" : "On a Stellar coin whose graduation is delayed: the label of why the last attempt failed (an error's name and the contract that raised it)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Motivo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Raison"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사유"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "原因"
+          }
+        }
+      }
+    },
+    "Recipient takeover notice" : {
+      "comment" : "In the review of a Stellar launch: how long the fee recipient has to veto a change DyorHQ's admin proposes. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aviso de cambio de receptor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Préavis de changement de destinataire"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수령인 변경 예고 기간"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接收方变更通知期"
+          }
+        }
+      }
+    },
+    "Recipient takeover window" : {
+      "comment" : "In the review of a Stellar launch: once its notice is over, how long a fee recipient change DyorHQ's admin proposed can be applied before it lapses. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plazo para aplicar el cambio de receptor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fenêtre d'application du changement de destinataire"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수령인 변경 적용 기간"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接收方变更执行窗口"
+          }
+        }
+      }
+    },
+    "Refund" : {
+      "comment" : "[tight] The button of a rescued Stellar launch's refund ticket, and the confirm button of its review: give back coins at the fixed rate",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rembourser"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "환불"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退款"
+          }
+        }
+      }
+    },
+    "Refund %@" : {
+      "comment" : "Button and review title on a rescued Stellar launch's page: give back coins at the fixed refund rate. The value is the coin's ticker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rembourser %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 환불"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "退还 %@"
+          }
+        }
+      }
+    },
+    "Refund at a fixed %@ per token, no fees, any time." : {
+      "comment" : "A rescued Stellar launch's refund ticket: every holder gives back coins for the same fixed amount of the quote asset per coin, with no fees and no deadline. The value is that amount with its asset (0.000000048 XLM)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolso a un precio fijo de %@ por token, sin comisiones, en cualquier momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursement à un taux fixe de %@ par jeton, sans frais, à tout moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "토큰당 %@의 고정 금액으로 수수료 없이 언제든 환불돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按每枚代币 %@ 的固定价格退款，无手续费，随时可退。"
+          }
+        }
+      }
+    },
+    "Refunds by DyorHQ after" : {
+      "comment" : "In the review of a Stellar launch: how long after a delay DyorHQ's admin can switch it to refunds, before anyone can. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por DyorHQ tras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par DyorHQ après"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 환불 개시까지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 开启退款需等待"
+          }
+        }
+      }
+    },
+    "Refunds by DyorHQ from" : {
+      "comment" : "On a Stellar coin whose graduation is delayed: from when DyorHQ's admin may switch it to refunds, before anyone may. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por DyorHQ desde"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par DyorHQ dès le"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 환불 개시 가능일"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 可开启退款于"
+          }
+        }
+      }
+    },
+    "Refunds by anyone after" : {
+      "comment" : "In the review of a Stellar launch: how long after a delay anyone can switch it to refunds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por cualquiera tras"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par tous après"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "누구나 환불 개시까지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任何人开启退款需等待"
+          }
+        }
+      }
+    },
+    "Refunds by anyone from" : {
+      "comment" : "On a Stellar coin whose graduation is delayed: from when anyone may switch it to refunds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reembolsos por cualquiera desde"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remboursements par tous dès le"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "누구나 환불 개시 가능일"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任何人可开启退款于"
+          }
+        }
+      }
+    },
+    "Takes effect" : {
+      "comment" : "On a Stellar coin's page: from when a proposed change of its fee recipient can be applied",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entra en vigor"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prend effet"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "적용 시점"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生效时间"
+          }
+        }
+      }
+    },
+    "Telegram: an https link on t.me, at most %lld characters." : {
+      "comment" : "Under the Telegram field of Stellar's Launch a Coin screen: what a coin's Telegram link may be. The value is the most characters (200). Telegram, https and t.me stay as they are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram: un enlace https de t.me, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram : un lien https sur t.me, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram: t.me의 https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Telegram：t.me 上的 https 链接，最多 %lld 个字符。"
+          }
+        }
+      }
+    },
+    "That isn't a Stellar address." : {
+      "comment" : "Under an address field on Stellar: what was typed isn't a valid G… or C… address. Stellar is a network's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No es una dirección de Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce n'est pas une adresse Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar 주소가 아니에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这不是 Stellar 地址。"
+          }
+        }
+      }
+    },
+    "The creator earns the creator tax plus a share of the %@ curve fee on every curve trade. Fees wait in the launchpad until the creator claims them." : {
+      "comment" : "Footer of a Stellar coin's creator fees. The value is the curve fee as a percent (1%)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El creador gana el impuesto de creador más una parte de la comisión de curva del %@ en cada operación de la curva. Las comisiones esperan en el launchpad hasta que el creador las cobra."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le créateur gagne la taxe de créateur plus une part des frais de courbe de %@ sur chaque échange de la courbe. Les frais attendent dans le launchpad jusqu'à ce que le créateur les récupère."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터는 커브 거래마다 크리에이터 세금과 %@ 커브 수수료의 일부를 받아요. 수수료는 크리에이터가 받을 때까지 런치패드에 보관돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每笔曲线交易，创作者都能获得创作者税以及 %@ 曲线费用中的一部分。费用存放在发射台中，直到创作者领取。"
+          }
+        }
+      }
+    },
+    "The curve is full. It graduates next, into a %@ pool with its liquidity locked forever, and then trades on Swap. DyorHQ graduates it within a few minutes, or you can do it now and pay only the network fee." : {
+      "comment" : "Footer of a Stellar coin whose curve is full and waits to graduate. The value is the venue's name (Soroswap). DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La curva está llena. Ahora se gradúa a un pool de %@ con la liquidez bloqueada para siempre, y luego se opera en Swap. DyorHQ la gradúa en unos minutos, o puedes hacerlo ahora y pagar solo la comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La courbe est pleine. Il gradue ensuite vers un pool %@, liquidité verrouillée pour toujours, puis s'échange sur Swap. DyorHQ le gradue en quelques minutes, ou vous pouvez le faire maintenant et ne payer que les frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "커브가 가득 찼어요. 다음으로 유동성이 영구히 잠긴 %@ 풀로 졸업한 뒤 스왑에서 거래돼요. DyorHQ가 몇 분 안에 졸업시키거나, 지금 직접 하고 네트워크 수수료만 낼 수도 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "曲线已满。接下来它将毕业进入 %@ 资金池，流动性永久锁定，之后在兑换中交易。DyorHQ 会在几分钟内完成毕业，你也可以现在自行操作，只需支付网络费用。"
+          }
+        }
+      }
+    },
+    "The curve's liquidity is locked forever in a %@ pool. Trades now route through Swap." : {
+      "comment" : "Footer of a graduated Stellar coin's section. The value is the venue's name (Soroswap)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La liquidez de la curva está bloqueada para siempre en un pool de %@. Ahora las operaciones pasan por Swap."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La liquidité de la courbe est verrouillée pour toujours dans un pool %@. Les échanges passent désormais par Swap."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "커브의 유동성은 %@ 풀에 영구히 잠겨 있어요. 이제 거래는 스왑을 통해 이뤄져요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "曲线的流动性已永久锁定在 %@ 资金池中。现在交易通过兑换进行。"
+          }
+        }
+      }
+    },
+    "The last graduation attempt failed. Anyone can retry it and pay only the network fee. If it keeps failing, the fallback venue opens, and then refunds at one fixed rate for every holder." : {
+      "comment" : "Footer of a Stellar coin whose graduation is delayed: what happens next, in order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El último intento de graduación falló. Cualquiera puede reintentarlo pagando solo la comisión de red. Si sigue fallando, se abre la plataforma alternativa y, después, los reembolsos a un precio fijo para todos los holders."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La dernière tentative de graduation a échoué. Tout le monde peut la relancer en ne payant que les frais de réseau. Si elle échoue encore, la plateforme de repli s'ouvre, puis les remboursements à un taux fixe pour chaque détenteur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마지막 졸업 시도가 실패했어요. 누구나 네트워크 수수료만 내고 다시 시도할 수 있어요. 계속 실패하면 대체 거래소가 열리고, 그다음 모든 홀더에게 같은 고정 금액으로 환불돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "上一次毕业尝试失败。任何人都可以重试，只需支付网络费用。如果持续失败，将开放备用场所，之后再按统一的固定价格为所有持有者退款。"
+          }
+        }
+      }
+    },
+    "The pool's fee stays with the pool; no creator tax is charged after graduation." : {
+      "comment" : "Footer of a graduated Stellar coin of the retired launchpad (v1): its pool's fees aren't shared out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La comisión del pool se queda en el pool; no se cobra impuesto de creador después de la graduación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les frais du pool restent dans le pool ; aucune taxe de créateur n'est prélevée après la graduation."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "풀 수수료는 풀에 남고, 졸업 후에는 크리에이터 세금이 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "资金池费用留在池中；毕业后不收取创作者税。"
+          }
+        }
+      }
+    },
+    "This coin couldn't be read just now." : {
+      "comment" : "On a Stellar coin's page, with Retry: its name, price and other figures couldn't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer esta moneda en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce jeton n'a pas pu être lu pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 코인을 읽을 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取此币。"
+          }
+        }
+      }
+    },
+    "This coin is on DyorHQ's retired launchpad: you can sell it on its curve and claim its fees. New buys are closed." : {
+      "comment" : "On a Stellar coin of the retired launchpad (v1), above its ticket: only selling and claiming remain. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta moneda está en el launchpad retirado de DyorHQ: puedes venderla en su curva y cobrar sus comisiones. Las compras nuevas están cerradas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce coin est sur l'ancien launchpad de DyorHQ : vous pouvez le vendre sur sa courbe et récupérer ses frais. Les nouveaux achats sont fermés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 코인은 DyorHQ의 종료된 런치패드에 있어요. 커브에서 팔거나 수수료를 받을 수 있지만, 새로 살 수는 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该代币位于 DyorHQ 已停用的发射台：你可以在其曲线上卖出并领取费用，但不再开放买入。"
+          }
+        }
+      }
+    },
+    "This version of DyorHQ can't launch on Stellar's new launchpad yet. Update DyorHQ." : {
+      "comment" : "On Stellar's Launch a Coin screen: this build of the app can't sign for the new launchpad. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta versión de DyorHQ aún no puede lanzar en el nuevo launchpad de Stellar. Actualiza DyorHQ."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cette version de DyorHQ ne peut pas encore lancer sur le nouveau launchpad de Stellar. Mettez DyorHQ à jour."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 버전의 DyorHQ는 아직 Stellar의 새 런치패드에서 런칭할 수 없어요. DyorHQ를 업데이트하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此版本的 DyorHQ 还无法在 Stellar 的新发射台上发射。请更新 DyorHQ。"
+          }
+        }
+      }
+    },
+    "Ticker: 2–10 letters (A–Z) or digits, without accents, spaces or symbols." : {
+      "comment" : "Under the ticker field of Stellar's Launch a Coin screen: what a Stellar coin's ticker may hold. A–Z stays as it is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ticker: de 2 a 10 letras (A–Z) o dígitos, sin acentos, espacios ni símbolos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ticker : 2 à 10 lettres (A–Z) ou chiffres, sans accents, espaces ni symboles."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "티커: 악센트, 공백, 기호 없이 영문자(A–Z) 또는 숫자 2–10자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "代码：2–10 个字母（A–Z）或数字，不含重音、空格或符号。"
+          }
+        }
+      }
+    },
+    "Total supply" : {
+      "comment" : "On a Stellar coin's page, About: how many of its coins exist (its supply less every burn)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suministro total"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Offre totale"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "총 공급량"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总供应量"
+          }
+        }
+      }
+    },
+    "Veto" : {
+      "comment" : "[tight] Button on a Stellar coin's page, for its fee recipient: refuse a proposed change of the account that receives its creator fees",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vetar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refuser"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "거부"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "否决"
+          }
+        }
+      }
+    },
+    "Veto Change" : {
+      "comment" : "Title of the review in which a Stellar coin's fee recipient refuses a proposed change of that account",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vetar cambio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Refuser le changement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "변경 거부"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "否决变更"
+          }
+        }
+      }
+    },
+    "Wait about %lld hours for the hourly collections to take it, or change now." : {
+      "comment" : "In the review of a Stellar coin's fee recipient change: the uncollected pool fees go to the new recipient unless you wait for the hourly collections. The value is a number of hours; Cancel waits",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Wait about %lld hour for the hourly collections to take it, or change now."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Wait about %lld hours for the hourly collections to take it, or change now."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Espera unas %lld hora a que los cobros de cada hora lo recojan, o cambia ahora."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Espera unas %lld horas a que los cobros de cada hora lo recojan, o cambia ahora."
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Attendez environ %lld heure que les collectes horaires le récupèrent, ou changez maintenant."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Attendez environ %lld heures que les collectes horaires le récupèrent, ou changez maintenant."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "매시간 수집이 가져갈 때까지 약 %lld시간 기다리거나, 지금 변경하세요."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "等待约 %lld 小时，由每小时的收取将其收走，或者现在就更改。"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Wallet exempt from the early-buy tax" : {
+      "comment" : "A field on Stellar's Launch a Coin screen: a wallet address that pays no early-buy (snipe) tax on the new coin, added with the Add button beside it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wallet exenta del impuesto de compra temprana"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wallet exempté de la taxe d'achat anticipé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "초기 매수세 면제 지갑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "免早期买入税的钱包"
+          }
+        }
+      }
+    },
+    "Website: an https link, at most %lld characters." : {
+      "comment" : "Under the website field of Stellar's Launch a Coin screen: what a coin's website link may be. The value is the most characters (200). https stays as it is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sitio web: un enlace https, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Site web : un lien https, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "웹사이트: https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网站：https 链接，最多 %lld 个字符。"
+          }
+        }
+      }
+    },
+    "With fee sharing on, the creator fee and the creator's share of the curve fee go to holders as rewards, so there are no creator fees to claim. Turn sharing off to keep them." : {
+      "comment" : "On Stellar's Launch a Coin screen and its review, while Share fees with holders is on: the creator's fees all go to the coin's holders",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con el reparto de comisiones activado, la comisión de creador y la parte del creador de la comisión de la curva van a los holders como recompensas, así que no habrá comisiones de creador que reclamar. Desactiva el reparto para quedártelas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec le partage des frais activé, les frais de créateur et la part du créateur des frais de courbe vont aux détenteurs sous forme de récompenses : il n'y aura donc aucuns frais de créateur à réclamer. Désactivez le partage pour les garder."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 공유가 켜져 있으면 크리에이터 수수료와 크리에이터 몫의 커브 수수료가 홀더에게 보상으로 가서 받을 크리에이터 수수료가 없어요. 직접 받으려면 공유를 끄세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启费用分享后，创作者费用和创作者所得的曲线费用将作为奖励发给持有者，因此没有可领取的创作者费用。关闭分享即可自己保留。"
+          }
+        }
+      }
+    },
+    "With fee sharing on, the creator tax and the creator's share of the curve fee go to holders as rewards." : {
+      "comment" : "Footer of a Stellar coin's creator fees, when it shares its fees with holders",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con el reparto de comisiones activado, el impuesto de creador y la parte del creador de la comisión de la curva van a los holders como recompensas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec le partage des frais activé, la taxe de créateur et la part du créateur des frais de courbe vont aux détenteurs sous forme de récompenses."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수수료 공유가 켜져 있으면 크리에이터 세금과 크리에이터 몫의 커브 수수료가 홀더에게 보상으로 가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启费用分享后，创作者税和创作者所得的曲线费用将作为奖励发给持有者。"
+          }
+        }
+      }
+    },
+    "X: an https link to a profile on x.com or twitter.com, at most %lld characters." : {
+      "comment" : "Under the X profile field of Stellar's Launch a Coin screen: what a coin's X link may be. The value is the most characters (200). X, https, x.com and twitter.com stay as they are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X: un enlace https a un perfil en x.com o twitter.com, de %lld caracteres como máximo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X : un lien https vers un profil sur x.com ou twitter.com, de %lld caractères au plus."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X: x.com 또는 twitter.com 프로필의 https 링크, 최대 %lld자."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "X：x.com 或 twitter.com 上个人主页的 https 链接，最多 %lld 个字符。"
+          }
+        }
+      }
+    },
+    "You (network fee only)" : {
+      "comment" : "In the review that graduates, marks or rescues a Stellar coin, as who pays: anyone may, and the user pays only the network fee",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tú (solo la comisión de red)"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vous (frais de réseau uniquement)"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "나 (네트워크 수수료만)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你（仅网络费用）"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

@@ -30,18 +30,7 @@ begin
   raise notice 'ok: % tables closed to anon and authenticated', denied;
 end $$;
 
--- 2. The daily sponsor budget is enforced atomically.
-do $$
-begin
-  if not lite.reserve_fee_budget('GTEST', 600, 1000) then raise exception 'first reservation refused'; end if;
-  if lite.reserve_fee_budget('GTEST', 500, 1000) then raise exception 'over-budget reservation accepted'; end if;
-  if not lite.reserve_fee_budget('GTEST', 400, 1000) then raise exception 'exact-budget reservation refused'; end if;
-  if (select fee_stroops from lite.sponsor_usage where address = 'GTEST') <> 1000 then raise exception 'usage mismatch'; end if;
-  delete from lite.sponsor_usage where address = 'GTEST';
-  raise notice 'ok: sponsor budget';
-end $$;
-
--- 3. Candles bucket trades.
+-- 2. Candles bucket trades.
 do $$
 declare n int;
 begin
@@ -58,17 +47,18 @@ begin
   raise notice 'ok: candles';
 end $$;
 
--- 4. lite_api (the functions' LITE_DB_URL role) works inside lite and nowhere else.
+-- 3. lite_api (the functions' LITE_DB_URL role) works inside lite and nowhere else.
 create table public.lite_api_sentinel (x int);
 insert into public.lite_api_sentinel values (1);
 do $$
-declare n int;
+declare n int; r record;
 begin
   execute 'set local role lite_api';
-  if not lite.reserve_fee_budget('GROLE', 1, 10) then raise exception 'lite_api: budget reservation refused'; end if;
-  select count(*) into n from lite.sponsor_usage where address = 'GROLE';
-  if n <> 1 then raise exception 'lite_api: cannot read its own budget row'; end if;
-  delete from lite.sponsor_usage where address = 'GROLE';
+  select * into r from lite.reserve_sponsorship('G' || repeat('R', 55), 'activate', repeat('0', 64), 1, 3, 10, 10, 5);
+  if r.id is null then raise exception 'lite_api: sponsorship reservation refused (%)', r.refusal; end if;
+  select count(*) into n from lite.sponsorships where id = r.id;
+  if n <> 1 then raise exception 'lite_api: cannot read its own sponsorship row'; end if;
+  delete from lite.sponsorships where id = r.id;
   perform 1 from lite.app_config where key = 'lite';
   truncate lite.indexer_cursors;
   begin

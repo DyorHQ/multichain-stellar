@@ -46,11 +46,12 @@ public struct StellarXLMPosition: Codable, Equatable, Sendable {
 
 /// The add-funds card: whether the account needs XLM before it can pay its fees, and how it can get some.
 public struct StellarFirstFunding: Codable, Equatable, Sendable {
-    /// Testnet's faucet: its amount in XLM, and whether today's tap is used.
+    /// Testnet's Friendbot: its grant in XLM, and whether the address has had it. One claim per address, ever: the
+    /// account's activation by Friendbot, or the faucet once.
     public struct Faucet: Codable, Equatable, Sendable {
         public let amount: String
         /// Nil in the public view (DyorHQ's records, not the ledger's).
-        public let usedToday: Bool?
+        public let claimed: Bool?
     }
 
     public let needsXlm: Bool

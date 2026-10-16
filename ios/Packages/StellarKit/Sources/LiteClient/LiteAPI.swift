@@ -265,9 +265,10 @@ public actor LiteAPI {
     public func holdings(timeout: TimeInterval = 60) async throws -> StellarHoldings { try await request("GET", "holdings", access: .viewer(aboutAccount: true), timeout: timeout) }
     public func activate() async throws -> ActivationResult { try await request("POST", "account/activate", body: [String: String]()) }
     public func enable(asset: String) async throws -> PlanView { try await request("POST", "account/trust", body: ["asset": asset]) }
+    /// Testnet: Friendbot's test XLM for an account that already existed, once per address (429 `faucet_used` after).
     public func faucet() async throws -> AnyJSON { try await request("POST", "account/faucet", body: [String: String]()) }
 
-    /// `memoType`: "text", "id" or "hash" (SEP-24 withdrawals give both).
+    /// `memoType`: "text", "id" or "hash" (exchanges that need a memo say which).
     public func send(asset: String, to: String, amount: Int64, memo: String? = nil, memoType: String? = nil) async throws -> PlanView {
         var body = ["asset": asset, "to": to, "amount": String(amount)]
         if let memo, !memo.isEmpty {
@@ -486,18 +487,6 @@ public actor LiteAPI {
     public func bridgeSource(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/source", body: ["txHash": txHash]) }
     public func bridgeClaimed(id: String, txHash: String) async throws -> AnyJSON { try await request("POST", "bridge/\(Self.segment(id))/claimed", body: ["txHash": txHash]) }
     public func bridgeStatus(id: String) async throws -> BridgeStatus { try await request("GET", "bridge/\(Self.segment(id))") }
-
-    public func anchors(country: String) async throws -> [AnchorInfo] {
-        struct R: Decodable { let anchors: [AnchorInfo] }
-        let r: R = try await request("GET", Self.path("cash/anchors", ["country": country]))
-        return r.anchors
-    }
-
-    public func trackCash(anchor: String, deposit: Bool, asset: String, anchorTxId: String, status: String, amount: String?) async throws {
-        var body = ["anchor": anchor, "kind": deposit ? "deposit" : "withdraw", "asset": asset, "anchorTxId": anchorTxId, "status": status]
-        if let amount { body["amount"] = amount }
-        let _: AnyJSON = try await request("POST", "cash/track", body: body)
-    }
 
     /// Every filter is optional: `section` ("spot", "earn", "launch", …), `kind` ("launch_buy", …), `market` (a token
     /// or an Earn market).

@@ -4,7 +4,7 @@ import PackageDescription
 // StellarKit: everything DyorHQ Lite needs on the phone, with no UI.
 // - StellarCore: StrKey, the XDR subset Lite signs, the transaction verifier, SEP-5 / SEP-53 / HKDF keys, ed25519
 //   signing. Pure Swift + swift-crypto, so it builds and tests on Linux CI as well as iOS.
-// - LiteClient: the typed Lite API client, the plan runner (verify → sign → submit → poll) and SEP-10 / SEP-24.
+// - LiteClient: the typed Lite API client and the plan runner (verify → sign → submit → poll).
 // - StellarKit: Apple-only glue (Keychain storage of the Stellar key).
 let package = Package(
     name: "StellarKit",
@@ -23,7 +23,8 @@ let package = Package(
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             resources: [.copy("Keys/bip39-english.txt")]
         ),
-        .target(name: "LiteClient", dependencies: ["StellarCore"]),
+        // LiteAPI's SEP-53 self-check hashes with swift-crypto where CryptoKit is missing (Linux CI).
+        .target(name: "LiteClient", dependencies: ["StellarCore", .product(name: "Crypto", package: "swift-crypto")]),
         .target(name: "StellarKit", dependencies: ["StellarCore", "LiteClient"]),
         .testTarget(name: "StellarCoreTests", dependencies: ["StellarCore"], resources: [.copy("Vectors")]),
         // The API fixtures are read from the source tree (#filePath), so they are no resources of the target.
