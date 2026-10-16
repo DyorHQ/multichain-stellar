@@ -311,6 +311,7 @@ if (!RECORD) {
     const row = f.momentRowV2Of(A, PRICES, NOW);
     assertEquals([row.generation, row.nft, row.number, row.name, row.symbol, row.title], [2, NFT_A, 2, "Harbour at dusk", "DUSK", "Harbour at dusk"]);
     assertEquals([row.mediaType, row.place, row.takenOn, row.quoteCode, row.priceUsd], ["video", "Accra", "2026-10-13", "USDC", 5]);
+    assertEquals(f.momentRowV2Of({ ...A, taken_at: "2026-10-13T18:30:00+02:00" }, PRICES, NOW).takenOn, "2026-10-13T18:30:00+02:00", "a date and time");
     assertEquals([row.state, row.open, row.progress, row.minted, row.creatorAllocBps], ["collecting", true, 0.75, 3, 500]);
     assertEquals(row.durations, { vestPeriod: 604800, stuckExpiry: 604800, pendingBackstop: 2592000, timelock: 172800, timelockWindow: 604800, minWindow: 3600, maxWindow: 2592000, harvestInterval: 3600 });
     // Its window closes: still collecting on chain until someone expires it, but no longer open.

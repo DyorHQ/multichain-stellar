@@ -637,6 +637,39 @@ Deno.test("recording: a grad_fail names its failure on the launch; exec-aquarius
   }
 });
 
+Deno.test("recording: a v2 publish keeps the creator's day and, beside it, the date and time its metadata says", async () => {
+  const uri = "https://example.supabase.co/storage/v1/object/public/lite-media/moments/m.json";
+  for (const [takenAt, day] of [["2026-10-14T15:30:00+02:00", "2026-10-14"], [null, "2026-10-14"]] as const) {
+    const writes: [string, unknown[]][] = [];
+    replaceSql(fakeSql((q, p) => {
+      writes.push([q, p]);
+      if (q === "select * from lite.moment_metadata where uri = ?") {
+        return [{ uri, address: CREATOR, title: "Accra at dusk", description: null, place: "Accra", taken_on: new Date("2026-10-14T00:00:00Z"), taken_at: takenAt, media_type: "image", media_url: "m", poster_url: "p" }];
+      }
+      if (q.startsWith("insert into lite.v2_events")) return [{ event_id: p[0] }];
+      return [];
+    }));
+    await ev.momentsV2Event(rpcEvent("0004-1"), decoded([sym("publish"), addr(NFT), addr(CREATOR)], map({
+      nonce: u64(7n),
+      coin: addr(COIN),
+      name: str("Accra at dusk"),
+      symbol: str("DUSK"),
+      metadata_uri: str(uri),
+      price: i128(1_000_000n),
+      threshold: i128(100_000_000n),
+      creator_alloc_bps: u32(1_000),
+      rate_num: i128(675_000_000_000_000_000n),
+      rate_den: i128(1_350_000_000n),
+      deadline: u64(T0 + 86_400),
+      durations: DURATIONS,
+    })), MOMENTS, NET);
+    const [q, params] = writes.find(([q]) => q.startsWith("insert into lite.moments"))!;
+    assert(q.includes("place, taken_on, taken_at, media_type"), q);
+    const place = params.indexOf("Accra");
+    assertEquals(params.slice(place + 1, place + 3), [day, takenAt]);
+  }
+});
+
 Deno.test("recording: a Moment's expired keeps its backstop flag; a launch token's reward events add up per asset", async () => {
   let writes = recordingDb();
   await ev.momentsV2Event(rpcEvent("0002-1"), decoded([sym("expired"), addr(NFT)], map({ reserve: i128(9n), creator_share: i128(6n), treasury_share: i128(3n), backstop: bool(true) })), MOMENTS, NET);

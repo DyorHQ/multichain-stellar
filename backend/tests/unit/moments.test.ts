@@ -483,6 +483,7 @@ Deno.test("metadata the indexer reads: only media on our storage; a video withou
   assertEquals(h.metadataFromJson({ image: PHOTO }), null);
   assertEquals(h.metadataFromJson([PHOTO]), null);
   assertEquals(h.metadataFromJson({ name: "Accra", image: PHOTO, attributes: [{ trait_type: "Date", value: "yesterday" }] })?.takenOn, null);
+  assertEquals(h.metadataFromJson({ name: "Accra", image: PHOTO, attributes: [{ trait_type: "Date", value: "2026-10-13T18:30:00+02:00" }] })?.takenOn, "2026-10-13T18:30:00+02:00");
 });
 
 /** A contract event as RPC hands it to the indexer. */

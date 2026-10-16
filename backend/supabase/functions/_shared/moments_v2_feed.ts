@@ -17,7 +17,7 @@ import type { MomentDetailV2, MomentHoldingV2, MomentRowV2, MyMomentsV2, View } 
 import { num, sql } from "./db.ts";
 import { env } from "./env.ts";
 import { bad, notFound } from "./http.ts";
-import type { MomentViewer } from "./moments.ts";
+import { type MomentViewer, takenText } from "./moments.ts";
 import { durationsOf, type MomentsV2Durations, momentsV2Id, type MomentV2State, pinnedDurations } from "./moments_v2.ts";
 import { assetById, AssetInfo, NetworkConfig, PriceRef } from "./networks.ts";
 import { referencePrices, RefPrice, usdOf } from "./refprices.ts";
@@ -40,12 +40,6 @@ const STATES: MomentV2State[] = ["collecting", "graduation_pending", "graduated"
 
 function stateOf(v: unknown): MomentV2State {
   return STATES.includes(v as MomentV2State) ? v as MomentV2State : "collecting";
-}
-
-/** A calendar day ("2026-10-14"), however the driver handed it over. */
-function dayText(v: unknown): string | null {
-  if (!known(v)) return null;
-  return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 }
 
 /** `units` of `asset` in USD, to the cent; null without a price. */
@@ -105,7 +99,7 @@ export function momentRowV2Of(r: Row, prices: Prices, now: number, net: NetworkC
     title: r.title ?? null,
     description: r.description ?? null,
     place: r.place ?? null,
-    takenOn: dayText(r.taken_on),
+    takenOn: takenText(r.taken_at, r.taken_on),
     mediaUrl: r.media_url ?? null,
     mediaType: mediaTypeOf(r),
     posterUrl: r.poster_url ?? null,

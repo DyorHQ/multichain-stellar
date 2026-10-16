@@ -520,7 +520,7 @@ const metadata = new Map<string, Row>();
 let queries: string[] = [];
 replaceSql(fakeSql((q, p) => {
   queries.push(q);
-  if (q === "select title, place, taken_on, media_type, media_url from lite.moment_metadata where uri = ? and address = ?") {
+  if (q === "select title, place, taken_on, taken_at, media_type, media_url from lite.moment_metadata where uri = ? and address = ?") {
     const row = metadata.get(`${p[0]}|${p[1]}`);
     return row ? [row] : [];
   }
@@ -533,8 +533,8 @@ replaceSql(fakeSql((q, p) => {
   throw new Error(`unexpected query: ${q}`);
 }));
 
-function writeMetadata(title = "Accra at dusk") {
-  metadata.set(`${URI}|${ME}`, { title, place: "Accra", taken_on: "2026-10-14", media_type: "image", media_url: PHOTO });
+function writeMetadata(title = "Accra at dusk", takenAt: string | null = null) {
+  metadata.set(`${URI}|${ME}`, { title, place: "Accra", taken_on: "2026-10-14", taken_at: takenAt, media_type: "image", media_url: PHOTO });
 }
 
 /** The error `run` threw: status, code, its stable contract code (§6.13) and the contract error it names (V10). */
@@ -924,6 +924,11 @@ Deno.test("publish's transaction passes the terms by value, and its intent the p
     [p.name, p.symbol, p.metadata_uri, Buffer.from(p.media_hash).toString("hex"), p.place, p.date, p.price, p.creator_alloc_bps, p.window_secs, String(p.nonce)],
     ["Dusk", "DUSK", URI, spec.mediaHash, "Accra", "2026-10-14", 10_000_000n, 1_000, 86_400n, spec.nonce],
   );
+  // A Moment with a date and time: the on-chain date says what its metadata's Date attribute says.
+  writeMetadata("Accra at dusk", "2026-10-14T15:30:00+02:00");
+  const timed = await mv.momentV2Steps(ME, { action: "publish", uri: URI, name: "Dusk", symbol: "DUSK", price: "10000000", allocationBps: 1_000, windowSecs: 86_400 }, NET, NOW);
+  assertEquals(native(argsOf((await mv.momentPublishStep(ME, timed.steps[0].spec, NET)).tx)[1]).date, "2026-10-14T15:30:00+02:00");
+  writeMetadata();
   // What the phone shows: every policy value and duration, as /v1/economics serves them, so its guard can compare.
   const shown = mv.termsDisplay(e.terms);
   for (const k of mv.TERMS_DISPLAY_KEYS) assertEquals(intent.display![k], shown[k], k);
