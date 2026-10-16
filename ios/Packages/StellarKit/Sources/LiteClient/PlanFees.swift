@@ -61,7 +61,7 @@ public struct PlanFees: Equatable, Sendable {
     public init(plan: PlanView, pinned: PinnedContracts, estimates: StellarFees? = nil) throws {
         steps = try plan.steps.map { step in
             if step.xdr != nil { return try Self.step(step, pinned: pinned) }
-            let ceiling = step.maxFee.flatMap(TxVerifier.units)
+            let ceiling: Int64 = step.maxFee.flatMap(TxVerifier.units)
                 ?? step.stepKind.flatMap { estimates?.estimate($0) }.flatMap { $0 >= 0 ? $0 : nil }
                 ?? pinned.feePolicy.maxFee
             guard ceiling <= pinned.feePolicy.maxFee else {

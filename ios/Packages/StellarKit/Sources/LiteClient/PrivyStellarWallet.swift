@@ -460,8 +460,8 @@ public enum PrivyWalletCheck {
         let parts = token.split(separator: ".")
         guard parts.count == 3, let payload = base64url(String(parts[1])),
               let claims = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              let iat = claims["iat"] as? NSNumber else { return nil }
-        return Date(timeIntervalSince1970: iat.doubleValue)
+              let iat = (claims["iat"] as? Double) ?? (claims["iat"] as? Int).map(Double.init) else { return nil }
+        return Date(timeIntervalSince1970: iat)
     }
 
     /// The Stellar wallets a Privy identity token's `linked_accounts` claim lists (a JSON string, or an array); none when

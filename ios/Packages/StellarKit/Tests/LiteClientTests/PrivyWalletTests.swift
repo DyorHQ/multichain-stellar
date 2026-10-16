@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import LiteClient
 import StellarCore
 import XCTest
@@ -580,8 +583,15 @@ final class Box<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var held: T?
 
-    func set(_ value: T) { lock.withLock { held = value } }
-    var value: T? { lock.withLock { held } }
+    func set(_ value: T) {
+        lock.lock(); defer { lock.unlock() }
+        held = value
+    }
+
+    var value: T? {
+        lock.lock(); defer { lock.unlock() }
+        return held
+    }
 }
 
 /// A count, kept across tasks.
