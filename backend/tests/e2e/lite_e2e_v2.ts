@@ -171,6 +171,35 @@ export async function checkDepth(quote: (sellStroops: bigint) => Promise<bigint>
   return { ok, rate1, sell, out, reason };
 }
 
+/** The depth check on one venue's route: what it found, and the venue the run then buys on. */
+export interface VenueDepth extends Depth {
+  venue: string | null;
+}
+
+/** The depth check per venue (F10): each venue the 1-XLM quote prices, best rate first, is held to checkDepth against its
+ *  own 1-XLM rate and its own quote for the full sale; the first that passes is the venue the run buys on. A thin pool
+ *  with the best small-trade rate (testnet's Soroswap XLM/USDC) must not hide a deep route (SDEX), and a deep route
+ *  must not pass against another venue's rate. `quotes` answers each venue's USDC for a sale of so many stroops. */
+export async function checkDepthByVenue(quotes: (sellStroops: bigint) => Promise<Record<string, bigint>>, need: bigint): Promise<VenueDepth> {
+  let first: Record<string, bigint>;
+  try {
+    first = await quotes(ONE);
+  } catch (e) {
+    return { ok: false, rate1: 0n, sell: 0n, out: 0n, reason: `the route didn't quote (${(e as Error).message})`, venue: null };
+  }
+  const venues = Object.entries(first).filter(([, out]) => out > 0n).sort(([, a], [, b]) => (b > a ? 1 : b < a ? -1 : 0)).map(([v]) => v);
+  if (venues.length === 0) return { ok: false, rate1: 0n, sell: 0n, out: 0n, reason: "1 XLM quotes no USDC", venue: null };
+  const tried: string[] = [];
+  let last: VenueDepth | null = null;
+  for (const venue of venues) {
+    const d = await checkDepth(async (sell) => (sell === ONE ? first[venue] : (await quotes(sell))[venue] ?? 0n), need);
+    if (d.ok) return { ...d, venue };
+    tried.push(`${venue}: ${d.reason}`);
+    last ??= { ...d, venue: null };
+  }
+  return { ...last!, reason: tried.join("; ") };
+}
+
 /** The message a failed depth check stops the USDC journeys with. */
 export const THIN = "testnet XLM→USDC liquidity too thin";
 
@@ -1876,10 +1905,14 @@ async function acquireUsdc(r: Run, journeys: Journey[], results: Result[]): Prom
   if (total === 0n) return journeys;
   say(`USDC: ${units(total)} for ${USDC_JOURNEYS.filter((j) => journeys.includes(j)).join(", ")} (their needs times 1.13)`);
   const bank = await phone(r, "USDC bank");
-  const quote = async (sell: bigint) =>
-    BigInt((await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 })).best.amountOut);
-  const depth = await checkDepth(quote, total);
-  say(`  depth check: 1 XLM → ${units(depth.rate1)} USDC; ${units(depth.sell)} XLM → ${units(depth.out)} USDC: ${depth.ok ? "deep enough" : "too thin"}`);
+  // Every venue's route the API quotes (its routes list), so the check holds each venue to its own rate.
+  const quotes = async (sell: bigint) => {
+    const q = await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 });
+    return Object.fromEntries((q.routes as any[]).map((x) => [String(x.venue), BigInt(x.amountOut)]));
+  };
+  const depth = await checkDepthByVenue(quotes, total);
+  say(`  depth check${depth.venue ? ` (${depth.venue})` : ""}: 1 XLM → ${units(depth.rate1)} USDC; ${units(depth.sell)} XLM → ${units(depth.out)} USDC: ` +
+    (depth.ok ? "deep enough" : `too thin (${depth.reason})`));
   const spendable = BigInt((await api(r, bank.token, "GET", "/account")).xlm.spendable);
   const affordable = depth.ok && (depth.sell * 103n) / 100n <= spendable;
   const next = afterDepth(journeys, affordable ? depth : { ...depth, ok: false, reason: depth.reason ?? `${units(depth.sell)} XLM is more than one Friendbot account holds` });
@@ -1888,9 +1921,10 @@ async function acquireUsdc(r: Run, journeys: Journey[], results: Result[]): Prom
     for (const j of next.stopped) results.push({ journey: j, outcome: "SKIP", detail: next.message });
     return next.run;
   }
+  // On the venue that passed the check, never on another route the API ranks first.
   const swap = async (sell: bigint) => {
     const q = await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 });
-    await runPlan(r, bank, await api(r, bank.token, "POST", "/swap/build", { quoteId: q.quoteId }));
+    await runPlan(r, bank, await api(r, bank.token, "POST", "/swap/build", { quoteId: q.quoteId, venue: depth.venue }));
   };
   await swap(depth.sell);
   const got = await balance(r, r.ids.usdc, bank.address);
@@ -2080,6 +2114,30 @@ Deno.test("USDC: the depth check passes within 3% of the 1-XLM rate and stops th
   assertTest((stop.message ?? "").startsWith(THIN), `with the clear message: ${stop.message}`);
   const go = afterDepth(JOURNEYS, deep);
   assertTest(go.run.length === JOURNEYS.length && go.stopped.length === 0 && go.message === null, "a deep route runs everything");
+});
+
+Deno.test("USDC: the depth check holds each venue to its own 1-XLM rate, and a thin pool with the best rate hides no deep route (F10)", async () => {
+  const need = 69n * ONE;
+  // testnet on 2026-10-16: Soroswap's XLM/USDC pool quotes 4.03 USDC for 1 XLM but ~94% of that on the full sale; SDEX
+  // quotes 0.89 flat.
+  const soroswap = (sell: bigint) => sell === ONE ? 40_271_591n : (sell * 40_271_591n * 94n) / (ONE * 100n);
+  const sdex = (sell: bigint) => (sell * 8_924_080n) / ONE;
+  const both = (sell: bigint) => Promise.resolve({ soroswap: soroswap(sell), sdex: sdex(sell) });
+  const d = await checkDepthByVenue(both, need);
+  assertTest(d.ok && d.venue === "sdex" && d.rate1 === 8_924_080n && d.out >= need, `the deep venue passes on its own rate: ${d.venue} ${d.reason}`);
+  // The best route alone, as the check read it before: too thin.
+  assertTest(!(await checkDepth((s) => Promise.resolve(soroswap(s)), need)).ok, "the thin pool alone fails");
+  // Both thin: no venue passes, and the reason names each one.
+  const thin = await checkDepthByVenue((s) => Promise.resolve({ soroswap: soroswap(s), sdex: s === ONE ? 8_924_080n : (sdex(s) * 90n) / 100n }), need);
+  assertTest(!thin.ok && thin.venue === null && (thin.reason ?? "").includes("soroswap:") && (thin.reason ?? "").includes("sdex:"), `no venue passes: ${thin.reason}`);
+  assertTest(afterDepth(["launch", "fallback"], thin).stopped.join() === "launch", "and the USDC journeys stop");
+  // A venue isn't held to another's rate: SDEX's flat 0.89 doesn't pass against Soroswap's 4.03 (it is checked alone).
+  const sdexAt4 = await checkDepth((s) => Promise.resolve(s === ONE ? 40_271_591n : sdex(s)), need);
+  assertTest(!sdexAt4.ok, "a deep route quoted against another venue's 1-XLM rate fails");
+  const none = await checkDepthByVenue(() => Promise.resolve({ soroswap: 0n }), need);
+  assertTest(!none.ok && none.reason === "1 XLM quotes no USDC", `no route: ${none.reason}`);
+  const down = await checkDepthByVenue(() => Promise.reject(new Error("503")), need);
+  assertTest(!down.ok && (down.reason ?? "").startsWith("the route didn't quote"), `a quote that doesn't answer: ${down.reason}`);
 });
 
 Deno.test("the run refuses every deployment but testnet-qa, and any API but a local stack", () => {
