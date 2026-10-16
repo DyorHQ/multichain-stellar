@@ -162,6 +162,13 @@ final class StellarPortfolioModel {
         }
     }
 
+    /// An edition the NFTs grid shows, keyed by its NFT contract and its number: every v2 Moment has a contract of its
+    /// own that numbers its editions from 1, and v1's editions are listed with them, so a number alone is no key.
+    struct Edition: Identifiable, Equatable {
+        let edition: StellarEdition
+        var id: String { "\(edition.contract ?? "")#\(edition.tokenId)" }
+    }
+
     /// Each period's figures as saved when the account was last read: shown, said to be saved, until the period's own read
     /// lands (`LiteStore.portfolio`).
     private(set) var savedFigures: [VolumePeriodKey: Figures] = [:]
@@ -233,6 +240,11 @@ final class StellarPortfolioModel {
         assets.filter { $0.valueUsd == nil }.map(\.code)
     }
 
+    /// The editions the account holds, in the server's order, v1's and v2's together.
+    static func editions(_ holdings: StellarHoldings?) -> [Edition] {
+        (holdings?.moments.editions ?? []).map(Edition.init)
+    }
+
     /// `codes` as one list in the app's language ("XLM, USDC and EURC").
     static func codeList(_ codes: [String]) -> String {
         let list = ListFormatter()
@@ -253,9 +265,22 @@ final class StellarPortfolioModel {
         return .moment(id: edition.momentId)
     }
 
-    /// The account's coins launched on the retired v1 launchpad, from My Launchpad's launches (each with its generation).
-    static func retired(in mine: StellarMyLaunchpad) -> Set<String> {
-        Set((mine.held.map(\.launch) + mine.created.map(\.launch)).filter { $0.generation == 1 }.map(\.token))
+    /// Whether each of the account's launches My Launchpad lists is of the retired v1 launchpad (generation 1), by token.
+    static func retiredByToken(in mine: StellarMyLaunchpad) -> [String: Bool] {
+        Dictionary((mine.held.map(\.launch) + mine.created.map(\.launch)).map { ($0.token, $0.generation == 1) },
+                   uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Of the held coins `held`, those of the retired v1 launchpad, by what was read of each (`read`, by token); a coin
+    /// nothing was read of keeps what `known` said of it.
+    static func retired(_ held: [String], read: [String: Bool], known: Set<String>) -> Set<String> {
+        Set(held.filter { read[$0] ?? known.contains($0) })
+    }
+
+    /// Whether a history read of Portfolio's waits for the sign-in (a passkey account with no session): once a session
+    /// comes back, Portfolio reads again.
+    static func waitsForSignIn(_ store: LiteStore) -> Bool {
+        [LitePart.portfolio, .activity].contains { store.status($0) == .needsSignIn }
     }
 
     // MARK: Saved figures
@@ -317,7 +342,8 @@ final class StellarPortfolioModel {
 
     /// Portfolio's reads, side by side: the period's figures and activity (DyorHQ's history), the holdings (a viewer read)
     /// unless already read and not `force`, and the words of the activity's rows. Then which held coins are of the retired
-    /// v1 launchpad. A passkey account with no session gets `.needsSignIn` for the history, and nothing asks.
+    /// v1 launchpad. A passkey account with no session gets `.needsSignIn` for the history, and nothing asks: the load
+    /// after its sign-in reads the history it waited for.
     func load(_ store: LiteStore?, period: VolumePeriod, force: Bool) async {
         guard let store, let key = VolumePeriodKey(rawValue: period.rawValue) else { return }
         loads += 1
@@ -335,18 +361,33 @@ final class StellarPortfolioModel {
     }
 
     /// The account's activity with the details its rows are worded from (`StellarActivityPresenter`), in the app's
-    /// language rather than the server's English.
+    /// language rather than the server's English: until it is read, every load asks again (after a sign-in, after a read
+    /// that failed).
     private func readActivity(_ store: LiteStore, force: Bool) async {
-        if force || store.status(.activity) == .unread { await store.refreshActivity() }
+        if force || store.status(.activity) != .read { await store.refreshActivity() }
     }
 
-    /// Which held coins are of the retired v1 launchpad: once per session, and again on a pull; a failed read keeps what
-    /// was known.
+    /// Which held coins are of the retired v1 launchpad: once per session, and again on a pull. My Launchpad says it for
+    /// the account's launches in one read; a coin it doesn't list, and every coin while it needs the sign-in (a passkey
+    /// account in the public view), is read from its own launch page, a viewer read. A coin whose read failed keeps what
+    /// was known of it, and is read again with the next load.
     private func readRetired(_ store: LiteStore, force: Bool) async {
-        guard let launch = store.holdings?.launch, !launch.isEmpty, force || !retiredRead,
-              let mine = try? await store.myLaunchpad() else { return }
-        retiredRead = true
-        let retired = Self.retired(in: mine)
+        guard let held = store.holdings?.launch.map(\.token), !held.isEmpty, force || !retiredRead else { return }
+        var read = (try? await store.myLaunchpad()).map(Self.retiredByToken) ?? [:]
+        let unlisted = held.filter { read[$0] == nil }
+        let pages = await withTaskGroup(of: (token: String, retired: Bool)?.self) { group in
+            for token in unlisted {
+                group.addTask { @MainActor in (try? await store.launchDetail(token)).map { (token: token, retired: $0.launch.generation == 1) } }
+            }
+            var pages: [String: Bool] = [:]
+            for await page in group {
+                if let page { pages[page.token] = page.retired }
+            }
+            return pages
+        }
+        read.merge(pages) { listed, _ in listed }
+        retiredRead = held.allSatisfy { read[$0] != nil }
+        let retired = Self.retired(held, read: read, known: retiredCoins)
         if retired != retiredCoins { retiredCoins = retired }
     }
 }

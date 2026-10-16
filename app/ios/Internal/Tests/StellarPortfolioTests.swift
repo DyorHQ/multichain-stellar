@@ -24,11 +24,16 @@ final class StellarPortfolioTests: XCTestCase {
     /// StellarKit's API fixture `name` (ios/Packages/StellarKit/Tests/LiteClientTests/Fixtures), read from this checkout:
     /// the answers the client is held to.
     private func fixture<T: Decodable>(_ type: T.Type, _ name: String) throws -> T {
+        try JSONDecoder().decode(T.self, from: Data(contentsOf: fixtureURL(name)))
+    }
+
+    nonisolated fileprivate static func fixtureURL(_ name: String) -> URL {
         var root = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 { root.deleteLastPathComponent() } // StellarPortfolioTests.swift → Tests → Internal → ios → app → S
-        let file = root.appending(path: "ios/Packages/StellarKit/Tests/LiteClientTests/Fixtures/\(name)")
-        return try JSONDecoder().decode(T.self, from: Data(contentsOf: file))
+        return root.appending(path: "ios/Packages/StellarKit/Tests/LiteClientTests/Fixtures/\(name)")
     }
+
+    private func fixtureURL(_ name: String) -> URL { Self.fixtureURL(name) }
 
     private func temporarySaved() -> StellarSaved {
         let folder = FileManager.default.temporaryDirectory.appending(path: "stellar-portfolio-\(UUID().uuidString)")
@@ -147,6 +152,75 @@ final class StellarPortfolioTests: XCTestCase {
         XCTAssertFalse(source.contains("actions.signIn()"), "nothing prompts until the row's button is tapped")
     }
 
+    /// Acceptance 5, against a Lite server: a passkey account whose refresh token was revoked opens Portfolio in the public
+    /// view. The history waits for the sign-in with no prompt, the holdings fill in with v1's coins said to be Retired,
+    /// and the load after the row's sign-in reads the figures and the activity the rows are worded from.
+    func testAPasskeyAccountWithARevokedRefreshTokenIsAskedNothingUntilItSignsIn() async throws {
+        URLProtocol.registerClass(PortfolioStub.self)
+        defer { URLProtocol.unregisterClass(PortfolioStub.self) }
+        let server = try PortfolioServer()
+        let prompts = PromptCount()
+        let signer = try StellarSigner(seed: (0..<32).map { _ in UInt8.random(in: 0...255) })
+        let address = signer.address
+        defer { server.stop(); Self.forget(address) }
+        // Set up on this iPhone; its saved session has ended, and the server refuses its refresh token.
+        UserDefaults.standard.set(true, forKey: LiteSession.activatedKey(address))
+        try StellarKeychain.saveSession(token: "jwt-ended", expiresAt: Date().addingTimeInterval(-3600), refreshToken: "lrt_revoked",
+                                        refreshExpiresAt: Date().addingTimeInterval(86_400), account: address, network: "testnet")
+        let keys = PhraseKeyProvider(address: address, methodLabel: "Passkey") { _ in
+            prompts.add()
+            throw LiteSession.Failure.cancelled
+        }
+        let session = LiteSession(env: server.env, stellarAddress: address, monad: nil, keys: keys, setupKey: { _ in
+            prompts.add()
+            return LiteSession.UnlockResult(keys: keys, signer: signer)
+        })
+        await session.resumeAtLaunch()
+        XCTAssertEqual(server.paths.filter { $0.contains("/v1/auth/") }, ["POST /v1/auth/refresh"], "refused, and no sign-in: that needs the passkey")
+        XCTAssertEqual(session.access, .publicView)
+        let store = try XCTUnwrap(session.store)
+
+        // Portfolio opens, then the period changes: the hero stays unread with the sign-in row, and the holdings fill in.
+        let model = self.model(temporarySaved(), stellar: address)
+        await model.load(store, period: .week, force: false)
+        await model.load(store, period: .month, force: false)
+        XCTAssertEqual(prompts.value, 0, "nothing prompts until the row is tapped")
+        XCTAssertEqual(store.status(.portfolio), .needsSignIn)
+        XCTAssertEqual(store.status(.activity), .needsSignIn)
+        XCTAssertNil(model.shown(.week, live: store.portfolio[.week], status: store.status(.portfolio)), "the sign-in row in the figures' place")
+        XCTAssertTrue(StellarPortfolioModel.waitsForSignIn(store))
+        XCTAssertEqual(store.holdings?.view, "public")
+        XCTAssertEqual(StellarPortfolioModel.assets(store.holdings).map(\.id), StellarPortfolioModel.assets(try fixture(StellarHoldings.self, "holdings.public.json")).map(\.id))
+        XCTAssertEqual(model.retiredCoins, [PortfolioServer.coin], "a v1 coin says Retired with no session: its own page says so")
+        let history = ["GET /v1/portfolio", "GET /v1/activity", "GET /v1/launchpad/me", "POST /v1/auth/challenge"]
+        XCTAssertEqual(server.paths.filter(history.contains), [], "no history read is even asked")
+        XCTAssertEqual(server.paths.filter { $0 == "GET /v1/launches/\(PortfolioServer.coin)" }.count, 1, "once per session")
+
+        // The row's button: one passkey prompt. The load it brings reads the history it waited for, activity included.
+        try await session.signIn()
+        XCTAssertEqual(prompts.value, 1)
+        XCTAssertEqual(session.access, .session)
+        XCTAssertTrue(StellarPortfolioModel.waitsForSignIn(store), "so Portfolio reads again")
+        await model.load(store, period: .week, force: false)
+        XCTAssertEqual(store.status(.portfolio), .read)
+        XCTAssertEqual(store.status(.activity), .read, "read again too: its rows are worded in the app's language")
+        XCTAssertEqual(store.activity.map(\.id), try fixture(ActivityPage.self, "activity.json").items.map(\.id))
+        let shown = try XCTUnwrap(model.shown(.week, live: store.portfolio[.week], status: store.status(.portfolio)))
+        XCTAssertEqual(shown.figures.totals, StellarPortfolioModel.Stats(try fixture(StellarPortfolio.self, "portfolio.json").totals))
+        XCTAssertNil(shown.savedAt, "this session's figures")
+        XCTAssertFalse(StellarPortfolioModel.waitsForSignIn(store))
+        XCTAssertEqual(prompts.value, 1, "the reads ask nothing more")
+    }
+
+    private struct ActivityPage: Decodable { let items: [StellarActivityItem] }
+
+    /// What a run left on this iPhone for `address`: its saved session and its setup notes.
+    private static func forget(_ address: String) {
+        StellarKeychain.erase(account: address)
+        UserDefaults.standard.removeObject(forKey: LiteSession.activatedKey(address))
+        UserDefaults.standard.removeObject(forKey: LiteSession.signedOutKey(address))
+    }
+
     // MARK: - Section headers
 
     func testASectionHeaderLandsOnItsStellarTabOrSide() {
@@ -226,11 +300,41 @@ final class StellarPortfolioTests: XCTestCase {
         XCTAssertEqual(StellarPortfolioModel.destination(v1, v1Moments: [v1Moments]), .moment(id: 3), "a retired Moment by its number")
         XCTAssertEqual(StellarPortfolioModel.destination(v2, v1Moments: [v1Moments]), .momentV2(nft: v2Nft), "a v2 Moment by its NFT")
         XCTAssertEqual(StellarPortfolioModel.destination(older, v1Moments: [v1Moments]), .moment(id: 3))
+    }
 
+    func testACoinsGenerationComesFromMyLaunchpadElseFromItsOwnPage() throws {
         let mine = try fixture(StellarMyLaunchpad.self, "launchpad-me.json")
-        let retired = StellarPortfolioModel.retired(in: mine)
-        XCTAssertEqual(retired, Set((mine.held.map(\.launch) + mine.created.map(\.launch)).filter { $0.generation == 1 }.map(\.token)))
-        XCTAssertFalse(retired.isEmpty, "the fixture's coins are v1's")
+        let listed = StellarPortfolioModel.retiredByToken(in: mine)
+        let launches = mine.held.map(\.launch) + mine.created.map(\.launch)
+        XCTAssertEqual(Set(listed.keys), Set(launches.map(\.token)))
+        XCTAssertEqual(Set(listed.filter(\.value).keys), Set(launches.filter { $0.generation == 1 }.map(\.token)))
+        XCTAssertFalse(listed.filter(\.value).isEmpty, "the fixture's coins are v1's")
+
+        // What was read of each held coin (My Launchpad's lists, or a coin's own page) says; a coin nothing was read of
+        // keeps what was known of it, and a coin no longer held is gone.
+        XCTAssertEqual(StellarPortfolioModel.retired(["A", "B", "C"], read: ["A": true, "B": false], known: ["B", "C", "D"]), ["A", "C"])
+        XCTAssertEqual(StellarPortfolioModel.retired(["A"], read: [:], known: []), [])
+    }
+
+    func testEditionsAreKeyedByTheirNFTContractAndNumber() throws {
+        // Edition #1 of two v2 Moments, each numbered by its own NFT contract, and v1's #1, as /v1/holdings lists them.
+        let other = "CBQ6XKZKRQAJDNNLSQ2VXGNQIK6CHVIZHXYAPDBYVKA6RLZEFPI7SIIJ"
+        let holdings = try holdings(editions: [(1, v2Nft), (1, other), (1, v1Moments), (2, v2Nft), (1, nil)])
+        let rows = StellarPortfolioModel.editions(holdings)
+        XCTAssertEqual(rows.map(\.edition.tokenId), [1, 1, 1, 2, 1], "in the server's order")
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "no two tiles share an id")
+        XCTAssertEqual(rows.map(\.id), ["\(v2Nft)#1", "\(other)#1", "\(v1Moments)#1", "\(v2Nft)#2", "#1"])
+        XCTAssertTrue(StellarPortfolioModel.editions(nil).isEmpty)
+    }
+
+    /// The holdings fixture with `editions` (its number and NFT contract each) in place of its own.
+    private func holdings(editions: [(tokenId: Int, contract: String?)]) throws -> StellarHoldings {
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL("holdings.json"))) as? [String: Any])
+        object["moments"] = ["count": editions.count, "editions": editions.map { edition -> [String: Any] in
+            ["tokenId": edition.tokenId, "momentId": 3, "title": "Harbour", "mediaUrl": NSNull(), "posterUrl": NSNull(), "mediaType": "image",
+             "contract": edition.contract.map { $0 as Any } ?? NSNull()]
+        }]
+        return try JSONDecoder().decode(StellarHoldings.self, from: JSONSerialization.data(withJSONObject: object))
     }
 
     func testTheCodeListIsOneList() {
@@ -281,5 +385,142 @@ final class StellarPortfolioTests: XCTestCase {
             XCTAssertFalse(text.contains("UIPasteboard"), name)
             XCTAssertFalse(text.contains("UserDefaults"), name)
         }
+    }
+}
+
+/// Passkey prompts, counted from the session's own task.
+final class PromptCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+    func add() { lock.withLock { count += 1 } }
+}
+
+/// A Lite server for one test, on a host of its own under `.stellar-portfolio.test`, answering with StellarKit's API
+/// fixtures: a refresh refused as reused (the token revoked), the passkey sign-in (challenge and verification), the
+/// public view's holdings and the v1 coin's launch page, and, only with the session the sign-in issued, the portfolio,
+/// the activity and My Launchpad. It keeps every request's method and path.
+final class PortfolioServer: @unchecked Sendable {
+    /// The holdings fixture's one coin, a v1 launch (`launch.public.json`).
+    static let coin = "CBGQQP6JNUGWZAJVCWUAEEKIY7IR3PUBSKCYIZLE3DHVLLKRPYI33X2V"
+
+    let host = "lite-\(UUID().uuidString.lowercased()).stellar-portfolio.test"
+    private let fixtures: [String: Data]
+    private let lock = NSLock()
+    private var seen: [String] = []
+    private var issued: String?
+
+    init() throws {
+        var fixtures: [String: Data] = [:]
+        for name in ["error-refresh-reused.json", "holdings.public.json", "launch.public.json", "portfolio.json", "activity.json", "launchpad-me.json"] {
+            fixtures[name] = try Data(contentsOf: StellarPortfolioTests.fixtureURL(name))
+        }
+        self.fixtures = fixtures
+        PortfolioStub.serve(host: host) { [self] request in answer(request) }
+    }
+
+    var env: LiteEnvironment { LiteEnvironment(apiURL: URL(string: "https://\(host)/lite")!, pinned: .testnet, buildNumber: 1000) }
+
+    /// Every request, in order: "GET /v1/holdings".
+    var paths: [String] { lock.withLock { seen } }
+
+    func stop() { PortfolioStub.serve(host: host, nil) }
+
+    private func answer(_ request: PortfolioStub.Request) -> (status: Int, body: Data) {
+        let session = lock.withLock {
+            seen.append("\(request.method) \(request.path)")
+            return issued.map { request.authorization == "Bearer \($0)" } ?? false
+        }
+        switch (request.method, request.path) {
+        case ("POST", "/v1/auth/refresh"): return (401, fixtures["error-refresh-reused.json"]!)
+        case ("POST", "/v1/auth/challenge"):
+            let nonce = "portfolio-nonce-0123456789"
+            let message = ["DyorHQ Lite sign-in", "Network: testnet", "Address: \(request.json["address"] ?? "")", "Nonce: \(nonce)",
+                           "Issued: 2026-10-15T09:41:00.000Z"].joined(separator: "\n")
+            return (200, Self.json(["nonce": nonce, "message": message, "expiresAt": Self.time(300)]))
+        case ("POST", "/v1/auth/verify"):
+            let token = "jwt-\(UUID().uuidString)"
+            lock.withLock { issued = token }
+            let body: [String: Any] = ["token": token, "expiresAt": Self.time(3600), "refreshToken": "lrt_fresh", "refreshExpiresAt": Self.time(30 * 86_400),
+                                       "tester": ["address": request.json["address"] ?? "", "label": NSNull()]]
+            return (200, try! JSONSerialization.data(withJSONObject: body))
+        case ("GET", "/v1/holdings"): return (200, fixtures["holdings.public.json"]!)
+        case ("GET", "/v1/launches/\(Self.coin)"): return (200, fixtures["launch.public.json"]!)
+        case ("GET", "/v1/portfolio"), ("GET", "/v1/activity"), ("GET", "/v1/launchpad/me"):
+            guard session else { return (401, Self.error("not_signed_in", "Sign in again.")) }
+            let name = ["/v1/portfolio": "portfolio.json", "/v1/activity": "activity.json", "/v1/launchpad/me": "launchpad-me.json"][request.path]!
+            return (200, fixtures[name]!)
+        default:
+            return (404, Self.error("not_found", "No such route."))
+        }
+    }
+
+    private static func json(_ fields: [String: String]) -> Data { try! JSONSerialization.data(withJSONObject: fields) }
+
+    private static func error(_ code: String, _ message: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["error": ["code": code, "message": message]])
+    }
+
+    /// `seconds` from now, as the API writes times.
+    private static func time(_ seconds: TimeInterval) -> String { ISO8601DateFormatter().string(from: Date().addingTimeInterval(seconds)) }
+}
+
+/// Answers the requests to `.stellar-portfolio.test` hosts (`URLSession.shared`, which `LiteAPI` uses, asks the
+/// registered protocols), each with its host's handler.
+final class PortfolioStub: URLProtocol {
+    struct Request: Sendable {
+        let method: String
+        /// The path below the API's base, without the query: "/v1/holdings".
+        let path: String
+        let authorization: String?
+        let body: Data?
+
+        var json: [String: String] { body.flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:] }
+    }
+
+    typealias Handler = @Sendable (Request) -> (status: Int, body: Data)
+
+    private static let lock = NSLock()
+    private static var handlers: [String: Handler] = [:]
+
+    static func serve(host: String, _ handler: Handler?) { lock.withLock { handlers[host] = handler } }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host?.hasSuffix(".stellar-portfolio.test") ?? false
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let seen = Request(method: request.httpMethod ?? "GET", path: url.path.replacingOccurrences(of: "/lite", with: ""),
+                           authorization: request.value(forHTTPHeaderField: "authorization"), body: Self.body(of: request))
+        guard let handler = Self.lock.withLock({ Self.handlers[url.host ?? ""] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotFindHost))
+            return
+        }
+        let (status, body) = handler(seen)
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["content-type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 }

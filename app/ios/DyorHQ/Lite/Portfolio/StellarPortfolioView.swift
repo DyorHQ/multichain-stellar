@@ -96,10 +96,16 @@ struct StellarPortfolioView: View {
                     if let store { model.take(store.portfolio) }
                 }
             }
-            // The period's reads, once the account's store is there; again once a session comes back (a passkey account's
-            // sign-in from the row).
-            .task(id: Load(period: router.period, access: session?.access, store: store.map(ObjectIdentifier.init))) {
+            // The period's reads, once the account's store is there.
+            .task(id: Load(period: router.period, store: store.map(ObjectIdentifier.init))) {
                 await model.load(store, period: router.period, force: false)
+            }
+            // A passkey account signed in from the row: the history it waited for is read now. A session that comes back
+            // silently while the reads run (a seed account's first read) restarts nothing: they go on with it.
+            .onChange(of: session?.access) { _, access in
+                guard access == .session, let store, StellarPortfolioModel.waitsForSignIn(store) else { return }
+                let period = router.period
+                Task { await model.load(store, period: period, force: false) }
             }
             // The store's reads land here whoever asked for them: this screen's, Home's Total Volume and the read after any
             // settled action.
@@ -112,7 +118,6 @@ struct StellarPortfolioView: View {
     /// What the reads run for: they start again when any of it changes.
     private struct Load: Equatable {
         let period: VolumePeriod
-        let access: LiteSession.Access?
         let store: ObjectIdentifier?
     }
 
@@ -332,7 +337,7 @@ struct StellarPortfolioView: View {
                     if live != nil {
                         Text("Nothing in this period.")
                     } else if status == .failed, !model.loading {
-                        Text("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
+                        Paragraph("Part of your history couldn't be read just now, so some figures may be missing. Pull to refresh.")
                     } else {
                         Text("Loading…")
                     }
@@ -454,7 +459,7 @@ private struct StellarAssetsCard: View {
 
     private var holdings: StellarHoldings? { store?.holdings }
     private var assets: [StellarPortfolioModel.Asset] { StellarPortfolioModel.assets(holdings) }
-    private var editions: [StellarEdition] { holdings?.moments.editions ?? [] }
+    private var editions: [StellarPortfolioModel.Edition] { StellarPortfolioModel.editions(holdings) }
     private var v1Moments: [String] { LiteGate.pinned.contracts("moments") }
     /// The holdings' first read is under way, or Portfolio's.
     private var loading: Bool { holdings == nil && (reading || store?.status(.spot) == .unread) }
@@ -496,7 +501,7 @@ private struct StellarAssetsCard: View {
         if !loading, let gap = tokenGap(empty: assets.isEmpty) {
             // A read that failed in part is said, with Retry, never passed off as all the account holds.
             VStack(alignment: .leading, spacing: 8) {
-                Text(gap).font(.footnote).foregroundStyle(.secondary)
+                Paragraph(gap).font(.footnote).foregroundStyle(.secondary)
                 Button("Retry", systemImage: "arrow.clockwise", action: retry).font(.footnote.weight(.medium))
             }
         }
@@ -586,15 +591,20 @@ private struct StellarAssetsCard: View {
         if !loading, holdings != nil, failed(.moments) {
             // A read that was a part is said, never "No NFTs".
             VStack(alignment: .leading, spacing: 8) {
-                Text(editions.isEmpty ? "No NFTs found, but part of your wallet couldn't be read, so some may be missing."
-                     : "Part of your wallet couldn't be read, so an NFT may be missing from the list.")
-                    .font(.footnote).foregroundStyle(.secondary)
+                Group {
+                    if editions.isEmpty {
+                        Paragraph("No NFTs found, but part of your wallet couldn't be read, so some may be missing.")
+                    } else {
+                        Paragraph("Part of your wallet couldn't be read, so an NFT may be missing from the list.")
+                    }
+                }
+                .font(.footnote).foregroundStyle(.secondary)
                 Button("Retry", systemImage: "arrow.clockwise", action: retry).font(.footnote.weight(.medium))
             }
         } else if editions.isEmpty {
             Group {
                 if holdings == nil, store?.status(.spot) == .failed {
-                    Text("Your balances couldn't be read. Check your connection and try again.")
+                    Paragraph("Your balances couldn't be read. Check your connection and try again.")
                 } else if holdings == nil {
                     Text("Reading the wallet…")
                 } else {
@@ -606,9 +616,10 @@ private struct StellarAssetsCard: View {
         }
         if !editions.isEmpty {
             LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(editions) { edition in
-                    Button { open(edition) } label: { editionTile(edition) }
+                ForEach(editions) { row in
+                    Button { open(row.edition) } label: { editionTile(row.edition) }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(Text(verbatim: tileLabel(row.edition)))
                 }
             }
         }
@@ -640,6 +651,15 @@ private struct StellarAssetsCard: View {
     private func editionTitle(_ edition: StellarEdition) -> Text {
         if let title = edition.title { return Text(verbatim: title) }
         return Text("Moment #\(edition.momentId)", tableName: "StellarPortfolio", comment: "Stellar Portfolio, My Holdings' NFTs: a Moment edition whose Moment has no title, named by the Moment's number. %lld is the number")
+    }
+
+    /// A tile as VoiceOver reads it, as Monad's tiles are read: its name, then its caption ("Retired", the number).
+    private func tileLabel(_ edition: StellarEdition) -> String {
+        let name = edition.title ?? liteTr(LocalizedStringResource("Moment #\(edition.momentId)", table: "StellarPortfolio", comment: "Stellar Portfolio, My Holdings' NFTs: a Moment edition whose Moment has no title, named by the Moment's number. %lld is the number"))
+        let retired = StellarPortfolioModel.isRetired(edition, v1Moments: v1Moments)
+            ? liteTr(LocalizedStringResource("Retired", table: "StellarPortfolio", comment: "[tight] Stellar Portfolio, My Holdings: a coin or Moment edition of DyorHQ's first (v1) Stellar contracts, which are retired: it can be viewed and sold or claimed, never bought or collected"))
+            : nil
+        return ([name, retired, "#\(edition.tokenId)"] as [String?]).compactMap { $0 }.joined(separator: ", ")
     }
 
     /// Portfolio closes, then the Moment opens over the Moments tab: a v2 Moment by its NFT, a retired one by its number.
