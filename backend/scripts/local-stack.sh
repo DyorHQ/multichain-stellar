@@ -1,6 +1,6 @@
 #!/bin/bash
 # DyorHQ Lite's backend on this Mac, against Stellar TESTNET, with no hosted Supabase project involved
-# (docs/DESIGN-stellar-parity.md §6.17, docs/RUNBOOK-testnet.md §8):
+# (docs/DESIGN-stellar-parity.md §6.17, docs/DEVELOPMENT.md):
 #   - Postgres 16 (Homebrew, keg-only) on 127.0.0.1 only (no Unix socket), trust auth; database `lite` with each
 #     migration applied once, in filename order, and recorded in public.local_stack_migrations (2 and 3 skip
 #     themselves: no pg_cron, pg_net or storage here); backend/tests/sql/lite_schema_test.sql, which rolls itself back,
@@ -22,7 +22,7 @@
 # no secret and prints none. A stack with PORT_BASE only reads .secrets (every worktree's .secrets links to the same
 # directory): its env file and its invites stay in its state directory. Without .secrets/testnet-functions.env, a stack
 # that has started before starts again from its env file as it is, with the same options; a new stack, or other
-# options, need the file back (docs/RUNBOOK-testnet.md §1).
+# options, need the file back (docs/DEVELOPMENT.md).
 #
 #   local-stack.sh start [options]   idempotent: initdb once, the new migrations, then whatever isn't running
 #     --no-loop                    no indexer loop, and LITE_KEEPER=off: a package's stack never races the shared
@@ -312,7 +312,7 @@ make_env() {
     fi
     rm -f "$SETTINGS.next"
     die "missing $SOURCE_ENV, which a new stack or other settings need: restore it from the password manager" \
-      "(docs/RUNBOOK-testnet.md §1). Don't run new-testnet-secrets.ts for it: its new sponsor isn't the one the app pins"
+      "(the maintainers keep it). Don't run new-testnet-secrets.ts for it: its new sponsor isn't the one the app pins"
   fi
   vars=(LITE_DB_URL="$LOCAL_DB_URL" LITE_DEPLOYMENT="$DEPLOYMENT" LITE_KEEPER="$KEEPER" LITE_LOCAL_STORAGE_DIR="$MEDIA"
     LITE_PUBLIC_BASE="$API_URL")

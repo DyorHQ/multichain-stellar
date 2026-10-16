@@ -1211,7 +1211,7 @@ export async function indexGenerations(net: NetworkConfig = env.network): Promis
       return { v1: { skipped: "rpc behind" }, v2: { skipped: "rpc behind" }, latest, reset: false };
     }
     await clearAll();
-    console.warn("testnet reset detected; indexed data of both generations cleared. Redeploy contracts (docs/RUNBOOK-testnet.md).");
+    console.warn("testnet reset detected; indexed data of both generations cleared. Redeploy contracts.");
     return { v1: { skipped: "reset" }, v2: { skipped: "reset" }, latest, reset: true };
   }
 

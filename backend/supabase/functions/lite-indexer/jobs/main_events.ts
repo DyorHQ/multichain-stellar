@@ -45,7 +45,7 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
     }
     reset = true;
     await clearIndexed();
-    console.warn("testnet reset detected; indexed data cleared. Redeploy contracts (docs/RUNBOOK-testnet.md).");
+    console.warn("testnet reset detected; indexed data cleared. Redeploy contracts.");
     return { events: 0, latest, reset };
   }
   let cursor: string | null = cur.length ? (cur[0].cursor as string | null) : null;

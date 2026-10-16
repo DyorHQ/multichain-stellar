@@ -1,4 +1,4 @@
-// Creates the Lite function secrets without ever printing one (docs/RUNBOOK-testnet.md §1 and §3).
+// Creates the Lite function secrets without ever printing one (the maintainers' runbook).
 //
 //   deno run -A --config backend/supabase/functions/deno.json backend/scripts/new-testnet-secrets.ts
 //     Writes .secrets/testnet-functions.env (git-ignored, mode 600): LITE_NETWORK, LITE_MIN_BUILD, a new sponsor's

@@ -1,4 +1,4 @@
-# Lite's functions in the DyorHQ project (fmnjqrguvopusfufmirs, DECISIONS #17; see docs/RUNBOOK-testnet.md). Deploy
+# Lite's functions in the DyorHQ project (fmnjqrguvopusfufmirs, DECISIONS #17). Deploy
 # functions only: `supabase config push` from here would overwrite the DyorHQ project's settings with this file.
 project_id = "dyorhq-lite"
 

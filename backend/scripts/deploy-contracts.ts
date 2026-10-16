@@ -1,7 +1,7 @@
 // Deploys the v1 Lite contracts (the launchpad, Moments and the launch-token code the launchpad deploys) as one named
 // deployment, configures them from economics.<name>.json and writes deployments/<name>.json, which the API, the
 // indexer and gen-pinned.ts read (docs/DESIGN-stellar-parity.md §6.16). The live testnet's contracts stay as they are
-// (owner decision O5): this is tooling for local stacks and QA (docs/RUNBOOK-testnet.md §2).
+// (owner decision O5): this is tooling for local stacks and QA (the maintainers' runbook).
 //
 //   (cd contracts && ./build.sh)
 //   deno run -A --config backend/supabase/functions/deno.json backend/scripts/deploy-contracts.ts \
