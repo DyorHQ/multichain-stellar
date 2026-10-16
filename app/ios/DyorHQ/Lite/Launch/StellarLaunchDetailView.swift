@@ -35,8 +35,9 @@ struct StellarLaunchDetailView: View {
     @State private var stateUnread = false
     /// Retry, a settled action and a pull to refresh read the page again: one read at a time, cancelled with the page.
     @State private var reloads = 0
-    /// A coin launched seconds ago whose row the indexer hasn't recorded yet (its page read answers 404): the page reads
-    /// it again every few seconds, up to `rowWaitLimit` times, before it says it couldn't be read.
+    /// A coin Create launched seconds ago (`justLaunched`) whose row the indexer hasn't recorded yet (its page read
+    /// answers 404): the page reads it again every few seconds, up to `rowWaitLimit` times, before it says it couldn't be
+    /// read.
     @State private var awaitingRow = false
     @State private var rowWaits = 0
     @State private var side: Side = .buy
@@ -1040,13 +1041,15 @@ struct StellarLaunchDetailView: View {
         async let account: Void = store.refreshAccount()
         async let page = store.launchDetail(token)
         async let live = launches.state(token)
+        let justLaunched = Self.justLaunched.contains(token)
         do {
             let read = try await page
             detail = read
             row = read.launch
             detailUnread = false
             awaitingRow = false
-        } catch LiteAPIError.server(404, _, _, _) where Self.waitsForRow(hasRow: coin != nil, waits: rowWaits) {
+            Self.justLaunched.remove(token)
+        } catch LiteAPIError.server(404, _, _, _) where Self.waitsForRow(justLaunched: justLaunched, hasRow: coin != nil, waits: rowWaits) {
             // Just launched: the indexer records the coin within seconds, and the page reads it again until it has.
             awaitingRow = true
         } catch {
@@ -1070,10 +1073,15 @@ struct StellarLaunchDetailView: View {
     static let rowWaitLimit = 30
     static let rowWait: Duration = .seconds(4)
 
-    /// Whether a page read that found no coin waits for the indexer to record it: only while the page has no row of it
-    /// (opened by its token alone, as after its launch) and within `rowWaitLimit` reads.
-    static func waitsForRow(hasRow: Bool, waits: Int) -> Bool {
-        !hasRow && waits < rowWaitLimit
+    /// The coins Create launched while the app is open whose page hasn't read their row yet
+    /// (`StellarCreateLaunchView.openLaunched`): only their page waits for the indexer to record them.
+    static var justLaunched: Set<String> = []
+
+    /// Whether a page read that found no coin waits for the indexer to record it: only for a coin Create just launched,
+    /// while the page has no row of it (opened by its token alone) and within `rowWaitLimit` reads. A link or a
+    /// notification naming a coin the server doesn't know says so at once.
+    static func waitsForRow(justLaunched: Bool, hasRow: Bool, waits: Int) -> Bool {
+        justLaunched && !hasRow && waits < rowWaitLimit
     }
 
     /// While the coin's row is awaited, the page reads it again after `rowWait`.

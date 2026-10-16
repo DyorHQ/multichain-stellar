@@ -298,7 +298,7 @@
       }
     },
     "Early-buy tax exemptions" : {
-      "comment" : "A section on Stellar's Launch a Coin screen: wallets that pay no early-buy (snipe) tax on the new coin",
+      "comment" : "In the review of a Stellar launch, beside a number: how many wallets pay no early-buy (snipe) tax on the new coin",
       "localizations" : {
         "es" : {
           "stringUnit" : {

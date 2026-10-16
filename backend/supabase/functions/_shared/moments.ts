@@ -91,9 +91,9 @@ function dayText(v: unknown): string | null {
   return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
 }
 
-/** When a Moment happened, as a row records it: the date and time its creator gave (`taken_at`,
- *  "2026-10-14T18:30:00+02:00"), else the day (`taken_on`, "2026-10-14"); null for neither. Each reader of a Moment's
- *  date (the feeds, the v2 publish's on-chain `date`) answers this one value. */
+/** When a Moment happened, as its record keeps it (lite.moment_metadata, and lite.moments for a v2 Moment): the date
+ *  and time its creator gave (`taken_at`, "2026-10-14T18:30:00+02:00"), else the day (`taken_on`, "2026-10-14"); null
+ *  for neither: what its metadata's Date attribute says (`writeMetadata`). */
 export function takenText(takenAt: unknown, takenOn: unknown): string | null {
   if (typeof takenAt === "string" && takenAt) return takenAt;
   return dayText(takenOn);
@@ -141,7 +141,7 @@ export function momentRowOf(r: Row, prices: Prices, now: number, net: NetworkCon
     createdAt: iso(r.created_at),
     description: r.description ?? null,
     place: r.place ?? null,
-    takenOn: takenText(r.taken_at, r.taken_on),
+    takenOn: dayText(r.taken_on),
     mediaType: mediaTypeOf(r),
     posterUrl: r.poster_url ?? null,
     quoteCode: quote?.code,
@@ -369,14 +369,15 @@ function realDay(day: string): boolean {
  *  - a date and time, ISO 8601 with its offset ("2026-10-14T18:30+02:00", "…T16:30:27.5Z"): a real day and time, an
  *    offset of at most 14 hours, not later than now (give or take a phone clock's `TAKEN_SKEW_MS`), written to the
  *    second with the creator's own offset ("2026-10-14T18:30:00+02:00", at most 25 bytes, within the contract's 32).
- *  Null for none. Its `day` is the creator's own calendar day, what `taken_on` keeps. */
-export function takenArg(v: unknown, now: number): { text: string; day: string; time: boolean } | null {
+ *  Null for none. Its `day` is the creator's own calendar day, what `taken_on` keeps; `at` the date and time, what
+ *  `taken_at` keeps (null for a day alone). */
+export function takenArg(v: unknown, now: number): TakenParts | null {
   if (v === undefined || v === null || v === "") return null;
   const bad_ = bad("bad_arg", "takenOn is a date, YYYY-MM-DD, or a date and time with its offset (ISO 8601), not in the future.");
   if (typeof v !== "string") throw bad_;
   if (DAY_FORM.test(v)) {
     if (!realDay(v) || Date.parse(`${v}T00:00:00.000Z`) > now + 86_400_000) throw bad_;
-    return { text: v, day: v, time: false };
+    return { text: v, day: v, at: null };
   }
   const m = DATE_TIME_FORM.exec(v);
   if (!m) throw bad_;
@@ -388,7 +389,26 @@ export function takenArg(v: unknown, now: number): { text: string; day: string; 
   const text = `${day}T${hh}:${mm}:${ss}${offset}`;
   const at = Date.parse(text);
   if (Number.isNaN(at) || at > now + TAKEN_SKEW_MS) throw bad_;
-  return { text, day, time: true };
+  return { text, day, at: text };
+}
+
+/** When a Moment happened, in the forms `takenArg` writes: `text` as its metadata's Date attribute says it, `day` for
+ *  `taken_on`, `at` for `taken_at` (null for a day alone). */
+export interface TakenParts {
+  text: string;
+  day: string;
+  at: string | null;
+}
+
+/** When a Moment happened, as a reader of what was written finds it (a metadata JSON's Date attribute, a recorded
+ *  `takenOn`): any value `takenArg` takes, whenever it was written; null for anything else, so a Moment is never
+ *  refused over its date. */
+export function takenParts(v: unknown): TakenParts | null {
+  try {
+    return takenArg(v, Number.POSITIVE_INFINITY);
+  } catch {
+    return null;
+  }
 }
 
 /** The metadata a request describes, checked: a title (1–80 characters), the user's own upload of the media, and for a
@@ -446,11 +466,11 @@ export async function writeMetadata(user: string, input: MetadataInput, now: num
   const external = linkBase ? `${linkBase.replace(/\/*$/, "/")}${id}` : null;
   const json = sep50Json(user, m, env.network.name, external);
   const uri = await putPublicObject(`moments/${user}/${id}.json`, JSON.stringify(json), "application/json");
-  // The day goes where every reader of a Moment's date has it; a time, with the creator's offset, beside it.
-  const taken = takenArg(m.takenOn, Number.POSITIVE_INFINITY);
+  // The day goes where every reader of a Moment's day has it; a time, with the creator's offset, beside it.
+  const taken = takenParts(m.takenOn);
   await sql()`
     insert into lite.moment_metadata (uri, address, title, description, place, taken_on, taken_at, media_type, media_url, poster_url)
-    values (${uri}, ${user}, ${m.title}, ${m.description}, ${m.place}, ${taken?.day ?? null}, ${taken?.time ? taken.text : null}, ${m.mediaType},
+    values (${uri}, ${user}, ${m.title}, ${m.description}, ${m.place}, ${taken?.day ?? null}, ${taken?.at ?? null}, ${m.mediaType},
             ${m.mediaUrl}, ${m.posterUrl})`;
   return { uri, posterUrl: m.posterUrl };
 }

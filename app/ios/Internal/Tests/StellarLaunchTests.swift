@@ -170,13 +170,15 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertEqual(twoHours.marks, ["2026-10-16T06:30:00Z", "2026-10-16T07:00:00Z", "2026-10-16T07:30:00Z"].compactMap(StellarFormat.date))
     }
 
-    /// A coin launched seconds ago has no row yet: its page reads it again, up to its limit, and only then says it
-    /// couldn't be read. A page opened with its row never waits.
+    /// A coin Create launched seconds ago has no row yet: its page reads it again, up to its limit, and only then says it
+    /// couldn't be read. A page opened with its row never waits, nor one a link or a notification opened for a coin the
+    /// server doesn't know.
     func testANewCoinsPageWaitsForItsRow() {
-        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(hasRow: false, waits: 0))
-        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit - 1))
-        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit))
-        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(hasRow: true, waits: 0))
+        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: 0))
+        XCTAssertTrue(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit - 1))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: false, waits: StellarLaunchDetailView.rowWaitLimit))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: true, hasRow: true, waits: 0))
+        XCTAssertFalse(StellarLaunchDetailView.waitsForRow(justLaunched: false, hasRow: false, waits: 0), "a link to a coin the server doesn't know")
     }
 
     // MARK: - Create
@@ -298,10 +300,12 @@ final class StellarLaunchTests: XCTestCase {
     }
 
     /// Done after a launch opens the new coin's own page: Create routes it through the router once its sheets have
-    /// closed, to the Launch tab, whose board pushes it (`pendingStellar`). Nothing opens for a launch that returned no
-    /// coin.
+    /// closed, to the Launch tab, whose board pushes it (`pendingStellar`), and its page waits for the coin's row as a
+    /// just-launched coin's. Nothing opens for a launch that returned no coin.
     func testDoneOpensTheNewCoinsPage() async throws {
         let token = "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5"
+        StellarLaunchDetailView.justLaunched = []
+        defer { StellarLaunchDetailView.justLaunched = [] }
         XCTAssertEqual(StellarCreateLaunchView.destination(afterLaunching: token), .launch(token: token))
         XCTAssertNil(StellarCreateLaunchView.destination(afterLaunching: nil))
         XCTAssertNil(StellarCreateLaunchView.destination(afterLaunching: "GCFIRY65OQE7DFP5KLNS2PF2LVZMUZYJX4OZIEQ36N2IQANUB5XVYOJR"), "only a contract")
@@ -311,6 +315,7 @@ final class StellarLaunchTests: XCTestCase {
         let router = Router()
         router.stellarTab = .home
         StellarCreateLaunchView.openLaunched(token, router: router)
+        XCTAssertEqual(StellarLaunchDetailView.justLaunched, [token], "its page waits for its row")
         XCTAssertNil(router.pendingStellar, "not while Create's sheets are still closing")
         for _ in 0..<40 where router.pendingStellar == nil { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertEqual(router.pendingStellar, .launch(token: token))
@@ -320,6 +325,7 @@ final class StellarLaunchTests: XCTestCase {
         StellarCreateLaunchView.openLaunched(nil, router: untouched)
         try await Task.sleep(for: .milliseconds(600))
         XCTAssertNil(untouched.pendingStellar)
+        XCTAssertEqual(StellarLaunchDetailView.justLaunched, [token])
     }
 
     /// Advanced's one footer says what launchpad v2 does: the creator tax on curve trades only, and after graduation the

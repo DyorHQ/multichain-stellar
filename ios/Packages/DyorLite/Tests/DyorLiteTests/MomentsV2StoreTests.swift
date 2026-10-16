@@ -258,8 +258,8 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(sent["uri"] as? String, "https://media.test/m/1.json")
     }
 
-    /// Publish's When is a day and a time, as on Monad: written to the minute with the phone's offset, and sent in the
-    /// metadata as it is, so the Date attribute and the on-chain date say the same.
+    /// Publish's When is a day and a time, as on Monad: written to the minute with the phone's offset, and sent with the
+    /// metadata as it is, for its Date attribute.
     func testWhenIsWrittenAsADateAndTimeWithItsOffset() async throws {
         let instant = Date(timeIntervalSince1970: 1_791_995_427) // 2026-10-14T16:30:27Z
         XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "UTC"))), "2026-10-14T16:30:00Z")

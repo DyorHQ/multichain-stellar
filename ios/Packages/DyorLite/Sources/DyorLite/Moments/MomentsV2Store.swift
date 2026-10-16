@@ -17,7 +17,7 @@ public struct StellarMomentFormV2: Equatable, Sendable {
     /// Where it happened: at most 64 bytes.
     public var place: String?
     /// When it happened: a date and time with its offset, "2026-10-14T18:30:00+02:00" (`takenAt`), or a day,
-    /// "2026-10-14". The metadata's Date and the Moment's on-chain date say the same.
+    /// "2026-10-14", sent with the metadata, whose Date attribute says it as it is.
     public var takenOn: String?
     /// Per edition, in USDC base units (7 decimals).
     public var price: Int64

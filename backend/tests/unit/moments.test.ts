@@ -262,11 +262,20 @@ Deno.test("metadata: the Date attribute and the record carry the time; the day g
     const json = JSON.parse(stored[stored.length - 1].body);
     assertEquals(json.attributes.find((a: { trait_type: string }) => a.trait_type === "Date")?.value, takenOn);
   }
-  // A Moment's row answers the time when its record has one, else the day.
+  // A record answers what the Date attribute says: the time when it has one, else the day.
   assertEquals(m.takenText("2026-10-14T15:30:00+02:00", new Date("2026-10-14T00:00:00Z")), "2026-10-14T15:30:00+02:00");
   assertEquals(m.takenText(null, new Date("2026-10-14T00:00:00Z")), "2026-10-14");
   assertEquals(m.takenText(null, "2026-10-14"), "2026-10-14");
   assertEquals(m.takenText(undefined, null), null);
+});
+
+Deno.test("a reader of a Moment's date splits what was written into its day and its time, and never refuses one", () => {
+  assertEquals(m.takenParts("2026-10-14T15:30:00+02:00"), { text: "2026-10-14T15:30:00+02:00", day: "2026-10-14", at: "2026-10-14T15:30:00+02:00" });
+  assertEquals(m.takenParts("2026-10-13T21:00:00-09:00"), { text: "2026-10-13T21:00:00-09:00", day: "2026-10-13", at: "2026-10-13T21:00:00-09:00" });
+  assertEquals(m.takenParts("2026-10-14"), { text: "2026-10-14", day: "2026-10-14", at: null });
+  // Written whenever: a reader never compares it with its own clock.
+  assertEquals(m.takenParts("2099-01-01T00:00:00Z")?.at, "2099-01-01T00:00:00Z");
+  for (const v of [null, undefined, "", "yesterday", "2026-02-30", "2026-10-14T10:00:00", 7]) assertEquals(m.takenParts(v), null, String(v));
 });
 
 Deno.test("SEP-50 JSON: always an image; animation_url only for a video; the network's name; Place and Date when given", () => {
@@ -392,6 +401,12 @@ Deno.test("a row indexed before migration 09: its media type from the file, no t
   const old = m.momentRowOf({ ...ROW, media_type: null, poster_url: null, platform_bps: null, royalty_bps: null, taken_on: null }, prices as any, NOW);
   assertEquals([old.mediaType, old.posterUrl, old.platformBps, old.royaltyBps, old.priceUsd], ["video", null, undefined, undefined, null]);
   assertEquals(m.momentRowOf({ ...ROW, media_type: null, media_url: PHOTO }, prices as any, NOW).mediaType, "image");
+});
+
+Deno.test("a v1 Moment's row says the day it happened: no v1 Moment has a time", () => {
+  const prices = { XLM: { ref: "XLM", usd: null, stale: true, at: null, market: "", change24h: null, volume24hUsd: null }, USDC: { ref: "USDC", usd: 1, stale: false, at: null, market: "", change24h: null, volume24hUsd: null } } as const;
+  const row = { ...ROW, taken_on: new Date("2026-10-14T00:00:00Z"), taken_at: "2026-10-14T15:30:00+02:00" };
+  assertEquals(m.momentRowOf(row, prices as any, NOW).takenOn, "2026-10-14");
 });
 
 Deno.test("a Moment without a title is never served: 404", async () => {

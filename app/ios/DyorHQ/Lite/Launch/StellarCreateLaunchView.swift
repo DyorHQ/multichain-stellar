@@ -505,7 +505,7 @@ struct StellarCreateLaunchView: View {
                 }
                 if let recipient { DetailRow("Fee recipient", verbatim: recipient.short) }
                 if !exempt.isEmpty {
-                    DetailRow(Text("Early-buy tax exemptions", tableName: "StellarLaunch", comment: "A section on Stellar's Launch a Coin screen: wallets that pay no early-buy (snipe) tax on the new coin"),
+                    DetailRow(Text("Early-buy tax exemptions", tableName: "StellarLaunch", comment: "In the review of a Stellar launch, beside a number: how many wallets pay no early-buy (snipe) tax on the new coin"),
                               Text(verbatim: "\(exempt.count)"))
                 }
                 DetailRow("Launch fee", verbatim: "\(StellarFormat.units(Int64(terms.launchFee) ?? 0)) XLM")
@@ -536,9 +536,11 @@ struct StellarCreateLaunchView: View {
     /// After a launch, Create's sheets close and the new coin's page opens over the Launch board: once they have closed
     /// (`Router.coverCloses`; a push asked for while two sheets are still closing could be lost), through the router, so the
     /// board pushes it (`pendingStellar`) whichever screen presented Create, and its page reads the coin first, waiting for
-    /// the indexer's row when the launch is seconds old. Nothing when the launch returned no coin.
+    /// the indexer's row as the page of a coin just launched (`StellarLaunchDetailView.justLaunched`). Nothing when the
+    /// launch returned no coin.
     static func openLaunched(_ token: String?, router: Router) {
-        guard let destination = destination(afterLaunching: token) else { return }
+        guard let token, let destination = destination(afterLaunching: token) else { return }
+        StellarLaunchDetailView.justLaunched.insert(token)
         Task { @MainActor in
             try? await Task.sleep(for: Router.coverCloses)
             router.openStellar(destination)
