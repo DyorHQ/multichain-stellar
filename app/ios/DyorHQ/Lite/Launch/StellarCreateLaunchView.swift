@@ -10,17 +10,17 @@ import StellarKit
 import SwiftUI
 
 /// Launch a coin on Stellar's launchpad v2, laid out as Monad's `CreateLaunchView`: its image, a live preview card, its
-/// name, ticker and description, links, the asset it is priced in and where it graduates, a developer buy, and the
-/// advanced terms (the creator fee until graduation, fee sharing with holders, a fee recipient and wallets exempt from
-/// the early-buy tax). The launchpad's terms and the 10 XLM launch fee are read live (`/v1/economics`, the launch
-/// preview); the review shows every term the launch binds, its durations included, and its network fee.
+/// name, ticker and description, links, the asset it is priced in and where it graduates, a developer buy, and Monad's
+/// Advanced (the creator tax and fee sharing with holders, then a fee recipient and wallets exempt from the early-buy
+/// tax). The launchpad's terms and the 10 XLM launch fee are read live (`/v1/economics`, the launch preview); the review
+/// shows every term the launch binds, its durations included, and its network fee. Done opens the new coin's page.
 ///
 /// A ticker must be 2–10 ASCII letters or digits and is refused here with a clear message, before any review; a name
 /// is at most 32 bytes and passes `SymbolSafety`. Too little XLM for the launch fee, the network fee and the account's
 /// minimum balance is said with what is missing, before the review.
 struct StellarCreateLaunchView: View {
     /// Once the launch settled and Create closed, exactly once (Done, a swipe of the settled review, or View): the new
-    /// coin's contract, when its transaction returned it. From View, Create has already opened the coin's page.
+    /// coin's contract, when its transaction returned it. Create opens the coin's page itself (`openLaunched`).
     var onLaunched: (String?) -> Void = { _ in }
     @Environment(\.stellarSession) private var session
     @Environment(Router.self) private var router
@@ -58,8 +58,6 @@ struct StellarCreateLaunchView: View {
     @State private var previewReads = 0
     /// The new coin, from what the launch returned.
     @State private var launchedToken: String?
-    /// View asked for the new coin's page: the review closes, and its cleanup opens the page.
-    @State private var opensLaunched = false
 
     /// Name: at most this many bytes (the launchpad's limit).
     static let maxNameBytes = 32
@@ -222,7 +220,6 @@ struct StellarCreateLaunchView: View {
                 pairingSection
                 developerBuySection
                 advancedSection
-                if showAdvanced { exemptSection }
             }
             .navigationTitle(tr("Launch a Coin"))
             .navigationBarTitleDisplayMode(.inline)
@@ -404,70 +401,67 @@ struct StellarCreateLaunchView: View {
 
     // MARK: Advanced
 
+    /// Monad's Advanced, inline: the creator tax and fee sharing, then the two settings launchpad v2 adds (a fee recipient
+    /// and wallets exempt from the early-buy tax), under one footer.
     private var advancedSection: some View {
         Section {
             DisclosureGroup(isExpanded: $showAdvanced) {
-                Stepper(value: $creatorFeeBps, in: 0...(terms?.maxCreatorFeeBps ?? economics?.maxCreatorFeeBps ?? 0), step: 25) {
-                    Text("Creator fee (until graduation) \(NumberStyle.basisPoints(creatorFeeBps))", tableName: "StellarLaunch", comment: "A stepper on Stellar's Launch a Coin screen: the creator's fee on every curve trade, charged until the coin graduates. The value is a percent (0.25%)")
-                }
+                Stepper("Creator tax \(NumberStyle.basisPoints(creatorFeeBps))", value: $creatorFeeBps,
+                        in: 0...(terms?.maxCreatorFeeBps ?? economics?.maxCreatorFeeBps ?? 0), step: 25)
                 Toggle("Share fees with holders", isOn: $holderSharing).tint(.brand)
-                TextField(text: $recipientText, prompt: Text(verbatim: "G… / C…")) {
-                    Text("Fee recipient (optional)", tableName: "StellarLaunch", comment: "A field on Stellar's Launch a Coin screen: another account to receive the coin's creator fees; empty for the creator")
-                }
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
+                addressField($recipientText, prompt: Text("Fee recipient (optional)", tableName: "StellarLaunch", comment: "A field on Stellar's Launch a Coin screen: another account to receive the coin's creator fees; empty for the creator"))
                 if recipientInvalid {
                     InlineError(message: LocalizedStringResource("That isn't a Stellar address.", table: "StellarLaunch", comment: "Under an address field on Stellar: what was typed isn't a valid G… or C… address. Stellar is a network's name, never translated"))
+                }
+                ForEach(exempt, id: \.self) { address in
+                    if let id = StellarAccountID(address) {
+                        LabeledContent {
+                            StellarAddressText(id)
+                        } label: {
+                            Text("Exempt", tableName: "StellarLaunch", comment: "[tight] On Stellar's Launch a Coin screen, before a wallet's address: it pays no early-buy (snipe) tax on the new coin")
+                        }
+                    }
+                }
+                .onDelete { exempt.remove(atOffsets: $0) }
+                if exempt.count < Self.maxExempt {
+                    HStack {
+                        addressField($exemptText, prompt: Text("Wallet exempt from the early-buy tax", tableName: "StellarLaunch", comment: "A field on Stellar's Launch a Coin screen: a wallet address that pays no early-buy (snipe) tax on the new coin, added with the Add button beside it"))
+                        Button("Add") {
+                            guard let id = StellarAccountID(exemptText.trimmingCharacters(in: .whitespacesAndNewlines)), !exempt.contains(id.checksummed) else { return }
+                            exempt.append(id.checksummed)
+                            exemptText = ""
+                        }
+                        .disabled(StellarAccountID(exemptText.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
+                    }
                 }
             } label: {
                 Label("Advanced", systemImage: "slider.horizontal.3")
             }
         } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Paragraph(LocalizedStringResource("The creator fee is charged on curve trades only. After graduation the pool's fees are shared instead: half to DyorHQ, half to holders or the fee recipient.", table: "StellarLaunch", comment: "Footer of the advanced terms on Stellar's Launch a Coin screen: the creator fee stops at graduation, when the pool's fees are split. DyorHQ is never translated"))
-                if holderSharing {
-                    // launchpad-v2's split_fees: with sharing on, the whole creator part goes to holders.
-                    Paragraph(Self.sharingTakesCreatorFees).foregroundStyle(creatorFeeBps > 0 ? Color.attention : Color.secondary)
-                    Paragraph(LocalizedStringResource("Holders also earn part of the pool fees after graduation, in this coin and in \(quoteCode).", table: "StellarLaunch", comment: "Under a Stellar coin's holder rewards, and the Share fees with holders setting: after graduation holders also get part of the pool's fees, in the coin and in its quote asset. The value is the quote asset (XLM)"))
-                }
-            }
+            if let terms { Paragraph(Self.feeFooter(terms)) }
         }
     }
 
-    /// With fee sharing on, the creator fee and the creator's share of the curve fee go to holders: said under the
-    /// setting and in the review, so a creator who sets a fee knows there will be none to claim.
+    /// An address typed in Advanced: monospaced, in capitals as StrKeys are, never corrected.
+    private func addressField(_ text: Binding<String>, prompt: Text) -> some View {
+        TextField(text: text, prompt: prompt) { prompt }
+            .textInputAutocapitalization(.characters)
+            .autocorrectionDisabled()
+            .font(.body.monospaced())
+    }
+
+    /// Advanced's one footer, true for launchpad v2: the creator tax is charged on curve trades only; the creator (or the
+    /// fee recipient) receives it with its share of the curve fee and, after graduation, its share of what the locked
+    /// Soroswap liquidity earns (the launch's own `protocolShareBps` going to DyorHQ); with sharing on, holders receive all
+    /// of it.
+    static func feeFooter(_ terms: StellarLaunchTermsV2) -> LocalizedStringResource {
+        let protocolShare = min(10_000, max(0, terms.protocolShareBps))
+        return LocalizedStringResource("Creator tax is charged on curve trades only. You, or the fee recipient you set, receive it with a share of the curve fee and, after graduation, \(NumberStyle.basisPoints(10_000 - protocolShare)) of the fees its locked \(terms.venue.name) liquidity earns (\(NumberStyle.basisPoints(protocolShare)) go to DyorHQ). With fee sharing on, holders receive all of it instead.", table: "StellarLaunch", comment: "The footer of Advanced on Stellar's Launch a Coin screen. The values are shares (50%, 50%) and the graduation venue's name (Soroswap, never translated). DyorHQ is never translated")
+    }
+
+    /// With fee sharing on, the creator fee and the creator's share of the curve fee go to holders: said in the review, so
+    /// a creator who sets a fee knows there will be none to claim.
     static let sharingTakesCreatorFees = LocalizedStringResource("With fee sharing on, the creator fee and the creator's share of the curve fee go to holders as rewards, so there are no creator fees to claim. Turn sharing off to keep them.", table: "StellarLaunch", comment: "On Stellar's Launch a Coin screen and its review, while Share fees with holders is on: the creator's fees all go to the coin's holders")
-
-    /// Wallets that pay no early-buy tax on this coin, besides the creator and the fee recipient.
-    private var exemptSection: some View {
-        Section {
-            ForEach(exempt, id: \.self) { address in
-                if let id = StellarAccountID(address) { StellarAddressText(id) }
-            }
-            .onDelete { exempt.remove(atOffsets: $0) }
-            if exempt.count < Self.maxExempt {
-                HStack {
-                    TextField(text: $exemptText, prompt: Text(verbatim: "G… / C…")) {
-                        Text("Wallet", tableName: "StellarLaunch", comment: "[tight] A field on Stellar's Launch a Coin screen: a wallet address to exempt from the early-buy tax")
-                    }
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .font(.body.monospaced())
-                    Button("Add") {
-                        guard let id = StellarAccountID(exemptText.trimmingCharacters(in: .whitespacesAndNewlines)), !exempt.contains(id.checksummed) else { return }
-                        exempt.append(id.checksummed)
-                        exemptText = ""
-                    }
-                    .disabled(StellarAccountID(exemptText.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
-                }
-            }
-        } header: {
-            Text("Early-buy tax exemptions", tableName: "StellarLaunch", comment: "A section on Stellar's Launch a Coin screen: wallets that pay no early-buy (snipe) tax on the new coin")
-        } footer: {
-            Paragraph(LocalizedStringResource("These wallets pay no early-buy tax on this coin, besides you and the fee recipient. Up to \(Self.maxExempt).", table: "StellarLaunch", comment: "Footer of the early-buy tax exemptions on Stellar's Launch a Coin screen. The value is the most wallets (32)"))
-        }
-    }
 
     // MARK: Review (§8.10.5 L)
 
@@ -476,20 +470,21 @@ struct StellarCreateLaunchView: View {
             StellarConfirmationSheet(
                 title: "Launch \(ticker)", confirmTitle: "Launch \(ticker)",
                 build: { try await launches.createPlan(form(ticker: ticker, terms: terms), terms: terms, image: imageData) },
-                // The review runs this once, however its settled sheet closes: Done, a swipe, or View (below).
+                // The review runs this once, however its settled sheet closes: Done, a swipe, or View (below). Create closes
+                // and the new coin's own page opens over the board (`openLaunched`).
                 onDone: {
-                    if opensLaunched, let launchedToken { router.openStellar(.launch(token: launchedToken)) }
+                    let token = launchedToken
                     dismiss()
-                    onLaunched(launchedToken)
+                    onLaunched(token)
+                    Self.openLaunched(token, router: router)
                 },
                 onCompleted: { results in
-                    if case .string(let token)? = results.last?.returnValue, StellarAccountID(token) != nil { launchedToken = token }
+                    launchedToken = Self.launchedToken(results)
                 },
                 onView: { hash in
                     // The new coin's own page, from what its launch returned: the review closes, and its cleanup (onDone)
-                    // opens the page and closes Create. StellarExpert only when the launch returned nothing.
+                    // closes Create and opens the page. StellarExpert only when the launch returned nothing.
                     if launchedToken != nil {
-                        opensLaunched = true
                         showConfirm = false
                     } else if let page = StellarExplorer.transaction(hash, network: LiteGate.pinned.network) {
                         UIApplication.shared.open(page)
@@ -503,8 +498,7 @@ struct StellarCreateLaunchView: View {
                 if terms.fallback.id != terms.venue.id {
                     DetailRow(Text("Fallback venue", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: where the coin graduates if its own venue keeps failing"), Text(verbatim: terms.fallback.name))
                 }
-                DetailRow(Text("Creator fee (until graduation)", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: the creator's fee on every curve trade, charged until the coin graduates"),
-                          Text(verbatim: NumberStyle.basisPoints(creatorFeeBps)))
+                DetailRow(Text("Creator tax"), Text(verbatim: NumberStyle.basisPoints(creatorFeeBps)))
                 DetailRow(Text("Fee sharing"), Text(holderSharing ? "On" : "Off"))
                 if holderSharing {
                     Paragraph(Self.sharingTakesCreatorFees).font(.footnote).foregroundStyle(.secondary)
@@ -531,6 +525,30 @@ struct StellarCreateLaunchView: View {
                 durationRow(Text("Pool fees collected every", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how often its pool's fees are collected after graduation"), terms.durations.harvestInterval)
             }
         }
+    }
+
+    /// The new coin's contract, from what its launch returned; nil when it returned none.
+    static func launchedToken(_ results: [TxStatus]) -> String? {
+        guard case .string(let token)? = results.last?.returnValue, StrKey.isValid(.contract, token) else { return nil }
+        return token
+    }
+
+    /// After a launch, Create's sheets close and the new coin's page opens over the Launch board: once they have closed
+    /// (`Router.coverCloses`; a push asked for while two sheets are still closing could be lost), through the router, so the
+    /// board pushes it (`pendingStellar`) whichever screen presented Create, and its page reads the coin first, waiting for
+    /// the indexer's row when the launch is seconds old. Nothing when the launch returned no coin.
+    static func openLaunched(_ token: String?, router: Router) {
+        guard let destination = destination(afterLaunching: token) else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: Router.coverCloses)
+            router.openStellar(destination)
+        }
+    }
+
+    /// Where Done takes a settled launch: the new coin's page on the Launch tab, when its contract is known.
+    static func destination(afterLaunching token: String?) -> StellarDestination? {
+        guard let token, StrKey.isValid(.contract, token) else { return nil }
+        return .launch(token: token)
     }
 
     private func durationRow(_ label: Text, _ seconds: Int) -> some View {

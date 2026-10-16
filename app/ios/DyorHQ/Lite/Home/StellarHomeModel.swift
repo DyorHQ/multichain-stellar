@@ -205,9 +205,18 @@ final class StellarHomeModel {
     }
 
     /// Top Tokens' tab: Monad's rules (`StellarMarketRanking`) over the markets read, without a test asset or a look-alike
-    /// (the server lists neither; a row that says it is one never shows).
+    /// (the server lists neither; a row that says it is one never shows), and without a coin of the retired v1 launchpad,
+    /// as Monad's Top Tokens hide retired launches: a launch is listed once the launch board says it is launchpad v2's
+    /// (`StellarLaunchGenerations`). My Holdings still lists every coin the account holds.
     static func topTokens(_ rows: [StellarMarketRow], tab: HomeTokenTab) -> [StellarMarketRow] {
-        let listed = rows.filter { !$0.badges.contains("testAsset") && !$0.badges.contains("lookAlike") }
+        topTokens(rows, tab: tab, generations: StellarLaunchGenerations.shared.known)
+    }
+
+    /// `topTokens` with the launchpad generation of each launch token known so far.
+    static func topTokens(_ rows: [StellarMarketRow], tab: HomeTokenTab, generations: [String: Int]) -> [StellarMarketRow] {
+        let listed = rows.filter {
+            !$0.badges.contains("testAsset") && !$0.badges.contains("lookAlike") && StellarLaunchGenerations.isLive($0, known: generations)
+        }
         return StellarMarketRanking.rows(listed, tab: StellarMarketRanking.Tab(rawValue: tab.rawValue) ?? .popular)
     }
 
@@ -348,6 +357,8 @@ final class StellarHomeModel {
             sync(from: store)
         }
         await markets
+        // Which launchpad Top Tokens' launches are on: read only for a launch not known yet.
+        await StellarLaunchGenerations.shared.learn(session.publicReads.markets, store: session.store)
     }
 
     /// Total Volume over `period` (DyorHQ's history: a session read; a passkey account in the public view gets
@@ -398,6 +409,61 @@ final class StellarHomeModel {
             value = holdings.totals.moments
         }
         if values[part] != value { values[part] = value }
+    }
+}
+
+/// The launchpad each launch token was made on, as the launch board's rows say (`StellarLaunch.generation`): 2 for
+/// launchpad v2's, 1 for the retired v1 launchpad's (and for a row that doesn't say, as the board reads it). Top Tokens
+/// lists a launch only once it is known to be launchpad v2's. A token's generation never changes, so what was learned
+/// is kept for the app's life, and the board is read again only for a launch not known yet.
+@MainActor
+@Observable
+final class StellarLaunchGenerations {
+    static let shared = StellarLaunchGenerations()
+
+    /// Each launch token's generation, by its contract.
+    private(set) var known: [String: Int] = [:]
+    /// The launches the last read went looking for: unknown ones it didn't find aren't looked for again until another
+    /// launch is.
+    @ObservationIgnored private var sought: Set<String> = []
+
+    /// The most pages of each board section read for unknown launches (newest first, 50 a page).
+    static let maxPages = 4
+
+    /// Whether Top Tokens may list `row`: anything that isn't a launch, and a launch known to be launchpad v2's.
+    nonisolated static func isLive(_ row: StellarMarketRow, known: [String: Int]) -> Bool {
+        row.kind != "launch" || known[row.id] == 2
+    }
+
+    /// The launches in `rows` whose generation isn't known.
+    nonisolated static func unknown(_ rows: [StellarMarketRow], known: [String: Int]) -> Set<String> {
+        Set(rows.lazy.filter { $0.kind == "launch" && known[$0.id] == nil }.map(\.id))
+    }
+
+    /// Takes in the generation of each launch read: a row that doesn't say is the retired launchpad's.
+    func record(_ launches: [StellarLaunch]) {
+        for launch in launches {
+            let generation = launch.generation ?? 1
+            if known[launch.token] != generation { known[launch.token] = generation }
+        }
+    }
+
+    /// Reads the launch board (a viewer read, newest first) for the launches in `rows` not known yet: both sections, a few
+    /// pages each, until every one is found. A read that fails is tried again with the next call.
+    func learn(_ rows: [StellarMarketRow], store: LiteStore?) async {
+        let unknown = Self.unknown(rows, known: known)
+        guard let store, !unknown.isEmpty, !unknown.isSubset(of: sought) else { return }
+        for section in ["explore", "graduated"] {
+            var cursor: String?
+            for _ in 0..<Self.maxPages {
+                guard let page = try? await store.launchBoard(section: section, sort: "newest", cursor: cursor) else { return }
+                record(page.launches)
+                cursor = page.nextCursor
+                if cursor == nil || unknown.allSatisfy({ known[$0] != nil }) { break }
+            }
+            if unknown.allSatisfy({ known[$0] != nil }) { break }
+        }
+        sought.formUnion(unknown)
     }
 }
 #endif

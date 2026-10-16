@@ -1,7 +1,8 @@
 // Stellar Home (docs/DESIGN-stellar-parity.md §8.2; decisions 6 and 7): the total waits for every part and the split is
 // the server's totals, a part that fails keeps its last figures, saved figures show before the first read and go at
-// sign-out, Top Tokens rank as Monad's and never list a test asset or a look-alike, My Holdings' rows, the add-funds
-// card's phases (Friendbot once, no cash), and the source rules Home keeps.
+// sign-out, Top Tokens rank as Monad's and never list a test asset, a look-alike or a retired launch, their change
+// capsule is compact, My Holdings' rows, the add-funds card's phases (Friendbot once, no cash), and the source rules Home
+// keeps.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -69,11 +70,13 @@ final class StellarHomeTests: XCTestCase {
             """)
     }
 
-    private func portfolio(volume: Double, period: String = "all") throws -> StellarPortfolio {
+    /// `/v1/portfolio` over `period`, read two minutes ago: a saved Total Volume shows for a day after its read.
+    private func portfolio(volume: Double, period: String = "all",
+                           asOf: String = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-120))) throws -> StellarPortfolio {
         let stats = #"{"volume": \#(volume), "fees": 0, "pnl": 0, "claimedFees": 0, "trades": 1, "pnlComplete": true, "networkFeesXlm": "0", "networkFeesUsd": 0}"#
         let zero = #"{"volume": 0, "fees": 0, "pnl": 0, "claimedFees": 0, "trades": 0, "pnlComplete": true, "networkFeesXlm": "0", "networkFeesUsd": 0}"#
         return try decode(StellarPortfolio.self, """
-            {"period": "\(period)", "since": null, "asOf": "2026-10-15T09:41:00.000Z",
+            {"period": "\(period)", "since": null, "asOf": "\(asOf)",
              "pricing": {"kind": "reference", "source": "Kraken", "network": "mainnet", "note": null},
              "totals": \(stats), "sections": {"spot": \(stats), "earn": \(zero), "launch": \(zero), "moments": \(zero), "bridge": \(zero)},
              "activity": [], "coverage": {"from": null, "note": null}}
@@ -188,9 +191,10 @@ final class StellarHomeTests: XCTestCase {
 
     // MARK: - Top Tokens
 
-    private func market(_ id: String, code: String, price: Double?, change: Double?, badges: [String] = [], isNew: Bool = false) -> String {
+    private func market(_ id: String, code: String, price: Double?, change: Double?, badges: [String] = [], isNew: Bool = false,
+                        kind: String = "registry") -> String {
         """
-        {"id": "\(id)", "kind": "registry", "contract": "\(xlmContract)", "classic": null, "code": "\(code)", "name": "\(code) name", "decimals": 7,
+        {"id": "\(id)", "kind": "\(kind)", "contract": "\(xlmContract)", "classic": null, "code": "\(code)", "name": "\(code) name", "decimals": 7,
          "logo": null, "image": null, "verified": true, "badges": [\(badges.map { "\"\($0)\"" }.joined(separator: ", "))], "note": null,
          "priceUsd": \(number(price)), "change24h": \(number(change)), "isNew": \(isNew), "volume24hUsd": null, "marketCapUsd": null,
          "priceSource": {"kind": "reference", "market": "Kraken", "at": null}, "stale": false, "launch": null}
@@ -215,6 +219,54 @@ final class StellarHomeTests: XCTestCase {
             XCTAssertFalse(StellarHomeModel.topTokens(rows, tab: tab).contains { ["BUSDC", "FAKE", "CHECK"].contains($0.id) }, tab.rawValue)
         }
         XCTAssertEqual(rows.first?.change24hPercent, -1.23, "ChangeBadge takes the percent")
+    }
+
+    /// Monad's Top Tokens hide retired launches: a coin of the retired v1 launchpad never shows in any tab, and a launch
+    /// shows only once the launch board says it is launchpad v2's. Registry rows don't wait for it.
+    func testTopTokensNeverListARetiredLaunch() throws {
+        let rows = try decode([StellarMarketRow].self, "[" + [
+            market("XLM", code: "XLM", price: 0.19, change: -0.0123),
+            market("OLD", code: "ECAT", price: 0.00003, change: 0.4, badges: ["launch"], kind: "launch"),
+            market("LIVE", code: "QALNCH", price: 0.00002, change: 0.25, badges: ["launch"], kind: "launch"),
+            market("UNREAD", code: "NEWC", price: 0.00001, change: -0.1, badges: ["launch"], kind: "launch"),
+        ].joined(separator: ",") + "]")
+        let generations = ["OLD": 1, "LIVE": 2]
+        for tab in HomeTokenTab.allCases {
+            let ids = StellarHomeModel.topTokens(rows, tab: tab, generations: generations).map(\.id)
+            XCTAssertFalse(ids.contains("OLD"), "a v1 launch never shows: \(tab.rawValue)")
+            XCTAssertFalse(ids.contains("UNREAD"), "nor one whose launchpad isn't known yet: \(tab.rawValue)")
+        }
+        XCTAssertEqual(StellarHomeModel.topTokens(rows, tab: .popular, generations: generations).map(\.id), ["XLM", "LIVE"])
+        XCTAssertEqual(StellarHomeModel.topTokens(rows, tab: .popular, generations: [:]).map(\.id), ["XLM"], "registry rows never wait")
+        XCTAssertEqual(StellarLaunchGenerations.unknown(rows, known: generations), ["UNREAD"])
+
+        // The board's rows say which launchpad: one that doesn't say is the retired one's, as the board reads it.
+        let launches = try decode([StellarLaunch].self, "[" + [launchRow("OLD", generation: "1"), launchRow("LIVE", generation: "2"),
+                                                                launchRow("UNREAD", generation: "null")].joined(separator: ",") + "]")
+        let learned = StellarLaunchGenerations()
+        learned.record(launches)
+        XCTAssertEqual(learned.known, ["OLD": 1, "LIVE": 2, "UNREAD": 1])
+        XCTAssertEqual(StellarHomeModel.topTokens(rows, tab: .popular, generations: learned.known).map(\.id), ["XLM", "LIVE"])
+    }
+
+    /// A board row (`GET /v1/launches`) for the launch `token`, of launchpad `generation` ("null" for an older server's).
+    private func launchRow(_ token: String, generation: String) -> String {
+        """
+        {"token": "\(token)", "creator": "\(stellar)", "quote": "\(xlmContract)", "name": "E2E Cat", "symbol": "ECAT", "uri": "",
+         "supply": "10000000000000000", "quoteReserve": "0", "tokenReserve": "0", "realQuote": "0", "threshold": "43245553200",
+         "progress": 0, "completed": false, "graduated": false, "volume": "0", "trades": 0, "createdAt": "2026-10-15T09:41:00Z",
+         "generation": \(generation)}
+        """
+    }
+
+    /// The change capsule never needs a second line: whole percents from 100%, thousands from 10,000%.
+    func testTheChangeBadgeIsCompact() {
+        XCTAssertEqual(StellarChangeBadge.text(2.0123), NumberStyle.percent(2.0123))
+        XCTAssertEqual(StellarChangeBadge.text(-0.3), NumberStyle.percent(-0.3))
+        XCTAssertEqual(StellarChangeBadge.text(775.12), "+775%")
+        XCTAssertEqual(StellarChangeBadge.text(-99.5), NumberStyle.percent(-99.5))
+        XCTAssertEqual(StellarChangeBadge.text(12_345), "+\(NumberStyle.number(12_345, compact: true))%")
+        XCTAssertEqual(StellarChangeBadge.text(.infinity), "—")
     }
 
     // MARK: - My Holdings

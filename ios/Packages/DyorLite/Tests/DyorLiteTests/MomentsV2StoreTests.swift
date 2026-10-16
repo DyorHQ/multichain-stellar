@@ -258,6 +258,28 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(sent["uri"] as? String, "https://media.test/m/1.json")
     }
 
+    /// Publish's When is a day and a time, as on Monad: written to the minute with the phone's offset, and sent in the
+    /// metadata as it is, so the Date attribute and the on-chain date say the same.
+    func testWhenIsWrittenAsADateAndTimeWithItsOffset() async throws {
+        let instant = Date(timeIntervalSince1970: 1_791_995_427) // 2026-10-14T16:30:27Z
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "UTC"))), "2026-10-14T16:30:00Z")
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 2 * 3600))), "2026-10-14T18:30:00+02:00")
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: -(9 * 3600 + 30 * 60)))),
+                       "2026-10-14T07:00:00-09:30")
+        XCTAssertLessThanOrEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: -12 * 3600))).utf8.count, 32,
+                                 "within the contract's date")
+
+        let (_, moments) = try await ready()
+        answer.plan = Self.publishPlan()
+        let taken = "2026-10-14T18:30:00+02:00"
+        let form = StellarMomentFormV2(name: "Dusk", symbol: "DUSK", place: "Accra", takenOn: taken, price: 10_000_000, allocationBps: 1_000,
+                                       windowSecs: 86_400)
+        _ = try await moments.publishPlan(form, media: StellarMomentUploadV2(mediaUrl: "https://media.test/u/p.jpg", posterUrl: nil), title: "Publish DUSK")
+        let metadata = try XCTUnwrap(server.seen.first { $0.path == "/v1/moments/metadata" }?.body)
+        let sent = try XCTUnwrap(try JSONSerialization.jsonObject(with: metadata) as? [String: Any])
+        XCTAssertEqual(sent["takenOn"] as? String, taken)
+    }
+
     // MARK: - The terms guard
 
     private func terms() throws -> StellarMomentsTermsV2 {

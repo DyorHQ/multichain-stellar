@@ -1,8 +1,10 @@
 // Stellar copy of ios/DyorHQ/Launchpad/LaunchpadView.swift LaunchDetailView (42cd8c7 sha256:e09b1e764833)
 // Stellar copy of ios/DyorHQ/Launchpad/LaunchpadView.swift LaunchTradeRow (42cd8c7 sha256:7e02fee967bf)
+// Stellar copy of ios/DyorHQ/Home/HomeView.swift PriceChart (42cd8c7 sha256:8fa76a8065f3)
 // A Stellar launch's page (docs/DESIGN-stellar-parity.md §8.10.2, §8.10.5; docs/DESIGN-stellar-contracts-v2.md §21).
 // Internal builds only (STELLAR_LITE).
 #if STELLAR_LITE
+import Charts
 import DyorKit
 import DyorLite
 import StellarKit
@@ -33,6 +35,10 @@ struct StellarLaunchDetailView: View {
     @State private var stateUnread = false
     /// Retry, a settled action and a pull to refresh read the page again: one read at a time, cancelled with the page.
     @State private var reloads = 0
+    /// A coin launched seconds ago whose row the indexer hasn't recorded yet (its page read answers 404): the page reads
+    /// it again every few seconds, up to `rowWaitLimit` times, before it says it couldn't be read.
+    @State private var awaitingRow = false
+    @State private var rowWaits = 0
     @State private var side: Side = .buy
     @State private var amountText = ""
     @State private var quote: LaunchV2Quote?
@@ -226,6 +232,8 @@ struct StellarLaunchDetailView: View {
         // The store too: a page opened before the session has one (a Stellar destination at a cold start) reads once it
         // does.
         .task(id: Reading(reloads: reloads, store: store.map(ObjectIdentifier.init))) { await load() }
+        // A new coin's page reads it again until its row exists (`awaitingRow`).
+        .task(id: "\(awaitingRow)-\(reloads)") { await waitForRow() }
         // The launch's state too: an amount typed before it was read is quoted once it is.
         .task(id: "\(tradeSide)-\(amountUnits)-\(reloads)-\(stateRead)") { await requote() }
         .sheet(item: $review) { review in confirmation(review) }
@@ -311,6 +319,9 @@ struct StellarLaunchDetailView: View {
                 Divider().frame(height: 34)
                 stat("Progress", coin == nil ? "—" : "\(percent)%")
             }
+            if awaitingRow {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading…").foregroundStyle(.secondary) }
+            }
             if stateUnread {
                 HStack(alignment: .firstTextBaseline) {
                     InlineError(message: "Some details of this launch couldn't be read just now.")
@@ -356,7 +367,7 @@ struct StellarLaunchDetailView: View {
                     Button("Retry") { reloads += 1 }.font(.footnote.weight(.semibold))
                 }
             } else {
-                PriceChart(points: priceSeries, isLoading: detail == nil && !detailUnread, tint: chartTint)
+                StellarPriceChart(points: priceSeries, isLoading: detail == nil && !detailUnread, tint: chartTint)
                     .frame(height: 180)
                     .padding(.vertical, 4)
                     .accessibilityLabel(phase == .graduated
@@ -378,25 +389,34 @@ struct StellarLaunchDetailView: View {
                                 quoteUSD: unit)
     }
 
-    /// The coin's price points in dollars (each point × the quote's dollar price), ending on the live price; with fewer
-    /// than two, a launch-time baseline first, so a coin with no trades draws a flat line. Sequential ids keep points
-    /// that share a time distinct.
+    /// The coin's price line in dollars (each point × the quote's dollar price), ending on the live price; with fewer than
+    /// two points, a launch-time baseline first, so a coin with no trades draws a flat line. Only real prices are drawn,
+    /// oldest first: a point with no price, or a zero one, is left out, and points that share a time (the launch's opening
+    /// price and the developer buy in the same ledger, a trade at the very instant read as the live price) are one point,
+    /// the last of them, so the line never runs straight up the edge and its fill is never cut. Sequential ids keep the
+    /// points distinct.
     static func priceSeries(_ prices: [StellarLaunchDetail.Point], current: Double?, launchedAt: Date?, quoteUSD unit: Double,
                             now: Date = Date()) -> [PricePoint] {
-        var points: [PricePoint] = []
-        var block: UInt64 = 0
+        guard unit.isFinite, unit > 0 else { return [] }
+        var samples: [(time: Date, usd: Double)] = []
         for point in prices {
-            guard let time = StellarFormat.date(point.t), let value = Double(point.price), value > 0 else { continue }
-            points.append(PricePoint(block: block, time: time, usd: value * unit))
-            block += 1
+            guard let time = StellarFormat.date(point.t), let value = Double(point.price), value.isFinite, value > 0 else { continue }
+            samples.append((time, value * unit))
         }
-        guard let current, current > 0 else { return points }
-        points.append(PricePoint(block: block, time: now, usd: current * unit))
-        block += 1
-        if points.count < 2 {
-            points.insert(PricePoint(block: block, time: launchedAt ?? now, usd: current * unit), at: 0)
+        let live = current.flatMap { $0.isFinite && $0 > 0 ? $0 * unit : nil }
+        // The live price is now, never before a point read: a clock behind the server's doesn't send the line back.
+        if let live { samples.append((max(now, samples.map(\.time).max() ?? now), live)) }
+        // Oldest first, in the order read among equal times; then one point per time, the last read.
+        let ordered = samples.enumerated().sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }.map(\.element)
+        var line: [(time: Date, usd: Double)] = []
+        for sample in ordered {
+            if let last = line.last, sample.time.timeIntervalSince(last.time) < 1 { line[line.count - 1] = sample } else { line.append(sample) }
         }
-        return points
+        if line.count == 1, let live, let only = line.first {
+            let start = min(launchedAt ?? now, only.time.addingTimeInterval(-60))
+            line.insert((start, live), at: 0)
+        }
+        return line.enumerated().map { PricePoint(block: UInt64($0.offset), time: $0.element.time, usd: $0.element.usd) }
     }
 
     private var chartTint: Color {
@@ -1025,9 +1045,16 @@ struct StellarLaunchDetailView: View {
             detail = read
             row = read.launch
             detailUnread = false
+            awaitingRow = false
+        } catch LiteAPIError.server(404, _, _, _) where Self.waitsForRow(hasRow: coin != nil, waits: rowWaits) {
+            // Just launched: the indexer records the coin within seconds, and the page reads it again until it has.
+            awaitingRow = true
         } catch {
             // A read cut short because the page went away isn't a failure.
-            if !Task.isCancelled { detailUnread = true }
+            if !Task.isCancelled {
+                awaitingRow = false
+                detailUnread = true
+            }
         }
         do {
             state = try await live
@@ -1037,6 +1064,25 @@ struct StellarLaunchDetailView: View {
             if !Task.isCancelled { stateUnread = true }
         }
         _ = await account
+    }
+
+    /// How many times a coin with no row yet is read again, `rowWait` apart (about two minutes in all).
+    static let rowWaitLimit = 30
+    static let rowWait: Duration = .seconds(4)
+
+    /// Whether a page read that found no coin waits for the indexer to record it: only while the page has no row of it
+    /// (opened by its token alone, as after its launch) and within `rowWaitLimit` reads.
+    static func waitsForRow(hasRow: Bool, waits: Int) -> Bool {
+        !hasRow && waits < rowWaitLimit
+    }
+
+    /// While the coin's row is awaited, the page reads it again after `rowWait`.
+    private func waitForRow() async {
+        guard awaitingRow else { return }
+        try? await Task.sleep(for: Self.rowWait)
+        guard !Task.isCancelled, awaitingRow else { return }
+        rowWaits += 1
+        reloads += 1
     }
 
     /// The trade's price for the amount typed: the previous amount's is dropped first, so the minimum a review signs is
@@ -1109,6 +1155,116 @@ private struct StellarLaunchTradeRow: View {
             }
         }
         .contentShape(Rectangle())
+    }
+}
+
+/// Monad's `PriceChart` for a launch page: the line and its fill over the plotted price range, the fill anchored at that
+/// range's floor (never at zero), the time axis exactly the line's span, and one label per mark at a stride that suits
+/// the span, each label distinct (`timeAxis`): a launch an hour or two old reads "6:00 AM, 6:30 AM, 7:00 AM", never
+/// "6 AM, 6 AM, 7 AM".
+struct StellarPriceChart: View {
+    let points: [PricePoint]
+    let isLoading: Bool
+    let tint: Color
+    /// The app's language: a chart draws its axis labels once, so they are formatted in it explicitly, and a change of
+    /// language draws them again.
+    @Environment(\.locale) private var locale
+
+    /// The plotted range with a little headroom. An area mark anchors at zero by default, which flattens a price line
+    /// into a ruler, so the fill starts at this floor instead.
+    private var domain: ClosedRange<Double> { Self.domain(points) }
+
+    static func domain(_ points: [PricePoint]) -> ClosedRange<Double> {
+        let values = points.map(\.usd)
+        let low = values.min() ?? 0
+        let high = values.max() ?? 1
+        let padding = max((high - low) * 0.08, abs(high) * 0.0005, 1e-12)
+        return (low - padding)...(high + padding)
+    }
+
+    /// The time axis's marks and their labels' format, for a line from `first` to `last`: about four marks at the first
+    /// stride that keeps them to four, on round times (the hour, the half hour, midnight), and a format fine enough that
+    /// no two of them read the same (minutes under an hour's stride, the day once the marks span days).
+    static func timeAxis(from first: Date, to last: Date, locale: Locale, calendar: Calendar = .current) -> (marks: [Date], format: Date.FormatStyle) {
+        let span = max(0, last.timeIntervalSince(first))
+        let strides: [(component: Calendar.Component, count: Int, seconds: TimeInterval)] = [
+            (.minute, 1, 60), (.minute, 2, 120), (.minute, 5, 300), (.minute, 10, 600), (.minute, 15, 900), (.minute, 30, 1_800),
+            (.hour, 1, 3_600), (.hour, 2, 7_200), (.hour, 3, 10_800), (.hour, 6, 21_600), (.hour, 12, 43_200),
+            (.day, 1, 86_400), (.day, 2, 172_800), (.day, 7, 604_800), (.day, 14, 1_209_600), (.month, 1, 2_629_746), (.month, 3, 7_889_238),
+            (.year, 1, 31_556_952),
+        ]
+        let stride = strides.first { span / $0.seconds <= 4 } ?? strides[strides.count - 1]
+        // The first round time at or after `first`, then every stride to `last`.
+        var marks: [Date] = []
+        if var mark = Self.roundUp(first, to: stride.component, count: stride.count, calendar: calendar) {
+            while mark <= last, marks.count < 32 {
+                marks.append(mark)
+                guard let next = calendar.date(byAdding: stride.component, value: stride.count, to: mark), next > mark else { break }
+                mark = next
+            }
+        }
+        var formats: [Date.FormatStyle] = switch stride.component {
+        case .minute: [.dateTime.hour().minute(), .dateTime.month(.abbreviated).day().hour().minute()]
+        case .hour: [.dateTime.hour(), .dateTime.month(.abbreviated).day().hour()]
+        case .day: [.dateTime.month(.abbreviated).day(), .dateTime.year().month(.abbreviated).day()]
+        default: [.dateTime.month(.abbreviated).year(), .dateTime.year().month(.abbreviated).day()]
+        }
+        formats = formats.map { format in
+            var format = format.locale(locale)
+            format.timeZone = calendar.timeZone
+            return format
+        }
+        let format = formats.first { format in Set(marks.map { $0.formatted(format) }).count == marks.count } ?? formats[formats.count - 1]
+        return (marks, format)
+    }
+
+    /// `date` moved forward to the next whole multiple of `count` of `component` (12:00, 12:30, midnight, the 1st).
+    private static func roundUp(_ date: Date, to component: Calendar.Component, count: Int, calendar: Calendar) -> Date? {
+        let unit: Calendar.Component = switch component {
+        case .minute: .hour
+        case .hour, .day: .day
+        default: .year
+        }
+        guard let start = calendar.dateInterval(of: unit, for: date)?.start else { return nil }
+        var mark = start
+        while mark < date {
+            guard let next = calendar.date(byAdding: component, value: count, to: mark), next > mark else { return nil }
+            mark = next
+        }
+        return mark
+    }
+
+    var body: some View {
+        if points.count >= 2, let first = points.first?.time, let last = points.last?.time, first < last {
+            let axis = Self.timeAxis(from: first, to: last, locale: locale)
+            Chart(points) { point in
+                LineMark(x: .value("Time", point.time), y: .value("Price", point.usd))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(tint)
+                AreaMark(x: .value("Time", point.time), yStart: .value("Floor", domain.lowerBound), yEnd: .value("Price", point.usd))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(colors: [tint.opacity(0.25), .clear], startPoint: .top, endPoint: .bottom))
+            }
+            .chartXScale(domain: first...last)
+            .chartYScale(domain: domain)
+            // Centred on their marks: a date label starts at its mark by default, so the last one ran past the plot ("Oc…").
+            .chartXAxis { AxisMarks(values: axis.marks) { _ in AxisGridLine(); AxisValueLabel(format: axis.format, centered: true) } }
+            .chartYAxis {
+                // Labels as fine as the plotted range needs (`PriceFormat.axis`), so a dust coin's ticks don't all read "0".
+                AxisMarks(position: .trailing) { value in
+                    AxisGridLine()
+                    AxisValueLabel { if let price = value.as(Double.self) { Text(PriceFormat.axis(price, span: domain.upperBound - domain.lowerBound)) } }
+                }
+            }
+        } else if isLoading {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ContentUnavailableView {
+                Label("No Price History", systemImage: "chart.line.downtrend.xyaxis")
+            } description: {
+                Paragraph("This token has no pool with enough liquidity to chart.")
+            }
+        }
     }
 }
 

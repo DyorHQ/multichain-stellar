@@ -11,10 +11,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Publish a Moment on Stellar: the photo or video (uploaded to DyorHQ's storage as it is picked; a video with its cover
-/// frame, the NFT's image), the name and coin ticker, where and when it happened, the collect price in USDC, the
-/// creator's coin allocation and how long collecting stays open. Everything is fixed at publish. The review is bound to
-/// what it shows: the publish carries the Moments terms by value, and the review refuses Confirm when the plan binds
-/// terms other than the ones it read (`termsCheck`).
+/// frame, the NFT's image), or Monad's image and video links, which the phone fetches and uploads the same way (Stellar
+/// shows only DyorHQ's own uploads, `LiteMediaPolicy`); the name and coin ticker, where it happened and when (a day and a
+/// time, as on Monad), the collect price in USDC, the creator's coin allocation and how long collecting stays open.
+/// Everything is fixed at publish. The review is bound to what it shows: the publish carries the Moments terms by value,
+/// and the review refuses Confirm when the plan binds terms other than the ones it read (`termsCheck`).
 struct StellarCreateMomentView: View {
     /// Called once the publish settled and the review closed, with the new Moment as Publish knows it: its opener
     /// pushes its page.
@@ -38,6 +39,14 @@ struct StellarCreateMomentView: View {
     /// The picked photo (or a video's cover frame), shown at once, before the upload returns.
     @State private var previewImage: UIImage?
     @State private var isVideo = false
+    /// Monad's link fields: an image (ipfs:// or https://) and, optionally, a video. Fetched and uploaded as a pick is
+    /// (`useLinks`), replacing it; a pick clears them.
+    @State private var imageLink = ""
+    @State private var videoLink = ""
+    /// Why the links couldn't be used: said under the field it is about.
+    @State private var linkProblem: LinkProblem?
+    /// The media on the form came from the links, not a pick: emptying both links takes it away.
+    @State private var fromLinks = false
     /// The form and the terms as they were when Review was tapped, the terms read again then: the sheet shows these and
     /// publishes the form, and Confirm stays off if the plan binds other terms.
     @State private var reviewed: Reviewed?
@@ -121,9 +130,9 @@ struct StellarCreateMomentView: View {
 
     private var form: StellarMomentFormV2? {
         guard let ticker, let price else { return nil }
-        let day = Self.dayFormatter.string(from: date)
-        return StellarMomentFormV2(name: trimmedName, symbol: ticker, place: trimmedPlace.isEmpty ? nil : trimmedPlace, takenOn: day, price: price,
-                                   allocationBps: allocationBps, windowSecs: windowDays * 86_400)
+        return StellarMomentFormV2(name: trimmedName, symbol: ticker, place: trimmedPlace.isEmpty ? nil : trimmedPlace,
+                                   takenOn: StellarMomentFormV2.takenAt(date), price: price, allocationBps: allocationBps,
+                                   windowSecs: windowDays * 86_400)
     }
 
     private var valid: Bool {
@@ -151,7 +160,7 @@ struct StellarCreateMomentView: View {
                     TextField("Place", text: $place)
                         .onChange(of: place) { _, v in if v.count > Self.maxPlaceBytes { place = String(v.prefix(Self.maxPlaceBytes)) } }
                     if let placeProblem { InlineError(message: placeProblem) }
-                    DatePicker("When", selection: $date, in: ...Date(), displayedComponents: [.date])
+                    DatePicker("When", selection: $date, in: ...Date(), displayedComponents: [.date, .hourAndMinute])
                 }
                 economicsSection
                 if valid { previewSection }
@@ -173,6 +182,8 @@ struct StellarCreateMomentView: View {
             }
             .task { await readEconomics() }
             .onChange(of: photoItem) { _, item in if let item { Task { await pick(item) } } }
+            // A link typed or pasted is used once the typing pauses; another edit starts over.
+            .task(id: LinkPair(image: imageLink, video: videoLink)) { await useLinks(LinkPair(image: imageLink, video: videoLink)) }
             .sheet(item: $reviewed) { reviewed in reviewSheet(reviewed) }
             .sheet(item: $enabling, onDismiss: {
                 // USDC is enabled: the publish's own review, whose plan is now the publish alone.
@@ -301,10 +312,22 @@ struct StellarCreateMomentView: View {
                 Spacer()
             }
             .padding(.vertical, 4)
+            TextField("Or paste an image link (ipfs:// or https://)", text: $imageLink)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .disabled(uploading && !fromLinks)
+            if let problem = linkProblem, problem.field == .image { InlineError(message: problem.message) }
+            TextField("Video link (optional)", text: $videoLink)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .disabled(uploading && !fromLinks)
+            if let problem = linkProblem, problem.field == .video { InlineError(message: problem.message) }
         } header: {
             Text("Media")
         } footer: {
-            if isVideo {
+            if !imageLink.isEmpty, StellarMediaLink.sources(imageLink) == nil {
+                Paragraph("Use an ipfs:// or https:// link.")
+            } else if !videoLink.isEmpty, StellarMediaLink.sources(videoLink) == nil {
+                Paragraph("The video link must be ipfs:// or https://.")
+            } else if isVideo {
                 Paragraph(LocalizedStringResource("The video plays in DyorHQ; its cover frame is the NFT image.", table: "StellarMoments", comment: "Under Publish a Moment's media, for a video. DyorHQ is never translated"))
             } else {
                 Paragraph(LocalizedStringResource("Shown in DyorHQ and in Freighter as the NFT.", table: "StellarMoments", comment: "Under Publish a Moment's media, for a photo. DyorHQ and Freighter are never translated"))
@@ -506,15 +529,6 @@ struct StellarCreateMomentView: View {
     static let maxNameBytes = 32
     static let maxPlaceBytes = 64
 
-    /// The day the Moment happened, as the metadata keeps it ("2026-10-14"), in the phone's own calendar day.
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-
     // MARK: Reading and uploading
 
     private func readEconomics() async {
@@ -542,6 +556,11 @@ struct StellarCreateMomentView: View {
         upload = nil
         previewImage = nil
         isVideo = false
+        // A pick replaces the links' media: they go, and emptying them takes nothing away.
+        fromLinks = false
+        linkProblem = nil
+        imageLink = ""
+        videoLink = ""
         defer {
             uploading = false
             photoItem = nil
@@ -583,6 +602,198 @@ struct StellarCreateMomentView: View {
             isVideo = false
             upload = nil
             mediaError = LiteErrorText.describe(error)
+        }
+    }
+
+    // MARK: Links
+
+    /// The two link fields, as one value: a change of either uses them again.
+    struct LinkPair: Equatable {
+        let image: String
+        let video: String
+    }
+
+    /// A link that couldn't be used, and the field it is under.
+    struct LinkProblem: Equatable {
+        enum Field { case image, video }
+        let field: Field
+        let message: String
+    }
+
+    /// The links as the media: fetched by the phone (`StellarMediaLink`, under the caps a picked photo or video has), then
+    /// uploaded to DyorHQ's storage like a pick. An image alone is a photo; a video takes the image as its cover frame,
+    /// else its own first frames. A link that isn't ipfs:// or https:// waits (the footer says so); emptying both takes
+    /// the links' media away. Runs once the typing has paused, and stops with the next edit.
+    private func useLinks(_ links: LinkPair) async {
+        let image = links.image.trimmingCharacters(in: .whitespacesAndNewlines)
+        let video = links.video.trimmingCharacters(in: .whitespacesAndNewlines)
+        linkProblem = nil
+        // Edited links no longer name the media they brought (whose fetch this edit may have cut short): it goes.
+        if fromLinks {
+            upload = nil
+            previewImage = nil
+            isVideo = false
+            uploading = false
+            mediaError = nil
+            fromLinks = false
+        }
+        guard !image.isEmpty || !video.isEmpty else { return }
+        let imageSources = image.isEmpty ? [] : StellarMediaLink.sources(image)
+        let videoSources = video.isEmpty ? [] : StellarMediaLink.sources(video)
+        guard let imageSources, let videoSources else { return }
+        try? await Task.sleep(for: .milliseconds(700))
+        guard !Task.isCancelled, let moments, !uploading else { return }
+        uploading = true
+        fromLinks = true
+        mediaError = nil
+        upload = nil
+        previewImage = nil
+        isVideo = false
+        defer { if !Task.isCancelled { uploading = false } }
+        do {
+            var photo: (jpeg: Data, preview: UIImage?)?
+            if !imageSources.isEmpty {
+                do {
+                    photo = try await StellarMediaLink.photo(from: imageSources)
+                } catch {
+                    if !Task.isCancelled { linkProblem = LinkProblem(field: .image, message: StellarMediaLink.problem(error, video: false)) }
+                    return
+                }
+            }
+            var media: StellarMedia
+            if !videoSources.isEmpty {
+                let clip: StellarMediaLink.Clip
+                do {
+                    clip = try await StellarMediaLink.video(from: videoSources)
+                } catch {
+                    if !Task.isCancelled { linkProblem = LinkProblem(field: .video, message: StellarMediaLink.problem(error, video: true)) }
+                    return
+                }
+                guard let poster = photo?.jpeg ?? clip.cover else {
+                    linkProblem = LinkProblem(field: .video, message: tr("Could not read a frame from that video."))
+                    return
+                }
+                previewImage = photo?.preview ?? clip.preview
+                isVideo = true
+                media = .video(clip.data, contentType: clip.contentType, poster: poster)
+            } else {
+                guard let photo else { return }
+                previewImage = photo.preview
+                media = .photo(photo.jpeg)
+            }
+            guard !Task.isCancelled else { return }
+            let uploaded = try await moments.upload(media)
+            guard !Task.isCancelled else { return }
+            upload = uploaded
+            Haptics.success()
+        } catch {
+            guard !Task.isCancelled else { return }
+            previewImage = nil
+            isVideo = false
+            upload = nil
+            mediaError = LiteErrorText.describe(error)
+        }
+    }
+}
+
+/// Monad's media links on Stellar, where a Moment shows only DyorHQ's own uploads (`LiteMediaPolicy`): the phone fetches
+/// what a link names (an ipfs:// CID through the app's IPFS gateways, an https link as it is) with DyorKit's capped
+/// fetch (`RemoteMedia`: no cookies, no redirect to another host, the body cut off at the cap), checks that it is an image
+/// or a video, and Publish uploads it like a picked file. The caps are a picked file's: a photo is read up to
+/// `RemoteMedia.maxImageBytes` and within its pixel caps and drawn at the Moments' size and quality; a video is at most
+/// `MomentsV2Store.maxVideoBytes`.
+enum StellarMediaLink {
+    /// A fetched video, its type read from its bytes, with its cover frame (a JPEG) and a preview of it.
+    struct Clip {
+        let data: Data
+        let contentType: String
+        let cover: Data?
+        let preview: UIImage?
+    }
+
+    /// What a fetched link turned out not to be.
+    enum Failure: Error, Equatable {
+        case notAVideo
+    }
+
+    /// Where a pasted link is fetched from, best first: an `ipfs://` link with a real CID through each of the app's
+    /// gateways (`MomentsMath.ipfsGateways`), an https link with a host and no user name as it is; nil for anything else
+    /// (http, another scheme, a link longer than any picture's address).
+    static func sources(_ text: String) -> [URL]? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= ImageSourcePolicy.maxURLBytes else { return nil }
+        if trimmed.lowercased().hasPrefix("ipfs://") {
+            guard let path = IPFS.path(trimmed), IPFS.isCID(IPFS.cid(of: path)) else { return nil }
+            let urls = MomentsMath.ipfsGateways.compactMap { URL(string: $0 + path) }
+            return urls.isEmpty ? nil : urls
+        }
+        guard let url = URL(string: trimmed), url.scheme?.lowercased() == "https", let host = url.host(percentEncoded: false), !host.isEmpty,
+              url.user == nil, url.password == nil else { return nil }
+        return [url]
+    }
+
+    /// The image a link names, as Publish uploads a picked photo: decoded within `RemoteMedia`'s caps (an HTML page or an
+    /// SVG is no image), at most `MomentsMath.photoMaxPixels` across, as a JPEG at the Moments' quality; with a small
+    /// preview.
+    static func photo(from sources: [URL]) async throws -> (jpeg: Data, preview: UIImage?) {
+        let data = try await fetch(sources, maxBytes: RemoteMedia.maxImageBytes)
+        return try await Task.detached(priority: .userInitiated) {
+            let image = try UIImage(cgImage: RemoteMedia.thumbnail(data, maxPixelSize: MomentsMath.photoMaxPixels))
+            guard let jpeg = image.avatarJPEG(maxDimension: CGFloat(MomentsMath.photoMaxPixels), quality: 0.85) else { throw RemoteMedia.Failure.notAnImage }
+            return (jpeg, UIImage(data: jpeg)?.preparingThumbnail(of: CGSize(width: 252, height: 252)))
+        }.value
+    }
+
+    /// The video a link names, at most `MomentsV2Store.maxVideoBytes`: an MP4 or QuickTime movie by its bytes
+    /// (`videoType`), with the frame Publish takes for a picked video's cover.
+    static func video(from sources: [URL]) async throws -> Clip {
+        let data = try await fetch(sources, maxBytes: MomentsV2Store.maxVideoBytes)
+        guard let type = videoType(data) else { throw Failure.notAVideo }
+        let file = URL.temporaryDirectory.appending(path: "moment-link-\(UUID().uuidString).\(type == "video/quicktime" ? "mov" : "mp4")")
+        try data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let frame = try? await MovieFile.coverFrame(url: file) else { throw Failure.notAVideo }
+        return Clip(data: data, contentType: type, cover: frame.avatarJPEG(maxDimension: 2048, quality: 0.9), preview: frame)
+    }
+
+    /// The video type of `data` from its first bytes: an ISO media file (its `ftyp` box), QuickTime's brand "qt  " as
+    /// video/quicktime and any other as video/mp4; nil for anything else.
+    static func videoType(_ data: Data) -> String? {
+        let head = [UInt8](data.prefix(12))
+        guard head.count == 12, head[4...7].elementsEqual("ftyp".utf8) else { return nil }
+        return head[8...11].elementsEqual("qt  ".utf8) ? "video/quicktime" : "video/mp4"
+    }
+
+    /// The link's body from the first source that answers, read at most `maxBytes` (a larger one is refused at once).
+    private static func fetch(_ sources: [URL], maxBytes: Int) async throws -> Data {
+        let session = RemoteMedia.makeSession(requestTimeout: 15, resourceTimeout: RemoteMedia.trustedResourceTimeout, storesResponses: false)
+        defer { session.finishTasksAndInvalidate() }
+        var failure: Error = RemoteMedia.Failure.status(404)
+        for url in sources {
+            do {
+                return try await RemoteMedia.fetch(url, session: session, maxBytes: maxBytes)
+            } catch RemoteMedia.Failure.tooLarge {
+                throw RemoteMedia.Failure.tooLarge
+            } catch {
+                try Task.checkCancellation()
+                failure = error
+            }
+        }
+        throw failure
+    }
+
+    /// What Publish says under a link that couldn't be used.
+    static func problem(_ error: Error, video: Bool) -> String {
+        switch error {
+        case RemoteMedia.Failure.tooLarge:
+            return video ? liteTr(LocalizedStringResource("Videos up to 25 MB.", table: "StellarMoments"))
+                : liteTr(LocalizedStringResource("Images up to 10 MB.", table: "StellarMoments", comment: "Under the image link field of Publish a Moment on Stellar: the image the link names is larger than the limit"))
+        case RemoteMedia.Failure.notAnImage, RemoteMedia.Failure.tooManyPixels:
+            return liteTr(LocalizedStringResource("That link isn't an image DyorHQ can use.", table: "StellarMoments", comment: "Under the image link field of Publish a Moment on Stellar: what the link names isn't a photo (a web page, an SVG) or is too large to draw. DyorHQ is never translated"))
+        case Failure.notAVideo:
+            return liteTr(LocalizedStringResource("That link isn't an MP4 or MOV video.", table: "StellarMoments", comment: "Under the video link field of Publish a Moment on Stellar: what the link names isn't a video the app can play. MP4 and MOV are file types, never translated"))
+        default:
+            return liteTr(LocalizedStringResource("That link couldn't be fetched. Check it, or choose the file instead.", table: "StellarMoments", comment: "Under a link field of Publish a Moment on Stellar: the phone couldn't download what the link names"))
         }
     }
 }

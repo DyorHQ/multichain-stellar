@@ -141,41 +141,6 @@
         }
       }
     },
-    "Closed" : {
-      "comment" : "[tight] Moments filter on Stellar: the Moments no longer taking collects (window closed, graduating, graduated, expired)",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Closed"
-          }
-        },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Cerrados"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Fermés"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已结束"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "종료"
-          }
-        }
-      }
-    },
     "Coins across every Moment you collected or published. They vest from graduation; claim what has vested here or on each Moment's page." : {
       "comment" : "Under the coin tiles of My Moments on Stellar",
       "localizations" : {
