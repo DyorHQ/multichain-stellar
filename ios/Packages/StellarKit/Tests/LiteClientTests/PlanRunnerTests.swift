@@ -264,14 +264,25 @@ final class PlanRunnerTests: XCTestCase {
             }
             XCTAssertEqual(signed.value, 0)
         }
-        // The server drops the minimum from the intent (the verifier then checks none): refused.
+        // The server drops the minimum from the intent: never signed (the verifier may refuse it first, as one that needs
+        // the intent's minimum does; the run refuses it in any case).
         let (_, missing) = try pathPayment(receive: nil)
         let dropped = Intent(kind: missing.kind, summary: missing.summary, spend: missing.spend, calls: missing.calls, ops: missing.ops, to: missing.to)
+        let signed = SignCount()
         do {
-            try await run(v, inspector: NoLaunchTokens(), intent: dropped, bindings: PlanBindings(minimums: [usdc: 9_000_000]))
+            try await run(v, inspector: NoLaunchTokens(), intent: dropped, bindings: PlanBindings(minimums: [usdc: 9_000_000]), signed: signed)
             XCTFail("a step without its minimum was signed")
         } catch let f as PlanRunner.Failure {
-            XCTAssertEqual(f, .minimumNotConfirmed(step: "path payment ok"))
+            switch f {
+            case .minimumNotConfirmed, .refused: break
+            default: XCTFail("\(f)")
+            }
+        }
+        XCTAssertEqual(signed.value, 0)
+        // Without the verifier's rule, the run's own check: a spending step that names no minimum.
+        var check = PlanBindings.Check(PlanBindings(minimums: [usdc: 9_000_000]), user: v.user)
+        XCTAssertThrowsError(try check.step(dropped, spends: true, last: true)) {
+            XCTAssertEqual($0 as? PlanBindings.Refusal, .minimum(reason: "the transaction names no minimum"))
         }
     }
 
