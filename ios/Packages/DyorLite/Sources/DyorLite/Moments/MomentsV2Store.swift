@@ -189,6 +189,25 @@ public struct MomentsV2Store {
         try await store.api.momentV2(nft)
     }
 
+    /// One page of the feed, newest first (a viewer read): the Moments listed with DyorHQ's metadata. `filter` "all",
+    /// "collecting" or "closed" (nil: all); `cursor` the last page's `nextCursor`.
+    public func feed(filter: String? = nil, cursor: String? = nil) async throws -> StellarMomentFeedV2 {
+        try await store.api.momentsV2(filter: filter, cursor: cursor)
+    }
+
+    /// The Moments the account holds editions of or was promised coins in, newest first (a viewer read about the
+    /// account: the session's, else the account's public view, where what it paid is nil).
+    public func owned() async throws -> StellarOwnedMomentsV2 {
+        try await store.api.ownedMomentsV2()
+    }
+
+    /// My Moments: the Moments the user published, with their proceeds, the ones they collected, and the totals.
+    /// DyorHQ's history (`LiteStore.myMomentsV2`): a passkey account with no session reports `.needsSignIn` for
+    /// `.myMoments` and asks nothing.
+    public func mine() async throws -> StellarMyMomentsV2 {
+        try await store.myMomentsV2()
+    }
+
     /// The account's USDC, in base units, as last read.
     public var usdcBalance: Int64 { store.balance("USDC") }
 

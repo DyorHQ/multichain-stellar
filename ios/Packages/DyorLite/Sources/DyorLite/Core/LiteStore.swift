@@ -245,6 +245,11 @@ public final class LiteStore {
         try await history(.myMoments) { try await self.api.myMoments() }
     }
 
+    /// My Moments of contracts v2 (DyorHQ's history), the same part as v1's.
+    public func myMomentsV2() async throws -> StellarMyMomentsV2 {
+        try await history(.myMoments) { try await self.api.myMomentsV2() }
+    }
+
     /// An Earn market's supply rate and utilization over `range` (`.week` or `.month`; public).
     public func earnHistory(pool: String, asset: String, range: VolumePeriodKey) async throws -> StellarEarnHistory {
         try await api.earnHistory(pool: pool, asset: asset, range: range)
