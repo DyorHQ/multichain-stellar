@@ -817,6 +817,25 @@ final class StellarSwapTests: XCTestCase {
             """), "Top Tokens and the sides it doesn't list, every 30 s")
     }
 
+    /// No Stellar screen opens the legacy swap sheet: Swap mode is this port, and every Swap entry (Home's search and
+    /// add-funds card, a token page, a graduated coin, a Moment's coin, Portfolio, the side menu's Spot) opens it through
+    /// `Router.openStellarSwap`. Only the token page's seam still hosts the old sheet, until its own port (WP-30) opens
+    /// Swap mode instead.
+    func testNoStellarScreenOpensTheLegacySwapSheet() throws {
+        var lite = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { lite.deleteLastPathComponent() } // StellarSwapTests.swift → Tests → Internal → ios
+        lite.appendPathComponent("DyorHQ/Lite")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: lite, includingPropertiesForKeys: nil))
+        var read = 0
+        for case let file as URL in files where file.pathExtension == "swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            read += 1
+            guard text.contains("LiteLegacyScreens.swap(") else { continue }
+            XCTAssertTrue(text.contains("SEAM(WP-30)"), "\(file.lastPathComponent) opens the legacy swap sheet")
+        }
+        XCTAssertGreaterThan(read, 50, "every Stellar screen was read")
+    }
+
     func testCoinValueRules() throws {
         let coinValue = try NSRegularExpression(pattern: #"priceNumber|LaunchpadMath\.marketCap\(|\b(launch|\$0|\$1)\.(price|marketCap)\b"#)
         for (name, text) in try swapSources() {
