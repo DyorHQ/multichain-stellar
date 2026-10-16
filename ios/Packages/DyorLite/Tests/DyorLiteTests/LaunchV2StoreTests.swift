@@ -38,6 +38,12 @@ final class LaunchV2StoreTests: XCTestCase {
             moments: .init(vestPeriod: 2_592_000, stuckExpiry: 604_800, pendingBackstop: 2_592_000, timelock: 172_800, timelockWindow: 604_800,
                            minWindow: 3600, maxWindow: 2_592_000, harvestInterval: 3600)))
 
+    /// A deployment pinned before v2: testnet's v1 roles only, with no v2 roles, runtime hashes or durations.
+    private static let v1Pins = PinnedContracts(
+        network: .testnet, sponsor: PinnedContracts.testnet.sponsor, launchTokenWasmHash: PinnedContracts.testnet.launchTokenWasmHash,
+        roles: PinnedContracts.testnet.roles.filter { !["launchpadV2", "momentsV2", "lpLocker", "execSoroswap", "execAquarius", "momentsGraduator"].contains($0.key) },
+        feePolicy: PinnedContracts.testnet.feePolicy, rpcURL: PinnedContracts.testnet.rpcURL)
+
     override func setUp() async throws {
         server = FakeLite()
         routes = Routes()
@@ -216,8 +222,13 @@ final class LaunchV2StoreTests: XCTestCase {
         XCTAssertEqual(server.paths.filter { $0.hasPrefix("POST") }, [], "nothing was sent")
     }
 
-    func testNothingIsBuiltWithoutTheV2Pins() async throws {
+    func testTestnetsBuildPinsLaunchpadV2() async throws {
         let (_, launches) = try await ready(pinned: .testnet)
+        XCTAssertTrue(launches.isPinned, "testnet's v2 deployment is pinned, so the app launches and trades on launchpad v2")
+    }
+
+    func testNothingIsBuiltWithoutTheV2Pins() async throws {
+        let (_, launches) = try await ready(pinned: Self.v1Pins)
         XCTAssertFalse(launches.isPinned)
         server.forget()
         do {

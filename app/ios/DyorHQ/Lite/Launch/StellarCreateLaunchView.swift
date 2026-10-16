@@ -19,7 +19,8 @@ import SwiftUI
 /// is at most 32 bytes and passes `SymbolSafety`. Too little XLM for the launch fee, the network fee and the account's
 /// minimum balance is said with what is missing, before the review.
 struct StellarCreateLaunchView: View {
-    /// Once the launch settled: the new coin's contract, when its transaction returned it.
+    /// Once the launch settled and Create closed, exactly once (Done, a swipe of the settled review, or View): the new
+    /// coin's contract, when its transaction returned it. From View, Create has already opened the coin's page.
     var onLaunched: (String?) -> Void = { _ in }
     @Environment(\.stellarSession) private var session
     @Environment(Router.self) private var router
@@ -52,10 +53,15 @@ struct StellarCreateLaunchView: View {
     @State private var previewError: String?
     /// The new coin, from what the launch returned.
     @State private var launchedToken: String?
+    /// View asked for the new coin's page: the review closes, and its cleanup opens the page.
+    @State private var opensLaunched = false
 
     /// Name: at most this many bytes (the launchpad's limit).
     static let maxNameBytes = 32
+    /// Description: at most this many Unicode scalars, as the server counts them (launch_metadata.ts).
     static let maxDescription = 500
+    /// A link: at most this many UTF-16 units, as the server counts them.
+    static let maxLink = 200
     /// The contract's limit on exemptions besides the creator and the recipient.
     static let maxExempt = 32
 
@@ -81,9 +87,19 @@ struct StellarCreateLaunchView: View {
 
     private var chosenVenue: Int? { quote?.venueLocked == true ? quote?.defaultVenue : venue ?? quote?.defaultVenue }
 
+    /// The launch preview of the quote and venue chosen: one read for another pair (just before a change, while the
+    /// next one is read) is never used for its terms, Max or shortfall.
+    private var currentPreview: StellarLaunchPreviewV2? { Self.preview(preview, quote: quote?.contract, venue: chosenVenue) }
+
+    /// `preview` when it was read for the quote asset `quote` (its contract) and `venue`; nil when it was another pair's.
+    static func preview(_ preview: StellarLaunchPreviewV2?, quote: String?, venue: Int?) -> StellarLaunchPreviewV2? {
+        guard let preview, preview.terms.quote == quote, preview.venue.id == venue else { return nil }
+        return preview
+    }
+
     /// The terms the launch binds: the preview's for this quote and venue, else the economics' for its default venue.
     private var terms: StellarLaunchTermsV2? {
-        if let preview, preview.terms.quote == quote?.contract, preview.venue.id == chosenVenue { return preview.terms }
+        if let currentPreview { return currentPreview.terms }
         return chosenVenue == quote?.defaultVenue ? quote?.terms : nil
     }
 
@@ -120,7 +136,7 @@ struct StellarCreateLaunchView: View {
     /// The XLM (or quote) missing before the review (F18, V12): the launch fee, its network fee and the account's minimum
     /// balance come first; for an XLM quote the developer buy too.
     private var shortfall: String? {
-        switch preview.flatMap({ Self.shortage($0, initialBuy: initialBuy, quoteIsXLM: quoteIsXLM) }) {
+        switch currentPreview.flatMap({ Self.shortage($0, initialBuy: initialBuy, quoteIsXLM: quoteIsXLM) }) {
         case nil:
             return nil
         case .quote(let balance)?:
@@ -145,9 +161,14 @@ struct StellarCreateLaunchView: View {
         return nil
     }
 
+    private var linksValid: Bool {
+        Self.linkAccepted(website, .website) && Self.linkAccepted(twitter, .x) && Self.linkAccepted(telegram, .telegram)
+    }
+
+    /// Review waits for the preview of the quote and venue chosen too: its shortfall is what the launch checks first.
     private var valid: Bool {
-        trimmedName.count >= 2 && ticker != nil && refusal == nil && terms != nil && blocker == nil && !recipientInvalid
-            && shortfall == nil && (initialBuy == 0 || firstBuy != nil) && (session?.canSign ?? false)
+        trimmedName.count >= 2 && ticker != nil && refusal == nil && terms != nil && blocker == nil && !recipientInvalid && linksValid
+            && currentPreview != nil && shortfall == nil && (initialBuy == 0 || firstBuy != nil) && (session?.canSign ?? false)
     }
 
     var body: some View {
@@ -181,13 +202,12 @@ struct StellarCreateLaunchView: View {
                     }
                     TextField("Description", text: $description, axis: .vertical)
                         .lineLimit(2...5)
-                        .onChange(of: description) { _, typed in if typed.count > Self.maxDescription { description = String(typed.prefix(Self.maxDescription)) } }
+                        .onChange(of: description) { _, typed in
+                            let fitted = Self.fitted(typed, scalars: Self.maxDescription)
+                            if fitted != typed { description = fitted }
+                        }
                 }
-                Section("Links") {
-                    TextField("Website", text: $website).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("X profile", text: $twitter).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("Telegram", text: $telegram).textInputAutocapitalization(.never).autocorrectionDisabled()
-                }
+                linksSection
                 pairingSection
                 developerBuySection
                 advancedSection
@@ -204,7 +224,8 @@ struct StellarCreateLaunchView: View {
             }
             .sheet(isPresented: $showConfirm) { confirmation }
             .onChange(of: photoItem) { _, item in if let item { Task { await readImage(item) } } }
-            .task { await loadEconomics() }
+            // The store's identity: Create opened before the session has a store reads once it does.
+            .task(id: store.map(ObjectIdentifier.init)) { await loadEconomics() }
             .task(id: previewKey) { await readPreview() }
         }
     }
@@ -285,12 +306,56 @@ struct StellarCreateLaunchView: View {
 
     private var venueName: String { terms?.venue.name ?? venues.first { $0.id == chosenVenue }?.name ?? "Soroswap" } // not localized: a venue's name
 
+    // MARK: Links
+
+    /// The coin's links, each refused under its field when the server would refuse it.
+    private var linksSection: some View {
+        Section("Links") {
+            TextField("Website", text: $website).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            if !Self.linkAccepted(website, .website) {
+                InlineError(message: LocalizedStringResource("Website: an https link, at most \(Self.maxLink) characters.", table: "StellarLaunch", comment: "Under the website field of Stellar's Launch a Coin screen: what a coin's website link may be. The value is the most characters (200). https stays as it is"))
+            }
+            TextField("X profile", text: $twitter).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            if !Self.linkAccepted(twitter, .x) {
+                InlineError(message: LocalizedStringResource("X: an https link to a profile on x.com or twitter.com, at most \(Self.maxLink) characters.", table: "StellarLaunch", comment: "Under the X profile field of Stellar's Launch a Coin screen: what a coin's X link may be. The value is the most characters (200). X, https, x.com and twitter.com stay as they are"))
+            }
+            TextField("Telegram", text: $telegram).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            if !Self.linkAccepted(telegram, .telegram) {
+                InlineError(message: LocalizedStringResource("Telegram: an https link on t.me, at most \(Self.maxLink) characters.", table: "StellarLaunch", comment: "Under the Telegram field of Stellar's Launch a Coin screen: what a coin's Telegram link may be. The value is the most characters (200). Telegram, https and t.me stay as they are"))
+            }
+        }
+    }
+
+    /// A coin's link fields, and the sites the server holds X and Telegram links to.
+    enum LinkKind {
+        case website, x, telegram
+
+        var hosts: [String]? {
+            switch self {
+            case .website: nil
+            case .x: ["x.com", "twitter.com"]
+            case .telegram: ["t.me"]
+            }
+        }
+    }
+
+    /// Whether the server takes `text` as a `kind` link (launch_metadata.ts `launchLink`): empty, or https with a host, at
+    /// most `maxLink` characters and no user name or password; an X or Telegram link a page on that service's own site.
+    static func linkAccepted(_ text: String, _ kind: LinkKind) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        guard trimmed.utf16.count <= maxLink, let url = URL(string: trimmed), url.scheme?.lowercased() == "https",
+              let host = url.host(percentEncoded: false)?.lowercased(), !host.isEmpty, url.user == nil, url.password == nil else { return false }
+        guard let hosts = kind.hosts else { return true }
+        return hosts.contains(host) && url.path(percentEncoded: true).count >= 2
+    }
+
     // MARK: Developer buy
 
     private var developerBuySection: some View {
         Section {
             StellarAmountField(title: "0" as String, text: $initialBuyText, code: quoteCode.isEmpty ? nil : quoteCode) {
-                if let max = preview.flatMap({ Int64($0.maxInitialBuy) }) { initialBuyText = StellarFormat.plain(units: max) }
+                if let max = currentPreview.flatMap({ Int64($0.maxInitialBuy) }) { initialBuyText = StellarFormat.plain(units: max) }
             }
             if let firstBuy {
                 DetailRow("You receive", verbatim: "\(StellarFormat.units(firstBuy.tokensOut, compact: true)) \(ticker ?? symbol)")
@@ -334,11 +399,17 @@ struct StellarCreateLaunchView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Paragraph(LocalizedStringResource("The creator fee is charged on curve trades only. After graduation the pool's fees are shared instead: half to DyorHQ, half to holders or the fee recipient.", table: "StellarLaunch", comment: "Footer of the advanced terms on Stellar's Launch a Coin screen: the creator fee stops at graduation, when the pool's fees are split. DyorHQ is never translated"))
                 if holderSharing {
+                    // launchpad-v2's split_fees: with sharing on, the whole creator part goes to holders.
+                    Paragraph(Self.sharingTakesCreatorFees).foregroundStyle(creatorFeeBps > 0 ? Color.attention : Color.secondary)
                     Paragraph(LocalizedStringResource("Holders also earn part of the pool fees after graduation, in this coin and in \(quoteCode).", table: "StellarLaunch", comment: "Under a Stellar coin's holder rewards, and the Share fees with holders setting: after graduation holders also get part of the pool's fees, in the coin and in its quote asset. The value is the quote asset (XLM)"))
                 }
             }
         }
     }
+
+    /// With fee sharing on, the creator fee and the creator's share of the curve fee go to holders: said under the
+    /// setting and in the review, so a creator who sets a fee knows there will be none to claim.
+    static let sharingTakesCreatorFees = LocalizedStringResource("With fee sharing on, the creator fee and the creator's share of the curve fee go to holders as rewards, so there are no creator fees to claim. Turn sharing off to keep them.", table: "StellarLaunch", comment: "On Stellar's Launch a Coin screen and its review, while Share fees with holders is on: the creator's fees all go to the coin's holders")
 
     /// Wallets that pay no early-buy tax on this coin, besides the creator and the fee recipient.
     private var exemptSection: some View {
@@ -377,7 +448,9 @@ struct StellarCreateLaunchView: View {
             StellarConfirmationSheet(
                 title: "Launch \(ticker)", confirmTitle: "Launch \(ticker)",
                 build: { try await launches.createPlan(form(ticker: ticker, terms: terms), terms: terms, image: imageData) },
+                // The review runs this once, however its settled sheet closes: Done, a swipe, or View (below).
                 onDone: {
+                    if opensLaunched, let launchedToken { router.openStellar(.launch(token: launchedToken)) }
                     dismiss()
                     onLaunched(launchedToken)
                 },
@@ -385,11 +458,11 @@ struct StellarCreateLaunchView: View {
                     if case .string(let token)? = results.last?.returnValue, StellarAccountID(token) != nil { launchedToken = token }
                 },
                 onView: { hash in
-                    // The new coin's own page, from what its launch returned; StellarExpert only when it returned nothing.
-                    if let launchedToken {
-                        router.openStellar(.launch(token: launchedToken))
-                        dismiss()
-                        onLaunched(launchedToken)
+                    // The new coin's own page, from what its launch returned: the review closes, and its cleanup (onDone)
+                    // opens the page and closes Create. StellarExpert only when the launch returned nothing.
+                    if launchedToken != nil {
+                        opensLaunched = true
+                        showConfirm = false
                     } else if let page = StellarExplorer.transaction(hash, network: LiteGate.pinned.network) {
                         UIApplication.shared.open(page)
                     }
@@ -405,6 +478,9 @@ struct StellarCreateLaunchView: View {
                 DetailRow(Text("Creator fee (until graduation)", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: the creator's fee on every curve trade, charged until the coin graduates"),
                           Text(verbatim: NumberStyle.basisPoints(creatorFeeBps)))
                 DetailRow(Text("Fee sharing"), Text(holderSharing ? "On" : "Off"))
+                if holderSharing {
+                    Paragraph(Self.sharingTakesCreatorFees).font(.footnote).foregroundStyle(.secondary)
+                }
                 if let recipient { DetailRow("Fee recipient", verbatim: recipient.short) }
                 if !exempt.isEmpty {
                     DetailRow(Text("Early-buy tax exemptions", tableName: "StellarLaunch", comment: "A section on Stellar's Launch a Coin screen: wallets that pay no early-buy (snipe) tax on the new coin"),
@@ -418,9 +494,12 @@ struct StellarCreateLaunchView: View {
                 DetailRow("Curve fee", verbatim: NumberStyle.basisPoints(terms.feeBps))
                 DetailRow("Supply", verbatim: StellarFormat.units(terms.supply, compact: true))
                 durationRow(Text("Graduation grace", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long a full curve may take to graduate before anyone can mark it delayed"), terms.durations.grace)
-                durationRow(Text("Fallback after", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long after a delay its fallback venue opens"), terms.durations.fallbackDelay)
-                durationRow(Text("Refunds after", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long after a delay anyone can switch it to refunds"), terms.durations.rescuePublic)
+                durationRow(Text("Fallback after", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long after a delay its fallback venue opens"),
+                            Self.fallbackDelay(terms))
+                durationRow(Text("Refunds by DyorHQ after", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long after a delay DyorHQ's admin can switch it to refunds, before anyone can. DyorHQ is never translated"), terms.durations.rescueAdmin)
+                durationRow(Text("Refunds by anyone after", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long after a delay anyone can switch it to refunds"), terms.durations.rescuePublic)
                 durationRow(Text("Recipient takeover notice", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how long the fee recipient has to veto a change DyorHQ's admin proposes. DyorHQ is never translated"), terms.durations.takeoverDelay)
+                durationRow(Text("Recipient takeover window", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: once its notice is over, how long a fee recipient change DyorHQ's admin proposed can be applied before it lapses. DyorHQ is never translated"), terms.durations.takeoverWindow)
                 durationRow(Text("Pool fees collected every", tableName: "StellarLaunch", comment: "In the review of a Stellar launch: how often its pool's fees are collected after graduation"), terms.durations.harvestInterval)
             }
         }
@@ -428,6 +507,12 @@ struct StellarCreateLaunchView: View {
 
     private func durationRow(_ label: Text, _ seconds: Int) -> some View {
         DetailRow(label, Text(verbatim: Self.duration(seconds)))
+    }
+
+    /// How long after a delay the fallback venue opens: `fallbackDelay`, and for a venue-locked launch no sooner than
+    /// `lockedFallback` (launchpad-v2's `fallback_at`, unless DyorHQ's admin allows it earlier).
+    static func fallbackDelay(_ terms: StellarLaunchTermsV2) -> Int {
+        terms.venueLocked ? max(terms.durations.fallbackDelay, terms.durations.lockedFallback) : terms.durations.fallbackDelay
     }
 
     /// A duration in the app's language: "1 hour", "30 days", "1 day, 12 hours".
@@ -456,11 +541,20 @@ struct StellarCreateLaunchView: View {
     }
 
     /// `text` cut to at most `bytes` UTF-8 bytes, whole characters only.
-    static func fitted(_ text: String, bytes: Int) -> String {
+    static func fitted(_ text: String, bytes: Int) -> String { fitted(text, limit: bytes) { $0.utf8.count } }
+
+    /// `text` cut to at most `scalars` Unicode scalars (what the server's `[...text].length` counts), whole characters
+    /// only.
+    static func fitted(_ text: String, scalars: Int) -> String { fitted(text, limit: scalars) { $0.unicodeScalars.count } }
+
+    private static func fitted(_ text: String, limit: Int, size: (String) -> Int) -> String {
         var kept = ""
+        var used = 0
         for character in text {
-            guard kept.utf8.count + String(character).utf8.count <= bytes else { break }
+            let next = size(String(character))
+            guard used + next <= limit else { break }
             kept.append(character)
+            used += next
         }
         return kept
     }
@@ -469,7 +563,7 @@ struct StellarCreateLaunchView: View {
 
     private func loadEconomics() async {
         guard let store else { return }
-        let launches = self.launches ?? LaunchV2Store(store: store)
+        let launches = self.launches.flatMap { $0.store === store ? $0 : nil } ?? LaunchV2Store(store: store)
         self.launches = launches
         await launches.refreshEconomics()
         if quoteAsset.isEmpty, let first = launches.economics?.quotes.first(where: \.enabled) { quoteAsset = first.asset }

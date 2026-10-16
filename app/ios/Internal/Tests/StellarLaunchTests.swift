@@ -1,6 +1,7 @@
 // The Stellar launch page and Create (docs/DESIGN-stellar-parity.md §8.10.2, §8.10.3; docs/DESIGN-stellar-contracts-v2.md
 // §21): the phase each v2 status reads as, the holders' minimum and its footnote, the price chart's points, the create
-// screen's name, ticker, XLM shortage and durations, and the source rules the Lite launch screens keep.
+// screen's name, description, links, ticker, XLM shortage, preview and durations, actions waiting for the coin's row, and
+// the source rules the Lite launch screens keep.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -26,6 +27,19 @@ final class StellarLaunchTests: XCTestCase {
             """)
     }
 
+    /// launchpad-v2's terms for an XLM launch on Soroswap, venue-locked or not.
+    private static func terms(venueLocked: Bool = false, fallbackDelay: Int = 3600, lockedFallback: Int = 86400) -> String {
+        """
+        {"supply": "10000000000000000", "feeBps": 100, "protocolShareBps": 5000, "maxCreatorFeeBps": 1000, "snipeSchedule": [9800],
+         "snipeStepSecs": 5, "launchFee": "100000000", "feeAsset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+         "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", "phantom": "20000000000", "threshold": "43245553200",
+         "venue": \(soroswap), "fallback": \(soroswap), "venueLocked": \(venueLocked),
+         "locker": "CABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAFNSZ", "tokenWasmHash": "02",
+         "durations": {"grace": 3600, "fallbackDelay": \(fallbackDelay), "rescueAdmin": 604800, "rescuePublic": 2592000, "lockedFallback": \(lockedFallback),
+                       "takeoverDelay": 259200, "takeoverWindow": 259200, "timelock": 172800, "timelockWindow": 604800, "harvestInterval": 3600}}
+        """
+    }
+
     // MARK: - The launch page
 
     func testEachV2PhaseReadsAsMonadsSections() throws {
@@ -47,6 +61,12 @@ final class StellarLaunchTests: XCTestCase {
         let unread = StellarLaunchDetailView.holders(nil, complete: false)
         XCTAssertEqual(unread.text, "—", "unread, never 0")
         XCTAssertFalse(unread.incomplete)
+    }
+
+    func testNoActionOpensBeforeTheCoinsRowIsRead() {
+        XCTAssertFalse(StellarLaunchDetailView.canAct(canSign: true, symbol: ""), "no ticker for the review, the activity or the notification")
+        XCTAssertFalse(StellarLaunchDetailView.canAct(canSign: false, symbol: "ECAT"))
+        XCTAssertTrue(StellarLaunchDetailView.canAct(canSign: true, symbol: "ECAT"))
     }
 
     func testThePriceChartIsInDollarsAndEndsOnTheLivePrice() throws {
@@ -73,6 +93,32 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertEqual(StellarCreateLaunchView.fitted("E2E Cat", bytes: 32), "E2E Cat")
     }
 
+    func testADescriptionIsCutToFiveHundredScalarsAsTheServerCounts() {
+        let thumbs = "👍🏽" // one character, two scalars
+        XCTAssertEqual(StellarCreateLaunchView.fitted(String(repeating: thumbs, count: 251), scalars: 500), String(repeating: thumbs, count: 250))
+        let accented = "e\u{301}" // é as a letter and its accent: two scalars
+        XCTAssertEqual(StellarCreateLaunchView.fitted(String(repeating: accented, count: 3), scalars: 5), String(repeating: accented, count: 2),
+                       "never half of a character")
+        XCTAssertEqual(StellarCreateLaunchView.fitted(String(repeating: "a", count: 500), scalars: 500).count, 500)
+    }
+
+    func testLinksAreRefusedOnTheFormAsTheServerRefusesThem() {
+        typealias Create = StellarCreateLaunchView
+        XCTAssertTrue(Create.linkAccepted("", .x), "a link is optional")
+        XCTAssertTrue(Create.linkAccepted(" https://dyorhq.fun ", .website))
+        XCTAssertFalse(Create.linkAccepted("http://dyorhq.fun", .website), "https only")
+        XCTAssertFalse(Create.linkAccepted("dyorhq.fun", .website))
+        XCTAssertFalse(Create.linkAccepted("https://user:secret@dyorhq.fun", .website))
+        XCTAssertFalse(Create.linkAccepted("https://dyorhq.fun/" + String(repeating: "a", count: 200), .website), "at most 200 characters")
+        XCTAssertTrue(Create.linkAccepted("https://x.com/dyorhq", .x))
+        XCTAssertTrue(Create.linkAccepted("HTTPS://Twitter.com/dyorhq", .x))
+        XCTAssertFalse(Create.linkAccepted("@dyorhq", .x))
+        XCTAssertFalse(Create.linkAccepted("https://x.com/", .x), "a profile, not the site")
+        XCTAssertFalse(Create.linkAccepted("https://example.com/x.com", .x))
+        XCTAssertTrue(Create.linkAccepted("https://t.me/dyorhq", .telegram))
+        XCTAssertFalse(Create.linkAccepted("https://telegram.me/dyorhq", .telegram))
+    }
+
     func testTickersAreTwoToTenASCIILettersOrDigits() {
         XCTAssertEqual(StellarTickerV2.normalized("ecat"), "ECAT")
         XCTAssertNil(StellarTickerV2.normalized("É"))
@@ -81,25 +127,18 @@ final class StellarLaunchTests: XCTestCase {
         XCTAssertNil(StellarTickerV2.normalized("ABCDEFGHIJK"))
     }
 
+    /// The launch preview of an XLM launch on Soroswap (venue 0) for an account that can spend `spendable` on its first buy.
+    private func preview(spendable: String, shortfall: String?, quoteBalance: String = "0") throws -> StellarLaunchPreviewV2 {
+        try decode(StellarLaunchPreviewV2.self, """
+            {"quote": {"id": "XLM", "code": "XLM", "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"}, "venue": \(Self.soroswap),
+             "terms": \(Self.terms()), "launchFee": {"asset": "XLM", "amount": "100000000", "booked": true, "to": "CACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAINCW"},
+             "xlm": {"balance": "50000000", "minBalance": "10000000", "sellingLiabilities": "0", "launchFee": "100000000", "fees": "4650100",
+                     "buffer": "5000000", "spendable": "\(spendable)"},
+             "quoteBalance": "\(quoteBalance)", "maxInitialBuy": "\(max(0, Int64(spendable) ?? 0))", "shortfall": \(shortfall.map { "\"\($0)\"" } ?? "null")}
+            """)
+    }
+
     func testTheXLMALaunchIsShortOfIsSaidBeforeTheReview() throws {
-        func preview(spendable: String, shortfall: String?, quoteBalance: String = "0") throws -> StellarLaunchPreviewV2 {
-            let terms = """
-                {"supply": "10000000000000000", "feeBps": 100, "protocolShareBps": 5000, "maxCreatorFeeBps": 1000, "snipeSchedule": [9800],
-                 "snipeStepSecs": 5, "launchFee": "100000000", "feeAsset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
-                 "quote": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC", "phantom": "20000000000", "threshold": "43245553200",
-                 "venue": \(Self.soroswap), "fallback": \(Self.soroswap), "venueLocked": false,
-                 "locker": "CABAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAFNSZ", "tokenWasmHash": "02",
-                 "durations": {"grace": 3600, "fallbackDelay": 3600, "rescueAdmin": 604800, "rescuePublic": 2592000, "lockedFallback": 86400,
-                               "takeoverDelay": 259200, "takeoverWindow": 259200, "timelock": 172800, "timelockWindow": 604800, "harvestInterval": 3600}}
-                """
-            return try decode(StellarLaunchPreviewV2.self, """
-                {"quote": {"id": "XLM", "code": "XLM", "contract": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"}, "venue": \(Self.soroswap),
-                 "terms": \(terms), "launchFee": {"asset": "XLM", "amount": "100000000", "booked": true, "to": "CACAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAINCW"},
-                 "xlm": {"balance": "50000000", "minBalance": "10000000", "sellingLiabilities": "0", "launchFee": "100000000", "fees": "4650100",
-                         "buffer": "5000000", "spendable": "\(spendable)"},
-                 "quoteBalance": "\(quoteBalance)", "maxInitialBuy": "\(max(0, Int64(spendable) ?? 0))", "shortfall": \(shortfall.map { "\"\($0)\"" } ?? "null")}
-                """)
-        }
         // 5 XLM: short of the fee before any buy; an XLM developer buy adds to what is missing.
         let short = try preview(spendable: "-69650100", shortfall: "69650100")
         XCTAssertEqual(StellarCreateLaunchView.shortage(short, initialBuy: 0, quoteIsXLM: true), .xlm(69_650_100))
@@ -112,6 +151,25 @@ final class StellarLaunchTests: XCTestCase {
         let usdc = try preview(spendable: "610349900", shortfall: nil, quoteBalance: "20000000")
         XCTAssertEqual(StellarCreateLaunchView.shortage(usdc, initialBuy: 30_000_000, quoteIsXLM: false), .quote(balance: 20_000_000))
         XCTAssertNil(StellarCreateLaunchView.shortage(usdc, initialBuy: 20_000_000, quoteIsXLM: false))
+    }
+
+    func testAPreviewReadForAnotherQuoteOrVenueIsNeverUsed() throws {
+        let xlm = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+        let read = try preview(spendable: "610349900", shortfall: nil)
+        XCTAssertEqual(StellarCreateLaunchView.preview(read, quote: xlm, venue: 0), read)
+        XCTAssertNil(StellarCreateLaunchView.preview(read, quote: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA", venue: 0),
+                     "Paired with just changed: the XLM preview's Max and shortfall aren't USDC's")
+        XCTAssertNil(StellarCreateLaunchView.preview(read, quote: xlm, venue: 1), "nor another venue's")
+        XCTAssertNil(StellarCreateLaunchView.preview(nil, quote: xlm, venue: 0))
+    }
+
+    func testTheReviewsFallbackWaitsForAVenueLockedLaunchsLockedFallback() throws {
+        let open = try decode(StellarLaunchTermsV2.self, Self.terms())
+        XCTAssertEqual(StellarCreateLaunchView.fallbackDelay(open), 3600)
+        let locked = try decode(StellarLaunchTermsV2.self, Self.terms(venueLocked: true))
+        XCTAssertEqual(StellarCreateLaunchView.fallbackDelay(locked), 86400, "no sooner than lockedFallback")
+        let lockedLater = try decode(StellarLaunchTermsV2.self, Self.terms(venueLocked: true, fallbackDelay: 172_800))
+        XCTAssertEqual(StellarCreateLaunchView.fallbackDelay(lockedLater), 172_800, "and never before fallbackDelay")
     }
 
     func testTheReviewWritesDurationsInWords() {
