@@ -1,4 +1,4 @@
-// Database access (postgres.js over SUPABASE_DB_URL). One small pool per isolate; `prepare: false` because Supabase
+// Database access (postgres.js over LITE_DB_URL, the lite_api role; never the full-access SUPABASE_DB_URL). One small pool per isolate; `prepare: false` because Supabase
 // routes Edge Function traffic through the transaction pooler.
 import postgres from "postgres";
 import { env } from "./env.ts";

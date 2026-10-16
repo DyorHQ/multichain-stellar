@@ -142,6 +142,8 @@ async function recordRun(job: string, startedAt: number, ms: number, ok: boolean
 }
 
 if (import.meta.main) {
+  // Refuses to start without the lite_api role's connection, rather than reaching the database another way.
+  env.dbUrl;
   Deno.serve(async (req) => {
     const secret = env.cronSecret;
     if (!secret || req.headers.get("x-cron-secret") !== secret) return json({ error: "forbidden" }, 403);
