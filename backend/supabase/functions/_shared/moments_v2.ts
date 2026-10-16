@@ -22,6 +22,7 @@ import { env } from "./env.ts";
 import { amountArg, ApiError, bad, notFound } from "./http.ts";
 import { launchName, launchSymbol } from "./launch_metadata.ts";
 import { ownUpload } from "./media.ts";
+import { takenText } from "./moments.ts";
 import { AssetInfo, NetworkConfig } from "./networks.ts";
 import { createPlan, PlanView, registerBuilder, StepSpec } from "./plans.ts";
 import type { BuiltTx } from "./plans.ts";
@@ -1312,12 +1313,6 @@ function provenanceText(v: unknown, what: string, max: number): string {
   return t;
 }
 
-/** "2026-10-14", however the driver handed the day over; "" for none. */
-function dayText(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  return (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10);
-}
-
 function wholeArg(v: unknown, code: string, message: string, min: number, max: number): number {
   const n = typeof v === "number" ? v : typeof v === "string" && /^[0-9]+$/.test(v) ? Number(v) : NaN;
   if (!Number.isSafeInteger(n) || n < min || n > max) throw bad(code, message);
@@ -1367,12 +1362,13 @@ async function publishSteps(user: string, input: MomentV2BuildRequest, net: Netw
   if (!uri || uri.length > net.limits.uriMax) throw bad("bad_uri", "Create the metadata through DyorHQ first.");
 
   const contract = momentsV2Id(net);
-  const rows = await sql()`select title, place, taken_on, media_type, media_url from lite.moment_metadata where uri = ${uri} and address = ${user}`;
+  const rows = await sql()`select title, place, taken_on, taken_at, media_type, media_url from lite.moment_metadata where uri = ${uri} and address = ${user}`;
   if (rows.length === 0) throw bad("bad_uri", "Create the metadata through DyorHQ first.");
   const meta = rows[0];
   const name = launchName(input.name ?? meta.title);
   const place = provenanceText(meta.place ?? "", "Place", 64);
-  const date = dayText(meta.taken_on);
+  // What the metadata's Date attribute says: the date and time the creator gave, else the day (at most 25 bytes).
+  const date = takenText(meta.taken_at, meta.taken_on) ?? "";
   const media = ownUpload(meta.media_url, user, meta.media_type === "video" ? "video" : "image");
   if (!media) throw bad("bad_media", "Upload the media through DyorHQ first.");
 

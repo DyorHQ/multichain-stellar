@@ -65,8 +65,8 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
 
   const deployLedger = net.deployment?.indexFromLedger ?? net.deployment?.deployLedger ?? 0;
   const filters = [{ type: "contract", contractIds: ids }];
-  const fromStart = () => ({ filters, limit: 500, startLedger: Math.max(deployLedger || latest - 100_000, latest - 110_000) });
-  let req: any = cursor ? { filters, limit: 500, cursor } : fromStart();
+  const fromStart = async () => ({ filters, limit: 500, startLedger: await streamStart(deployLedger, latest) });
+  let req: any = cursor ? { filters, limit: 500, cursor } : await fromStart();
 
   let count = 0;
   // RPC scans a bounded ledger window per request and answers with a cursor at the window's end, so a page with
@@ -80,7 +80,7 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
       // A cursor older than RPC retention (~7 days) is refused: restart from what RPC still has.
       if (round === 0 && req.cursor) {
         console.warn("cursor refused, restarting from retention window", String((err as Error).message).slice(0, 120));
-        req = fromStart();
+        req = await fromStart();
         res = await rpcServer().getEvents(req);
       } else {
         throw err;
@@ -98,6 +98,25 @@ export async function indexEvents(): Promise<{ events: number; latest: number; r
     req = { filters, limit: 500, cursor: res.cursor };
   }
   return { events: count, latest, reset };
+}
+
+/** How far inside RPC's window a stream with no usable cursor starts, as watch.ts's groups do (RETENTION_MARGIN):
+ *  about 100 s, since the window moves on while a run reads. */
+const START_MARGIN = 20;
+
+/** Where a stream with no usable cursor starts reading: its contracts' deploy ledger (or, without one, about 5.8 days
+ *  back), but never before the oldest ledger RPC keeps. Testnet's public RPC keeps about 13 hours, far less than the
+ *  7 days the window above assumes, so on a fresh database the deploy ledger is already out of reach and getEvents
+ *  refuses it. An RPC that doesn't answer getHealth gets the old start, and getEvents has the last word. */
+export async function streamStart(fromLedger: number, latest: number): Promise<number> {
+  const wanted = Math.max(fromLedger || latest - 100_000, latest - 110_000);
+  let oldest = 0;
+  try {
+    oldest = Number((await rpcServer().getHealth()).oldestLedger) || 0;
+  } catch {
+    oldest = 0;
+  }
+  return oldest > 0 ? Math.max(wanted, oldest + START_MARGIN) : wanted;
 }
 
 /** Event cursors are "<TOID>-<index>"; a TOID's high 32 bits are the ledger sequence. */

@@ -4,6 +4,7 @@
 // Stellar copy of ios/DyorHQ/Home/HomeView.swift LaunchHoldingRow (42cd8c7 sha256:ec989ee1a371)
 // Stellar copy of ios/DyorHQ/Home/HomeView.swift PositionSummaryRow (42cd8c7 sha256:5aedeb469e1d)
 // Stellar copy of ios/DyorHQ/Home/HomeView.swift MomentHoldingRow (42cd8c7 sha256:e69fe20eac3c)
+// Stellar copy of ios/DyorHQ/Design/Components.swift ChangeBadge (42cd8c7 sha256:f82993ba2554)
 // Stellar Home's building blocks: its tiles, Top Tokens' rows and My Holdings' four tabs (docs/DESIGN-stellar-parity.md
 // §8.2.2, §8.2.5, §8.2.6). Internal builds only (STELLAR_LITE).
 #if STELLAR_LITE
@@ -73,12 +74,15 @@ struct StellarHomeAction: View {
 }
 
 /// A ranked market row for Top Tokens: rank, logo, code with its badge, name, the price and its 24h change ("New" for a
-/// coin under a day old, which has none yet).
+/// coin under a day old, which has none yet). The change stays on one line, written compactly (`StellarChangeBadge`),
+/// and the badge keeps at least its first word and a letter ("DyorHQ L…"): the name column takes the squeeze.
 struct StellarTokenListRow: View {
     let rank: Int
     let row: StellarMarketRow
     /// The rank column's width (`StellarHomeView.rankWidth`).
     let rankWidth: CGFloat
+    /// The narrowest the badge gets beside a long ticker and price: "DyorHQ L…" at the default text size.
+    @ScaledMetric(relativeTo: .caption2) private var badgeMinWidth: CGFloat = 66
 
     private static let spacing: CGFloat = 12
     private static let logoSize: CGFloat = 34
@@ -92,23 +96,58 @@ struct StellarTokenListRow: View {
             stellarLogo(code: row.code, classic: row.classic, image: row.image, size: Self.logoSize)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(verbatim: row.code).font(.subheadline.weight(.semibold))
-                    if let badge = StellarTokenBadge.kind(badges: row.badges, verified: row.verified, code: row.code) { StellarTokenBadge(badge) }
+                    Text(verbatim: row.code).font(.subheadline.weight(.semibold)).lineLimit(1).layoutPriority(1)
+                    if let badge = StellarTokenBadge.kind(badges: row.badges, verified: row.verified, code: row.code) {
+                        StellarTokenBadge(badge).frame(minWidth: badgeMinWidth, alignment: .leading)
+                    }
                 }
                 Text(verbatim: row.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             USDText(price: row.priceUsd, font: .subheadline.weight(.medium))
                 .layoutPriority(1) // the price keeps its width; the name truncates first
-            if row.isNew {
-                StellarTokenBadge(.new)
-            } else {
-                ChangeBadge(value: row.change24hPercent)
+            Group {
+                if row.isNew {
+                    StellarTokenBadge(.new)
+                } else {
+                    StellarChangeBadge(value: row.change24hPercent)
+                }
             }
+            .lineLimit(1)
+            .fixedSize()
         }
         .padding(.vertical, 8)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// Monad's 24h change capsule, written compactly so it never needs a second line: two decimals under 100%, whole percents
+/// from there ("+775%"), and thousands past 10,000% ("+12K%").
+struct StellarChangeBadge: View {
+    let value: Double?
+
+    var body: some View {
+        if let raw = value {
+            let value = abs(raw) < 0.005 ? 0 : raw
+            Text(verbatim: Self.text(value))
+                .font(.footnote.weight(.semibold))
+                .monospacedDigit()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background((value < 0 ? Color.negative : value > 0 ? Color.positive : Color.secondary).opacity(0.14), in: Capsule())
+                .foregroundStyle(value < 0 ? Color.negative : value > 0 ? Color.positive : Color.secondary)
+        }
+    }
+
+    /// The change in percent as the capsule writes it: "+2.01%", "−0.30%", "+775%", "+12K%".
+    static func text(_ percent: Double) -> String {
+        guard percent.isFinite else { return "—" }
+        let size = abs(percent)
+        if size < 100 { return NumberStyle.percent(percent) }
+        if size < 10_000 { return NumberStyle.percent(percent, fractionDigits: 0) }
+        let sign = percent < 0 ? "−" : "+"
+        return "\(sign)\(NumberStyle.number(size, compact: true))%"
     }
 }
 

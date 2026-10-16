@@ -16,7 +16,8 @@ public struct StellarMomentFormV2: Equatable, Sendable {
     public var description: String?
     /// Where it happened: at most 64 bytes.
     public var place: String?
-    /// The day it happened, "2026-10-14".
+    /// When it happened: a date and time with its offset, "2026-10-14T18:30:00+02:00" (`takenAt`), or a day,
+    /// "2026-10-14", sent with the metadata, whose Date attribute says it as it is.
     public var takenOn: String?
     /// Per edition, in USDC base units (7 decimals).
     public var price: Int64
@@ -35,6 +36,17 @@ public struct StellarMomentFormV2: Equatable, Sendable {
         self.price = price
         self.allocationBps = allocationBps
         self.windowSecs = windowSecs
+    }
+
+    /// When a Moment happened, as Publish writes it from its When (a day and a time, to the minute): ISO 8601 with the
+    /// offset of `timeZone`, "2026-10-14T18:30:00+02:00" ("…Z" in UTC). At most 25 bytes, within the contract's 32 for
+    /// the date.
+    public static func takenAt(_ date: Date, timeZone: TimeZone = .current) -> String {
+        let minute = Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded(.down) * 60)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = timeZone
+        return formatter.string(from: minute)
     }
 }
 
@@ -68,7 +80,7 @@ public struct StellarMomentListingV2: Hashable, Sendable, Identifiable {
     /// The video, for a video Moment.
     public var video: String?
     public var place: String?
-    /// "2026-10-14".
+    /// When it happened: "2026-10-14T18:30:00+02:00", or a day, "2026-10-14" (`StellarMomentFormV2.takenOn`).
     public var takenOn: String?
 
     public var id: String { nft }
@@ -189,6 +201,25 @@ public struct MomentsV2Store {
         try await store.api.momentV2(nft)
     }
 
+    /// One page of the feed, newest first (a viewer read): the Moments listed with DyorHQ's metadata. `filter` "all",
+    /// "collecting" or "closed" (nil: all); `cursor` the last page's `nextCursor`.
+    public func feed(filter: String? = nil, cursor: String? = nil) async throws -> StellarMomentFeedV2 {
+        try await store.api.momentsV2(filter: filter, cursor: cursor)
+    }
+
+    /// The Moments the account holds editions of or was promised coins in, newest first (a viewer read about the
+    /// account: the session's, else the account's public view, where what it paid is nil).
+    public func owned() async throws -> StellarOwnedMomentsV2 {
+        try await store.api.ownedMomentsV2()
+    }
+
+    /// My Moments: the Moments the user published, with their proceeds, the ones they collected, and the totals.
+    /// DyorHQ's history (`LiteStore.myMomentsV2`): a passkey account with no session reports `.needsSignIn` for
+    /// `.myMoments` and asks nothing.
+    public func mine() async throws -> StellarMyMomentsV2 {
+        try await store.myMomentsV2()
+    }
+
     /// The account's USDC, in base units, as last read.
     public var usdcBalance: Int64 { store.balance("USDC") }
 
@@ -236,8 +267,12 @@ public struct MomentsV2Store {
                                                           place: form.place, takenOn: form.takenOn)
         let plan = try await store.api.buildMomentV2(.init(action: .publish, uri: metadata.uri, name: form.name, symbol: symbol,
                                                            price: String(form.price), allocationBps: form.allocationBps, windowSecs: form.windowSecs))
+        // What the user chose, as the publish binds it (verify.ts and TxVerifier bind these to the transaction). A publish
+        // queued behind the USDC trustline isn't built yet: its review doesn't go ahead (`publishWaits`).
+        if !Self.publishWaits(plan), !Self.formChanges(plan, form: form).isEmpty { throw Self.formChanged }
         let main = LiteTitles.intent(kind: "moment_publish", display: ["price": .string(String(form.price)), "quote": .string("USDC")])
-        return try store.prepare(plan, limits: [:], title: title,
+        // The run holds the publish to the form however late it is built (behind a trust or a restore step).
+        return try store.prepare(plan, limits: [:], bindings: PlanBindings(shown: Self.shown(form)), title: title,
                                  titles: LiteStore.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string("USDC")])),
                                  section: .moments, reference: Self.publishing(plan).map(Self.reference), summary: .publish(title: form.name))
     }
@@ -381,6 +416,31 @@ public struct MomentsV2Store {
             ("symbol", StellarTickerV2.normalized(form.symbol) ?? form.symbol),
         ]
         return expected.filter { name, value in shown[name]?.text != value }.map(\.0)
+    }
+
+    /// The fields of `form` the plan's built publish binds differently, or doesn't state, by name; empty when it binds
+    /// them as the form has them: `price` (USDC base units), `allocationBps` and `windowSecs`, which both verifiers bind
+    /// to the call. Fails closed: no built publish, or a field it doesn't state, differs.
+    public nonisolated static func formChanges(_ plan: PlanView, form: StellarMomentFormV2) -> [String] {
+        guard let intent = plan.steps.first(where: isPublish)?.intent, intent.kind == "moment_publish" else { return ["publish"] }
+        let shown = BoundDisplay(intent.display)
+        var changes: [String] = []
+        if shown.text("price") != String(form.price) { changes.append("price") }
+        if shown.whole("allocationBps") != form.allocationBps { changes.append("allocationBps") }
+        if shown.whole("windowSecs") != form.windowSecs { changes.append("windowSecs") }
+        return changes
+    }
+
+    /// What a publish must show from `form`, by its kind and by moments-v2's function (`PlanBindings.shown`): the
+    /// price, the creator's allocation and the collecting window, as the verifiers bind them to the call.
+    public nonisolated static func shown(_ form: StellarMomentFormV2) -> [String: [String: StellarJSON]] {
+        let fields: [String: StellarJSON] = ["price": .string(String(form.price)), "allocationBps": .number(Double(form.allocationBps)),
+                                             "windowSecs": .number(Double(form.windowSecs))]
+        return ["moment_publish": fields, "publish": fields]
+    }
+
+    nonisolated static var formChanged: LiteAPIError {
+        .server(status: 409, code: "moment_form_changed", message: words("The Moment doesn't match what you chose. Nothing was signed. Review it again."))
     }
 
     /// Whether a publish plan's publish waits, unbuilt, behind another step (the account's USDC trustline): it can't be

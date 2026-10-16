@@ -264,6 +264,11 @@ const BINDING_CASES: [string, string | null][] = [
   ["v2 moments publish with another allocation", "the Moment's price, allocation or window is not the one shown"],
   ["v2 moments publish with another window", "the Moment's price, allocation or window is not the one shown"],
   ["v2 moments publish without its settings shown", "the Moment's price, allocation or window is not the one shown"],
+  // Once v2 is pinned, a new launch or Moment is v2's: v1's launch and publish, which bind none of the above, are refused.
+  ["v1 launch create with v2 pinned", "this generation no longer takes new launches or Moments"],
+  ["v1 moments publish with v2 pinned", "this generation no longer takes new launches or Moments"],
+  ["launch create ok without v2 pins", null],
+  ["moments publish ok without v2 pins", null],
 ];
 
 Deno.test("the vectors cover the authorization tree, swap routes, minimums and what the user typed, with the verdict each gives", () => {

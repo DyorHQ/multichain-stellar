@@ -41,6 +41,7 @@ function localOnly(name: string): string | undefined {
 }
 
 let keeperWarned = false;
+let keeperSharedWarned = false;
 const ignoredWarned = new Set<string>();
 
 /** A QA override, which only testnet takes: off testnet it is ignored, with one warning per variable. */
@@ -113,8 +114,10 @@ export const env = {
   get sponsorSecret(): string {
     return required("SPONSOR_SECRET");
   },
-  /** Pays protocol upkeep: graduation, TTL and the CCTP relay (§4.7). Testnet falls back to the sponsor, with one
-   *  warning; mainnet needs its own key. */
+  /** Pays protocol upkeep: graduation, TTL and the CCTP relay (§4.7). Set, it is always the keeper's key: never the
+   *  sponsor's in its place, and on testnet a KEEPER_SECRET equal to SPONSOR_SECRET is warned about (keeper sends and
+   *  sponsored activations would share one sequence number). Unset, testnet falls back to the sponsor with one warning;
+   *  mainnet needs its own key. */
   get keeperSecret(): string {
     const keeper = read("KEEPER_SECRET");
     if (networkName() === "mainnet") {
@@ -122,15 +125,23 @@ export const env = {
       if (keeper === read("SPONSOR_SECRET")) throw new Error("KEEPER_SECRET must differ from SPONSOR_SECRET on mainnet");
       return keeper;
     }
-    if (keeper) return keeper;
+    if (keeper) {
+      if (!keeperSharedWarned && keeper === read("SPONSOR_SECRET")) {
+        keeperSharedWarned = true;
+        console.warn("KEEPER_SECRET is the sponsor's key: keeper sends and sponsored activations share one sequence number (testnet only).");
+      }
+      return keeper;
+    }
     if (!keeperWarned) {
       keeperWarned = true;
-      console.warn("KEEPER_SECRET is not set: the sponsor pays protocol upkeep (testnet only).");
+      console.warn("KEEPER_SECRET is not set: the sponsor pays protocol upkeep (testnet only). Set a keeper key of its own.");
     }
     return this.sponsorSecret;
   },
+  /** The lite_api role's connection (migration 20261013000004), and nothing else: never the project's full-access
+   *  SUPABASE_DB_URL, which bypasses RLS and reaches every schema. Missing, the functions refuse to start. */
   get dbUrl(): string {
-    return read("LITE_DB_URL") ?? required("SUPABASE_DB_URL");
+    return required("LITE_DB_URL");
   },
   get supabaseUrl(): string | undefined {
     return read("SUPABASE_URL");

@@ -1,10 +1,12 @@
 // Stellar copy of ios/DyorHQ/Moments/MomentDetailView.swift MomentDetailView (42cd8c7 sha256:b47ea52891d1)
 // Stellar copy of ios/DyorHQ/Moments/MomentsUI.swift MomentStateBadge (42cd8c7 sha256:e656eda0dbb7)
 // Stellar copy of ios/DyorHQ/Moments/MomentsUI.swift MomentStateLabel (42cd8c7 sha256:a4ec2c6cd7d5)
+// Stellar copy of ios/DyorHQ/Moments/MomentLinkView.swift MomentShareButton (42cd8c7 sha256:3937eeaaba46)
 // A Stellar Moment's page (docs/DESIGN-stellar-parity.md §8.11.2, §8.11.3; docs/DESIGN-stellar-contracts-v2.md §21).
 // Internal builds only (STELLAR_LITE).
 #if STELLAR_LITE
 import AVFoundation
+import BigInt
 import DyorKit
 import DyorLite
 import StellarKit
@@ -66,8 +68,8 @@ struct StellarMomentDetailView: View {
 // MARK: - A v2 Moment
 
 /// One v2 Moment's page (MomentDetailView's sections, for Stellar): every figure read live from its contract through the
-/// API (`MomentsV2Store`), every write a review (`StellarConfirmationSheet`). No share button and no OpenSea row: Stellar
-/// editions are seen in Freighter (`StellarFreighterSheet`).
+/// API (`MomentsV2Store`), every write a review (`StellarConfirmationSheet`), and Monad's Share button at the top right
+/// (`StellarMomentShareButton`). No OpenSea row: Stellar editions are seen in Freighter (`StellarFreighterSheet`).
 private struct StellarMomentPage: View {
     let listing: StellarMomentListingV2
     @Environment(\.stellarSession) private var session
@@ -140,6 +142,9 @@ private struct StellarMomentPage: View {
         .listStyle(.insetGrouped)
         .navigationTitle(Text(verbatim: shown.symbol.map { "$\($0)" } ?? name))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) { StellarMomentShareButton(nft: nft, name: name, symbol: shown.symbol) }
+        }
         .refreshable { await load() }
         .task { await clock.run(showing: { face(at: $0) }) }
         .task(id: reloads) { await load() }
@@ -217,9 +222,9 @@ private struct StellarMomentPage: View {
     private func statsSection(_ status: StellarMomentStatusV2) -> some View {
         Section {
             HStack(spacing: 0) {
-                stat(Text("Per edition"), StellarMomentText.usdc(status.price))
+                stat(Text("Per edition"), StellarMomentText.perEdition(status.price))
                 Divider().frame(height: 34)
-                stat(Text("Graduation FDV"), StellarMomentText.fdvAtOpen(status).map(StellarMomentText.usdc) ?? "—")
+                stat(Text("Graduation FDV"), StellarMomentText.fdvAtOpen(status).map(StellarMomentText.fdv) ?? "—")
                 Divider().frame(height: 34)
                 stat(Text("Editions"), "\(status.editions)")
                 Divider().frame(height: 34)
@@ -228,12 +233,13 @@ private struct StellarMomentPage: View {
         }
     }
 
+    /// One of the strip's four stats, each a quarter of its width whatever its figure.
     private func stat(_ label: Text, _ value: String) -> some View {
         VStack(spacing: 3) {
             Text(verbatim: value).font(.subheadline.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-            label.font(.caption2).foregroundStyle(.secondary)
+            label.font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     // MARK: Collect
@@ -255,6 +261,12 @@ private struct StellarMomentPage: View {
                 }
             }
             LabeledContent("You pay") { Text(verbatim: StellarMomentText.usdc(pay)).monospacedDigit().fontWeight(.semibold) }
+            // What the stepper's editions get, from the Moment's own terms: the editions minted and the coins promised.
+            if let symbol = shown.symbol, let gets = StellarMomentText.collectGets(status, quantity: min(quantity, limit)) {
+                LabeledContent("You get") {
+                    Paragraph("\(gets.editions) editions · \(StellarMomentText.units(gets.coins)) $\(symbol)").monospacedDigit().multilineTextAlignment(.trailing)
+                }
+            }
             if StellarMomentText.completes(status, quantity: quantity) {
                 Label {
                     Text("This collect completes the Moment: it takes only what the reserve still needs, and the coin graduates right after.", tableName: "StellarMoments", comment: "On a Stellar Moment's collect ticket: this many editions reach the threshold")
@@ -675,6 +687,27 @@ private struct StellarMomentPage: View {
     }
 }
 
+// MARK: - Share
+
+/// Monad's Share button for a Stellar Moment, at the top right of its page: the Moment's title and ticker, with the link
+/// that opens it (`StellarMomentText.shareLink`).
+struct StellarMomentShareButton: View {
+    let nft: String
+    /// The Moment's name, as its page shows it.
+    let name: String
+    let symbol: String?
+
+    var body: some View {
+        if let link = StellarMomentText.shareLink(nft: nft) {
+            ShareLink(item: link, subject: Text(verbatim: name), message: Text(verbatim: StellarMomentText.shareMessage(title: name, symbol: symbol)),
+                      preview: SharePreview(name, image: Image(.wordmark))) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .accessibilityLabel("Share this Moment")
+        }
+    }
+}
+
 // MARK: - The state badge
 
 /// Where a v2 Moment is: collecting (with the time left), window closed, graduation pending or failed, graduated,
@@ -1006,16 +1039,57 @@ enum StellarMomentText {
         return numbers.count > 2 ? "\(shown) +\(numbers.count - 2)" : shown
     }
 
-    /// A day the creator picked ("2026-10-14"), in the app's language ("October 14, 2026").
-    static func day(_ text: String) -> String? {
+    /// When the creator said the Moment happened, as the page's header shows it, Monad's way: the day, in the app's
+    /// language ("October 14, 2026"). A day ("2026-10-14") is that day wherever it is read; a date and time
+    /// ("2026-10-14T18:30:00+02:00", what Publish writes) is the day it was where it is read, as Monad shows a Moment's
+    /// time.
+    static func day(_ text: String) -> String? { day(text, timeZone: .current) }
+
+    /// `day(_:)` read in `timeZone`.
+    static func day(_ text: String, timeZone: TimeZone) -> String? {
+        var style = Date.FormatStyle(date: .long, time: .omitted).locale(L10n.locale)
+        if text.count > 10, let instant = StellarFormat.date(text) {
+            style.timeZone = timeZone
+            return instant.formatted(style)
+        }
         let parser = DateFormatter()
         parser.locale = Locale(identifier: "en_US_POSIX")
         parser.timeZone = TimeZone(identifier: "UTC")
         parser.dateFormat = "yyyy-MM-dd"
-        guard let date = parser.date(from: text) else { return nil }
-        var style = Date.FormatStyle(date: .long, time: .omitted).locale(L10n.locale)
+        guard text.count == 10, let date = parser.date(from: text) else { return nil }
         style.timeZone = TimeZone(identifier: "UTC")!
         return date.formatted(style)
+    }
+
+    /// One edition's price as the stats strip shows it, as Monad's does: dollars, at most four decimals ("$0.10",
+    /// "$25.9259"). USDC, the only quote of v2 Moments.
+    static func perEdition(_ units: String) -> String {
+        guard let value = Double(units) else { return "—" }
+        return PriceFormat.usdValue(value / 1e7, fractionDigits: 2...4)
+    }
+
+    /// The graduation FDV as the stats strip shows it, as Monad states it: in full, whole dollars from $100 ("$2,000").
+    static func fdv(_ units: Int64) -> String { MomentsFormat.fdv(Double(units) / 1e7) }
+
+    /// What collecting `quantity` editions gets, from the Moment's own terms (moments-v2's collect): the editions minted,
+    /// fewer than asked for the collect that completes it (its gross over the price, rounded up), and the coins promised
+    /// for them, gross × rate, in coin base units. Nil without a price or a rate.
+    static func collectGets(_ status: StellarMomentStatusV2, quantity: Int) -> (editions: Int, coins: String)? {
+        guard let price = Int64(status.price), price > 0, quantity > 0, let num = BigUInt(status.rate.num), let den = BigUInt(status.rate.den), den > 0
+        else { return nil }
+        let gross = gross(status, quantity: quantity)
+        guard gross > 0, gross < .max else { return nil }
+        let editions = completes(status, quantity: quantity) ? Int((gross - 1) / price + 1) : quantity
+        return (editions, String(BigUInt(gross) * num / den))
+    }
+
+    /// The link a Moment is shared with: its NFT contract's page on StellarExpert, on the build's pinned network (no
+    /// Stellar Moment link opens the app yet, and a local stack's address never leaves the phone).
+    static func shareLink(nft: String) -> URL? { StellarAccountID(nft)?.explorerURL() }
+
+    /// The words shared with it: the Moment's title and its coin's ticker ("Harbour at dusk ($DUSK)").
+    static func shareMessage(title: String, symbol: String?) -> String {
+        symbol.map { "\(title) ($\($0))" } ?? title
     }
 
     /// The most editions one collect may take: the contract's limit, and at least 1 (a stepper over 1...0 would trap).

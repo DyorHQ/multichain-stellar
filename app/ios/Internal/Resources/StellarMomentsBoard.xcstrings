@@ -1,0 +1,881 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%lld collected" : {
+      "comment" : "A Moment the account published, in My Moments on Stellar: how many editions were collected",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%lld collected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld coleccionadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld collectées"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏 %lld 份"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 수집됨"
+          }
+        }
+      }
+    },
+    "%lld of %lld collected" : {
+      "comment" : "A retired Moment the account published, in My Moments on Stellar: editions collected of its edition size",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld of %2$lld collected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld de %2$lld coleccionadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld sur %2$lld collectées"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏 %1$lld/%2$lld 份"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%2$lld개 중 %1$lld개 수집됨"
+          }
+        }
+      }
+    },
+    "already in your account" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the amount of Claimed: coins already claimed into the account",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "already in your account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ya en tu cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "déjà sur votre compte"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已在账户中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "계정에 보유 중"
+          }
+        }
+      }
+    },
+    "Claim All takes up to %lld Moments at a time; claim again for the rest." : {
+      "comment" : "Under the coin tiles of My Moments on Stellar, when more Moments have coins to claim than one transaction takes. The number is how many one claim takes (20)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Claim All takes up to %lld Moments at a time; claim again for the rest."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclamar todo incluye hasta %lld Moments a la vez; vuelve a reclamar para el resto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tout réclamer prend jusqu'à %lld Moments à la fois ; réclamez à nouveau pour le reste."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "全部领取每次最多包含 %lld 个 Moment；其余的请再次领取。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "모두 수령은 한 번에 최대 %lld개의 Moment를 처리해요. 나머지는 다시 수령하세요."
+          }
+        }
+      }
+    },
+    "Coins across every Moment you collected or published. They vest from graduation; claim what has vested here or on each Moment's page." : {
+      "comment" : "Under the coin tiles of My Moments on Stellar",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Coins across every Moment you collected or published. They vest from graduation; claim what has vested here or on each Moment's page."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monedas de cada Moment que coleccionaste o publicaste. Se liberan desde la graduación; reclama lo liberado aquí o en la página de cada Moment."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetons de chaque Moment que vous avez collecté ou publié. Ils se débloquent à partir du diplôme ; réclamez ce qui est débloqué ici ou sur la page de chaque Moment."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你收藏或发布的每个 Moment 中的币。它们从毕业起开始解锁；可在此处或各 Moment 页面领取已解锁的部分。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집하거나 게시한 모든 Moment의 코인이에요. 졸업부터 베스팅되며, 베스팅된 코인은 여기나 각 Moment 페이지에서 수령하세요."
+          }
+        }
+      }
+    },
+    "Collect a Moment and it shows up here." : {
+      "comment" : "My Moments on Stellar with no Moment collected or published yet",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Collect a Moment and it shows up here."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Colecciona un Moment y aparecerá aquí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collectez un Moment et il apparaîtra ici."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏 Moment 后，它会显示在这里。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment를 수집하면 여기에 표시돼요."
+          }
+        }
+      }
+    },
+    "collected" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the number of Moments the editions are from",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "collected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "coleccionados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "collectés"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수집함"
+          }
+        }
+      }
+    },
+    "Collected on Stellar. OpenSea doesn't list Stellar; add an edition to Freighter to see it there." : {
+      "comment" : "Under the editions of My Moments on Stellar. OpenSea, Stellar and Freighter are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Collected on Stellar. OpenSea doesn't list Stellar; add an edition to Freighter to see it there."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coleccionado en Stellar. OpenSea no lista Stellar; añade una edición a Freighter para verla allí."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collecté sur Stellar. OpenSea ne liste pas Stellar ; ajoutez une édition à Freighter pour l'y voir."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏于 Stellar。OpenSea 不支持 Stellar；将版本添加到 Freighter 即可在那里查看。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar에서 수집했어요. OpenSea는 Stellar를 지원하지 않아요. Freighter에 에디션을 추가하면 거기서 볼 수 있어요."
+          }
+        }
+      }
+    },
+    "collecting editions" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the amount Spent",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "collecting editions"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en ediciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en éditions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用于收藏"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션 수집"
+          }
+        }
+      }
+    },
+    "Earned" : {
+      "comment" : "[tight] My Moments tile on Stellar: what the account's Moments earned it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Earned"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ganado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gagné"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已赚取"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수익"
+          }
+        }
+      }
+    },
+    "Edition #%@" : {
+      "comment" : "A Moment edition in My Moments on Stellar: its number (its NFT token id)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Edition #%@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Edición n.º %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Édition nº %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "第 %@ 版"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "에디션 #%@"
+          }
+        }
+      }
+    },
+    "from your Moments" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the amount Earned",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "from your Moments"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "de tus Moments"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "de vos Moments"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自你的 Moment"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내 Moment에서"
+          }
+        }
+      }
+    },
+    "in your account" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the number of Editions",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "in your account"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "en tu cuenta"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "sur votre compte"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你的账户中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내 계정에"
+          }
+        }
+      }
+    },
+    "Legacy editions from DyorHQ's first Stellar Moments contract. Collecting is closed; editions stay with their collectors." : {
+      "comment" : "Under the Retired heading of the Moments board on Stellar. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Legacy editions from DyorHQ's first Stellar Moments contract. Collecting is closed; editions stay with their collectors."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ediciones heredadas del primer contrato de Moments de DyorHQ en Stellar. Ya no se puede coleccionar; las ediciones siguen con sus coleccionistas."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Éditions héritées du premier contrat Moments de DyorHQ sur Stellar. La collecte est fermée ; les éditions restent à leurs collectionneurs."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 DyorHQ 首个 Stellar Moments 合约的旧版版本。收藏已关闭；版本仍归收藏者所有。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ의 첫 Stellar Moments 컨트랙트의 레거시 에디션이에요. 수집은 종료되었고, 에디션은 수집자에게 그대로 남아요."
+          }
+        }
+      }
+    },
+    "Legacy editions from DyorHQ's first Stellar Moments contract: view them and add them to Freighter. Collecting is closed." : {
+      "comment" : "Under the Retired section of My Moments on Stellar. DyorHQ, Stellar and Freighter are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Legacy editions from DyorHQ's first Stellar Moments contract: view them and add them to Freighter. Collecting is closed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ediciones heredadas del primer contrato de Moments de DyorHQ en Stellar: velas y añádelas a Freighter. Ya no se puede coleccionar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Éditions héritées du premier contrat Moments de DyorHQ sur Stellar : consultez-les et ajoutez-les à Freighter. La collecte est fermée."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 DyorHQ 首个 Stellar Moments 合约的旧版版本：可查看并添加到 Freighter。收藏已关闭。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ의 첫 Stellar Moments 컨트랙트의 레거시 에디션이에요. 확인하고 Freighter에 추가할 수 있어요. 수집은 종료되었어요."
+          }
+        }
+      }
+    },
+    "New Moments appear here once the DyorHQ Moments contract is live on Stellar." : {
+      "comment" : "The Moments board on Stellar while the network has no DyorHQ Moments contract. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "New Moments appear here once the DyorHQ Moments contract is live on Stellar."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los nuevos Moments aparecerán aquí cuando el contrato de Moments de DyorHQ esté activo en Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouveaux Moments apparaîtront ici dès que le contrat Moments de DyorHQ sera actif sur Stellar."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Moments 合约在 Stellar 上线后，新的 Moment 会显示在这里。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Moments 컨트랙트가 Stellar에 배포되면 새 Moment가 여기에 표시돼요."
+          }
+        }
+      }
+    },
+    "Publish a photo or video as an NFT on Stellar. Share it with everyone and earn every time it's collected." : {
+      "comment" : "Under the Moments board's title on Stellar. NFT and Stellar are never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Publish a photo or video as an NFT on Stellar. Share it with everyone and earn every time it's collected."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publica una foto o un video como NFT en Stellar. Compártelo con todos y gana cada vez que lo coleccionen."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publiez une photo ou une vidéo en NFT sur Stellar. Partagez-la avec tout le monde et gagnez à chaque collecte."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 上将照片或视频发布为 NFT。分享给所有人，每次被收藏都能获得收益。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "사진이나 동영상을 Stellar에 NFT로 게시하세요. 모두와 공유하고, 수집될 때마다 수익을 얻으세요."
+          }
+        }
+      }
+    },
+    "Published by You" : {
+      "comment" : "A section of My Moments on Stellar: the Moments the account published",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Published by You"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publicados por ti"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Publiés par vous"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你发布的"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내가 게시한 Moment"
+          }
+        }
+      }
+    },
+    "Publishing new Moments is paused." : {
+      "comment" : "Under the Moments board's title on Stellar: DyorHQ has paused publishing new Moments",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Publishing new Moments is paused."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publicación de nuevos Moments está en pausa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La publication de nouveaux Moments est en pause."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发布新 Moment 已暂停。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 Moment 게시가 일시 중지되었어요."
+          }
+        }
+      }
+    },
+    "Retired" : {
+      "comment" : "[tight] A heading on the Moments board on Stellar: the Moments of DyorHQ's first, retired Stellar Moments contract",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Retired"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirés"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停用"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료됨"
+          }
+        }
+      }
+    },
+    "Spent" : {
+      "comment" : "[tight] My Moments tile on Stellar: what the account paid collecting editions",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Spent"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gastado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépensé"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已花费"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지출"
+          }
+        }
+      }
+    },
+    "The Moments terms couldn't be read. Publish is off until they are." : {
+      "comment" : "Under the Moments board's title on Stellar: the live Moments terms couldn't be read, so Publish is off",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The Moments terms couldn't be read. Publish is off until they are."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer las condiciones de Moments. Publicar está desactivado hasta que se lean."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les conditions des Moments n'ont pas pu être lues. La publication reste désactivée jusque-là."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法读取 Moments 条款。读取之前无法发布。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments 약관을 읽지 못했어요. 읽을 때까지 게시가 꺼져 있어요."
+          }
+        }
+      }
+    },
+    "unlocks as it vests" : {
+      "comment" : "[tight] My Moments tile on Stellar, under the amount of Still vesting: coins that unlock over time",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "unlocks as it vests"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "se libera con el vesting"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "se débloque au fil du vesting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "随解锁进度释放"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "베스팅에 따라 해제"
+          }
+        }
+      }
+    },
+    "View in Freighter" : {
+      "comment" : "A swipe and menu action on a Moment edition in My Moments on Stellar: how to see it in Freighter. Freighter is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "View in Freighter"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver en Freighter"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voir dans Freighter"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Freighter 中查看"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Freighter에서 보기"
+          }
+        }
+      }
+    },
+    "Your Editions" : {
+      "comment" : "A section of My Moments on Stellar: the Moment editions (NFTs) the account holds",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Your Editions"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tus ediciones"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vos éditions"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的版本"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "내 에디션"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

@@ -35,7 +35,7 @@ const ev = await import("../../supabase/functions/lite-indexer/v2_events.ts");
 const k = await import("../../supabase/functions/lite-indexer/v2_keeper.ts");
 const ttl = await import("../../supabase/functions/_shared/ttl.ts");
 const { decodeMove } = await import("../../supabase/functions/lite-indexer/handlers/moments.ts");
-const { deploymentKey } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
+const { deploymentKey, streamStart } = await import("../../supabase/functions/lite-indexer/jobs/main_events.ts");
 
 const C = (n: number) => StrKey.encodeContract(new Uint8Array(32).fill(n) as any);
 const G = (n: number) => StrKey.encodeEd25519PublicKey(new Uint8Array(32).fill(n) as any);
@@ -559,6 +559,24 @@ Deno.test("generations: deploying v2, or another v2, clears no v1 row and reads 
   }
 });
 
+Deno.test("generations: a fresh stream starts inside the window RPC keeps, never at a deploy ledger it no longer holds", async () => {
+  // Testnet's RPC keeps about 13 hours: v2's deploy ledger (5_300_000) is gone once the oldest it holds is LATEST - 10_000.
+  rpcAnswer = (method) => {
+    if (method === "getHealth") return { status: "healthy", latestLedger: LATEST, oldestLedger: LATEST - 10_000, ledgerRetentionWindow: 10_000 };
+    throw new Error(`no ${method} here`);
+  };
+  try {
+    assertEquals(await streamStart(5_300_000, LATEST), LATEST - 10_000 + 20);
+    // A deploy ledger inside the window stands; with none, the ~5.8-day look-back is clamped the same way.
+    assertEquals(await streamStart(LATEST - 5_000, LATEST), LATEST - 5_000);
+    assertEquals(await streamStart(0, LATEST), LATEST - 10_000 + 20);
+  } finally {
+    rpcAnswer = null;
+  }
+  // An RPC that doesn't answer getHealth (the default fake): the start it always had.
+  assertEquals(await streamStart(5_300_000, LATEST), 5_300_000);
+});
+
 Deno.test("generations: another v1 deployment clears v1's rows only, never v2's", async () => {
   const writes = cursorDb([
     { name: "events", ledger: LATEST - 5, cursor: "0002-0", network_id: `${TESTNET.passphrase}|${C(60)}|${C(61)}` },
@@ -616,6 +634,39 @@ Deno.test("recording: a grad_fail names its failure on the launch; exec-aquarius
     await ev.launchpadV2Event(rpcEvent("0001-10404"), fail(4, 10_404), AQUA_NET);
   } finally {
     console.warn = warn;
+  }
+});
+
+Deno.test("recording: a v2 publish keeps the creator's day and, beside it, the date and time its metadata says", async () => {
+  const uri = "https://example.supabase.co/storage/v1/object/public/lite-media/moments/m.json";
+  for (const [takenAt, day] of [["2026-10-14T15:30:00+02:00", "2026-10-14"], [null, "2026-10-14"]] as const) {
+    const writes: [string, unknown[]][] = [];
+    replaceSql(fakeSql((q, p) => {
+      writes.push([q, p]);
+      if (q === "select * from lite.moment_metadata where uri = ?") {
+        return [{ uri, address: CREATOR, title: "Accra at dusk", description: null, place: "Accra", taken_on: new Date("2026-10-14T00:00:00Z"), taken_at: takenAt, media_type: "image", media_url: "m", poster_url: "p" }];
+      }
+      if (q.startsWith("insert into lite.v2_events")) return [{ event_id: p[0] }];
+      return [];
+    }));
+    await ev.momentsV2Event(rpcEvent("0004-1"), decoded([sym("publish"), addr(NFT), addr(CREATOR)], map({
+      nonce: u64(7n),
+      coin: addr(COIN),
+      name: str("Accra at dusk"),
+      symbol: str("DUSK"),
+      metadata_uri: str(uri),
+      price: i128(1_000_000n),
+      threshold: i128(100_000_000n),
+      creator_alloc_bps: u32(1_000),
+      rate_num: i128(675_000_000_000_000_000n),
+      rate_den: i128(1_350_000_000n),
+      deadline: u64(T0 + 86_400),
+      durations: DURATIONS,
+    })), MOMENTS, NET);
+    const [q, params] = writes.find(([q]) => q.startsWith("insert into lite.moments"))!;
+    assert(q.includes("place, taken_on, taken_at, media_type"), q);
+    const place = params.indexOf("Accra");
+    assertEquals(params.slice(place + 1, place + 3), [day, takenAt]);
   }
 });
 

@@ -4,6 +4,7 @@
 // here (below).
 // Every plan step's builder registers itself when its module loads: load them all, whichever routes use them. Launchpad
 // v2's builders are registered below, from the table launchpad_v2.ts exports.
+import "../_shared/node_globals.ts";
 import "../_shared/account.ts";
 import "../_shared/swap.ts";
 import "../_shared/earn.ts";
@@ -273,4 +274,8 @@ export function handle(req: Request): Promise<Response> {
   });
 }
 
-if (import.meta.main) Deno.serve(handle);
+if (import.meta.main) {
+  // Refuses to start without the lite_api role's connection, rather than reaching the database another way.
+  env.dbUrl;
+  Deno.serve(handle);
+}

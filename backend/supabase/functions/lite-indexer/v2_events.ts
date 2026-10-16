@@ -22,13 +22,13 @@ import { env } from "../_shared/env.ts";
 import { ratio, SOROSWAP_POOL_FEE_BPS } from "../_shared/launchpad.ts";
 import { localMediaEnabled, readLocal } from "../_shared/localmedia.ts";
 import { mediaBase } from "../_shared/media.ts";
-import type { MomentMetadataFields } from "../_shared/moments.ts";
+import { type MomentMetadataFields, takenParts, takenText } from "../_shared/moments.ts";
 import type { NetworkConfig } from "../_shared/networks.ts";
 import { native, rpcServer, sv, view, xdr } from "../_shared/stellar.ts";
 import { errorName } from "../_shared/v2_errors.ts";
 import { launchFacts, pairSide, watchContract } from "./handlers/launchpad.ts";
 import { decodeMove, metadataFromJson } from "./handlers/moments.ts";
-import { cursorLedger, deploymentKey, handle as handleV1 } from "./jobs/main_events.ts";
+import { cursorLedger, deploymentKey, handle as handleV1, streamStart } from "./jobs/main_events.ts";
 import { clearIndexed, resetAllowed } from "./jobs/reset.ts";
 import { CAUGHT_UP_LEDGERS, decodeTokenEvent, GROUP_SIZE, ledgerOf, mergeGroups, type Position, RETENTION_MARGIN } from "./jobs/watch.ts";
 import { fireAlert, gradFailAlert, venueKindName } from "./v2_keeper.ts";
@@ -824,7 +824,7 @@ async function momentMetadata(uri: string, creator: string): Promise<MomentMetad
       title: r.title,
       description: r.description ?? null,
       place: r.place ?? null,
-      takenOn: r.taken_on ? (r.taken_on instanceof Date ? r.taken_on.toISOString() : String(r.taken_on)).slice(0, 10) : null,
+      takenOn: takenText(r.taken_at, r.taken_on),
       mediaType: r.media_type,
       mediaUrl: r.media_url,
       posterUrl: r.poster_url,
@@ -869,17 +869,19 @@ export async function momentsV2Event(e: Event, d: Decodable, contract: string, n
     case "publish": {
       const p = decodePublishV2(d);
       const [meta, terms] = await Promise.all([momentMetadata(p.metadataUri, p.creator), momentTerms(contract, p.nft)]);
+      // The creator's day where readers of the day have it; the date and time, as the metadata says it, beside it.
+      const taken = takenParts(meta?.takenOn);
       const usdc = net.assets.find((a) => a.id === "USDC")!.contract;
       await once(e, contract, d, p.nft, async (tx) => {
         await tx`
           insert into lite.moments (id, nft, generation, contract, nonce, number, creator, uri, title, media_url, price, quote, max_editions,
-                                    deadline, created_ledger, created_at, description, place, taken_on, media_type, poster_url,
+                                    deadline, created_ledger, created_at, description, place, taken_on, taken_at, media_type, poster_url,
                                     platform_bps, royalty_bps, listed, coin, name, symbol, threshold, creator_alloc_bps, rate_num,
                                     rate_den, durations, state)
           values (null, ${p.nft}, 2, ${contract}, ${s(p.nonce)},
                   (select coalesce(max(number), 0) + 1 from lite.moments where contract = ${contract}), ${p.creator}, ${p.metadataUri},
                   ${meta?.title ?? null}, ${meta?.mediaUrl ?? null}, ${s(p.price)}, ${usdc}, 0, ${p.deadline}, ${e.ledger}, ${ts},
-                  ${meta?.description ?? null}, ${meta?.place ?? null}, ${meta?.takenOn ?? null}, ${meta?.mediaType ?? null},
+                  ${meta?.description ?? null}, ${meta?.place ?? null}, ${taken?.day ?? null}, ${taken?.at ?? null}, ${meta?.mediaType ?? null},
                   ${meta?.posterUrl || null}, ${terms?.platformBps ?? null}, ${terms?.royaltyBps ?? null},
                   ${listedV2(meta, contract, net)}, ${p.coin}, ${p.name}, ${p.symbol}, ${s(p.threshold)}, ${p.creatorAllocBps},
                   ${s(p.rateNum)}, ${s(p.rateDen)}, ${tx.json(p.durations)}, 'collecting')
@@ -1109,8 +1111,8 @@ export function cursorAction(row: CursorRow | null, key: string, latest: number)
 /** Reads a stream's events from its cursor (or from its start), as jobs/main_events.ts reads v1's: RPC scans a bounded
  *  window per request, so pages go on until the cursor reaches the latest ledger, at most 30 a run. */
 async function readStream(st: Stream, start: string | null, latest: number): Promise<number> {
-  const fromStart = () => ({ filters: st.filters, limit: 500, startLedger: Math.max(st.fromLedger || latest - 100_000, latest - 110_000) });
-  let req: any = start ? { filters: st.filters, limit: 500, cursor: start } : fromStart();
+  const fromStart = async () => ({ filters: st.filters, limit: 500, startLedger: await streamStart(st.fromLedger, latest) });
+  let req: any = start ? { filters: st.filters, limit: 500, cursor: start } : await fromStart();
   let count = 0;
   for (let round = 0; round < 30; round++) {
     let res: rpc.Api.GetEventsResponse;
@@ -1120,7 +1122,7 @@ async function readStream(st: Stream, start: string | null, latest: number): Pro
       // A cursor older than RPC's retention (~7 days) is refused: again from what RPC keeps.
       if (round === 0 && req.cursor) {
         console.warn(`${st.cursor}: cursor refused, restarting from the retention window`, String((err as Error).message).slice(0, 120));
-        req = fromStart();
+        req = await fromStart();
         res = await rpcServer().getEvents(req);
       } else {
         throw err;

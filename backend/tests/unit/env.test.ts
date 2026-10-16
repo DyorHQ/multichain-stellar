@@ -47,6 +47,33 @@ Deno.test("testnet with KEEPER_SECRET: the keeper's own key", () => {
   withEnv({ LITE_NETWORK: "testnet", KEEPER_SECRET: KEEPER.secret() }, () => assert(env.keeperSecret === KEEPER.secret()));
 });
 
+Deno.test("testnet with KEEPER_SECRET set: never the sponsor's key in its place; the sponsor's own key there is warned about once", () => {
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (...args: unknown[]) => void warnings.push(args.join(" "));
+  try {
+    withEnv({ LITE_NETWORK: "testnet", KEEPER_SECRET: KEEPER.secret() }, () => {
+      for (let i = 0; i < 3; i++) assert(env.keeperSecret === KEEPER.secret(), "the keeper's own key");
+    });
+    assertEquals(warnings.length, 0);
+    withEnv({ LITE_NETWORK: "testnet", KEEPER_SECRET: SPONSOR.secret() }, () => {
+      for (let i = 0; i < 3; i++) assert(env.keeperSecret === SPONSOR.secret());
+    });
+  } finally {
+    console.warn = warn;
+  }
+  assertEquals(warnings.length, 1);
+  assert(warnings[0].includes("share one sequence number") && !warnings[0].includes(SPONSOR.secret()), "a warning that names no key");
+});
+
+Deno.test("the database is the lite_api role's LITE_DB_URL only: without it nothing connects, SUPABASE_DB_URL or not", () => {
+  const lite = "postgresql://lite_api@127.0.0.1:55096/lite";
+  withEnv({ LITE_DB_URL: undefined, SUPABASE_DB_URL: "postgresql://postgres@127.0.0.1:55096/postgres" }, () => {
+    assertThrows(() => env.dbUrl, Error, "LITE_DB_URL is not set");
+  });
+  withEnv({ LITE_DB_URL: lite, SUPABASE_DB_URL: "postgresql://postgres@127.0.0.1:55096/postgres" }, () => assert(env.dbUrl === lite));
+});
+
 Deno.test("mainnet needs a keeper key of its own", () => {
   withEnv({ LITE_NETWORK: "mainnet", KEEPER_SECRET: undefined }, () => {
     assertThrows(() => env.keeperSecret, Error, "KEEPER_SECRET is not set");

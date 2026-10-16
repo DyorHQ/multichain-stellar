@@ -265,8 +265,13 @@ export async function activate(user: string, ip: string): Promise<ActivationResu
       await assertSponsorAvailable(user, "activate", ip, net.feePolicy.activationMaxFee);
       return await createPlan(user, "activate", [{ label: "Create your account", spec: { kind: "activate", usdc: usdc.classic } }]);
     }
-    const funded = await friendbotFund(user);
-    if (funded) await logFaucet(sql(), user, funded.hash, { status: "success", ledger: funded.ledger, maxFee: funded.maxFee ?? "0", feeCharged: funded.feeCharged });
+    // Friendbot's grant is the address's one claim: funded and logged under the faucet's per-address lock, so a faucet
+    // tap racing this activation finds the claim once it gets the lock, and never claims a second grant.
+    await sql().begin(async (q) => {
+      await q`select pg_advisory_xact_lock(hashtextextended(${`lite.faucet:${user}`}, 0))`;
+      const funded = await friendbotFund(user);
+      if (funded) await logFaucet(q, user, funded.hash, { status: "success", ledger: funded.ledger, maxFee: funded.maxFee ?? "0", feeCharged: funded.feeCharged });
+    });
     acct = await classicBalances(user);
   }
   if (acct && !acct.balances.some((b) => b.asset === usdc.classic)) {
@@ -315,28 +320,30 @@ async function logFaucet(q: postgres.Sql | postgres.TransactionSql, user: string
 /** POST /v1/account/faucet. Testnet: Friendbot's grant of test XLM (networks.ts faucet.amount) for an account that
  *  already existed, once per address, ever (decision 7): 429 faucet_used once the address has claimed, here or by
  *  Friendbot's activation. Friendbot funds a temporary account, which merges into the user's; that account pays the
- *  fee (`external` in the log). The claim is logged before the merge is sent, under a lock per address, so two taps at
- *  once claim once; a merge that fails releases it. */
+ *  fee (`external` in the log). Everything up to the claim's row runs under a lock per address (the one activation
+ *  takes too): the claim is checked, Friendbot funds the temporary account and the claim is logged before the merge is
+ *  sent, so two taps at once ask Friendbot once and claim once; a merge that fails releases the claim. */
 export async function testnetFaucet(user: string): Promise<{ hash: string }> {
   if (!env.network.faucet) throw new ApiError(400, "testnet_only", "The faucet is testnet-only.");
   if (await faucetClaimed(user)) throw faucetUsed();
   await requireAccount(user);
   const temp = Keypair.random();
-  await friendbotFund(temp.publicKey());
-  const tempAcct = (await loadAccount(temp.publicKey()))!;
-  const tx = new TransactionBuilder(tempAcct, { fee: "1000", networkPassphrase: env.network.passphrase })
-    .addOperation(Operation.accountMerge({ destination: user }))
-    .setTimeout(60)
-    .build();
-  tx.sign(temp);
-  const hash = tx.hash().toString("hex");
-  const claimed = await sql().begin(async (q) => {
+  const claim = await sql().begin(async (q) => {
     await q`select pg_advisory_xact_lock(hashtextextended(${`lite.faucet:${user}`}, 0))`;
-    if (await faucetClaimed(user, q)) return false;
+    if (await faucetClaimed(user, q)) return null;
+    await friendbotFund(temp.publicKey());
+    const tempAcct = (await loadAccount(temp.publicKey()))!;
+    const tx = new TransactionBuilder(tempAcct, { fee: "1000", networkPassphrase: env.network.passphrase })
+      .addOperation(Operation.accountMerge({ destination: user }))
+      .setTimeout(60)
+      .build();
+    tx.sign(temp);
+    const hash = tx.hash().toString("hex");
     await logFaucet(q, user, hash, { status: "pending", ledger: null, maxFee: "1000", feeCharged: null });
-    return true;
+    return { tx, hash };
   });
-  if (!claimed) throw faucetUsed();
+  if (!claim) throw faucetUsed();
+  const { tx, hash } = claim;
   try {
     await sendSigned(tx, "external");
   } catch (err) {

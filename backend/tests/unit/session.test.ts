@@ -96,6 +96,8 @@ class Tables {
       }
       case "select 1 from lite.testers where address = ? and revoked_at is null":
         return this.testers.get(p[0])?.revoked_at === null ? [{ "?column?": 1 }] : [];
+      case "select 1 from lite.testers where address = ?":
+        return this.testers.has(p[0]) ? [{ "?column?": 1 }] : [];
       case "select label from lite.testers where address = ? and revoked_at is null": {
         const t = this.testers.get(p[0]);
         return t && t.revoked_at === null ? [{ label: t.label }] : [];
@@ -330,6 +332,23 @@ Deno.test("testnet: a first sign-in needs no invite and registers the tester, wh
   db.testers.get(kp.publicKey())!.revoked_at = new Date();
   assertEquals(await refusal(() => auth.requireUser(req())), [403, "access_revoked"]);
   assertEquals(await refusal(() => signIn(kp)), [403, "access_revoked"]);
+});
+
+Deno.test("a valid token for an address this database has no tester for signs in again; a revoked one stays refused", async () => {
+  const db = new Tables();
+  const kp = Keypair.random();
+  const v = await signIn(kp);
+  const req = () => new Request("http://127.0.0.1/lite/v1/activity", { headers: { authorization: `Bearer ${v.token}` } });
+  // Issued by another database that shares the secret (a local stack, or this one before a reset): 401, so the phone
+  // signs in again, and that sign-in registers the tester here.
+  db.testers.delete(kp.publicKey());
+  assertEquals(await refusal(() => auth.requireUser(req())), [401, "unauthorized"]);
+  const again = await signIn(kp);
+  const req2 = new Request("http://127.0.0.1/lite/v1/activity", { headers: { authorization: `Bearer ${again.token}` } });
+  assertEquals(await auth.requireUser(req2), kp.publicKey());
+  // Turned off: refused at once, and for good.
+  db.testers.get(kp.publicKey())!.revoked_at = new Date();
+  assertEquals(await refusal(() => auth.requireUser(req2)), [403, "access_revoked"]);
 });
 
 Deno.test("testnet: an invite that is given is still checked, and used", async () => {

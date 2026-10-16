@@ -506,7 +506,9 @@ Deno.test("create acts for the creator; graduation is any user's to call; claims
   respond = (q) => LAUNCH_OF_ECAT(q) ?? [];
   answer = (contract, fn) => (contract === PAD && ["launch", "graduate", "claim_creator_fees", "get_curve"].includes(fn) ? (fn === "get_curve" ? struct({ creator_fees: i128(3_900_000n) }) : i128(1n)) : { error: "x" });
   const create = await lp.launchCreateStep(ME, { kind: "launch_create", quote: XLM, name: "E2E Cat", symbol: "ECAT", uri: "", creatorFeeBps: 100, initialBuy: "100000000", minOut: "0" });
-  verifyTransaction(create.tx, create.intent, verifyCtx(ECAT));
+  // A new v1 launch passes v1's rules only while v2 isn't pinned; once it is, new launches are v2's.
+  verifyTransaction(create.tx, create.intent, { ...verifyCtx(ECAT), v2: null });
+  assertRejectsVerify(create.tx, create.intent, ECAT, "this generation no longer takes new launches or Moments");
   assertEquals([create.intent.spend, (create.tx.operations[0] as any).func.invokeContract().args().map(native)[0]], [{ [XLM]: "100000000" }, ME]);
   const grad = await lp.launchGraduateStep(ME, { kind: "launch_graduate", token: ECAT });
   verifyTransaction(grad.tx, grad.intent, verifyCtx(ECAT));

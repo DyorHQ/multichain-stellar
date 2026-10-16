@@ -40,6 +40,13 @@ final class MomentsV2StoreTests: XCTestCase {
             case ("GET", "/v1/economics"): return (200, Data(Self.economics.utf8))
             case ("GET", "/v1/moments/\(Self.nft)/status"): return (200, Data(Self.status(state: "collecting").utf8))
             case ("GET", "/v1/moments/v2/\(Self.nft)"): return (200, FakeLite.fixture("moment-v2"))
+            case ("GET", "/v1/moments/v2"): return (200, FakeLite.fixture("moments-v2"))
+            case ("GET", "/v1/moments/v2/owned"):
+                guard request.token != nil || request.route.contains("address=") else { return (400, FakeLite.error("address_required", "An address is required.")) }
+                return (200, FakeLite.fixture(request.token != nil ? "moments-v2-owned" : "moments-v2-owned.public"))
+            case ("GET", "/v1/moments/v2/mine"):
+                guard request.token != nil else { return (401, FakeLite.error("unauthorized", "Sign in.")) }
+                return (200, FakeLite.fixture("moments-v2-mine"))
             case ("GET", "/v1/moments/\(Self.nft)/vesting"):
                 guard request.token != nil || request.route.contains("address=") else { return (401, FakeLite.error("unauthorized", "Sign in.")) }
                 return (200, Data(Self.vesting.utf8))
@@ -103,6 +110,49 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(listing.image, detail.moment.posterUrl, "a video's image is its cover frame")
         XCTAssertEqual(listing.video, detail.moment.mediaUrl)
         XCTAssertEqual(tally.prompts, 0, "reads ask nothing")
+    }
+
+    /// The feed, the account's Moments and My Moments read their v2 routes: the feed's filter and page as asked, the
+    /// account's Moments and My Moments as the session's (what it paid included), and nothing prompts.
+    func testTheFeedOwnedAndMineReadTheirV2Routes() async throws {
+        let (_, moments) = try await ready()
+        let feed = try await moments.feed(filter: "collecting", cursor: "page-2")
+        XCTAssertEqual(feed.moments.map(\.symbol), ["DUSK", "MAKOLA"])
+        let asked = try XCTUnwrap(server.seen.last { $0.path == "/v1/moments/v2" })
+        XCTAssertTrue(asked.route.contains("filter=collecting") && asked.route.contains("cursor=page-2"), asked.route)
+        let owned = try await moments.owned()
+        XCTAssertEqual(owned.moments.map(\.editions), [[3], [1, 2]])
+        XCTAssertEqual(owned.moments.first?.spent, "50000000", "the session's view says what it paid")
+        let mine = try await moments.mine()
+        XCTAssertEqual([mine.totals.editions, mine.totals.moments], [3, 2])
+        XCTAssertEqual([mine.totals.spentByQuote, mine.totals.earnedByQuote], [["USDC": "350000000"], ["USDC": "200000000"]])
+        XCTAssertEqual(mine.created.map(\.proceeds), ["200000000"])
+        XCTAssertEqual(moments.store.status(.myMoments), .read)
+        XCTAssertEqual(tally.prompts, 0, "reads ask nothing")
+    }
+
+    /// In the public view (a passkey account with no session) the feed and the account's Moments still read, and My
+    /// Moments, DyorHQ's history, reports the sign-in instead of asking for the passkey.
+    func testMyMomentsNeedsASignInInThePublicView() async throws {
+        let keys = TestAccount.passkeyKeys(tally: tally)
+        defaults.set(true, forKey: LiteSession.activatedKey(keys.address))
+        let session = LiteSession(env: env, stellarAddress: keys.address, monad: nil, keys: keys, setupKey: nil, backend: backend, vault: vault,
+                                  defaults: defaults)
+        sessions.append(session)
+        await session.resumeAtLaunch()
+        XCTAssertEqual(session.access, .publicView)
+        let moments = MomentsV2Store(store: try XCTUnwrap(session.store))
+        let feed = try await moments.feed()
+        XCTAssertEqual(feed.moments.count, 2)
+        let owned = try await moments.owned()
+        XCTAssertNil(owned.moments.first?.spent, "the public view never says what the account paid")
+        do {
+            _ = try await moments.mine()
+            XCTFail("My Moments without a session")
+        } catch {}
+        XCTAssertEqual(moments.store.status(.myMoments), .needsSignIn)
+        XCTAssertFalse(server.paths.contains("GET /v1/moments/v2/mine"), "nothing asked without a session")
+        XCTAssertEqual(tally.prompts, 0, "nothing prompts until Sign in is tapped")
     }
 
     /// Publish enables USDC first when the account can't hold it: the publish is then built at once, and its review can
@@ -208,6 +258,28 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(sent["uri"] as? String, "https://media.test/m/1.json")
     }
 
+    /// Publish's When is a day and a time, as on Monad: written to the minute with the phone's offset, and sent with the
+    /// metadata as it is, for its Date attribute.
+    func testWhenIsWrittenAsADateAndTimeWithItsOffset() async throws {
+        let instant = Date(timeIntervalSince1970: 1_791_995_427) // 2026-10-14T16:30:27Z
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(identifier: "UTC"))), "2026-10-14T16:30:00Z")
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: 2 * 3600))), "2026-10-14T18:30:00+02:00")
+        XCTAssertEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: -(9 * 3600 + 30 * 60)))),
+                       "2026-10-14T07:00:00-09:30")
+        XCTAssertLessThanOrEqual(StellarMomentFormV2.takenAt(instant, timeZone: try XCTUnwrap(TimeZone(secondsFromGMT: -12 * 3600))).utf8.count, 32,
+                                 "within the contract's date")
+
+        let (_, moments) = try await ready()
+        answer.plan = Self.publishPlan()
+        let taken = "2026-10-14T18:30:00+02:00"
+        let form = StellarMomentFormV2(name: "Dusk", symbol: "DUSK", place: "Accra", takenOn: taken, price: 10_000_000, allocationBps: 1_000,
+                                       windowSecs: 86_400)
+        _ = try await moments.publishPlan(form, media: StellarMomentUploadV2(mediaUrl: "https://media.test/u/p.jpg", posterUrl: nil), title: "Publish DUSK")
+        let metadata = try XCTUnwrap(server.seen.first { $0.path == "/v1/moments/metadata" }?.body)
+        let sent = try XCTUnwrap(try JSONSerialization.jsonObject(with: metadata) as? [String: Any])
+        XCTAssertEqual(sent["takenOn"] as? String, taken)
+    }
+
     // MARK: - The terms guard
 
     private func terms() throws -> StellarMomentsTermsV2 {
@@ -219,6 +291,40 @@ final class MomentsV2StoreTests: XCTestCase {
     }
 
     private func plan(_ json: String) throws -> PlanView { try JSONDecoder().decode(PlanView.self, from: Data(json.utf8)) }
+
+    func testThePublishBindsThePriceAllocationAndWindowTheFormHas() throws {
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan()), form: form), [])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "\"1\""])), form: form), ["price"])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["allocationBps": "5000", "windowSecs": "3600"])), form: form),
+                       ["allocationBps", "windowSecs"])
+        XCTAssertEqual(MomentsV2Store.formChanges(try plan(Self.publishPlan(overrides: ["price": "null"])), form: form), ["price"], "fails closed")
+    }
+
+    func testAPublishBuiltDuringTheRunIsHeldToTheForm() async throws {
+        // The publish waits behind a step (a restore, the USDC trustline): its review can't compare it, so the run holds
+        // it to the form's price, allocation and window however late the server builds it.
+        let (_, moments) = try await ready()
+        answer.plan = Self.trustThenPublish
+        let video = StellarMomentUploadV2(mediaUrl: "https://media.test/u/v.mp4", posterUrl: "https://media.test/u/p.jpg")
+        let action = try await moments.publishPlan(form, media: video, title: "Publish DUSK")
+        XCTAssertEqual(action.bindings, PlanBindings(shown: MomentsV2Store.shown(form)))
+        let fields: [String: StellarJSON] = ["price": .string("10000000"), "allocationBps": .number(1_000), "windowSecs": .number(86_400)]
+        XCTAssertEqual(action.bindings.shown, ["moment_publish": fields, "publish": fields], "by the kind and by moments-v2's function alike")
+        _ = try await moments.store.run(action, reason: "Confirm Publish")
+        XCTAssertEqual(backend.lastBindings, action.bindings, "the run is held to them")
+    }
+
+    func testAPublishOfAnotherPriceIsRefusedBeforeItIsSigned() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.publishPlan(overrides: ["price": "\"1\""])
+        let video = StellarMomentUploadV2(mediaUrl: "https://media.test/u/v.mp4", posterUrl: "https://media.test/u/p.jpg")
+        do {
+            _ = try await moments.publishPlan(form, media: video, title: "Publish DUSK")
+            XCTFail("a publish at another price")
+        } catch let LiteAPIError.server(_, code, _, _) {
+            XCTAssertEqual(code, "moment_form_changed")
+        }
+    }
 
     func testTheTermsGuardPassesAPublishOfTheReviewedTerms() throws {
         XCTAssertEqual(MomentsV2Store.termsChanges(try plan(Self.publishPlan()), terms: try terms(), form: form), [])
@@ -419,7 +525,8 @@ final class MomentsV2StoreTests: XCTestCase {
     nonisolated static let nft = "CAKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBJRD5"
     nonisolated static let publishedNft = "CACB5AH45XMW4BHBYUUPEEZDMXGX5LBBBMSZRBS7YUUXGGQLZVM7FN7Z"
     nonisolated static let usdc = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA"
-    nonisolated static let contract = "CACQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQLC2U"
+    /// testnet's pinned moments-v2: a publish's bindings hold its call to this contract.
+    nonisolated static let contract = "CDABBNTQD2IOJMAFH75MKP4OKZJSGTFILZUBG4X5VSL4LMOX3HLPDOQL"
 
     nonisolated static let policy = """
     {"threshold":"100000000","minPrice":"1000000","creatorBps":2000,"platformBps":500,"reserveBps":7500,"maxCreatorAllocBps":1000,

@@ -3938,6 +3938,35 @@
         }
       }
     },
+    "No minimum to receive in %@: DyorHQ won't sign this." : {
+      "comment" : "The review of a Stellar transaction: a step receives an asset (%@, its code) with no minimum (zero), so the phone refuses to sign it. DyorHQ is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin mínimo a recibir en %@: DyorHQ no firmará esto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun minimum à recevoir en %@ : DyorHQ ne signera pas ceci."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 최소 수령액이 없습니다: DyorHQ는 이 거래에 서명하지 않습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 没有最低接收数量：DyorHQ 不会签署此交易。"
+          }
+        }
+      }
+    },
     "Not enough %@." : {
       "comment" : "An error: a transaction failed on Stellar because the account didn't have enough of the asset it sends; %@ is the asset's code (USDC).",
       "localizations" : {
@@ -4166,6 +4195,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "未签名：%1$@ 未通过检查（%2$@）。未发送任何内容。"
+          }
+        }
+      }
+    },
+    "Not signed: %@ doesn't guarantee the minimum you confirmed. Nothing was sent." : {
+      "comment" : "An error: the step (%@, its title) names a lower minimum to receive than the one the user confirmed, or none; nothing was signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: %@ no garantiza el mínimo que confirmaste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : %@ ne garantit pas le minimum que vous avez confirmé. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: %@이(가) 확인한 최소 수령액을 보장하지 않습니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：%@ 无法保证你确认的最低数量。未发送任何内容。"
+          }
+        }
+      }
+    },
+    "Not signed: %@ doesn't have the settings you chose. Nothing was sent." : {
+      "comment" : "An error: the step (%@, its title) shows other settings than the ones the user chose (a Moment's price, a launch's fee recipient or exemptions), or doesn't state them; nothing was signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: %@ no tiene los ajustes que elegiste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : %@ n'a pas les réglages que vous avez choisis. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: %@에 선택한 설정이 없습니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：%@ 的设置与你的选择不一致。未发送任何内容。"
+          }
+        }
+      }
+    },
+    "Not signed: %@ doesn't pay the address and memo you confirmed. Nothing was sent." : {
+      "comment" : "An error: the step (%@, its title) pays another address, or carries another memo, than the ones the user typed; nothing was signed.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin firmar: %@ no paga a la dirección y el memo que confirmaste. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Non signé : %@ ne paie pas l'adresse et le mémo que vous avez confirmés. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서명하지 않았습니다: %@이(가) 확인한 주소와 메모로 보내지 않습니다. 아무것도 보내지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未签名：%@ 支付的地址和备注与你确认的不一致。未发送任何内容。"
           }
         }
       }
@@ -7317,6 +7433,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "标题"
+          }
+        }
+      }
+    },
+    "To" : {
+      "comment" : "The review of a Stellar transaction: the label above the whole address the transaction pays.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "À"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받는 사람"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收款方"
           }
         }
       }

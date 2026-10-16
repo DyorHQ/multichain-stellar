@@ -1,0 +1,151 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Across Spot, Earn, Launch, Moments and Bridge" : {
+      "comment" : "Stellar Portfolio, under the cumulative volume: the five sections it adds up, as the cards below name them",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En Spot, Rendimientos, Lanzamientos, Moments y Puente"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur Spot, Rendement, Lancement, Moments et Bridge"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현물, 예치, 런칭, Moments, 브리지 전체 기준"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "涵盖现货、理财、发射、Moments 和跨链桥"
+          }
+        }
+      }
+    },
+    "Dollar values use mainnet market prices. Testnet assets have no value." : {
+      "comment" : "Stellar Portfolio, in the hero card on Stellar's test network: the dollar figures value test XLM and USDC at the real (mainnet) market's prices, though test assets are worth nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los valores en dólares usan precios de mercado de mainnet. Los activos de testnet no tienen valor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les valeurs en dollars utilisent les prix du marché du mainnet. Les actifs du testnet n'ont aucune valeur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "달러 가치는 메인넷 시장 가격을 사용해요. 테스트넷 자산은 가치가 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美元价值采用主网市场价格。测试网资产没有价值。"
+          }
+        }
+      }
+    },
+    "Moment #%lld" : {
+      "comment" : "Stellar Portfolio, My Holdings' NFTs: a Moment edition whose Moment has no title, named by the Moment's number. %lld is the number",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment n.º %lld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment nº %lld"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment #%lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment #%lld"
+          }
+        }
+      }
+    },
+    "Network fees paid: %@ XLM" : {
+      "comment" : "Stellar Portfolio, under the figures: the Stellar network fees the account paid in the period, apart from DyorHQ's fees. %@ is an amount (0.0154); XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones de red pagadas: %@ XLM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais de réseau payés : %@ XLM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지불한 네트워크 수수료: %@ XLM"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已付网络费用：%@ XLM"
+          }
+        }
+      }
+    },
+    "Retired" : {
+      "comment" : "[tight] Stellar Portfolio, My Holdings: a coin or Moment edition of DyorHQ's first (v1) Stellar contracts, which are retired: it can be viewed and sold or claimed, never bought or collected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retiré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "종료됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停用"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

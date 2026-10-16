@@ -383,7 +383,9 @@ const restoreIntent = (kind = "restore"): Intent => ({ kind, summary: "", spend:
 const sixPayments = (fee: number) => withFee(tx(Array.from({ length: 6 }, () => pay("1"))), fee);
 const starterIntent = payIntent("60000000");
 
-type Synthetic = [string, Transaction, Intent, Omit<Partial<Judged>, "name" | "tx" | "intent">?];
+/** A synthetic vector: judged against SYNTHETIC's pins (v2 pinned), or with `v1Only` against the same contracts without
+ *  v2's pins (v1's rules alone, as before v2 was deployed). */
+type Synthetic = [string, Transaction, Intent, (Omit<Partial<Judged>, "name" | "tx" | "intent"> & { v1Only?: boolean })?];
 const syn: Synthetic[] = [
   // Source, expiry, operations, auth and outflow.
   ["swap within cap", tx([swapOp(100n, 100n)]), swapIntent(100n)],
@@ -498,7 +500,9 @@ const syn: Synthetic[] = [
       ["curve buy for another trader", tx([invoke(buy(third, 4_000n), [pull(XLM, LAUNCHPAD, 1_000n)])]), buyIntent],
       ["curve sell ok", tx([invoke(sell(90n), [pull(TOKEN, LAUNCHPAD, 500n)])]), sellIntent],
       ["curve sell min below receive", tx([invoke(sell(89n), [pull(TOKEN, LAUNCHPAD, 500n)])]), sellIntent],
-      ["launch create ok", tx([invoke(launch)]), callIntent("launch_create", LAUNCHPAD, "launch")],
+      // A new v1 launch only while v2 isn't pinned: v1's rule binds none of what v2's does.
+      ["launch create ok without v2 pins", tx([invoke(launch)]), callIntent("launch_create", LAUNCHPAD, "launch"), { v1Only: true }],
+      ["v1 launch create with v2 pinned", tx([invoke(launch)]), callIntent("launch_create", LAUNCHPAD, "launch")],
       ["graduate ok", tx([invoke(call(LAUNCHPAD, "graduate", [addr(TOKEN)]))]), callIntent("launch_graduate", LAUNCHPAD, "graduate")],
       ["claim creator fees ok", tx([invoke(call(LAUNCHPAD, "claim_creator_fees", [addr(TOKEN)]))]), callIntent("launch_claim", LAUNCHPAD, "claim_creator_fees")],
       ["curve call with missing arguments", tx([invoke(call(LAUNCHPAD, "buy", [addr(user), addr(TOKEN), i128(1_000n)]))]), buyIntent],
@@ -548,7 +552,8 @@ const syn: Synthetic[] = [
     return [
       ["moments collect ok", tx([invoke(collect(user), [pull(USDC, MOMENTS, 20_000n)])]), intent],
       ["moments collect for another collector", tx([invoke(collect(third), [pull(USDC, MOMENTS, 20_000n)])]), intent],
-      ["moments publish ok", tx([invoke(publish)]), callIntent("moment_publish", MOMENTS, "publish")],
+      ["moments publish ok without v2 pins", tx([invoke(publish)]), callIntent("moment_publish", MOMENTS, "publish"), { v1Only: true }],
+      ["v1 moments publish with v2 pinned", tx([invoke(publish)]), callIntent("moment_publish", MOMENTS, "publish")],
     ] as Synthetic[];
   })(),
   ["function without a rule", tx([invoke(call(ROUTER, "add_liquidity", [addr(user)]))]), callIntent("swap", ROUTER, "add_liquidity")],
@@ -563,9 +568,10 @@ const syn: Synthetic[] = [
     const withTwin = (ic: xdr.InvokeContractArgs, twin: xdr.InvokeContractArgs) => tx([invoke(ic, [], [src(inv(twin, [pull(USDC, third, 5n)]))])]);
     const error = (code: number) => xdr.ScVal.scvError(xdr.ScError.sceContract(code));
     const intent = callIntent("launch_create", LAUNCHPAD, "launch", { [USDC]: "5" }, { to: friend });
+    // Judged by v1's rules (no v2 pins), which still take a v1 launch, so the authorization is what is compared.
     return [
-      ["auth root that is the call in another normalization", withTwin(launch(str("Caf\u00e9"), uri), launch(str("Cafe\u0301"), uri)), intent],
-      ["auth root that is the call with another error code", withTwin(launch(str("Deploy"), error(1)), launch(str("Deploy"), error(2))), intent],
+      ["auth root that is the call in another normalization", withTwin(launch(str("Caf\u00e9"), uri), launch(str("Cafe\u0301"), uri)), intent, { v1Only: true }],
+      ["auth root that is the call with another error code", withTwin(launch(str("Deploy"), error(1)), launch(str("Deploy"), error(2))), intent, { v1Only: true }],
       [
         "call to a function name with a byte-order mark",
         tx([invoke(call(USDC, "\ufefftransfer", [addr(user), addr(friend), i128(100n)]))]),
@@ -971,7 +977,8 @@ const SYNTHETIC = pinsOf(withDeploymentV2(TESTNET, V2_FIXTURE));
 }
 
 for (const [name, t, intent, extra] of syn) {
-  vectors.push(judge({ name, tx: t, intent, user, sponsor, pins: SYNTHETIC, now: NOW, ...extra }));
+  const { v1Only, ...rest } = extra ?? {};
+  vectors.push(judge({ name, tx: t, intent, user, sponsor, pins: v1Only ? { allowed: SYNTHETIC.allowed, v2: null } : SYNTHETIC, now: NOW, ...rest }));
 }
 
 await Deno.mkdir(out, { recursive: true });

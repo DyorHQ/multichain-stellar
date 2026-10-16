@@ -163,6 +163,8 @@ const ROUTE = "the swap route goes through a token this app doesn't list";
 const LAUNCH_RECIPIENT = "the creator fees go to another address than the one you confirmed";
 const LAUNCH_SETTINGS = "the launch settings are not the ones shown";
 const MOMENT_SETTINGS = "the Moment's price, allocation or window is not the one shown";
+/** v1's launch or publish once v2 is pinned: their rules bind none of what v2's do (recipient, settings, minimum). */
+const V1_CLOSED = "this generation no longer takes new launches or Moments";
 
 // Contract structs as their ScVal maps name their fields (contracts/launchpad-v2/src/storage.rs, contracts/moments-v2,
 // contracts/common/src/types.rs). A struct is read only when it has exactly these fields.
@@ -455,8 +457,10 @@ const CALL_RULES: Record<string, CallRule> = {
     routeListed(rc, tokens, tokenIn, out!);
     atLeast(intOf(args[4]), minimumFor(rc.intent, out));
   },
-  // Launchpad launch(creator, quote, name, symbol, uri, creator_fee_bps, initial_buy, min_tokens_out).
+  // Launchpad launch(creator, quote, name, symbol, uri, creator_fee_bps, initial_buy, min_tokens_out). Refused once v2
+  // is pinned: new launches are v2's, whose rule binds what the user typed; v1's launches keep trading and claiming.
   launch: (args, rc) => {
+    if (rc.v2) fail(V1_CLOSED);
     arity(args, 8);
     actsFor(rc, args[0]);
   },
@@ -486,8 +490,9 @@ const CALL_RULES: Record<string, CallRule> = {
     arity(args, 1);
     if (addrOf(args[0]) === null) fail(ARGUMENTS);
   },
-  // Moments publish(creator, uri, price, quote, max_editions, window_secs).
+  // Moments publish(creator, uri, price, quote, max_editions, window_secs). Refused once v2 is pinned, as launch is.
   publish: (args, rc) => {
+    if (rc.v2) fail(V1_CLOSED);
     arity(args, 6);
     actsFor(rc, args[0]);
   },

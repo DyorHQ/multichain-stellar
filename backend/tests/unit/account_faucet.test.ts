@@ -332,6 +332,38 @@ Deno.test("two claims at once claim once: the second finds the first's row under
   const answers = await Promise.all([ask("POST", "/account/faucet", token), ask("POST", "/account/faucet", token)]);
   assertEquals(answers.map((a) => a.status).sort(), [200, 429]);
   assertEquals([sent.length, claimRows(me).length, ledger.get(me)], [1, 1, 50_000_000n + GRANT]);
+  assertEquals(friendbotAsked.length, 1, "the claim is checked under the lock before Friendbot funds anything");
+});
+
+Deno.test("a faucet tap racing a Friendbot activation: the activation's claim is logged under the same lock, so the tap claims nothing", async () => {
+  reset();
+  friendbotAnswers = "text"; // Friendbot's answer names no transaction: activate looks it up on Horizon,
+  horizonLag = 3; //            which lists it a few seconds late: the claim is logged only then.
+  const me = Keypair.random().publicKey();
+  const token = await tokenFor(me);
+  const activation = ask("POST", "/account/activate", token);
+  while (!ledger.has(me)) await new Promise((r) => setTimeout(r, 20)); // Friendbot has funded the account
+  const faucet = await ask("POST", "/account/faucet", token);
+  const act = await activation;
+  assertEquals([act.status, act.body.kind], [200, "trust"]);
+  assertEquals([faucet.status, faucet.body.error?.code], [429, "faucet_used"]);
+  assertEquals(ledger.get(me), GRANT, "one Friendbot grant");
+  assertEquals(claimRows(me).length, 1);
+  assertEquals(friendbotAsked, [me], "no temporary account funded for the tap");
+});
+
+Deno.test("activation and the faucet are rate-limited per address", async () => {
+  reset();
+  const me = Keypair.random().publicKey();
+  ledger.set(me, 50_000_000n);
+  const token = await tokenFor(me);
+  const taps = [];
+  for (let i = 0; i < 4; i++) taps.push(await ask("POST", "/account/faucet", token));
+  assertEquals(taps.map((t) => t.body.error?.code ?? t.status), [200, "faucet_used", "faucet_used", "rate_limited"]);
+  const activations = [];
+  for (let i = 0; i < 6; i++) activations.push((await ask("POST", "/account/activate", token)).status);
+  assertEquals(activations, [200, 200, 200, 200, 200, 429]);
+  assertEquals(friendbotAsked.length, 1);
 });
 
 Deno.test("a merge the network refused sent nothing: the claim is still to make, and the next one goes through", async () => {

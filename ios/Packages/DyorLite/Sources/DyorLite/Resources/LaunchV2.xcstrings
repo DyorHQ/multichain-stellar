@@ -442,6 +442,35 @@
         }
       }
     },
+    "The launch doesn't match what you chose. Nothing was signed. Review your launch again." : {
+      "comment" : "An error: the launch the server built binds another fee recipient, early-buy exemptions, creator fee or holder sharing than the user chose.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El lanzamiento no coincide con lo que elegiste. No se firmó nada. Revisa tu lanzamiento de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le lancement ne correspond pas à ce que vous avez choisi. Rien n'a été signé. Vérifiez à nouveau votre lancement."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "런치가 선택한 내용과 일치하지 않습니다. 아무것도 서명하지 않았습니다. 런치를 다시 검토하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此次发行与你的选择不一致。未签署任何内容。请重新检查你的发行。"
+          }
+        }
+      }
+    },
     "The launchpad's terms aren't the ones this version of DyorHQ signs. Update DyorHQ to launch." : {
       "comment" : "An error before the launch review: the launchpad's terms (its fee or its waiting times) differ from the ones this build of the app may sign. DyorHQ is never translated",
       "localizations" : {

@@ -669,7 +669,7 @@ public final class LiteSession {
                 guard gen == generation else { return }
                 // The step's own figure once it exists (its decoded fee when built), never above the one shown.
                 setupFee = fees
-                _ = try await backend.run(plan, user: address, limits: [:], fees: fees, signer: signer, onEvent: { event in
+                _ = try await backend.run(plan, user: address, limits: [:], bindings: .none, fees: fees, signer: signer, onEvent: { event in
                     if case .submitted = event { sent.mark() }
                 })
             }
@@ -1183,7 +1183,8 @@ public final class LiteSession {
         case let runner as PlanRunner.Failure:
             switch runner {
             case .failedOnChain, .timedOut: return .server(LiteErrorText.describe(runner))
-            case .refused, .overLimit, .feeAboveConfirmed: return sent ? .server(LiteErrorText.describe(runner)) : .setUpFailed
+            case .refused, .overLimit, .feeAboveConfirmed, .minimumNotConfirmed, .destinationNotConfirmed, .settingsNotConfirmed:
+                return sent ? .server(LiteErrorText.describe(runner)) : .setUpFailed
             }
         case LiteAPIError.decoding:
             return sent ? .server(LiteErrorText.describe(error)) : .setUpFailed
@@ -1275,8 +1276,9 @@ final class AccountSigningRun: LiteSigningRun {
 protocol LiteBackend: Sendable {
     /// The API the session signs in, renews and reads through, and the store builds through.
     var api: LiteAPI { get }
-    /// Verifies, signs and sends a plan's steps for `user`, within `limits` and the `fees` the user confirmed.
-    func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
+    /// Verifies, signs and sends a plan's steps for `user`, within `limits`, the `bindings` (minimums, destination and
+    /// memo) and the `fees` the user confirmed.
+    func run(_ plan: PlanView, user: String, limits: [String: Int64], bindings: PlanBindings, fees: PlanFees,
              signer: @Sendable () async throws -> any StellarHashSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus]
 }
 
@@ -1285,10 +1287,10 @@ struct LiveBackend: LiteBackend {
     let pinned: PinnedContracts
 
     /// `PlanRunner` with launch tokens checked on the build's pinned RPC (§5.5), never the one the server names.
-    func run(_ plan: PlanView, user: String, limits: [String: Int64], fees: PlanFees,
+    func run(_ plan: PlanView, user: String, limits: [String: Int64], bindings: PlanBindings, fees: PlanFees,
              signer: @Sendable () async throws -> any StellarHashSigner, onEvent: @Sendable (PlanRunner.Event) -> Void) async throws -> [TxStatus] {
         let runner = PlanRunner(api: api, user: user, pinned: pinned, inspector: ContractInspector(pinned: pinned))
-        return try await runner.run(plan, limits: limits, fees: fees, signer: signer, onEvent: onEvent)
+        return try await runner.run(plan, limits: limits, bindings: bindings, fees: fees, signer: signer, onEvent: onEvent)
     }
 }
 

@@ -245,6 +245,11 @@ public final class LiteStore {
         try await history(.myMoments) { try await self.api.myMoments() }
     }
 
+    /// My Moments of contracts v2 (DyorHQ's history), the same part as v1's.
+    public func myMomentsV2() async throws -> StellarMyMomentsV2 {
+        try await history(.myMoments) { try await self.api.myMomentsV2() }
+    }
+
     /// An Earn market's supply rate and utilization over `range` (`.week` or `.month`; public).
     public func earnHistory(pool: String, asset: String, range: VolumePeriodKey) async throws -> StellarEarnHistory {
         try await api.earnHistory(pool: pool, asset: asset, range: range)
@@ -366,9 +371,15 @@ public final class LiteStore {
         let plan = try await api.buildSwap(quoteId: quote.quoteId, venue: venue)
         let sell = code(quote.sell)
         let buy = code(quote.buy)
-        let out = venue.flatMap { v in quote.routes?.first { $0.venue == v }?.amountOut } ?? quote.best.amountOut
+        let route = venue.flatMap { v in quote.routes?.first { $0.venue == v } }
+        let out = route?.amountOut ?? quote.best.amountOut
+        let least = try Self.swapMinimum(quoted: out, minOut: route?.minOut ?? quote.best.minOut, slippageBps: quote.slippageBps)
+        // The asset the user chose to buy, pinned on the phone: the verifiers let the bought token off the route
+        // allowlist because the intent names it, so the run must hold the intent to this one.
+        let bought = contract(quote.buy)
+        guard bought != PlanBindings.anyAsset else { throw PlanRunner.Failure.refused(step: tr("Swap"), reason: "the asset you buy can't be checked") }
         let main = LiteTitles.intent(kind: "swap", display: ["amountIn": .string(quote.amountIn), "sell": .string(sell), "buy": .string(buy)])
-        return try prepare(plan, limits: limit(quote.sell, quote.amountIn), title: tr("Swap"),
+        return try prepare(plan, limits: limit(quote.sell, quote.amountIn), bindings: PlanBindings(minimums: [bought: least]), title: tr("Swap"),
                            titles: Self.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string(buy)])),
                            section: isLaunchToken(quote.sell) || isLaunchToken(quote.buy) ? .launch : .spot, reference: "stellar:swap",
                            summary: .swap(amountIn: Int64(quote.amountIn) ?? 0, sell: sell, buy: buy, quotedOut: Int64(out) ?? 0))
@@ -378,7 +389,8 @@ public final class LiteStore {
     public func sendPlan(asset: String, to: String, amount: Int64, memo: String?, memoType: String? = nil) async throws -> PreparedAction {
         try await ensureSession()
         let plan = try await api.send(asset: asset, to: to, amount: amount, memo: memo, memoType: memoType)
-        return try prepare(plan, limits: limit(asset, String(amount)), title: tr("Send"), section: .spot, reference: "stellar:home",
+        let typed = PlanBindings(destination: .confirmed(to: to, memo: Self.boundMemo(memo, type: memoType)))
+        return try prepare(plan, limits: limit(asset, String(amount)), bindings: typed, title: tr("Send"), section: .spot, reference: "stellar:home",
                            summary: .send(amount: amount, code: code(asset), to: to))
     }
 
@@ -395,7 +407,9 @@ public final class LiteStore {
         try await ensureSession()
         let plan = try await api.buildEarn(deposit: deposit, pool: market.pool, asset: market.asset, amount: amount)
         let main = LiteTitles.intent(kind: deposit ? "earn_deposit" : "earn_withdraw", display: ["amount": .string(String(amount)), "asset": .string(market.code)])
-        return try prepare(plan, limits: deposit ? [market.asset: amount] : [:], title: deposit ? tr("Deposit") : tr("Withdraw"),
+        // A withdrawal receives what the user asked for, at least.
+        return try prepare(plan, limits: deposit ? [market.asset: amount] : [:],
+                           bindings: deposit ? .none : PlanBindings(minimums: [market.asset: amount]), title: deposit ? tr("Deposit") : tr("Withdraw"),
                            titles: Self.unbuilt(plan, main: main, before: LiteTitles.intent(kind: "trust", display: ["asset": .string(market.code)])),
                            section: .earn, reference: "stellar:earn/\(market.id)", summary: .earn(deposit: deposit, amount: amount, code: market.code))
     }
@@ -414,7 +428,8 @@ public final class LiteStore {
         request.minOut = String(minOut)
         let quote = try await quoteAsset(of: token)
         let plan = try await api.buildLaunch(request)
-        return try prepare(plan, limits: [buy ? quote : token: amount], title: buy ? tr("Buy") : tr("Sell"), section: .launch,
+        return try prepare(plan, limits: [buy ? quote : token: amount], bindings: PlanBindings(minimums: [buy ? token : quote: minOut]),
+                           title: buy ? tr("Buy") : tr("Sell"), section: .launch,
                            reference: "stellar:launch/\(token)",
                            summary: .launchTrade(buy: buy, symbol: code(token), amount: amount, quoteCode: code(quote)))
     }
@@ -436,7 +451,8 @@ public final class LiteStore {
         request.minOut = String(form.minOut)
         let plan = try await api.buildLaunch(request)
         let quote = asset(form.quote)?.contract ?? form.quote
-        return try prepare(plan, limits: form.developerBuy > 0 ? [quote: form.developerBuy] : [:], title: tr("Launch a coin"),
+        return try prepare(plan, limits: form.developerBuy > 0 ? [quote: form.developerBuy] : [:],
+                           bindings: form.developerBuy > 0 ? PlanBindings(minimums: [PlanBindings.anyAsset: form.minOut]) : .none, title: tr("Launch a coin"),
                            section: .launch, reference: nil, summary: .launchCreate(symbol: symbol, name: form.name))
     }
 
@@ -508,7 +524,8 @@ public final class LiteStore {
         let start = try await api.bridgeStart(toStellar: false, amount: String(amount), monadAddress: monadAddress)
         guard let plan = start.plan else { throw LiteAPIError.decoding("the bridge plan") }
         let send = LiteTitles.intent(kind: "bridge_out", display: ["amount": .string(String(amount))])
-        let action = try prepare(plan, limits: limit("USDC", String(amount)), title: tr("Send to Monad"), titles: Self.unbuilt(plan, main: send, before: nil),
+        let action = try prepare(plan, limits: limit("USDC", String(amount)), bindings: PlanBindings(destination: .confirmed(to: monadAddress, memo: nil)),
+                                 title: tr("Send to Monad"), titles: Self.unbuilt(plan, main: send, before: nil),
                                  section: .bridge, reference: "stellar:bridge/\(start.transfer.id)", summary: .bridgeOut(amount: amount))
         return (action, start.transfer)
     }
@@ -586,13 +603,85 @@ public final class LiteStore {
     }
 
     /// The plan, priced on the phone: a step above the pinned caps throws here, so the review never shows a fee the
-    /// run would refuse.
-    func prepare(_ plan: PlanView, limits: [String: Int64], title: String, titles: [String: String] = [:], section: LiteSection,
-                 reference: String?, summary: LiteActionSummary) throws -> PreparedAction {
+    /// run would refuse. `bindings`: what the user's form computed and typed besides the spends (the minimums, the
+    /// destination and memo); a step already built that names other ones throws here too, and the run holds every step
+    /// to them (`PlanRunner.run`).
+    func prepare(_ plan: PlanView, limits: [String: Int64], bindings: PlanBindings = .none, title: String, titles: [String: String] = [:],
+                 section: LiteSection, reference: String?, summary: LiteActionSummary) throws -> PreparedAction {
+        try Self.checkBuilt(plan, bindings: bindings, user: address, pinned: env.pinned)
         let fees = try PlanFees(plan: plan, pinned: env.pinned, estimates: fees)
         let spends = limits.keys.sorted().map { isXLM($0) ? "XLM" : code($0) }
-        return PreparedAction(plan: plan, limits: limits, title: title, titles: titles, section: section, reference: reference, fees: fees, summary: summary,
-                              spends: spends)
+        return PreparedAction(plan: plan, limits: limits, bindings: bindings, title: title, titles: titles, section: section, reference: reference,
+                              fees: fees, summary: summary, spends: spends)
+    }
+
+    /// The steps the server built already, against `bindings`, in plan order: the review never shows a minimum, a
+    /// destination or a memo the run would refuse. A step not built yet is checked when the run builds it.
+    nonisolated static func checkBuilt(_ plan: PlanView, bindings: PlanBindings, user: String, pinned: PinnedContracts) throws {
+        var check = PlanBindings.Check(bindings, user: user, pinned: pinned)
+        for (index, step) in plan.steps.enumerated() {
+            guard let intent = step.intent else { continue }
+            do {
+                try check.step(intent, spends: intent.spend.values.contains { (Int64($0) ?? 1) != 0 }, last: index == plan.steps.count - 1)
+            } catch PlanBindings.Refusal.minimum {
+                throw PlanRunner.Failure.minimumNotConfirmed(step: step.label)
+            } catch PlanBindings.Refusal.destination {
+                throw PlanRunner.Failure.destinationNotConfirmed(step: step.label)
+            } catch PlanBindings.Refusal.settings {
+                throw PlanRunner.Failure.settingsNotConfirmed(step: step.label)
+            }
+        }
+    }
+
+    /// A swap's minimum as the screen showed it: the route's own (`minOut`), never less than the quoted amount less the
+    /// quote's slippage, and never nothing.
+    nonisolated static func swapMinimum(quoted: String, minOut: String?, slippageBps: Int) throws -> Int64 {
+        let out = Int64(quoted) ?? 0
+        let bps = Int64(min(max(slippageBps, 0), 10_000))
+        let product = out.multipliedFullWidth(by: 10_000 - bps)
+        let floor = out > 0 && product.high < 10_000 ? Int64(10_000).dividingFullWidth(product).quotient : 0
+        let least = max(minOut.flatMap { Int64($0) } ?? 0, floor)
+        guard least > 0 else { throw PlanRunner.Failure.minimumNotConfirmed(step: tr("Swap")) }
+        return least
+    }
+
+    /// The memo the user typed, as the server binds it in a send's intent (account.ts `memoOf`): an id as its number, a
+    /// hash as 64 lowercase hex characters (from hex or base64), text as typed; nil without one.
+    nonisolated static func boundMemo(_ value: String?, type: String?) -> Intent.Memo? {
+        guard let value, !value.isEmpty else { return nil }
+        switch type ?? "text" {
+        case "id":
+            return Intent.Memo(type: "id", value: UInt64(value).map(String.init) ?? value)
+        case "hash":
+            let isHex = value.count == 64 && value.allSatisfy(\.isHexDigit)
+            if isHex { return Intent.Memo(type: "hash", value: value.lowercased()) }
+            guard let bytes = Data(base64Encoded: value), bytes.count == 32 else { return Intent.Memo(type: "hash", value: value) }
+            return Intent.Memo(type: "hash", value: bytes.map { String(format: "%02x", $0) }.joined())
+        default:
+            return Intent.Memo(type: type ?? "text", value: value)
+        }
+    }
+
+    /// The key a step's `intent.receive` names an asset by, worked out on the phone rather than taken from the server's
+    /// config: a registry asset ("XLM", "USDC") by its contract when the build pins it (the `token` role), else by the
+    /// asset contract of its classic asset (native, or CODE:ISSUER); a C… as given; a CODE:ISSUER by its asset contract.
+    /// `PlanBindings.anyAsset` when none of these applies, which a swap refuses (`swapPlan`).
+    func contract(_ asset: String) -> String {
+        if let info = config?.asset(asset) {
+            if env.pinned.contracts("token").contains(info.contract) { return info.contract }
+            if let classic = info.classic { return Self.assetContract(classic, network: env.pinned.network) ?? PlanBindings.anyAsset }
+            return PlanBindings.anyAsset
+        }
+        if StrKey.isValid(.contract, asset) { return asset }
+        return Self.assetContract(asset, network: env.pinned.network) ?? PlanBindings.anyAsset
+    }
+
+    /// A classic asset's contract ("native", or CODE:ISSUER), as Stellar derives it; nil for anything else.
+    nonisolated static func assetContract(_ classic: String, network: StellarNetwork) -> String? {
+        if classic == "native" { return AssetContract.id(.native, network: network) }
+        let parts = classic.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, (1...12).contains(parts[0].count), StrKey.isValid(.accountID, parts[1]) else { return nil }
+        return AssetContract.id(.credit(code: parts[0], issuer: parts[1]), network: network)
     }
 
     // MARK: - Running
@@ -618,7 +707,7 @@ public final class LiteStore {
         let signing = try await session.beginSigning(reason: reason)
         defer { signing.end() }
         let step = StepTitle()
-        let results = try await backend.run(action.plan, user: address, limits: action.limits, fees: action.fees,
+        let results = try await backend.run(action.plan, user: address, limits: action.limits, bindings: action.bindings, fees: action.fees,
                                             signer: { try await signing.signer(reason: step.title ?? action.title) },
                                             onEvent: { event in
                                                 if case let .signing(id, label) = event {
@@ -699,6 +788,59 @@ public final class LiteStore {
 }
 
 /// The title of the step being signed now: what the passkey prompt names.
+/// A step's display fields as a store compares them with its own form (`LaunchV2Store.formChanges`,
+/// `MomentsV2Store.formChanges`). A list reads the same whether the server sends it as an array or as a comma-separated
+/// string; a field that is absent or of another kind reads as nil, which never matches a form's value.
+struct BoundDisplay {
+    private let display: [String: StellarJSON]
+
+    init(_ display: [String: StellarJSON]?) {
+        self.display = display ?? [:]
+    }
+
+    /// A whole number, sent as a number or as its digits.
+    func whole(_ key: String) -> Int? {
+        switch display[key] {
+        case .number(let n)? where n == n.rounded() && abs(n) < 1e15: Int(n)
+        case .string(let s)?: Int(s)
+        default: nil
+        }
+    }
+
+    /// A base-units amount or another figure, as its digits.
+    func text(_ key: String) -> String? {
+        switch display[key] {
+        case .string(let s)?: s
+        case .number(let n)? where n == n.rounded() && abs(n) < 1e15: String(Int64(n))
+        default: nil
+        }
+    }
+
+    func flag(_ key: String) -> Bool? {
+        switch display[key] {
+        case .bool(let b)?: b
+        case .string("true")?: true
+        case .string("false")?: false
+        default: nil
+        }
+    }
+
+    /// A list of strings: the field read back through its JSON, so an array reads as one.
+    func strings(_ key: String) -> [String]? {
+        guard display[key] != nil, let data = try? JSONEncoder().encode(display),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        switch object[key] {
+        case let list as [Any]:
+            let strings = list.compactMap { $0 as? String }
+            return strings.count == list.count ? strings : nil
+        case let text as String:
+            return text.isEmpty ? [] : text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        default:
+            return nil
+        }
+    }
+}
+
 private final class StepTitle: @unchecked Sendable {
     private let lock = NSLock()
     private var value: String?

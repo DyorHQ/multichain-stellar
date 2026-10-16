@@ -767,6 +767,35 @@
         }
       }
     },
+    "Images up to 10 MB." : {
+      "comment" : "Under the image link field of Publish a Moment on Stellar: the image the link names is larger than the limit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imágenes de hasta 10 MB."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Images jusqu'à 10 Mo."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이미지는 최대 10MB입니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片最大 10 MB。"
+          }
+        }
+      }
+    },
     "In My Moments once it settles" : {
       "comment" : "The value of the collect review's 'Your NFTs' row",
       "localizations" : {
@@ -1403,6 +1432,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Soroswap · 永久锁定"
+          }
+        }
+      }
+    },
+    "That link couldn't be fetched. Check it, or choose the file instead." : {
+      "comment" : "Under a link field of Publish a Moment on Stellar: the phone couldn't download what the link names",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo descargar ese enlace. Revísalo o elige el archivo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de récupérer ce lien. Vérifiez-le ou choisissez plutôt le fichier."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 링크를 가져올 수 없어요. 링크를 확인하거나 파일을 직접 선택하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法获取该链接。请检查链接，或改为选择文件。"
+          }
+        }
+      }
+    },
+    "That link isn't an image DyorHQ can use." : {
+      "comment" : "Under the image link field of Publish a Moment on Stellar: what the link names isn't a photo (a web page, an SVG) or is too large to draw. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ese enlace no es una imagen que DyorHQ pueda usar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce lien n'est pas une image que DyorHQ peut utiliser."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 링크는 DyorHQ에서 쓸 수 있는 이미지가 아니에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该链接不是 DyorHQ 可用的图片。"
+          }
+        }
+      }
+    },
+    "That link isn't an MP4 or MOV video." : {
+      "comment" : "Under the video link field of Publish a Moment on Stellar: what the link names isn't a video the app can play. MP4 and MOV are file types, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ese enlace no es un vídeo MP4 o MOV."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ce lien n'est pas une vidéo MP4 ou MOV."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 링크는 MP4 또는 MOV 동영상이 아니에요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该链接不是 MP4 或 MOV 视频。"
           }
         }
       }

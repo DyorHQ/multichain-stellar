@@ -101,6 +101,9 @@ public enum LiteErrorText {
         case let .failedOnChain(step, _, code?): return resultCode(code) ?? tr("\(step) failed on the network (\(code)).")
         case let .failedOnChain(step, _, nil): return tr("\(step) failed on the network.")
         case let .timedOut(step, _): return tr("\(step) was sent; confirmation not seen yet.")
+        case let .minimumNotConfirmed(step): return tr("Not signed: \(step) doesn't guarantee the minimum you confirmed. Nothing was sent.")
+        case let .destinationNotConfirmed(step): return tr("Not signed: \(step) doesn't pay the address and memo you confirmed. Nothing was sent.")
+        case let .settingsNotConfirmed(step): return tr("Not signed: \(step) doesn't have the settings you chose. Nothing was sent.")
         }
     }
 

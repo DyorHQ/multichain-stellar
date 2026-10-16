@@ -6,6 +6,9 @@ public struct PreparedAction: Identifiable, Equatable {
     public let plan: PlanView
     /// The most the user confirms spending, per asset contract id (base units). An asset not listed may not be spent.
     public let limits: [String: Int64]
+    /// What else the user confirmed, from the screen's own form: the least each trade brings back and the destination
+    /// and memo the user typed (`PlanBindings`). The run refuses any step that names other ones.
+    public let bindings: PlanBindings
     public let title: String
     /// The phone's titles for the steps the server hasn't built yet, by step id: they come with an English label only.
     public let titles: [String: String]
@@ -25,10 +28,11 @@ public struct PreparedAction: Identifiable, Equatable {
     let spends: [String]
     public var id: String { plan.planId }
 
-    init(plan: PlanView, limits: [String: Int64], title: String, titles: [String: String], section: LiteSection, reference: String?,
-         fees: PlanFees, summary: LiteActionSummary, spends: [String] = []) {
+    init(plan: PlanView, limits: [String: Int64], bindings: PlanBindings = .none, title: String, titles: [String: String], section: LiteSection,
+         reference: String?, fees: PlanFees, summary: LiteActionSummary, spends: [String] = []) {
         self.plan = plan
         self.limits = limits
+        self.bindings = bindings
         self.title = title
         self.titles = titles
         self.section = section

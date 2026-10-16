@@ -12,7 +12,7 @@ import { sql } from "../../_shared/db.ts";
 import { env } from "../../_shared/env.ts";
 import { localMediaEnabled, readLocal } from "../../_shared/localmedia.ts";
 import { anyUpload, mediaBase } from "../../_shared/media.ts";
-import type { MomentMetadataFields } from "../../_shared/moments.ts";
+import { type MomentMetadataFields, takenParts } from "../../_shared/moments.ts";
 import { sv, view } from "../../_shared/stellar.ts";
 import type { ContractEvent } from "../jobs/main_events.ts";
 
@@ -108,7 +108,7 @@ export function metadataFromJson(json: unknown): MomentMetadataFields | null {
     title,
     description: typeof m.description === "string" && m.description.trim() ? m.description.trim().slice(0, 500) : null,
     place: place ? place.slice(0, 64) : null,
-    takenOn: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
+    takenOn: takenParts(date)?.text ?? null,
     mediaType: video ? "video" : "image",
     mediaUrl: (video ?? image)!,
     // An empty poster means none: the Moment stays off the feed.
@@ -186,7 +186,7 @@ export async function momentsEvent(event: ContractEvent): Promise<void> {
                                 description, place, taken_on, media_type, poster_url, platform_bps, royalty_bps, listed)
       values (${p.id}, ${p.creator}, ${p.uri}, ${meta?.title ?? null}, ${meta?.mediaUrl ?? null}, ${p.price.toString()}, ${p.quote},
               ${p.maxEditions}, ${p.deadline}, ${e.ledger}, ${ts}, ${meta?.description ?? null}, ${meta?.place ?? null},
-              ${meta?.takenOn ?? null}, ${meta?.mediaType ?? null}, ${meta?.posterUrl || null}, ${terms?.platformBps ?? null},
+              ${takenParts(meta?.takenOn)?.day ?? null}, ${meta?.mediaType ?? null}, ${meta?.posterUrl || null}, ${terms?.platformBps ?? null},
               ${terms?.royaltyBps ?? null}, ${listed})
       on conflict (id) do nothing`;
   } else if (kind === "collect") {

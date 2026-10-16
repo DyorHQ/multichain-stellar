@@ -33,6 +33,13 @@ confirm() {
 }
 # --linked with --project-ref goes through the Management API for that project; no folder needs linking.
 query() { supabase db query --linked --project-ref "$REF" "$@"; }
+# Runs a command whose input holds a secret (a SQL file with a password or a Vault value, the function secrets) with all
+# of its output kept back: a failed statement's error can quote the statement, so only "failed" is ever printed.
+quiet_secret() {
+  local what=$1
+  shift
+  "$@" >/dev/null 2>&1 || die "$what failed (its output is withheld because it may contain the secret); nothing was deleted, run this step again"
+}
 # The migrations in filename order, but the cron job's, which runs last (step cron).
 migrations() { find "$MIG" -name '*.sql' ! -name '*_lite_cron.sql' | LC_ALL=C sort; }
 cron_migration() { find "$MIG" -name '*_lite_cron.sql'; }
@@ -75,7 +82,7 @@ migrate() {
 role() {
   [ -f "$SECRETS/lite-api-role.sql" ] || die "no .secrets/lite-api-role.sql: make it with new-testnet-secrets.ts --db-role $REF aws-1-eu-west-1.pooler.supabase.com"
   confirm "set the lite_api role's password (a SCRAM verifier, from .secrets/lite-api-role.sql)"
-  query --file "$SECRETS/lite-api-role.sql" >/dev/null
+  quiet_secret "setting the lite_api password" query --file "$SECRETS/lite-api-role.sql"
   rm -f "$SECRETS/lite-api-role.sql"
   say "lite_api role password set; .secrets/lite-api-role.sql deleted"
 }
@@ -83,7 +90,7 @@ role() {
 secrets() {
   [ -f "$SECRETS/testnet-functions.env" ] || die "no .secrets/testnet-functions.env"
   confirm "set the function secrets on $REF from .secrets/testnet-functions.env (names: $(sed -n 's/^\([A-Z_]*\)=.*/\1/p' "$SECRETS/testnet-functions.env" | tr '\n' ' '))"
-  supabase secrets set --project-ref "$REF" --env-file "$SECRETS/testnet-functions.env" >/dev/null
+  quiet_secret "setting the function secrets" supabase secrets set --project-ref "$REF" --env-file "$SECRETS/testnet-functions.env"
   say "function secrets set"
 }
 
@@ -98,7 +105,7 @@ vault() {
     deno run -A --config "$ROOT/backend/supabase/functions/deno.json" "$ROOT/backend/scripts/new-testnet-secrets.ts" --vault-sql "$REF"
   fi
   confirm "create or update the Vault entries lite_indexer_url and lite_cron_secret (from .secrets/testnet-vault.sql)"
-  query --file "$SECRETS/testnet-vault.sql" >/dev/null
+  quiet_secret "setting the Vault entries" query --file "$SECRETS/testnet-vault.sql"
   rm -f "$SECRETS/testnet-vault.sql"
   say "Vault entries set; .secrets/testnet-vault.sql deleted"
 }

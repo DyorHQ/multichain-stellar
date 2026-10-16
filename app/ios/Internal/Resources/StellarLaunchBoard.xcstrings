@@ -1,0 +1,424 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%lld claims · each asks for %@" : {
+      "comment" : "The Claim All review on Stellar, above its button, when App Lock is on: each claim is its own transaction and asks for Face ID or the passcode on its own. The first value is how many claims, the second the prompt's name (Face ID, Touch ID, Passcode)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld claims · each asks for %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld reclamos · cada uno pide %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld réclamations · chacune demande %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld건 · 건마다 %2$@ 필요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld 项领取 · 每项都需要 %2$@"
+          }
+        }
+      }
+    },
+    "%lld steps · each asks for your passkey" : {
+      "comment" : "The Claim All review on Stellar, above its button, on a passkey account: how many transactions the claims sign, each with its own passkey prompt",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld pasos · cada uno pide tu llave de acceso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld étapes · chacune demande votre clé d'accès"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld단계 · 단계마다 패스키 필요"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个步骤 · 每步都需要你的通行密钥"
+          }
+        }
+      }
+    },
+    "Add XLM" : {
+      "comment" : "Button in the Claim All review on Stellar when the account's XLM is short: opens Deposit to add XLM. XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Añadir XLM"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajouter des XLM"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 추가"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "添加 XLM"
+          }
+        }
+      }
+    },
+    "Dollar values use mainnet market prices. Testnet assets have no value." : {
+      "comment" : "Under My Launchpad's dollar figures on Stellar testnet: they come from real mainnet prices, while testnet assets themselves are worth nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los valores en dólares usan precios de mercado de mainnet. Los activos de testnet no tienen valor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les valeurs en dollars utilisent les prix du marché du mainnet. Les actifs du testnet n'ont aucune valeur."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "달러 가치는 메인넷 시장 가격을 사용해요. 테스트넷 자산은 가치가 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "美元价值采用主网市场价格。测试网资产没有价值。"
+          }
+        }
+      }
+    },
+    "Each claim is its own transaction, sent one after another. Your phone checks each one against this review before it signs, and refuses anything else." : {
+      "comment" : "The Claim All review on My Launchpad on Stellar: every claim is a separate transaction, and the phone signs only what the review shows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cada reclamo es su propia transacción y se envían uno tras otro. Tu teléfono comprueba cada una con esta revisión antes de firmarla y rechaza cualquier otra cosa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chaque réclamation est une transaction à part, envoyées l'une après l'autre. Votre téléphone vérifie chacune par rapport à ce récapitulatif avant de la signer, et refuse tout le reste."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수령마다 별도의 거래이며 차례로 보내져요. 휴대폰은 서명하기 전에 각 거래를 이 검토 내용과 대조하고, 그 밖의 것은 모두 거부해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每笔领取都是单独的一笔交易，依次发送。你的手机会在签名前将每笔交易与此确认页核对，并拒绝任何不符的内容。"
+          }
+        }
+      }
+    },
+    "Launches appear here once the DyorHQ launchpad is live on Stellar." : {
+      "comment" : "Stellar's empty Launch board while DyorHQ's launchpad isn't deployed on this Stellar network yet. DyorHQ and Stellar are never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los lanzamientos aparecerán aquí cuando el launchpad de DyorHQ esté activo en Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les lancements apparaîtront ici dès que le launchpad DyorHQ sera actif sur Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 런치패드가 Stellar에서 시작되면 여기에 런칭이 표시돼요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ Launchpad 在 Stellar 上线后，发射的币会显示在这里。"
+          }
+        }
+      }
+    },
+    "New launches are paused." : {
+      "comment" : "On Stellar's Launch board: DyorHQ paused new launches on its launchpad for now; coins already launched keep trading",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los nuevos lanzamientos están en pausa."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les nouveaux lancements sont en pause."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "새 런칭이 일시 중지됐어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新发射已暂停。"
+          }
+        }
+      }
+    },
+    "Not enough XLM for these claims' network fees." : {
+      "comment" : "The Claim All review on Stellar: the account's XLM can't pay the network fees of all the claims. XLM is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente XLM para las comisiones de red de estos reclamos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas assez de XLM pour les frais de réseau de ces réclamations."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 수령들의 네트워크 수수료를 낼 XLM이 부족해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "XLM 不足以支付这些领取的网络费用。"
+          }
+        }
+      }
+    },
+    "On DyorHQ's retired launchpad: a coin still on its curve can be sold, not bought, and its creator fees can still be claimed." : {
+      "comment" : "Under My Launchpad's Retired section on Stellar: coins from DyorHQ's previous launchpad take sales and creator fee claims only. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En el launchpad retirado de DyorHQ: una moneda que sigue en su curva se puede vender, pero no comprar, y sus comisiones del creador aún se pueden reclamar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur le launchpad retiré de DyorHQ : un coin encore sur sa courbe peut être vendu, mais pas acheté, et ses frais du créateur peuvent toujours être réclamés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ의 운영 종료된 런치패드: 아직 커브에 있는 코인은 팔 수만 있고 살 수는 없으며, 크리에이터 수수료는 계속 수령할 수 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 DyorHQ 已退役的 Launchpad 上：仍在曲线上的币只能卖出，不能买入，其创作者费用仍可领取。"
+          }
+        }
+      }
+    },
+    "Owed fees · %@" : {
+      "comment" : "A claim on My Launchpad on Stellar: creator fees owed to the account from before a coin's fee recipient changed. The value is the asset's code (XLM)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Comisiones adeudadas · %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frais dus · %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "미지급 수수료 · %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "欠付费用 · %@"
+          }
+        }
+      }
+    },
+    "Received: creator fees you claimed. Claimable: creator fees you can claim now, those owed to you from before a fee recipient change included. Holder rewards are claims of their own. Claim All sends one transaction per claim, one after another, each with its own network fee." : {
+      "comment" : "Under the fee tiles and claims of My Launchpad on Stellar: what Received and Claimable count (Claimable includes the fees owed from before a fee recipient change), that holder rewards are claimed apart, and how Claim All runs",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recibido: comisiones del creador que reclamaste. Reclamable: comisiones del creador que puedes reclamar ahora, incluidas las que se te deben de antes de un cambio de destinatario. Las recompensas para holders son reclamos aparte. Reclamar todo envía una transacción por reclamo, una tras otra, cada una con su propia comisión de red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reçu : frais du créateur que vous avez réclamés. À réclamer : frais du créateur que vous pouvez réclamer maintenant, y compris ceux qui vous sont dus d'avant un changement de bénéficiaire. Les récompenses des détenteurs sont des réclamations à part. Tout réclamer envoie une transaction par réclamation, l'une après l'autre, chacune avec ses propres frais de réseau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "받은 금액: 내가 수령한 크리에이터 수수료예요. 수령 가능: 지금 수령할 수 있는 크리에이터 수수료로, 수수료 수령인 변경 전부터 받을 수수료도 포함돼요. 홀더 보상은 따로 수령해요. 모두 수령은 수령마다 거래를 하나씩 차례로 보내며, 거래마다 네트워크 수수료가 따로 있어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收到：你已领取的创作者费用。可领取：你现在可以领取的创作者费用，包括费用接收人变更前欠你的费用。持有者奖励会单独领取。全部领取会为每笔领取依次发送一笔交易，每笔都有自己的网络费用。"
+          }
+        }
+      }
+    },
+    "Retired" : {
+      "comment" : "[tight] A section of My Launchpad on Stellar: the coins held or launched on DyorHQ's previous, retired launchpad",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "운영 종료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已退役"
+          }
+        }
+      }
+    },
+    "These creator fees now go to the coin's fee recipient, not to you." : {
+      "comment" : "The creator fee claim review on Stellar, when the coin's fee recipient is no longer this account: the claim would pay someone else, so it is refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estas comisiones del creador ahora van al receptor de comisiones de la moneda, no a ti."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ces frais du créateur vont désormais au destinataire des frais du coin, pas à vous."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 크리에이터 수수료는 이제 내가 아니라 코인의 수수료 수령인에게 가요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这些创作者费用现在归该代币的费用接收方，而不是你。"
+          }
+        }
+      }
+    },
+    "You need about %@ XLM and can spend %@ XLM. Your account keeps %@ XLM to stay open." : {
+      "comment" : "The Claim All review on Stellar, when the account's XLM is short. The values are amounts of XLM: what the claims need, what the account can spend, and the minimum balance Stellar keeps in it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "You need about %1$@ XLM and can spend %2$@ XLM. Your account keeps %3$@ XLM to stay open."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Necesitas unos %1$@ XLM y puedes gastar %2$@ XLM. Tu cuenta guarda %3$@ XLM para seguir abierta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Il vous faut environ %1$@ XLM et vous pouvez dépenser %2$@ XLM. Votre compte garde %3$@ XLM pour rester ouvert."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "약 %1$@ XLM이 필요하며 %2$@ XLM을 쓸 수 있어요. 계정을 유지하려면 %3$@ XLM이 남아 있어야 해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你需要约 %1$@ XLM，可用 %2$@ XLM。你的账户需保留 %3$@ XLM 才能保持开通。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
