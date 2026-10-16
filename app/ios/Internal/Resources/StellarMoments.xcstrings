@@ -94,6 +94,35 @@
         }
       }
     },
+    "A Moments policy change is queued. Publish once it takes effect or lapses." : {
+      "comment" : "In a Stellar Moment's publish review, when the publish can only be built after another step and a change of the Moments terms is queued: Confirm is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay un cambio de política de Moments en cola. Publica cuando entre en vigor o caduque."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un changement de règles des Moments est en attente. Publiez une fois qu'il est appliqué ou qu'il expire."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments 정책 변경이 대기 중이에요. 변경이 적용되거나 만료된 뒤 게시하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moments 政策变更正在排队。请在其生效或失效后再发布。"
+          }
+        }
+      }
+    },
     "A graduation attempt failed. Anyone can try again; it graduates as soon as an attempt succeeds." : {
       "comment" : "A Stellar Moment whose graduation failed and was recorded",
       "localizations" : {
@@ -322,6 +351,93 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "版本数量"
+          }
+        }
+      }
+    },
+    "Enable" : {
+      "comment" : "The confirm button of the review that enables USDC before a Moment is published",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "활성화"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用"
+          }
+        }
+      }
+    },
+    "Enable USDC" : {
+      "comment" : "Title of the review that enables USDC on the account before a Moment is published. USDC is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar USDC"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activer USDC"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "USDC 활성화"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启用 USDC"
+          }
+        }
+      }
+    },
+    "Enable USDC first, then review your Moment again." : {
+      "comment" : "In a Stellar Moment's publish review, when the account can't hold USDC yet: Confirm is off; closing and tapping Review again enables USDC first. USDC is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activa USDC primero y luego vuelve a revisar tu Moment."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activez d'abord USDC, puis vérifiez à nouveau votre Moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "먼저 USDC를 활성화한 다음 Moment를 다시 검토하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请先启用 USDC，然后重新查看你的 Moment。"
           }
         }
       }
@@ -709,6 +825,89 @@
         }
       }
     },
+    "Minimum %@. About %lld collects at this price reach the %@ reserve, and the coin graduates at a %@ FDV. Up to %@ of the %@ coins is yours, vesting 20%% at graduation then 16%% every %@; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (%@ to %@ days)." : {
+      "comment" : "Under Publish a Moment's economics: %1$@ the minimum price, %2$lld how many collects reach the reserve %3$@, %4$@ the FDV the coin opens at, %5$@ the most the creator keeps of the %6$@ coins, %7$@ the vesting period (“30 days”), %8$@ to %9$@ the collect window's range in days. FDV is never translated",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. About %2$lld collect at this price reaches the %3$@ reserve, and the coin graduates at a %4$@ FDV. Up to %5$@ of the %6$@ coins is yours, vesting 20%% at graduation then 16%% every %7$@; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (%8$@ to %9$@ days)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. About %2$lld collects at this price reach the %3$@ reserve, and the coin graduates at a %4$@ FDV. Up to %5$@ of the %6$@ coins is yours, vesting 20%% at graduation then 16%% every %7$@; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (%8$@ to %9$@ days)."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mínimo %1$@. Con este precio, aprox. %2$lld compra alcanza la reserva de %3$@, y la moneda se gradúa con un FDV de %4$@. Hasta %5$@ de las %6$@ monedas son tuyas, que se liberan un 20%% en la graduación y luego un 16%% cada %7$@; lo que dejes añade profundidad al pool. Se puede coleccionar hasta la graduación o hasta que se cierre el plazo (de %8$@ a %9$@ días)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Mínimo %1$@. Con este precio, aprox. %2$lld compras alcanzan la reserva de %3$@, y la moneda se gradúa con un FDV de %4$@. Hasta %5$@ de las %6$@ monedas son tuyas, que se liberan un 20%% en la graduación y luego un 16%% cada %7$@; lo que dejes añade profundidad al pool. Se puede coleccionar hasta la graduación o hasta que se cierre el plazo (de %8$@ a %9$@ días)."
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. Environ %2$lld achat à ce prix atteint la réserve de %3$@, et le jeton gradue à une FDV de %4$@. Jusqu'à %5$@ des %6$@ jetons vous reviennent, avec un vesting de 20%% à la graduation puis de 16%% par période de %7$@ ; tout ce que vous laissez renforce la profondeur du pool. La collecte se termine à la graduation ou à la clôture de la période (%8$@ à %9$@ jours)."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Minimum %1$@. Environ %2$lld achats à ce prix atteignent la réserve de %3$@, et le jeton gradue à une FDV de %4$@. Jusqu'à %5$@ des %6$@ jetons vous reviennent, avec un vesting de 20%% à la graduation puis de 16%% par période de %7$@ ; tout ce que vous laissez renforce la profondeur du pool. La collecte se termine à la graduation ou à la clôture de la période (%8$@ à %9$@ jours)."
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "최소 %1$@. 이 가격으로 약 %2$lld회 수집하면 준비금 %3$@에 도달하고, 코인은 FDV %4$@에서 졸업해요. %6$@ 코인 중 최대 %5$@까지 내 몫이며, 졸업 시 20%%, 이후 %7$@마다 16%%씩 베스팅돼요. 내가 남긴 몫은 풀의 유동성을 키워요. 수집은 졸업하거나 수집 기간(%8$@~%9$@일)이 끝나면 종료돼요."
+                }
+              }
+            }
+          }
+        },
+        "zh-Hans" : {
+          "variations" : {
+            "plural" : {
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "最低 %1$@。按此价格，约 %2$lld 次收藏即可达到 %3$@ 储备金，该币将以 %4$@ FDV 毕业。%6$@ 枚币中最多 %5$@ 归你，毕业时解锁 20%%，之后每 %7$@ 解锁 16%%；你未保留的部分会加深池子。收藏会在毕业时或收藏期结束时结束（%8$@ 至 %9$@ 天）。"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Name: at most 32 bytes. Accented letters and emoji count as more than one." : {
       "comment" : "Under the name field of Publish a Moment on Stellar: the name is too long for the contract",
       "localizations" : {
@@ -879,6 +1078,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "开放版本"
+          }
+        }
+      }
+    },
+    "Outcome" : {
+      "comment" : "A row of a Stellar Moment's graduation review: what this attempt does",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resultado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Résultat"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "결과"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结果"
           }
         }
       }
@@ -1059,6 +1287,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "原因"
+          }
+        }
+      }
+    },
+    "Records a failed attempt" : {
+      "comment" : "The value of a Stellar Moment's graduation review row 'Outcome': the attempt fails as things stand, so it only records the failure, which starts the clock to its expiry",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Registra un intento fallido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistre une tentative échouée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실패한 시도로 기록됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录一次失败的尝试"
           }
         }
       }
@@ -1436,6 +1693,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "是，随后立即"
+          }
+        }
+      }
+    },
+    "Your Moment's proceeds are paid in USDC, so your account enables it first. Then you review the publish." : {
+      "comment" : "In the review that enables USDC before a Moment is published: why, and what comes next. USDC is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los ingresos de tu Moment se pagan en USDC, así que tu cuenta lo activa primero. Después revisas la publicación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les revenus de votre Moment sont versés en USDC : votre compte l'active d'abord. Ensuite, vous vérifiez la publication."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment 수익은 USDC로 지급되므로 계정에서 먼저 USDC를 활성화해요. 그다음 게시 내용을 검토해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Moment 收益以 USDC 支付，因此你的账户需先启用 USDC。之后你再查看发布内容。"
           }
         }
       }

@@ -41,6 +41,10 @@ struct StellarCreateMomentView: View {
     /// The form and the terms as they were when Review was tapped, the terms read again then: the sheet shows these and
     /// publishes the form, and Confirm stays off if the plan binds other terms.
     @State private var reviewed: Reviewed?
+    /// A review waiting on the account's USDC: enabled first, in its own review, then this one opens (`review()`).
+    @State private var enabling: Reviewed?
+    /// That review, once USDC is enabled: it opens as the enabling's sheet closes.
+    @State private var afterUSDC: Reviewed?
     @State private var reviewing = false
     /// The new Moment, once its publish settled: opened when the review closes.
     @State private var published: StellarMomentListingV2?
@@ -170,6 +174,11 @@ struct StellarCreateMomentView: View {
             .task { await readEconomics() }
             .onChange(of: photoItem) { _, item in if let item { Task { await pick(item) } } }
             .sheet(item: $reviewed) { reviewed in reviewSheet(reviewed) }
+            .sheet(item: $enabling, onDismiss: {
+                // USDC is enabled: the publish's own review, whose plan is now the publish alone.
+                if let next = afterUSDC { reviewed = next }
+                afterUSDC = nil
+            }) { next in enableSheet(next) }
         }
     }
 
@@ -333,7 +342,10 @@ struct StellarCreateMomentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 if let priceProblem { Paragraph(priceProblem).foregroundStyle(Color.attention) }
                 if let economics, let policy, let price, price > 0 {
-                    Paragraph("Minimum \(StellarMomentText.usdc(policy.minPrice)). About \(Self.collectsToComplete(policy, price: price)) collects at this price reach the \(StellarMomentText.usdc(policy.threshold)) reserve, and the coin graduates at a \(Self.fdv(economics, allocationBps: allocationBps)) FDV. Up to \(NumberStyle.basisPoints(policy.maxCreatorAllocBps)) of the \(StellarMomentText.units(economics.supply)) coins is yours, vesting 20% at graduation then 16% a month; anything you leave deepens the pool. Collecting ends at graduation or when the window closes (1 to 30 days).")
+                    // The vesting period and the window as the terms bind them (a test deployment's are minutes).
+                    let period = StellarMomentText.duration(economics.terms.durations.vestPeriod)
+                    let days = windowDaysRange
+                    Paragraph(LocalizedStringResource("Minimum \(StellarMomentText.usdc(policy.minPrice)). About \(Self.collectsToComplete(policy, price: price)) collects at this price reach the \(StellarMomentText.usdc(policy.threshold)) reserve, and the coin graduates at a \(Self.fdv(economics, allocationBps: allocationBps)) FDV. Up to \(NumberStyle.basisPoints(policy.maxCreatorAllocBps)) of the \(StellarMomentText.units(economics.supply)) coins is yours, vesting 20% at graduation then 16% every \(period); anything you leave deepens the pool. Collecting ends at graduation or when the window closes (\(String(days.lowerBound)) to \(String(days.upperBound)) days).", table: "StellarMoments", comment: "Under Publish a Moment's economics: %1$@ the minimum price, %2$lld how many collects reach the reserve %3$@, %4$@ the FDV the coin opens at, %5$@ the most the creator keeps of the %6$@ coins, %7$@ the vesting period (“30 days”), %8$@ to %9$@ the collect window's range in days. FDV is never translated"))
                 } else if let economicsError {
                     Paragraph(economicsError).foregroundStyle(Color.attention)
                 } else if !economicsRead {
@@ -406,12 +418,42 @@ struct StellarCreateMomentView: View {
     }
 
     /// The review's guard: the terms the built publish binds, against the ones its review read (`MomentsV2Store
-    /// .termsChanges`). A mismatch keeps Confirm off and says so; nil when the plan may go. While the publish waits behind
-    /// the account's USDC trustline it isn't built yet, and the server builds it with the terms as they stand then.
-    static func termsCheck(_ plan: PlanView, reviewed: Reviewed) -> LocalizedStringResource? {
-        let changed = MomentsV2Store.termsChanges(plan, terms: reviewed.economics.terms, form: reviewed.form)
-        guard let changed, !changed.isEmpty else { return nil }
+    /// .termsChanges`). A mismatch keeps Confirm off and says so; nil when the plan may go. A publish the server builds
+    /// only after an earlier step can't be compared before it is signed (`MomentsV2Store.publishWaits`): behind the
+    /// account's USDC trustline, Confirm stays off and the next Review enables USDC first (`review()`); behind a restore of
+    /// archived data, which changes no terms, it goes unless a policy change is queued that could apply first.
+    static func termsCheck(_ plan: PlanView, reviewed: Reviewed, now: Date = Date()) -> LocalizedStringResource? {
+        if MomentsV2Store.publishWaits(plan) {
+            if plan.steps.contains(where: StellarConfirmationSheet<EmptyView>.enables) {
+                return LocalizedStringResource("Enable USDC first, then review your Moment again.", table: "StellarMoments", comment: "In a Stellar Moment's publish review, when the account can't hold USDC yet: Confirm is off; closing and tapping Review again enables USDC first. USDC is never translated")
+            }
+            // The publish is built seconds after the review: a proposal that can be applied now, or within minutes, could
+            // come first.
+            guard let pending = reviewed.economics.pendingPolicy,
+                  [now, now.addingTimeInterval(Self.policyMargin)].contains(where: { pending.state(at: $0) == "ready" }) else { return nil }
+            return LocalizedStringResource("A Moments policy change is queued. Publish once it takes effect or lapses.", table: "StellarMoments", comment: "In a Stellar Moment's publish review, when the publish can only be built after another step and a change of the Moments terms is queued: Confirm is off")
+        }
+        guard !MomentsV2Store.termsChanges(plan, terms: reviewed.economics.terms, form: reviewed.form).isEmpty else { return nil }
         return LocalizedStringResource("The Moments terms changed since you started. Review them again.", table: "StellarMoments", comment: "In a Stellar Moment's publish review: the contract's terms differ from the ones the review shows, so Confirm is off")
+    }
+
+    /// USDC enabled first, in its own review, when the account can't hold it yet: a creator's proceeds are paid in USDC,
+    /// and the publish is then built at once, so its review can check it against the terms it shows.
+    private func enableSheet(_ next: Reviewed) -> some View {
+        StellarConfirmationSheet(
+            title: LocalizedStringResource("Enable USDC", table: "StellarMoments", comment: "Title of the review that enables USDC on the account before a Moment is published. USDC is never translated"),
+            confirmTitle: LocalizedStringResource("Enable", table: "StellarMoments", comment: "The confirm button of the review that enables USDC before a Moment is published"),
+            build: {
+                guard let moments else { throw LiteAPIError.notSignedIn }
+                return try await moments.enableUSDCPlan()
+            },
+            onDone: {},
+            onCompleted: { _ in afterUSDC = next }
+        ) {
+            DetailRow("Moment", verbatim: "\(next.form.name) ($\(next.form.symbol))")
+            Paragraph(LocalizedStringResource("Your Moment's proceeds are paid in USDC, so your account enables it first. Then you review the publish.", table: "StellarMoments", comment: "In the review that enables USDC before a Moment is published: why, and what comes next. USDC is never translated"))
+                .font(.footnote).foregroundStyle(.secondary)
+        }
     }
 
     /// The new Moment as Publish knows it: its NFT address from the publish's result, with the form's name, ticker,
@@ -422,14 +464,16 @@ struct StellarCreateMomentView: View {
                                       place: form.place, takenOn: form.takenOn)
     }
 
-    /// Review: the terms read again, live, so the sheet shows (and binds) the ones that stand now.
+    /// Review: the terms read again, live, so the sheet shows (and binds) the ones that stand now; an account that can't
+    /// hold USDC yet enables it first (`enableSheet`).
     private func review() async {
         guard let form, let upload, let moments else { return }
         reviewing = true
         defer { reviewing = false }
         await readEconomics(with: moments)
         guard let economics, publishBlock == nil, priceProblem == nil else { return }
-        reviewed = Reviewed(form: form, economics: economics, upload: upload)
+        let next = Reviewed(form: form, economics: economics, upload: upload)
+        if await moments.needsUSDC() { enabling = next } else { reviewed = next }
     }
 
     // MARK: Figures
@@ -454,6 +498,9 @@ struct StellarCreateMomentView: View {
         return share.rounding(accordingToBehavior: NSDecimalNumberHandler(roundingMode: .down, scale: 0, raiseOnExactness: false,
                                                                           raiseOnOverflow: false, raiseOnUnderflow: false, raiseOnDivideByZero: false)).stringValue
     }
+
+    /// How soon a queued policy change counts as able to apply before a publish built after an earlier step (`termsCheck`).
+    static let policyMargin: TimeInterval = 10 * 60
 
     /// The contract stores a name of at most 32 bytes and a place of at most 64.
     static let maxNameBytes = 32

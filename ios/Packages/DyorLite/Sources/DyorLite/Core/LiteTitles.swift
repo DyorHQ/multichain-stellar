@@ -105,7 +105,7 @@ enum LiteTitles {
             return (tr("Collected \(title)"), tr("\(quantity) editions · \("\(amount(total)) \(quoteCode)")"))
         case let .bridgeOut(value):
             return (tr("Sent \(amount(value)) USDC to the bridge"), tr("Claim it on Monad once Circle confirms."))
-        case let .launchV2(_, title, body):
+        case let .launchV2(_, title, body), let .momentV2(_, title, body):
             return (title, body)
         }
     }

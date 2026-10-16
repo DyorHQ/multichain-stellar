@@ -39,7 +39,8 @@ struct StellarSwapRequest: Hashable {
 /// | `stellar:swap[/<sell>,<buy>]` | Swap, either side may be empty |
 /// | `stellar:earn[/<marketId>]` | Earn |
 /// | `stellar:launch[/<C…>]` | Launch |
-/// | `stellar:moment[/<id>]` | Moment |
+/// | `stellar:moment[/<id>]` | Moments; a retired v1 Moment by its number |
+/// | `stellar:moment/<C…>` | A v2 Moment, by its NFT contract |
 /// | `stellar:portfolio` | Portfolio |
 /// | `stellar:bridge[/<id>]` | Bridge |
 ///
@@ -49,7 +50,10 @@ enum StellarDestination: Hashable {
     case swap(StellarSwapRequest)
     case earn(market: String?)
     case launch(token: String?)
+    /// The Moments tab, or a retired v1 Moment over it by its number.
     case moment(id: Int?)
+    /// A v2 Moment over the Moments tab, by its NFT contract (its id): `StellarMomentDetailView(nft:)`.
+    case momentV2(nft: String)
     case portfolio
     case bridge(id: String?)
 
@@ -78,6 +82,7 @@ enum StellarDestination: Hashable {
             self = .launch(token: id)
         case "moment":
             guard let id else { self = .moment(id: nil); return }
+            if StrKey.isValid(.contract, id) { self = .momentV2(nft: id); return }
             guard id.allSatisfy(\.isASCII), let number = Int(id), number >= 0 else { return nil }
             self = .moment(id: number)
         case "bridge": self = .bridge(id: id)
@@ -95,6 +100,7 @@ enum StellarDestination: Hashable {
         case .earn(let market): path = market.map { "earn/\($0)" } ?? "earn"
         case .launch(let token): path = token.map { "launch/\($0)" } ?? "launch"
         case .moment(let id): path = id.map { "moment/\($0)" } ?? "moment"
+        case .momentV2(let nft): path = "moment/\(nft)"
         case .portfolio: path = "portfolio"
         case .bridge(let id): path = id.map { "bridge/\($0)" } ?? "bridge"
         }
@@ -107,7 +113,7 @@ enum StellarDestination: Hashable {
         case .home, .bridge: .home
         case .swap, .earn: .earn
         case .launch: .launch
-        case .moment: .moments
+        case .moment, .momentV2: .moments
         case .portfolio: nil
         }
     }
@@ -169,12 +175,12 @@ extension Router {
         switch destination {
         case .swap: stellarTradeMode = .swap
         case .earn: stellarTradeMode = .earn
-        case .home, .launch, .moment, .portfolio, .bridge: break
+        case .home, .launch, .moment, .momentV2, .portfolio, .bridge: break
         }
         switch destination {
         case .home, .portfolio, .earn(market: nil), .launch(token: nil), .moment(id: nil):
             pendingStellar = nil
-        case .swap, .earn, .launch, .moment, .bridge:
+        case .swap, .earn, .launch, .moment, .momentV2, .bridge:
             pendingStellar = destination
         }
         if destination == .portfolio { presented = .portfolio }
