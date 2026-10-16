@@ -1,8 +1,19 @@
 // Account: balances and the XLM position (a viewer route), activation, trustlines, testnet's one claim of Friendbot's
 // test XLM, sends and recipient checks (§1.1 decision 7, §4.3, §6.4).
 import { accountView, activate, publicAccountView, recipient, sendPlan, testnetFaucet, trustPlan } from "../../_shared/account.ts";
-import { amountArg, bad, clientIp, json, PUBLIC_VIEW_CACHE, readJson, Router, stringArg } from "../../_shared/http.ts";
+import { amountArg, bad, clientIp, json, PUBLIC_VIEW_CACHE, rateLimit, readJson, Router, stringArg } from "../../_shared/http.ts";
 import { accountViewer, user } from "./auth.ts";
+
+/** Activation and the faucet ask Friendbot (or DyorHQ's sponsor) for something, so each is limited per IP and per
+ *  address, a minute at a time (best effort, per isolate; the claim's lock and lite.reserve_sponsorship are the hard
+ *  limits): a few taps per address, more per IP for testers behind one network. */
+const CLAIMS_PER_IP = 30;
+const CLAIMS_PER_ADDRESS = { activate: 5, faucet: 3 } as const;
+
+function limitClaims(route: keyof typeof CLAIMS_PER_ADDRESS, address: string, req: Request): void {
+  rateLimit(`${route}:ip:${clientIp(req)}`, CLAIMS_PER_IP);
+  rateLimit(`${route}:${address}`, CLAIMS_PER_ADDRESS[route]);
+}
 
 /** An asset id: XLM, USDC, BUSDC, a C… contract or CODE:G… (at most 12 + 1 + 56 characters). */
 const ASSET_ID_MAX = 69;
@@ -15,7 +26,11 @@ export function register(router: Router): void {
     return json(await publicAccountView(v.address), 200, PUBLIC_VIEW_CACHE);
   });
 
-  router.on("POST /v1/account/activate", async ({ req }) => json(await activate(await user(req), clientIp(req))));
+  router.on("POST /v1/account/activate", async ({ req }) => {
+    const u = await user(req);
+    limitClaims("activate", u, req);
+    return json(await activate(u, clientIp(req)));
+  });
 
   router.on("POST /v1/account/trust", async ({ req }) => {
     const u = await user(req);
@@ -23,7 +38,11 @@ export function register(router: Router): void {
     return json(await trustPlan(u, stringArg(body.asset, "asset", ASSET_ID_MAX)));
   });
 
-  router.on("POST /v1/account/faucet", async ({ req }) => json(await testnetFaucet(await user(req))));
+  router.on("POST /v1/account/faucet", async ({ req }) => {
+    const u = await user(req);
+    limitClaims("faucet", u, req);
+    return json(await testnetFaucet(u));
+  });
 
   router.on("POST /v1/send", async ({ req }) => {
     const u = await user(req);

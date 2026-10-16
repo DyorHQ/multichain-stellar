@@ -514,15 +514,18 @@ private struct StellarBoundRows: View {
             DetailRow(Text("Minimum"), Text(verbatim: StellarFormat.amount(minimum.units, code: code(minimum.asset))))
         }
         if let to = intents.lazy.compactMap(\.to).first {
+            // The whole address the transaction pays, never a short form: a look-alike address can share its first and
+            // last characters, so the user checks every one (§5.2). Monospaced, selectable, read out character by character.
             LabeledContent {
                 if let address = StellarAccountID(to) {
-                    StellarAddressText(address).foregroundStyle(.secondary)
+                    StellarAddressText(address, whole: true).foregroundStyle(.secondary)
                 } else {
-                    // A Monad address (a bridge's): shown as it is, spelled out, never shortened past its checksum's start.
-                    Text(verbatim: to.count > 12 ? "\(to.prefix(6))…\(to.suffix(4))" : to)
+                    // A Monad address (a bridge's): shown as it is, whole.
+                    Text(verbatim: to)
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                         .accessibilityLabel(Text(verbatim: to))
                         .speechSpellsOutCharacters()
                 }

@@ -56,13 +56,13 @@ struct ConfirmSheet: View {
                 } footer: {
                     LiteParagraph(tr("Your phone checks every transaction against what you see here before it signs. Anything else is refused."))
                 }
-                if let error {
-                    Section { LiteInlineError(message: error) }
+                if let message = error ?? refusal {
+                    Section { LiteInlineError(message: message) }
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                LitePrimaryButton(title: finished ? tr("Done") : (error == nil ? tr("Confirm") : tr("Close")), busy: running) {
-                    if finished || error != nil { dismiss() } else { Task { await confirm() } }
+                LitePrimaryButton(title: finished ? tr("Done") : (error == nil && refusal == nil ? tr("Confirm") : tr("Close")), busy: running) {
+                    if finished || error != nil || refusal != nil { dismiss() } else { Task { await confirm() } }
                 }
                 .padding()
                 .background(.bar)
@@ -90,6 +90,18 @@ struct ConfirmSheet: View {
             LabeledContent(tr("Max network fee"), value: tr("Up to \(Self.xlm(stroops)) + \(steps) more steps"))
         case .pricedAsSigned, .paidByDyorHQ:
             LabeledContent(tr("Max network fee"), value: tr("Priced as each step is signed"))
+        }
+    }
+
+    /// Why the plan can't be confirmed as it stands, before anything is signed: a built step names no minimum (or a zero
+    /// one) where it receives, or a minimum, destination or memo other than the ones the user confirmed. The run would
+    /// refuse it; the sheet says so instead of offering Confirm.
+    private var refusal: String? {
+        do {
+            try LiteStore.checkBuilt(action.plan, bindings: action.bindings, user: store.address, pinned: store.env.pinned)
+            return nil
+        } catch {
+            return LiteErrorText.describe(error, for: action)
         }
     }
 
@@ -151,6 +163,40 @@ struct IntentLines: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(lines, id: \.self) { Text(verbatim: $0).font(.subheadline).foregroundStyle(.secondary) }
+            ForEach(unbound, id: \.self) { Text(verbatim: $0).font(.subheadline).foregroundStyle(.red) }
+            if let to = destination {
+                // The whole address the transaction pays (the bound `intent.to`), monospaced and selectable, so it can be
+                // checked character by character against the one the user meant: never a short form a look-alike shares.
+                Text(verbatim: tr("To"))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(verbatim: to)
+                    .font(.subheadline.monospaced())
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(Text(verbatim: to))
+                    .speechSpellsOutCharacters()
+            }
+            if let memo {
+                Text(verbatim: tr("Memo \(memo)")).font(.subheadline.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
+    }
+
+    /// The bound recipient (§5.2), else what the server displays.
+    private var destination: String? { intent.to ?? intent.display?["to"]?.text }
+
+    private var memo: String? {
+        guard let memo = intent.memo?.value ?? intent.display?["memo"]?.text, !memo.isEmpty else { return nil }
+        return memo
+    }
+
+    /// A receive with no minimum (zero, or not a number): shown, never hidden, and the plan is refused (`refusal`).
+    private var unbound: [String] {
+        (intent.receive ?? [:]).sorted(by: { $0.key < $1.key }).compactMap { asset, units in
+            guard (Int64(units) ?? 0) <= 0 else { return nil }
+            return tr("No minimum to receive in \(store.asset(asset)?.code ?? symbol(asset)): DyorHQ won't sign this.")
         }
     }
 
@@ -159,13 +205,10 @@ struct IntentLines: View {
         for (asset, units) in intent.spend.sorted(by: { $0.key < $1.key }) {
             out.append(tr("You pay up to \(StellarAmount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
         }
-        for (asset, units) in (intent.receive ?? [:]).sorted(by: { $0.key < $1.key }) where units != "0" {
+        for (asset, units) in (intent.receive ?? [:]).sorted(by: { $0.key < $1.key }) where (Int64(units) ?? 0) > 0 {
             out.append(tr("You receive at least \(StellarAmount.format(units)) \(store.asset(asset)?.code ?? symbol(asset))"))
         }
         if let venue = intent.display?["venue"]?.text { out.append(tr("Route: \(LiteTitles.venue(venue))")) }
-        // The bound recipient (§5.2), else what the server displays.
-        if let to = intent.to ?? intent.display?["to"]?.text { out.append(tr("To \(LiteFormat.short(to))")) }
-        if let memo = intent.memo?.value ?? intent.display?["memo"]?.text, !memo.isEmpty { out.append(tr("Memo \(memo)")) }
         if intent.spend.isEmpty && (intent.receive ?? [:]).isEmpty { out.append(neutralLine) }
         return out
     }

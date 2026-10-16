@@ -166,6 +166,8 @@ public struct TxVerifier {
     static let launchRecipient = "The creator fees go to another address than the one you confirmed."
     static let launchSettings = "The launch settings are not the ones shown."
     static let momentSettings = "The Moment's price, allocation or window is not the one shown."
+    /// v1's launch or publish once v2 is pinned: their rules bind none of what v2's do (recipient, settings, minimum).
+    static let v1Closed = "This generation no longer takes new launches or Moments."
 
     public init(
         user: String,
@@ -627,6 +629,9 @@ extension TxVerifier {
                 try atLeast(args[4].amount, TxVerifier.minimum(intent, for: out))
             case "launch":
                 // Launchpad launch(creator, quote, name, symbol, uri, creator_fee_bps, initial_buy, min_tokens_out).
+                // Refused once v2 is pinned: new launches are v2's, whose rule binds what the user typed; v1's launches
+                // keep trading and claiming.
+                guard V2Pins(verifier.pinned) == nil else { throw fail(TxVerifier.v1Closed) }
                 try arity(8)
                 try actsForUser(0)
             case "buy":
@@ -639,7 +644,9 @@ extension TxVerifier {
                 try arity(1)
                 try address(0)
             case "publish":
-                // Moments publish(creator, uri, price, quote, max_editions, window_secs).
+                // Moments publish(creator, uri, price, quote, max_editions, window_secs). Refused once v2 is pinned, as
+                // launch is.
+                guard V2Pins(verifier.pinned) == nil else { throw fail(TxVerifier.v1Closed) }
                 try arity(6)
                 try actsForUser(0)
             case "collect":

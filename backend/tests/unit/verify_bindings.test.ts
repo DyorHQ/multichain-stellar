@@ -212,3 +212,15 @@ Deno.test("an instance of a pinned v2 runtime WASM counts only when the pinned s
   assertEquals(byName.get("launch token created by the pinned launchpad"), "a1".repeat(32));
   assertEquals(byName.get("moment coin minted by the pinned moments"), "a3".repeat(32));
 });
+
+// ------------------------------------------------------------------------------------------------ v1's launch and publish
+
+Deno.test("with v2 pinned, a v1 publish or launch is refused, whatever its display shows; without v2's pins it is judged by v1's rules", () => {
+  const v2From = vectors.find((x) => x.name === "v2 moments publish ok");
+  for (const name of ["moments publish ok without v2 pins", "launch create ok without v2 pins"]) {
+    const v = vectors.find((x) => x.name === name);
+    assertEquals(judgeVector(v, v.envelope).ok, true, name);
+    // The same transaction, judged with the testnet's v2 pins, as a compromised server would substitute it for a v2 one.
+    assertEquals(judgeVector({ ...v, v2: v2From.v2 }, v.envelope), { ok: false, reason: "this generation no longer takes new launches or Moments" }, name);
+  }
+});

@@ -158,6 +158,8 @@ export const routeRows: Responder = (q) => {
   if (q.startsWith("select value from lite.app_config")) return [{ value: { enabled: true, maintenance: false } }];
   if (q.startsWith("update lite.auth_nonces set used_at")) return [];
   if (q.startsWith("select 1 from lite.tx_log where address = ? and kind = 'faucet'")) return [{ "?column?": 1 }];
+  // Friendbot's claim, activation's and the faucet's, is made under this lock per address (account.ts).
+  if (q === "select pg_advisory_xact_lock(hashtextextended(?, 0))") return [{}];
   if (/^select \* from lite\.launches .*order by/.test(q)) return [LAUNCH_ROW];
   if (q === "select * from lite.launches where token = ?") return [];
   // The launch board and a launch's page (launchpad.ts launchQuery): the board lists LAUNCH_ROW, and TOKEN has no page.

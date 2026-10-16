@@ -273,4 +273,8 @@ export function handle(req: Request): Promise<Response> {
   });
 }
 
-if (import.meta.main) Deno.serve(handle);
+if (import.meta.main) {
+  // Refuses to start without the lite_api role's connection, rather than reaching the database another way.
+  env.dbUrl;
+  Deno.serve(handle);
+}

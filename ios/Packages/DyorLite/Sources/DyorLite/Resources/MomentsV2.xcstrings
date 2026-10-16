@@ -478,6 +478,35 @@
         }
       }
     },
+    "The Moment doesn't match what you chose. Nothing was signed. Review it again." : {
+      "comment" : "An error: the publish the server built binds another price, creator allocation or collecting window than the user chose. Moment is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El Moment no coincide con lo que elegiste. No se firmó nada. Revísalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le Moment ne correspond pas à ce que vous avez choisi. Rien n'a été signé. Vérifiez-le à nouveau."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment이 선택한 내용과 일치하지 않습니다. 아무것도 서명하지 않았습니다. 다시 검토하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此 Moment 与你的选择不一致。未签署任何内容。请重新检查。"
+          }
+        }
+      }
+    },
     "Tried to graduate %@" : {
       "comment" : "A notification's title: the user made a graduation attempt whose outcome the phone didn't know when it was confirmed; %@ is the Moment's ticker ($DUSK) or its name.",
       "localizations" : {
