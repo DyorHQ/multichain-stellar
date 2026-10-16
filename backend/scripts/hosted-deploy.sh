@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploys the Stellar backend to the hosted DyorHQ project (docs/RUNBOOK-testnet.md §3), one confirmed step at a time:
+# Deploys the Stellar backend to the hosted DyorHQ project (the maintainers' runbook), one confirmed step at a time:
 # the `lite` schema's migrations, the lite_api role's password, the function secrets, the lite and lite-indexer
 # functions, the Vault entries the cron job reads, and the cron job last (it calls the indexer every minute and fails
 # until the function and the Vault entries exist).

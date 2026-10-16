@@ -114,7 +114,7 @@ if [ -d "$MAIN/.secrets" ]; then
   ln -s "$MAIN/.secrets" "$S/.secrets"
   say "S: .secrets links to $MAIN/.secrets (excluded from git)"
 else
-  say "note: $MAIN has no .secrets; local-stack.sh needs one (docs/RUNBOOK-testnet.md §1)"
+  say "note: $MAIN has no .secrets; local-stack.sh needs one (docs/DEVELOPMENT.md)"
 fi
 
 done_ok=1
