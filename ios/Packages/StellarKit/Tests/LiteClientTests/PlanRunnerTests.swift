@@ -20,6 +20,9 @@ final class PlanRunnerTests: XCTestCase {
         return (xdr, intent)
     }
 
+    /// What the user typed for `send`: the friend's address, no memo.
+    private var toFriend: PlanBindings { PlanBindings(destination: .confirmed(to: friend, memo: nil)) }
+
     private func runner(_ backend: FakePlanBackend) -> PlanRunner {
         PlanRunner(api: backend, user: user.address, pinned: pinned, inspector: NoLaunchTokens())
     }
@@ -43,7 +46,7 @@ final class PlanRunnerTests: XCTestCase {
         let fees = try PlanFees(plan: plan, pinned: pinned)
         XCTAssertEqual(fees.userMax, 1_100)
         let signed = SignCount()
-        let results = try await runner(backend).run(plan, limits: [xlm: 30_000_000], fees: fees, signer: signer(signed))
+        let results = try await runner(backend).run(plan, limits: [xlm: 30_000_000], bindings: toFriend, fees: fees, signer: signer(signed))
         XCTAssertEqual(results.map(\.status), ["success", "success"])
         let submitted = await backend.submitted
         XCTAssertEqual(submitted, ["s1", "s2"])
@@ -60,7 +63,7 @@ final class PlanRunnerTests: XCTestCase {
         let backend = FakePlanBackend(plan: plan, builds: ["s2": TestPlan.step("s2", "Send again", xdr: pricier.xdr, intent: pricier.intent)])
         let signed = SignCount()
         do {
-            try await runner(backend).run(plan, limits: [xlm: 30_000_000], fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(signed))
+            try await runner(backend).run(plan, limits: [xlm: 30_000_000], bindings: toFriend, fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(signed))
             XCTFail("a step above its confirmed fee was sent")
         } catch let f as PlanRunner.Failure {
             XCTAssertEqual(f, .feeAboveConfirmed(step: "Send again"))
@@ -175,7 +178,7 @@ final class PlanRunnerTests: XCTestCase {
             TestPlan.step("s2", "Send to a friend", xdr: reviewed.xdr, intent: reviewed.intent),
         ])
         let backend = FakePlanBackend(plan: plan, builds: ["s1": TestPlan.step("s1", "Send", xdr: first.xdr, intent: first.intent)], rewrites: ["s1": [rewritten]])
-        try await runner(backend).run(plan, limits: [xlm: 60_000_000], fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(SignCount()))
+        try await runner(backend).run(plan, limits: [xlm: 60_000_000], bindings: toFriend, fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(SignCount()))
         let builds = await backend.builds
         XCTAssertEqual(builds, ["s1"])
         let signed = await backend.signed
@@ -201,14 +204,139 @@ final class PlanRunnerTests: XCTestCase {
 
     /// Runs a shared vector as a one-step plan, built for the review, on the vector's clock and pins.
     @discardableResult
-    private func run(_ vector: SharedVectors.Vector, inspector: any LaunchTokenInspecting) async throws -> [TxStatus] {
-        let plan = TestPlan.view([TestPlan.step("s1", vector.name, xdr: vector.envelope, intent: vector.intent)])
+    private func run(_ vector: SharedVectors.Vector, inspector: any LaunchTokenInspecting, intent: Intent? = nil,
+                     bindings: PlanBindings? = nil, signed: SignCount = SignCount()) async throws -> [TxStatus] {
+        let intent = intent ?? vector.intent
+        let plan = TestPlan.view([TestPlan.step("s1", vector.name, xdr: vector.envelope, intent: intent)])
         var runner = PlanRunner(api: FakePlanBackend(plan: plan), user: vector.user, pinned: vector.pinned, inspector: inspector)
         let now = vector.now
         runner.now = { Date(timeIntervalSince1970: now) }
         let key = try SharedVectors.user()
-        let limits = vector.intent.spend.compactMapValues(TxVerifier.units)
-        return try await runner.run(plan, limits: limits, fees: try PlanFees(plan: plan, pinned: vector.pinned), signer: { key })
+        let limits = intent.spend.compactMapValues(TxVerifier.units)
+        return try await runner.run(plan, limits: limits, bindings: bindings ?? PlanBindings.typed(intent, user: vector.user),
+                                    fees: try PlanFees(plan: plan, pinned: vector.pinned), signer: {
+                                        signed.add()
+                                        return key
+                                    })
+    }
+
+    // MARK: - What the user confirmed besides the spends (PlanBindings)
+
+    /// "path payment ok" with its minimum (9 USDC, in its intent's receive) set to `receive`, or as it is.
+    private func pathPayment(receive: String?) throws -> (SharedVectors.Vector, Intent) {
+        let v = try SharedVectors.named("path payment ok")
+        let i = v.intent
+        return (v, Intent(kind: i.kind, summary: i.summary, spend: i.spend, receive: receive.map { r in i.receive!.mapValues { _ in r } } ?? i.receive, calls: i.calls,
+                          ops: i.ops, trust: i.trust, display: i.display, to: i.to, memo: i.memo))
+    }
+
+    func testATradeGoesOutWhenItsMinimumIsTheOneTheUserConfirmed() async throws {
+        let (v, intent) = try pathPayment(receive: nil)
+        let usdc = try XCTUnwrap(intent.receive?.keys.first)
+        let results = try await run(v, inspector: NoLaunchTokens(), bindings: PlanBindings(minimums: [usdc: 9_000_000]))
+        XCTAssertEqual(results.count, 1)
+    }
+
+    func testATradeWhoseMinimumIsBelowTheConfirmedOneIsNeverSigned() async throws {
+        let (v, intent) = try pathPayment(receive: nil)
+        let usdc = try XCTUnwrap(intent.receive?.keys.first)
+        let signed = SignCount()
+        do {
+            try await run(v, inspector: NoLaunchTokens(), bindings: PlanBindings(minimums: [usdc: 9_000_001]), signed: signed)
+            XCTFail("a lower minimum was signed")
+        } catch let f as PlanRunner.Failure {
+            XCTAssertEqual(f, .minimumNotConfirmed(step: "path payment ok"))
+        }
+        XCTAssertEqual(signed.value, 0)
+    }
+
+    func testAZeroOrMissingMinimumIsNeverSigned() async throws {
+        // The server zeroes the minimum: refused whatever the user confirmed, even with no minimum given.
+        let (v, zero) = try pathPayment(receive: "0")
+        let usdc = try XCTUnwrap(zero.receive?.keys.first)
+        for bindings in [PlanBindings(minimums: [usdc: 9_000_000]), PlanBindings.none] {
+            let signed = SignCount()
+            do {
+                try await run(v, inspector: NoLaunchTokens(), intent: zero, bindings: bindings, signed: signed)
+                XCTFail("a zero minimum was signed")
+            } catch let f as PlanRunner.Failure {
+                XCTAssertEqual(f, .minimumNotConfirmed(step: "path payment ok"))
+            }
+            XCTAssertEqual(signed.value, 0)
+        }
+        // The server drops the minimum from the intent (the verifier then checks none): refused.
+        let (_, missing) = try pathPayment(receive: nil)
+        let dropped = Intent(kind: missing.kind, summary: missing.summary, spend: missing.spend, calls: missing.calls, ops: missing.ops, to: missing.to)
+        do {
+            try await run(v, inspector: NoLaunchTokens(), intent: dropped, bindings: PlanBindings(minimums: [usdc: 9_000_000]))
+            XCTFail("a step without its minimum was signed")
+        } catch let f as PlanRunner.Failure {
+            XCTAssertEqual(f, .minimumNotConfirmed(step: "path payment ok"))
+        }
+    }
+
+    func testASendToAnotherAddressThanTheTypedOneIsNeverSigned() async throws {
+        let other = try StellarSigner(seed: [UInt8](repeating: 4, count: 32)).address
+        let five = send(50_000_000, fee: 100)
+        let plan = TestPlan.view([TestPlan.step("s1", "Send", xdr: five.xdr, intent: five.intent)])
+        let cases: [PlanBindings] = [
+            .none, // nothing typed: only the user's own account
+            PlanBindings(destination: .confirmed(to: other, memo: nil)), // typed another address
+            PlanBindings(destination: .confirmed(to: friend, memo: .init(type: "text", value: "123"))), // a memo the step doesn't carry
+        ]
+        for bindings in cases {
+            let backend = FakePlanBackend(plan: plan)
+            let signed = SignCount()
+            do {
+                try await runner(backend).run(plan, limits: [xlm: 50_000_000], bindings: bindings, fees: try PlanFees(plan: plan, pinned: pinned), signer: signer(signed))
+                XCTFail("a send the user didn't confirm was signed")
+            } catch let f as PlanRunner.Failure {
+                XCTAssertEqual(f, .destinationNotConfirmed(step: "Send"))
+            }
+            XCTAssertEqual(signed.value, 0)
+            let submitted = await backend.submitted
+            XCTAssertEqual(submitted, [])
+        }
+    }
+
+    func testTheBindingsChecksStepByStep() throws {
+        let me = user.address
+        let token = "CARCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEIRCEVQO"
+        func intent(receive: [String: String]? = nil, to: String? = nil, memo: Intent.Memo? = nil) -> Intent {
+            Intent(kind: "k", summary: "", spend: [:], receive: receive, to: to, memo: memo)
+        }
+        // A trust step before the trade spends nothing and names nothing: it passes; the trade must name the minimum.
+        var check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
+        XCTAssertNoThrow(try check.step(intent(), spends: false, last: false))
+        XCTAssertThrowsError(try check.step(intent(), spends: true, last: true)) { XCTAssertEqual($0 as? PlanBindings.Refusal, .minimum(reason: "the transaction names no minimum")) }
+        check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
+        XCTAssertNoThrow(try check.step(intent(receive: [token: "100"]), spends: true, last: true))
+        XCTAssertTrue(check.outstanding.isEmpty)
+        // A last step that spends nothing (an Earn withdrawal) must still name it.
+        check = PlanBindings.Check(PlanBindings(minimums: [token: 100]), user: me)
+        XCTAssertThrowsError(try check.step(intent(), spends: false, last: true))
+        // A new coin's first buy: any asset, at the minimum.
+        check = PlanBindings.Check(PlanBindings(minimums: [PlanBindings.anyAsset: 4000]), user: me)
+        XCTAssertThrowsError(try check.step(intent(receive: [token: "3999"]), spends: true, last: true))
+        check = PlanBindings.Check(PlanBindings(minimums: [PlanBindings.anyAsset: 4000]), user: me)
+        XCTAssertNoThrow(try check.step(intent(receive: [token: "4000"]), spends: true, last: true))
+        // Destinations: the user's own by default; the typed one exactly; a bridge's 0x address in either case.
+        var own = PlanBindings.Check(.none, user: me)
+        XCTAssertNoThrow(try own.step(intent(to: me), spends: true, last: true))
+        XCTAssertThrowsError(try own.step(intent(to: friend), spends: true, last: true))
+        XCTAssertThrowsError(try own.step(intent(memo: .init(type: "id", value: "1")), spends: true, last: true))
+        let typed = PlanBindings(destination: .confirmed(to: friend, memo: .init(type: "id", value: "42")))
+        var send = PlanBindings.Check(typed, user: me)
+        XCTAssertNoThrow(try send.step(intent(), spends: false, last: false), "a trust step before the send")
+        XCTAssertNoThrow(try send.step(intent(to: friend, memo: .init(type: "id", value: "42")), spends: true, last: true))
+        send = PlanBindings.Check(typed, user: me)
+        XCTAssertThrowsError(try send.step(intent(to: friend, memo: .init(type: "text", value: "42")), spends: true, last: true), "memo type included")
+        send = PlanBindings.Check(typed, user: me)
+        XCTAssertThrowsError(try send.step(intent(), spends: true, last: true), "the last step names no destination")
+        var bridge = PlanBindings.Check(PlanBindings(destination: .confirmed(to: "0xAbCd000000000000000000000000000000001234", memo: nil)), user: me)
+        XCTAssertNoThrow(try bridge.step(intent(to: "0xabcd000000000000000000000000000000001234"), spends: true, last: true))
+        var unchecked = PlanBindings.Check(PlanBindings(destination: .unchecked), user: me)
+        XCTAssertNoThrow(try unchecked.step(intent(to: friend), spends: false, last: true))
     }
 
     func testTheCompatibilityRunPricesUnbuiltStepsAtTheirCeiling() async throws {
@@ -216,7 +344,7 @@ final class PlanRunnerTests: XCTestCase {
         let built = send(10_000_000, fee: 30_000)
         let plan = TestPlan.view([TestPlan.step("s1", "Send")])
         let backend = FakePlanBackend(plan: plan, builds: ["s1": TestPlan.step("s1", "Send", xdr: built.xdr, intent: built.intent)])
-        let results = try await runner(backend).run(plan, limits: [xlm: 10_000_000], signer: signer(SignCount()))
+        let results = try await runner(backend).run(plan, limits: [xlm: 10_000_000], bindings: toFriend, signer: signer(SignCount()))
         XCTAssertEqual(results.count, 1)
         let builds = await backend.builds
         XCTAssertEqual(builds, ["s1"])
@@ -224,6 +352,14 @@ final class PlanRunnerTests: XCTestCase {
 }
 
 // ------------------------------------------------------------------------------------------------------ fakes
+
+extension PlanBindings {
+    /// What a user who typed a shared vector's destination confirmed: its `to` and memo when it pays someone else.
+    static func typed(_ intent: Intent, user: String) -> PlanBindings {
+        guard let to = intent.to, to != user else { return .none }
+        return PlanBindings(destination: .confirmed(to: to, memo: intent.memo))
+    }
+}
 
 /// Counts the signer's calls (a signature is one call).
 final class SignCount: @unchecked Sendable {
