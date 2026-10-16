@@ -399,6 +399,60 @@ final class VerifierVectorTests: XCTestCase {
         }
     }
 
+    /// So are the authorization tree, swap routes, minimums and what the user typed into a v2 launch or Moment
+    /// (verify.test.ts keeps the same list, BINDING_CASES): each with its verdict and reason.
+    func testCoversTheBindingCases() throws {
+        let vectors: [VerifierVector] = try loadVectors("verifier")
+        let byName = Dictionary(vectors.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
+        let cases: [(String, String?)] = [
+            ("swap with a non-token call nested under its own authorization", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("swap with a non-token call nested under a token spend", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("swap with a nested spend of another account's tokens", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("swap with a nested spend with extra arguments", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("blend submit with a nested withdrawal", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("v2 launch with a non-token call nested under its own authorization", "The transaction asks you to authorize a call that is not a spend of your tokens."),
+            ("swap with a second root authorizing another call", "The transaction asks you to authorize a call other than this one."),
+            ("swap with a second root transferring to the confirmed address", "The transaction asks you to authorize a call other than this one."),
+            ("transfer in another root to another account", "The transaction asks you to authorize a call other than this one."),
+            ("v2 curve buy with a creator-fee recipient change as a second root", "The transaction asks you to authorize a call other than this one."),
+            ("v2 claim rewards with a second root", "The transaction asks you to authorize a call other than this one."),
+            ("soroswap through an unlisted middle token", "The swap route goes through a token this app doesn't list."),
+            ("soroswap to an unlisted token the intent doesn't quote", "The swap route goes through a token this app doesn't list."),
+            ("aquarius through an unlisted hop token", "The swap route goes through a token this app doesn't list."),
+            ("soroswap through a listed middle token ok", nil),
+            ("soroswap to an unlisted token the intent quotes ok", nil),
+            ("soroswap from an unlisted token the intent spends ok", nil),
+            ("aquarius through listed hops ok", nil),
+            ("soroswap with no minimum", "The transaction sets no minimum received."),
+            ("aquarius with no minimum", "The transaction sets no minimum received."),
+            ("curve buy with no minimum", "The transaction sets no minimum received."),
+            ("curve sell with no minimum", "The transaction sets no minimum received."),
+            ("v2 launch initial buy with no minimum", "The transaction sets no minimum received."),
+            ("path payment without a quoted minimum", "The minimum received is lower than quoted."),
+            ("v2 launch creator fees to a third party", "The creator fees go to another address than the one you confirmed."),
+            ("v2 launch creator fees to another than the confirmed recipient", "The creator fees go to another address than the one you confirmed."),
+            ("v2 launch creator fees to the user when a recipient was confirmed", "The creator fees go to another address than the one you confirmed."),
+            ("v2 launch showing another recipient", "The creator fees go to another address than the one you confirmed."),
+            ("v2 launch without its settings shown", "The creator fees go to another address than the one you confirmed."),
+            ("v2 launch with a snipe exemption not shown", "The launch settings are not the ones shown."),
+            ("v2 launch with snipe exemptions in another order", "The launch settings are not the ones shown."),
+            ("v2 launch with another creator fee", "The launch settings are not the ones shown."),
+            ("v2 launch with holder sharing other than shown", "The launch settings are not the ones shown."),
+            ("v2 launch creator fees to the user named ok", nil),
+            ("v2 launch creator fees to the confirmed recipient ok", nil),
+            ("v2 launch with its snipe exemptions shown ok", nil),
+            ("v2 moments publish at another price", "The Moment's price, allocation or window is not the one shown."),
+            ("v2 moments publish with another allocation", "The Moment's price, allocation or window is not the one shown."),
+            ("v2 moments publish with another window", "The Moment's price, allocation or window is not the one shown."),
+            ("v2 moments publish without its settings shown", "The Moment's price, allocation or window is not the one shown."),
+        ]
+        for (name, reason) in cases {
+            let v = try XCTUnwrap(byName[name], name)
+            XCTAssertEqual(v.expect.ok, reason == nil, name)
+            if let reason { XCTAssertEqual(v.expect.reason.map(swiftReason), reason, name) }
+        }
+    }
+
     private static func memo(_ memo: StellarMemo) -> VerifierVector.Memo? {
         switch memo {
         case .none: return nil

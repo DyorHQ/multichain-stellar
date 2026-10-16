@@ -111,16 +111,18 @@ public enum StellarSponsorReason: String, Equatable, Sendable {
 /// caps; the memo the user confirmed; only the operation types the intent names; the sponsor only in an account's
 /// activation; payments and new accounts only to the address the user confirmed; contract calls only to pinned
 /// contracts (and verified launch tokens), only the functions the intent names, each bound by its call rule; Soroban
-/// auth only through the source account; restores only as their own intent, of the app's own data; and the user's
-/// total outflow per asset never above what the intent declares.
+/// auth only through the source account, of the call itself only, with nothing beneath it but spends of the user's own
+/// tokens; a positive minimum wherever a trade encodes one; restores only as their own intent, of the app's own data;
+/// and the user's total outflow per asset never above what the intent declares.
 ///
 /// Contracts v2 (docs/DESIGN-stellar-contracts-v2.md §20.4): the live generation's contracts are pinned by role, and
 /// the ones it creates at runtime (launch tokens, Moment NFTs and coins) are allowed only by their pinned WASM hash. A
 /// call to launchpad-v2, moments-v2 or the lp-locker is judged by that contract's own rules, since v1's launchpad and
 /// Moments use some of the same function names with other arguments: a launch binds its terms to the pins (the
 /// executors, the locker, the token's WASM and the durations) and pays exactly its terms' fee, at most the pinned
-/// bound, to the launchpad; refunds, collects and claims act for the user; a call anyone may make carries none of the
-/// user's authorization.
+/// bound, to the launchpad, and the creator-fee recipient, exemptions, creator fee and sharing are the ones the intent
+/// shows (a Moment's price, allocation and window likewise); refunds, collects and claims act for the user; a call
+/// anyone may make carries none of the user's authorization.
 public struct TxVerifier {
     public let user: String
     public let pinned: PinnedContracts
@@ -132,7 +134,12 @@ public struct TxVerifier {
     public var runtimeContracts: [String: String]
     public var now: () -> Date
 
-    static let tokenSpendFunctions: Set<String> = ["transfer", "transfer_from", "burn", "burn_from", "approve"]
+    /// The token-spend functions (SEP-41 and the SAC), with the position of the account the tokens leave, of the
+    /// amount, and their arity: transfer(from, to, amount) · burn(from, amount) · approve(from, spender, amount,
+    /// live_until) · transfer_from(spender, from, to, amount) · burn_from(spender, from, amount).
+    static let tokenSpends: [String: (from: Int, amount: Int, arity: Int)] = [
+        "transfer": (0, 2, 3), "burn": (0, 1, 2), "approve": (0, 2, 4), "transfer_from": (1, 3, 4), "burn_from": (1, 2, 3),
+    ]
     static let maxValidity: TimeInterval = 30 * 60
 
     static let destination = "The destination is not the one you confirmed."
@@ -149,6 +156,16 @@ public struct TxVerifier {
     static let launchFeeTo = "The launch fee goes to another address than the launchpad."
     static let launchFeeAmount = "The launch fee is not the one in the terms."
     static let momentTerms = "The Moment's terms are not the ones this app pins."
+    static let creation = "The transaction asks to authorize contract creation."
+    /// An authorization entry whose root is not the call being judged (a second call the user would authorize).
+    static let extraAuth = "The transaction asks you to authorize a call other than this one."
+    /// A node beneath the call's own authorization that is not a spend of the user's own tokens.
+    static let otherAuth = "The transaction asks you to authorize a call that is not a spend of your tokens."
+    static let noMinimum = "The transaction sets no minimum received."
+    static let route = "The swap route goes through a token this app doesn't list."
+    static let launchRecipient = "The creator fees go to another address than the one you confirmed."
+    static let launchSettings = "The launch settings are not the ones shown."
+    static let momentSettings = "The Moment's price, allocation or window is not the one shown."
 
     public init(
         user: String,
@@ -211,9 +228,9 @@ public struct TxVerifier {
             case let .pathPaymentStrictSend(sendAsset, sendAmount, destination, destAsset, destMin, _):
                 guard destination == user else { throw fail("Swap output goes to another account.") }
                 try outflow.add(sac(sendAsset), sendAmount)
-                if intent.receive != nil {
-                    guard let want = Self.minimum(intent, for: sac(destAsset)), destMin >= want else { throw fail(Self.belowMinimum) }
-                }
+                // The intent must quote the minimum: a path payment without one is refused, not let through.
+                guard destMin > 0 else { throw fail(Self.noMinimum) }
+                guard let want = Self.minimum(intent, for: sac(destAsset)), destMin >= want else { throw fail(Self.belowMinimum) }
             case let .changeTrust(asset, limit):
                 guard (intent.trust ?? []).contains(asset.spec) else { throw fail("Unexpected trustline \(asset.spec).") }
                 guard limit > 0 else { throw fail("The transaction removes a trustline.") }
@@ -238,13 +255,11 @@ public struct TxVerifier {
                 guard allowedCalls.contains(where: { $0.contract == contract && $0.fn == call.function }) else {
                     throw fail("Call \(call.function) is not part of this action.")
                 }
-                try checkCall(call, intent: intent, allowed: pinnedOrVerified, auth: auth, v2: v2)
+                try checkCall(call, intent: intent, allowed: pinnedOrVerified, listed: allowedContracts, auth: auth, v2: v2)
                 for entry in auth {
                     guard entry.credentials == .sourceAccount else { throw fail("The transaction needs a signature from another address.") }
-                    // The authorization of the call itself is bound by the call's rule; any other root is bound here.
-                    // A root is the call itself only byte for byte (InvokeContractArgs ==), as verify.ts compares them.
-                    let covered = entry.rootInvocation.function == .contractFn(call)
-                    try walk(entry.rootInvocation, intent: intent, covered: covered, outflow: &outflow)
+                    // Only the call itself, bound by its rule, with the user's own token spends beneath it.
+                    try walk(entry, call: call, outflow: &outflow)
                 }
             case .restoreFootprint:
                 // Archived entries come back only as their own step, and only the app's own data (§4.9).
@@ -316,29 +331,32 @@ public struct TxVerifier {
         }
     }
 
-    /// Adds every token outflow the user authorizes (transfer/burn/approve/transfer_from/burn_from from the user). A
-    /// transfer outside a call that has its own rule (`covered`) must go to the address the user confirmed.
-    private func walk(_ inv: AuthorizedInvocation, intent: Intent, covered: Bool, outflow: inout Outflow) throws {
-        guard case let .contractFn(c) = inv.function, let contract = c.contract.string else {
-            throw fail("The transaction asks to authorize contract creation.")
+    /// Adds every token outflow the user authorizes in one authorization entry, and refuses anything else in it. The
+    /// user's authorization moves their tokens, but it also lets a contract act for them in any other way (a Blend
+    /// withdrawal to a third party, a creator-fee recipient change), which no outflow shows. So the entry's root must be
+    /// the call being judged, byte for byte (InvokeContractArgs ==, as verify.ts compares them), which its own rule
+    /// binds, and every node beneath it, at any depth, a spend of the user's own tokens (transfer, burn, approve,
+    /// transfer_from or burn_from from the user), counted toward the outflow the intent declares. An approval counts in
+    /// full: the spender may take it later.
+    private func walk(_ entry: AuthorizationEntry, call: InvokeContractArgs, outflow: inout Outflow) throws {
+        guard case let .contractFn(c) = entry.rootInvocation.function else { throw fail(Self.creation) }
+        guard c == call else { throw fail(Self.extraAuth) }
+        // The call itself may be a spend (a send, an approval); its rule has checked its arguments.
+        if let l = Self.tokenSpends[c.function], c.args.count > l.amount, c.args[l.from].addressString == user, let contract = c.contract.string {
+            guard let n = c.args[l.amount].amount else { throw fail(Self.outOfRange) }
+            try outflow.add(contract, n)
         }
-        if Self.tokenSpendFunctions.contains(c.function) {
-            // An approval counts in full: the spender may take it later.
-            let layout: [String: (from: Int, amount: Int)] = [
-                "transfer": (0, 2), "burn": (0, 1), "approve": (0, 2), "transfer_from": (1, 3), "burn_from": (1, 2),
-            ]
-            if let l = layout[c.function], c.args.count > l.amount, c.args[l.from].addressString == user {
-                guard let n = c.args[l.amount].amount else { throw fail(Self.outOfRange) }
-                try outflow.add(contract, n)
-            }
+        for sub in entry.rootInvocation.subInvocations { try walkSpends(sub, outflow: &outflow) }
+    }
+
+    private func walkSpends(_ inv: AuthorizedInvocation, outflow: inout Outflow) throws {
+        guard case let .contractFn(c) = inv.function, let contract = c.contract.string else { throw fail(Self.creation) }
+        guard let l = Self.tokenSpends[c.function], c.args.count == l.arity, c.args[l.from].addressString == user else {
+            throw fail(Self.otherAuth)
         }
-        if !covered, c.function == "transfer" || c.function == "transfer_from" {
-            let (from, to) = c.function == "transfer" ? (0, 1) : (1, 2)
-            if c.args.count > to, c.args[from].addressString == user, !Self.isConfirmed(c.args[to], intent) {
-                throw fail(Self.destination)
-            }
-        }
-        for sub in inv.subInvocations { try walk(sub, intent: intent, covered: covered, outflow: &outflow) }
+        guard let n = c.args[l.amount].amount else { throw fail(Self.outOfRange) }
+        try outflow.add(contract, n)
+        for sub in inv.subInvocations { try walkSpends(sub, outflow: &outflow) }
     }
 
     /// The Stellar Asset Contract id of a classic asset on this network.
@@ -389,8 +407,8 @@ extension TxVerifier {
     /// Soroswap and Aquarius routers' published ABIs, Blend's pool, Circle's TokenMessengerMinter and SEP-41. A function
     /// without a rule is not signed. v2's singletons have their own rules, every other contract v1's. Same order of
     /// checks as verify.ts's rule tables.
-    func checkCall(_ call: InvokeContractArgs, intent: Intent, allowed: Set<String>, auth: [AuthorizationEntry], v2: V2Pins?) throws {
-        let rules = CallRules(verifier: self, call: call, intent: intent, auth: auth)
+    func checkCall(_ call: InvokeContractArgs, intent: Intent, allowed: Set<String>, listed: Set<String>, auth: [AuthorizationEntry], v2: V2Pins?) throws {
+        let rules = CallRules(verifier: self, call: call, intent: intent, auth: auth, listed: listed)
         if let v2, let contract = call.contract.string {
             if contract == v2.launchpad { return try rules.launchpadV2(v2) }
             if contract == v2.moments { return try rules.momentsV2(v2) }
@@ -485,6 +503,8 @@ extension TxVerifier {
         let call: InvokeContractArgs
         let intent: Intent
         let auth: [AuthorizationEntry]
+        /// The allowlist: pinned contracts, verified launch tokens and v2 runtime contracts with a pinned WASM.
+        let listed: Set<String>
 
         var args: [SCVal] { call.args }
         var user: String { verifier.user }
@@ -499,9 +519,33 @@ extension TxVerifier {
             guard let a = args[i].addressString else { throw fail(TxVerifier.arguments) }
             return a
         }
+        /// The call's minimum is positive and at least the intent's quote: a minimum of 0 protects nothing, whatever
+        /// the intent says.
         func atLeast(_ min: Int64?, _ quoted: Int64?) throws {
             guard let min else { throw fail(TxVerifier.arguments) }
+            guard min > 0 else { throw fail(TxVerifier.noMinimum) }
             guard let quoted, min >= quoted else { throw fail(TxVerifier.belowMinimum) }
+        }
+        /// A swap's tokens (a Soroswap path, an Aquarius chain's hops) run their code inside the user's swap, so each
+        /// must be on the allowlist; only the token sold, when the intent spends it, and the token bought, when the
+        /// intent quotes its minimum, may be outside it (the user's own choice, which the phone binds to its form).
+        func routeListed(_ tokens: [String], sold: String, bought: String) throws {
+            var ends: Set<String> = []
+            if intent.spend[sold] != nil { ends.insert(sold) }
+            if intent.receive?[bought] != nil { ends.insert(bought) }
+            for t in tokens where !listed.contains(t) && !ends.contains(t) { throw fail(TxVerifier.route) }
+        }
+        /// A display field of the intent, when it has it.
+        func shown(_ key: String) -> StellarJSON? { intent.display?[key] }
+        /// A displayed whole number equal to the call's `n`.
+        func sameNumber(_ value: StellarJSON?, _ n: Int64?) -> Bool {
+            guard case let .number(d)? = value, let n, d.rounded() == d, abs(d) <= 9_007_199_254_740_991 else { return false }
+            return Int64(d) == n
+        }
+        /// A displayed amount (base units as a decimal string) equal to the call's `n`.
+        func sameUnits(_ value: StellarJSON?, _ n: Int64?) -> Bool {
+            guard case let .string(text)? = value, let u = TxVerifier.units(text), let n else { return false }
+            return u == n
         }
         /// The intent's one quoted minimum, for a call whose output asset isn't among its arguments.
         var soleMinimum: Int64? { intent.receive.flatMap { $0.count == 1 ? $0.values.first.flatMap(TxVerifier.units) : nil } }
@@ -556,16 +600,30 @@ extension TxVerifier {
                 // Soroswap router swap_exact_tokens_for_tokens(amount_in, amount_out_min, path, to, deadline).
                 try arity(5)
                 guard args[3].addressString == user else { throw fail("Swap output goes to another account.") }
-                guard case let .vec(path?) = args[2], let last = path.last, let out = last.addressString else { throw fail(TxVerifier.arguments) }
+                guard case let .vec(path?) = args[2], !path.isEmpty else { throw fail(TxVerifier.arguments) }
+                let tokens = path.compactMap(\.addressString)
+                guard tokens.count == path.count, let out = tokens.last else { throw fail(TxVerifier.arguments) }
+                try routeListed(tokens, sold: tokens[0], bought: out)
                 try atLeast(args[1].amount, TxVerifier.minimum(intent, for: out))
             case "swap_chained":
                 // Aquarius router swap_chained(user, swaps_chain, token_in, in_amount, out_min); each hop is
                 // (tokens, pool_index, token_out), so the last hop's token_out is what the user receives.
                 try arity(5)
                 try actsForUser(0)
-                guard case let .vec(chain?) = args[1], case let .vec(hop?)? = chain.last, hop.count == 3, let out = hop[2].addressString else {
-                    throw fail(TxVerifier.arguments)
+                guard case let .vec(chain?) = args[1], !chain.isEmpty, let tokenIn = args[2].addressString else { throw fail(TxVerifier.arguments) }
+                var tokens = [tokenIn]
+                var bought: String?
+                for h in chain {
+                    guard case let .vec(hop?) = h, hop.count == 3, case let .vec(pair?) = hop[0], let out = hop[2].addressString else {
+                        throw fail(TxVerifier.arguments)
+                    }
+                    let pairTokens = pair.compactMap(\.addressString)
+                    guard pairTokens.count == pair.count else { throw fail(TxVerifier.arguments) }
+                    tokens += pairTokens + [out]
+                    bought = out
                 }
+                guard let out = bought else { throw fail(TxVerifier.arguments) }
+                try routeListed(tokens, sold: tokenIn, bought: out)
                 try atLeast(args[4].amount, TxVerifier.minimum(intent, for: out))
             case "launch":
                 // Launchpad launch(creator, quote, name, symbol, uri, creator_fee_bps, initial_buy, min_tokens_out).
@@ -705,6 +763,31 @@ extension TxVerifier {
             }
             for (i, x) in transfers.enumerated() where i != feeAt && x.to != launchpad { throw fail(TxVerifier.destination) }
             if initialBuy > 0 { try atLeast(minOut, soleMinimum) }
+            // What the user chose: the creator fees go to the address they confirmed (intent.to), or to themselves when
+            // it is absent, for the launch's whole life; the displayed exemptions, creator fee and sharing are the
+            // call's.
+            let recipient = p["creator_fee_recipient"]
+            let isVoid = recipient == .void
+            let recipientOK: Bool
+            if let to = intent.to {
+                recipientOK = !isVoid && recipient?.addressString == to
+            } else {
+                recipientOK = isVoid || recipient?.addressString == user
+            }
+            guard recipientOK, case let .string(shownRecipient)? = shown("recipient"),
+                  shownRecipient.utf8.elementsEqual((intent.to ?? user).utf8) else { throw fail(TxVerifier.launchRecipient) }
+            var exemptShown: [String]?
+            if case let .string(list)? = shown("snipeExempt") {
+                exemptShown = list.isEmpty ? [] : list.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            }
+            var settingsOK = false
+            if case let .vec(exempt?)? = p["snipe_exempt"], let exemptShown, exempt.count == exemptShown.count,
+               zip(exempt, exemptShown).allSatisfy({ value, address in value.addressString?.utf8.elementsEqual(address.utf8) ?? false }),
+               sameNumber(shown("creatorFeeBps"), p["creator_fee_bps"]?.amount),
+               case let .bool(sharing)? = p["holder_sharing"], case let .bool(sharingShown)? = shown("holderSharing"), sharing == sharingShown {
+                settingsOK = true
+            }
+            guard settingsOK else { throw fail(TxVerifier.launchSettings) }
         }
 
         // ------------------------------------------------------------------------------------------ moments-v2
@@ -728,6 +811,11 @@ extension TxVerifier {
                     && TxVerifier.hash32(t["coin_wasm_hash"]) == v2.coinWasm
                     && TxVerifier.sameDurations(t["durations"], v2.durations.moments.fields)
                 guard pinnedTerms else { throw fail(TxVerifier.momentTerms) }
+                // What the user chose: the displayed price, creator allocation and collect window are the call's.
+                let chosen = sameUnits(shown("price"), p["price"]?.amount)
+                    && sameNumber(shown("allocationBps"), p["creator_alloc_bps"]?.amount)
+                    && sameNumber(shown("windowSecs"), p["window_secs"]?.amount)
+                guard chosen else { throw fail(TxVerifier.momentSettings) }
             case "collect":
                 // collect(collector, nft, qty, max_total): the collector pays at most max_total, in the one asset the
                 // intent spends.

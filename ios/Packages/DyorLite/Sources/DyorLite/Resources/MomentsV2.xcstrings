@@ -1,0 +1,612 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ USDC creator proceeds" : {
+      "comment" : "A notification's text under “Collected %@ proceeds”: %@ is the amount withdrawn (12.5). USDC is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC de ingresos del creador"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC de revenus du créateur"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "크리에이터 수익 %@ USDC"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC 创作者收益"
+          }
+        }
+      }
+    },
+    "%@ USDC reserve into a locked pool" : {
+      "comment" : "A notification's text under “Graduated %@”: %@ is the reserve that went into the pool (75). USDC is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reserva de %@ USDC a un pool bloqueado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réserve de %@ USDC versée dans un pool verrouillé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "준비금 %@ USDC를 잠긴 풀로"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC 储备注入锁定池"
+          }
+        }
+      }
+    },
+    "%@ USDC reserve wound down" : {
+      "comment" : "A notification's text under “Expired %@”: %@ is the reserve split between the creator and the treasury (40). USDC is never translated.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reserva de %@ USDC liquidada"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réserve de %@ USDC liquidée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "준비금 %@ USDC 정산"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ USDC 储备已结算"
+          }
+        }
+      }
+    },
+    "%@ vested coins" : {
+      "comment" : "A notification's text under “Claimed %@”: %@ is the number of coins claimed (1,250).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ monedas liberadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ jetons acquis"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "베스팅된 코인 %@개"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 枚已归属代币"
+          }
+        }
+      }
+    },
+    "Claim vested coins from %lld Moments" : {
+      "comment" : "A transaction's title: the user claims the vested coins of several Moments in one transaction. “Moment” is a feature's name.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Claim vested coins from %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Claim vested coins from %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Reclamar monedas liberadas de %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Reclamar monedas liberadas de %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Réclamer les jetons acquis de %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Réclamer les jetons acquis de %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment %lld개에서 베스팅된 코인 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 %lld 个 Moment 领取已归属代币"
+          }
+        }
+      }
+    },
+    "Claim your vested coins" : {
+      "comment" : "A transaction's title: the user claims the coins of a Moment that have vested so far. “Moment” is a feature's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclamar tus monedas liberadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réclamer vos jetons acquis"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "베스팅된 코인 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领取你的已归属代币"
+          }
+        }
+      }
+    },
+    "Claimed %@" : {
+      "comment" : "A notification's title: the user claimed the vested coins of a Moment; %@ is its ticker ($DUSK) or its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclamaste %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ réclamé"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取 %@"
+          }
+        }
+      }
+    },
+    "Claimed vested coins" : {
+      "comment" : "A notification's title: the user claimed the vested coins of several Moments at once.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reclamaste monedas liberadas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Jetons acquis réclamés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "베스팅된 코인 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取已归属代币"
+          }
+        }
+      }
+    },
+    "Collected %@ proceeds" : {
+      "comment" : "A notification's title: a Moment's creator withdrew their share of its collects; %@ is its ticker ($DUSK) or its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cobraste los ingresos de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revenus de %@ collectés"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 수익 수령"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已领取 %@ 收益"
+          }
+        }
+      }
+    },
+    "Expire this Moment" : {
+      "comment" : "A transaction's title: a Moment that can no longer graduate ends; its reserve goes to its creator and the treasury. “Moment” is a feature's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer expirar este Moment"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Faire expirer ce Moment"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment 만료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让这个 Moment 到期"
+          }
+        }
+      }
+    },
+    "Expired %@" : {
+      "comment" : "A notification's title: a Moment ended without graduating; %@ is its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ expiró"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ expiré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 만료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已到期"
+          }
+        }
+      }
+    },
+    "Graduate this Moment" : {
+      "comment" : "A transaction's title: a Moment that reached its goal graduates into its coin and a Soroswap pool. “Moment” is a feature's name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduar este Moment"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graduer ce Moment"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 Moment 졸업"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让这个 Moment 毕业"
+          }
+        }
+      }
+    },
+    "Graduated %@" : {
+      "comment" : "A notification's title: a Moment graduated into its coin and a Soroswap pool; %@ is its ticker ($DUSK) or its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ se graduó"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ gradué"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업 완료"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 已毕业"
+          }
+        }
+      }
+    },
+    "Record a failed graduation attempt" : {
+      "comment" : "A transaction's title: a graduation attempt that fails as things stand, so it only records the failure (which starts the clock to the Moment's expiry).",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Registrar un intento de graduación fallido"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enregistrer une tentative de graduation échouée"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "실패한 졸업 시도 기록"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录一次失败的毕业尝试"
+          }
+        }
+      }
+    },
+    "Recorded a failed graduation of %@" : {
+      "comment" : "A notification's title: the user's graduation attempt failed and was recorded, which starts the clock to the Moment's expiry; %@ is its ticker ($DUSK) or its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se registró una graduación fallida de %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de graduation de %@ enregistré"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업 실패 기록됨"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已记录 %@ 的毕业失败"
+          }
+        }
+      }
+    },
+    "Tried to graduate %@" : {
+      "comment" : "A notification's title: the user made a graduation attempt whose outcome the phone didn't know when it was confirmed; %@ is the Moment's ticker ($DUSK) or its name.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intentaste graduar %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tentative de graduation de %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ 졸업 시도"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已尝试让 %@ 毕业"
+          }
+        }
+      }
+    },
+    "Withdraw your proceeds" : {
+      "comment" : "A transaction's title: a Moment's creator withdraws their share of its collects, in USDC.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirar tus ingresos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirer vos revenus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수익 인출"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "提取你的收益"
+          }
+        }
+      }
+    },
+    "across %lld Moments" : {
+      "comment" : "A notification's text under “Claimed vested coins”: how many Moments they came from. “Moment” is a feature's name.",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "across %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "across %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "de %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "de %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "fr" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "sur %lld Moment"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "sur %lld Moments"
+                }
+              }
+            }
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Moment %lld개에서"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自 %lld 个 Moment"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

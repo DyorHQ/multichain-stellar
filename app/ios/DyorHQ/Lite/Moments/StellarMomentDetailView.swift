@@ -13,16 +13,20 @@ import SwiftUI
 /// A Stellar Moment's page, pushed over the Moments board. A Moment of contracts v2 is its NFT contract, keyed by that
 /// address: its progress to the threshold, the collect ticket while it collects, its graduation (or expiry), the
 /// account's editions and coins as they vest, the creator's proceeds and the pool once it exists. A retired v1 Moment
-/// (`init(id:)`) is shown as it stands: its editions and their way into Freighter, never a collect.
+/// (`init(contract:id:)`, or `init(id:)` on its own) is shown as it stands: its editions and their way into Freighter,
+/// never a collect.
 struct StellarMomentDetailView: View {
     private enum Key: Hashable {
         case moment(StellarMomentListingV2)
-        case retired(Int)
+        /// A v1 Moment, by its contract when its opener knows it, and its number there; `alone`: presented by itself.
+        case retired(contract: String?, id: Int, alone: Bool)
     }
 
     private let key: Key
+    @Environment(\.dismiss) private var dismiss
 
-    /// The v2 Moment `nft`, with what its opener knows of it (`listing`: its name and media); only the address otherwise.
+    /// The v2 Moment `nft`, with what its opener knows of it (`listing`: its name and media); only the address otherwise,
+    /// until the page reads the rest.
     init(nft: String, listing: StellarMomentListingV2? = nil) {
         key = .moment(listing?.nft == nft ? listing! : StellarMomentListingV2(nft: nft))
     }
@@ -32,15 +36,29 @@ struct StellarMomentDetailView: View {
         key = .moment(listing)
     }
 
-    /// The retired v1 Moment `id`, by its number in the v1 Moments contract.
+    /// The retired v1 Moment `id` of the v1 Moments contract `contract`, pushed (a board's or My Moments' Retired
+    /// section).
+    init(contract: String, id: Int) {
+        key = .retired(contract: contract, id: id, alone: false)
+    }
+
+    /// The retired v1 Moment `id` (a Stellar notification's number), presented by itself, as a sheet: it brings its own
+    /// navigation and Close.
     init(id: Int) {
-        key = .retired(id)
+        key = .retired(contract: nil, id: id, alone: true)
     }
 
     var body: some View {
         switch key {
-        case .moment(let listing): StellarMomentPage(listing: listing)
-        case .retired(let id): StellarRetiredMomentPage(id: id)
+        case .moment(let listing):
+            StellarMomentPage(listing: listing)
+        case let .retired(contract, id, alone) where alone:
+            NavigationStack {
+                StellarRetiredMomentPage(id: id, contract: contract)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            }
+        case let .retired(contract, id, _):
+            StellarRetiredMomentPage(id: id, contract: contract)
         }
     }
 }
@@ -60,8 +78,11 @@ private struct StellarMomentPage: View {
     @State private var status: StellarMomentStatusV2?
     @State private var vesting: StellarMomentVestingV2?
     @State private var economics: StellarMomentsEconomicsV2?
-    /// The editions this account collected from this page, from each settled collect's result: the API has no read of an
-    /// account's v2 editions, so these are the ones the page can offer in Freighter.
+    /// The Moment as the API's indexer recorded it: its name, media, place and date, its collectors and the account's
+    /// editions. Nil until read, and while the indexer hasn't seen its publish (a Moment just published).
+    @State private var detail: StellarMomentDetailV2?
+    /// The editions this account collected from this page, from each settled collect's result: shown at once, before the
+    /// indexer records them in `detail`.
     @State private var collected: [Int] = []
     @State private var quantity = 1
     @State private var reloads = 0
@@ -70,8 +91,11 @@ private struct StellarMomentPage: View {
     @State private var failures: [Part: String] = [:]
     @State private var action: Action?
     @State private var freighter: StellarFreighterEdition?
+    /// What the open review's plan binds, once built: the editions a collect mints, and what a graduation attempt does.
+    @State private var boundCollect: StellarCollectV2?
+    @State private var attempt: StellarGraduationAttemptV2?
 
-    private enum Part: CaseIterable { case status, economics, vesting }
+    private enum Part: CaseIterable { case status, economics, vesting, detail }
 
     private enum Action: String, Identifiable {
         case collect, claim, withdraw, graduate, expire
@@ -85,7 +109,11 @@ private struct StellarMomentPage: View {
     private var now: Date { Date(timeIntervalSince1970: TimeInterval(clock.now)) }
     private var phase: StellarMomentPhaseV2? { status.map { StellarMomentPhaseV2($0, now: now) } }
     private var isCreator: Bool { status.map { $0.creator == session?.address } == true }
-    private var name: String { listing.name ?? StellarAccountID(nft)?.short ?? nft }
+    /// The Moment as the page shows it: what the indexer recorded, else what its opener knew.
+    private var shown: StellarMomentListingV2 { StellarMomentText.merged(listing, detail: detail) }
+    private var name: String { shown.name ?? StellarAccountID(nft)?.short ?? nft }
+    /// The account's editions: the indexer's, and the ones collected here since.
+    private var editions: [Int] { Array(Set(detail?.you?.editions ?? []).union(collected)).sorted() }
 
     var body: some View {
         List {
@@ -103,13 +131,14 @@ private struct StellarMomentPage: View {
                 positionSection(status, phase: phase)
                 if isCreator { creatorSection(status, phase: phase) }
                 if phase == .graduated { poolSection(status) }
+                if let detail { collectorsSection(detail) }
                 aboutSection(status)
             } else if loadError == nil {
                 Section { HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Loading…").foregroundStyle(.secondary) } }
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle(Text(verbatim: listing.symbol.map { "$\($0)" } ?? name))
+        .navigationTitle(Text(verbatim: shown.symbol.map { "$\($0)" } ?? name))
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
         .task { await clock.run(showing: { face(at: $0) }) }
@@ -135,22 +164,22 @@ private struct StellarMomentPage: View {
                 // The art fills a box the row's width decides; a video loops muted over its poster.
                 Color(.tertiarySystemFill)
                     .frame(height: 240)
-                    .overlay { StellarMomentArtwork(image: listing.image, name: name) }
+                    .overlay { StellarMomentArtwork(image: shown.image, name: name) }
                     .overlay {
-                        if let video = StellarImages.video(listing.video) { StellarLoopingVideo(url: video).allowsHitTesting(false) }
+                        if let video = StellarImages.video(shown.video) { StellarLoopingVideo(url: video).allowsHitTesting(false) }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(verbatim: name).font(.title2.weight(.semibold)).lineLimit(2)
-                        if let symbol = listing.symbol {
+                        if let symbol = shown.symbol {
                             Text(verbatim: "$\(symbol)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                         }
                     }
                     if let status { StellarMomentPhaseBadge(status: status) }
                     HStack(spacing: 6) {
-                        if let place = listing.place, !place.isEmpty { Label { Text(verbatim: place) } icon: { Image(systemName: "mappin.and.ellipse") }.lineLimit(1) }
-                        if let day = listing.takenOn.flatMap(StellarMomentText.day) { Label { Text(verbatim: day) } icon: { Image(systemName: "calendar") } }
+                        if let place = shown.place, !place.isEmpty { Label { Text(verbatim: place) } icon: { Image(systemName: "mappin.and.ellipse") }.lineLimit(1) }
+                        if let day = shown.takenOn.flatMap(StellarMomentText.day) { Label { Text(verbatim: day) } icon: { Image(systemName: "calendar") } }
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                 }
@@ -212,7 +241,9 @@ private struct StellarMomentPage: View {
     private func collectSection(_ status: StellarMomentStatusV2) -> some View {
         let limit = StellarMomentText.collectLimit(maxPerCollect: economics?.maxPerCollect)
         let price = Int64(status.price) ?? 0
-        let pay = price.multipliedReportingOverflow(by: Int64(min(quantity, limit))).partialValue
+        // What the collect pulls: price × quantity, or for the collect that completes the Moment only what its reserve
+        // still needs.
+        let pay = StellarMomentText.gross(status, quantity: min(quantity, limit))
         let balance = moments?.usdcBalance ?? 0
         let short = balance < pay
         return Section {
@@ -296,12 +327,13 @@ private struct StellarMomentPage: View {
                     Text("Can expire from", tableName: "StellarMoments", comment: "A row on a Stellar Moment that hasn't graduated: from when anyone can end it without graduating (a date follows)")
                 }
             }
-            if StellarMomentText.isExpirable(status, at: now) {
-                expireButton
-            } else if status.graduatable {
+            // Graduate stays on offer to anyone until the Moment expires, even once it can (contracts v2 §9.2, V11): a
+            // graduation that succeeds first wins.
+            if status.graduatable {
                 Button(phase == .graduationFailed ? "Retry Graduation" : "Graduate", systemImage: "arrow.up.forward.circle") { Haptics.tap(); action = .graduate }
                     .disabled(!canSign)
             }
+            if StellarMomentText.isExpirable(status, at: now) { expireButton }
         } header: {
             if phase == .graduationFailed {
                 Text("Graduation Failed", tableName: "StellarMoments", comment: "Section header on a Stellar Moment whose graduation attempt failed")
@@ -341,12 +373,14 @@ private struct StellarMomentPage: View {
 
     @ViewBuilder
     private func positionSection(_ status: StellarMomentStatusV2, phase: StellarMomentPhaseV2) -> some View {
+        // An expired Moment's coins never exist: no coins are owed (the vesting read says it doesn't vest).
+        let owed = StellarMomentText.owedCoins(vesting: vesting, you: detail?.you, phase: phase)
         let side = vesting?.collector
-        if !collected.isEmpty || side != nil {
+        if !editions.isEmpty || owed != nil {
             Section {
-                if !collected.isEmpty {
-                    LabeledContent("Editions", value: StellarMomentText.editions(collected))
-                    ForEach(collected.prefix(3), id: \.self) { edition in
+                if !editions.isEmpty {
+                    LabeledContent("Editions", value: StellarMomentText.editions(editions))
+                    ForEach(editions.prefix(3), id: \.self) { edition in
                         Button {
                             freighter = freighterEdition(edition)
                         } label: {
@@ -355,9 +389,9 @@ private struct StellarMomentPage: View {
                         .disabled(freighterEdition(edition) == nil)
                     }
                 }
-                if let side {
-                    LabeledContent("Coins owed", value: StellarMomentText.coins(side.total, symbol: listing.symbol))
-                    if phase == .graduated { vestingRows(side, claimable: vesting?.claimable.collector ?? "0") }
+                if let owed {
+                    LabeledContent("Coins owed", value: StellarMomentText.coins(owed, symbol: shown.symbol))
+                    if phase == .graduated, let side { vestingRows(side, claimable: vesting?.claimable.collector ?? "0") }
                 }
                 claimButton(status, phase: phase)
             } header: {
@@ -365,7 +399,7 @@ private struct StellarMomentPage: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if phase != .graduated, phase != .expired { Paragraph("Coins are minted to you as they vest once the Moment graduates.") }
-                    if !collected.isEmpty {
+                    if !editions.isEmpty {
                         Paragraph(LocalizedStringResource("Each edition is an NFT in your Stellar account. Freighter can show it once you add it.", table: "StellarMoments", comment: "Under a Stellar Moment's position. Stellar and Freighter are never translated"))
                     }
                 }
@@ -378,10 +412,10 @@ private struct StellarMomentPage: View {
     private func vestingRows(_ side: StellarMomentVestingV2.Side, claimable: String) -> some View {
         let due = (Int64(claimable) ?? 0) > 0
         LabeledContent("Claimable now") {
-            Text(verbatim: StellarMomentText.coins(claimable, symbol: listing.symbol)).monospacedDigit()
+            Text(verbatim: StellarMomentText.coins(claimable, symbol: shown.symbol)).monospacedDigit()
                 .fontWeight(due ? .semibold : .regular).foregroundStyle(due ? Color.brand : .primary)
         }
-        LabeledContent("Claimed", value: StellarMomentText.coins(side.claimed, symbol: listing.symbol))
+        LabeledContent("Claimed", value: StellarMomentText.coins(side.claimed, symbol: shown.symbol))
         ForEach(side.tranches) { tranche in
             LabeledContent {
                 Text(verbatim: NumberStyle.basisPoints(tranche.vestedBps))
@@ -401,7 +435,7 @@ private struct StellarMomentPage: View {
                 Haptics.tap()
                 action = .claim
             } label: {
-                Label(listing.symbol.map { tr("Claim \(StellarMomentText.units(total)) $\($0)") } ?? tr("Claim"), systemImage: "arrow.down.circle")
+                Label(shown.symbol.map { tr("Claim \(StellarMomentText.units(total)) $\($0)") } ?? tr("Claim"), systemImage: "arrow.down.circle")
                     .fontWeight(.semibold)
             }
             .disabled(!canSign)
@@ -418,8 +452,8 @@ private struct StellarMomentPage: View {
                 Button("Withdraw Proceeds", systemImage: "banknote") { Haptics.tap(); action = .withdraw }.disabled(!canSign)
             }
             if phase == .graduated, let mine = vesting?.creator {
-                LabeledContent("Allocation claimable") { Text(verbatim: StellarMomentText.coins(vesting?.claimable.creator ?? "0", symbol: listing.symbol)).monospacedDigit() }
-                LabeledContent("Allocation vested", value: StellarMomentText.coins(mine.vested, symbol: listing.symbol))
+                LabeledContent("Allocation claimable") { Text(verbatim: StellarMomentText.coins(vesting?.claimable.creator ?? "0", symbol: shown.symbol)).monospacedDigit() }
+                LabeledContent("Allocation vested", value: StellarMomentText.coins(mine.vested, symbol: shown.symbol))
                 if vesting?.collector == nil { claimButton(status, phase: phase) }
             }
         } header: {
@@ -439,7 +473,7 @@ private struct StellarMomentPage: View {
                 Haptics.tap()
                 router.openStellarSwap(sell: "USDC", buy: status.coin)
             } label: {
-                Label("Trade $\(listing.symbol ?? StellarAccountID(status.coin)?.short ?? "")", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
+                Label("Trade $\(shown.symbol ?? StellarAccountID(status.coin)?.short ?? "")", systemImage: "arrow.left.arrow.right").fontWeight(.semibold)
             }
         } header: {
             Text("Pool")
@@ -447,6 +481,21 @@ private struct StellarMomentPage: View {
             if let harvest = economics?.terms.harvest {
                 Paragraph(LocalizedStringResource("Graduated on Soroswap. Of its pool's fees on the locked liquidity, \(NumberStyle.basisPoints(harvest.compoundedBps)) stay in the pool; of the rest, the USDC goes \(NumberStyle.basisPoints(harvest.quoteSide.creatorBps)) to the creator and \(NumberStyle.basisPoints(harvest.quoteSide.platformBps)) to DyorHQ, and the coins are burned.", table: "StellarMoments", comment: "Under a graduated Stellar Moment's pool. The values are shares (33.33%, 40%, 60%). Soroswap, USDC and DyorHQ are never translated"))
             }
+        }
+    }
+
+    private func collectorsSection(_ detail: StellarMomentDetailV2) -> some View {
+        Section {
+            if detail.collectorsSummary.count > 0 {
+                LabeledContent { Text(verbatim: "\(detail.collectorsSummary.count)") } label: { Text("Collectors", tableName: "StellarMoments") }
+                if let largest = detail.collectorsSummary.largest, let address = StellarAccountID(largest.address) {
+                    LabeledContent("Largest", value: tr("\(address.short) · \(largest.editions) editions"))
+                }
+            } else {
+                Text("No collects yet.", tableName: "StellarMoments").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Collectors", tableName: "StellarMoments")
         }
     }
 
@@ -458,10 +507,10 @@ private struct StellarMomentPage: View {
             LabeledContent("Split", value: tr("\(NumberStyle.basisPoints(status.reserveBps)) reserve · \(NumberStyle.basisPoints(status.creatorBps)) creator · \(NumberStyle.basisPoints(status.platformBps)) DyorHQ"))
             LabeledContent("Creator allocation", value: NumberStyle.basisPoints(status.creatorAllocBps))
             LabeledContent("NFT royalty", value: NumberStyle.basisPoints(status.royaltyBps))
-            if let supply = economics?.supply { LabeledContent("Supply", value: StellarMomentText.coins(supply, symbol: listing.symbol)) }
-            if let video = StellarImages.video(listing.video) {
+            if let supply = economics?.supply { LabeledContent("Supply", value: StellarMomentText.coins(supply, symbol: shown.symbol)) }
+            if let video = StellarImages.video(shown.video) {
                 Link(destination: video) { Label("Open video", systemImage: "play.rectangle") }
-            } else if let image = StellarMomentText.original(listing.image) {
+            } else if let image = StellarMomentText.original(shown.image) {
                 Link(destination: image) { Label("Open media", systemImage: "photo") }
             }
             if let collection = StellarAccountID(nft) {
@@ -483,7 +532,7 @@ private struct StellarMomentPage: View {
 
     @ViewBuilder
     private func sheet(for which: Action) -> some View {
-        let symbol = listing.symbol ?? name
+        let symbol = shown.symbol ?? name
         switch which {
         case .collect:
             let count = min(quantity, StellarMomentText.collectLimit(maxPerCollect: economics?.maxPerCollect))
@@ -491,7 +540,10 @@ private struct StellarMomentPage: View {
                 title: "Collect \(symbol)", confirmTitle: "Collect",
                 build: {
                     guard let moments, let status else { throw LiteAPIError.notSignedIn }
-                    return try await moments.collectPlan(nft: nft, quantity: count, price: Int64(status.price) ?? 0, name: name, title: tr("Collect"))
+                    boundCollect = nil
+                    let action = try await moments.collectPlan(nft: nft, quantity: count, price: Int64(status.price) ?? 0, name: name, title: tr("Collect"))
+                    boundCollect = MomentsV2Store.collect(in: action.plan)
+                    return action
                 },
                 onDone: { reloads += 1 },
                 onCompleted: { results in
@@ -499,11 +551,12 @@ private struct StellarMomentPage: View {
                     reloads += 1
                 }
             ) {
-                DetailRow("Moment", verbatim: listing.symbol.map { "\(name) ($\($0))" } ?? name)
-                DetailRow("Editions", verbatim: "\(count)")
+                DetailRow("Moment", verbatim: shown.symbol.map { "\(name) ($\($0))" } ?? name)
+                // What the plan mints: fewer than asked when this collect completes the Moment.
+                DetailRow("Editions", verbatim: "\(boundCollect?.editions ?? count)")
                 DetailRow(Text("Your NFTs", tableName: "StellarMoments", comment: "A row of a Stellar Moment's collect review: where the editions collected appear"),
                           Text("In My Moments once it settles", tableName: "StellarMoments", comment: "The value of the collect review's 'Your NFTs' row"))
-                if let status, StellarMomentText.completes(status, quantity: count) {
+                if boundCollect?.terminal ?? status.map({ StellarMomentText.completes($0, quantity: count) }) ?? false {
                     DetailRow(Text("Graduates"), Text("Yes, right after", tableName: "StellarMoments", comment: "The value of a Stellar Moment's collect review row 'Graduates': this collect completes it, and it graduates in the following ledgers"), tint: .brand)
                 }
             }
@@ -512,18 +565,19 @@ private struct StellarMomentPage: View {
                 title: "Claim \(symbol)", confirmTitle: "Claim",
                 build: {
                     guard let moments else { throw LiteAPIError.notSignedIn }
-                    return try await moments.claimPlan(nft: nft, title: tr("Claim"))
+                    return try await moments.claimPlan(nft: nft, name: name, symbol: shown.symbol, title: tr("Claim"))
                 },
                 onDone: { reloads += 1 }, onCompleted: { _ in reloads += 1 }
             ) {
-                DetailRow("Claimable", verbatim: StellarMomentText.coins(vesting?.claimable.total ?? "0", symbol: listing.symbol))
+                DetailRow("Claimable", verbatim: StellarMomentText.coins(vesting?.claimable.total ?? "0", symbol: shown.symbol))
             }
         case .withdraw:
             StellarConfirmationSheet(
                 title: "Withdraw Proceeds", confirmTitle: "Withdraw",
                 build: {
                     guard let moments else { throw LiteAPIError.notSignedIn }
-                    return try await moments.withdrawPlan(nft: nft, symbol: symbol, title: tr("Withdraw"))
+                    return try await moments.withdrawPlan(nft: nft, name: name, symbol: shown.symbol, proceeds: status.flatMap { Int64($0.proceeds.creator) },
+                                                          title: tr("Withdraw"))
                 },
                 onDone: { reloads += 1 }, onCompleted: { _ in reloads += 1 }
             ) {
@@ -534,19 +588,35 @@ private struct StellarMomentPage: View {
                 title: status?.stuckSince == nil ? "Graduate" : "Retry Graduation", confirmTitle: "Graduate",
                 build: {
                     guard let moments else { throw LiteAPIError.notSignedIn }
-                    return try await moments.graduatePlan(nft: nft, symbol: symbol, title: tr("Graduate"))
+                    attempt = nil
+                    let action = try await moments.graduatePlan(nft: nft, name: name, symbol: shown.symbol, reserve: status.flatMap { Int64($0.reserve) },
+                                                                title: tr("Graduate"))
+                    attempt = MomentsV2Store.graduation(in: action.plan)
+                    return action
                 },
                 onDone: { reloads += 1 }, onCompleted: { _ in reloads += 1 }
             ) {
                 DetailRow("Reserve", StellarMomentText.usdc(status?.reserve ?? "0"))
-                DetailRow(Text("Pool"), Text("Soroswap · locked forever", tableName: "StellarMoments", comment: "A row of a Stellar Moment's graduation review: where its coin's liquidity goes. Soroswap is never translated"))
+                // What the attempt does, as the plan says: it graduates, or it only records its failure.
+                if let attempt, attempt.failed {
+                    DetailRow(Text("Outcome", tableName: "StellarMoments", comment: "A row of a Stellar Moment's graduation review: what this attempt does"),
+                              Text("Records a failed attempt", tableName: "StellarMoments", comment: "The value of a Stellar Moment's graduation review row 'Outcome': the attempt fails as things stand, so it only records the failure, which starts the clock to its expiry"),
+                              tint: .attention)
+                    if let failure = attempt.failure { DetailRow(Text("Reason", tableName: "StellarMoments"), Text(verbatim: failure)) }
+                    if let status, let stuckExpiry = detail?.moment.durations.stuckExpiry ?? economics?.terms.durations.stuckExpiry,
+                       let expires = StellarMomentText.expiry(afterFailureOf: status, stuckExpiry: stuckExpiry, at: Date()) {
+                        DetailRow(Text("Can expire from", tableName: "StellarMoments"), Text(verbatim: MomentsFormat.date(expires)))
+                    }
+                } else if attempt != nil {
+                    DetailRow(Text("Pool"), Text("Soroswap · locked forever", tableName: "StellarMoments", comment: "A row of a Stellar Moment's graduation review: where its coin's liquidity goes. Soroswap is never translated"))
+                }
             }
         case .expire:
             StellarConfirmationSheet(
                 title: "Expire Moment", confirmTitle: "Expire",
                 build: {
                     guard let moments else { throw LiteAPIError.notSignedIn }
-                    return try await moments.expirePlan(nft: nft, title: tr("Expire"))
+                    return try await moments.expirePlan(nft: nft, name: name, title: tr("Expire"))
                 },
                 onDone: { reloads += 1 }, onCompleted: { _ in reloads += 1 }
             ) {
@@ -559,7 +629,7 @@ private struct StellarMomentPage: View {
 
     /// Edition `number` of this Moment, as Freighter adds it: the Moment's own NFT contract and the edition's number.
     private func freighterEdition(_ number: Int) -> StellarFreighterEdition? {
-        StellarAccountID(nft).map { StellarFreighterEdition(contract: $0, tokenId: number, name: listing.name, image: listing.image, isVideo: listing.video != nil) }
+        StellarAccountID(nft).map { StellarFreighterEdition(contract: $0, tokenId: number, name: shown.name, image: shown.image, isVideo: shown.video != nil) }
     }
 
     // MARK: Loading
@@ -571,7 +641,8 @@ private struct StellarMomentPage: View {
         async let s: Void = read(.status) { status = try await moments.status(nft) }
         async let e: Void = read(.economics) { economics = try await moments.economics() }
         async let v: Void = read(.vesting) { vesting = try await moments.vesting(nft) }
-        _ = await (s, e, v)
+        async let d: Void = read(.detail) { detail = try await moments.detail(nft) }
+        _ = await (s, e, v, d)
     }
 
     private func read(_ part: Part, _ body: () async throws -> Void) async {
@@ -580,6 +651,9 @@ private struct StellarMomentPage: View {
             failures[part] = nil
         } catch LiteAPIError.notSignedIn where part == .vesting {
             // No account to read about: nothing to show, nothing failed.
+            failures[part] = nil
+        } catch LiteAPIError.server(404, _, _, _) where part == .detail {
+            // The indexer hasn't seen its publish yet (a Moment just published): the page shows what its opener knew.
             failures[part] = nil
         } catch {
             if !Task.isCancelled { failures[part] = LiteErrorText.describe(error) }
@@ -683,6 +757,8 @@ private struct StellarMomentPhaseLabel: View {
 /// way into Freighter, its collectors and what was fixed at publish. Nothing is collected or published there any more.
 private struct StellarRetiredMomentPage: View {
     let id: Int
+    /// The v1 Moments contract that minted it, when its opener knows it.
+    let contract: String?
     @Environment(\.stellarSession) private var session
     @State private var detail: StellarMomentDetail?
     @State private var failure: String?
@@ -840,10 +916,10 @@ private struct StellarRetiredMomentPage: View {
         }
     }
 
-    /// The v1 Moments contract that minted `m`: the account's editions name it (as the store last read them); else the
-    /// API's v1 Moments contract.
+    /// The v1 Moments contract that minted `m`: its opener's, else the one the account's editions name (as the store last
+    /// read them), else the API's v1 Moments contract.
     private func contract(of m: StellarMoment) -> StellarAccountID? {
-        let named = store?.owned.first { $0.momentId == m.id }?.contract ?? store?.config?.contracts.moments
+        let named = contract ?? store?.owned.first { $0.momentId == m.id }?.contract ?? store?.config?.contracts.moments
         return named.flatMap(StellarAccountID.init)
     }
 
@@ -969,6 +1045,60 @@ enum StellarMomentText {
         guard let left = remaining(status), let price = Int64(status.price) else { return false }
         let gross = Double(price) * Double(quantity)
         return gross * Double(status.reserveBps) / 10_000 >= Double(left)
+    }
+
+    /// What collecting `quantity` editions pulls, in USDC base units: price × quantity, or for the collect that completes
+    /// the Moment only what its reserve still needs, ceil(remaining × 10,000 / reserve share) (moments-v2's collect,
+    /// contracts v2 §9.2).
+    static func gross(_ status: StellarMomentStatusV2, quantity: Int) -> Int64 {
+        let price = Int64(status.price) ?? 0
+        let (requested, overflow) = price.multipliedReportingOverflow(by: Int64(max(0, quantity)))
+        guard !overflow else { return .max }
+        guard completes(status, quantity: quantity), let left = remaining(status), status.reserveBps > 0 else { return requested }
+        let (scaled, over) = left.multipliedReportingOverflow(by: 10_000)
+        guard !over else { return requested }
+        let needed = (scaled + Int64(status.reserveBps) - 1) / Int64(status.reserveBps)
+        return min(requested, needed)
+    }
+
+    /// The coins the account is owed in a Moment, in coin base units: as its collector, from the vesting read (else the
+    /// page's own read); nil when it is owed none, and for an expired Moment, whose coins never exist.
+    static func owedCoins(vesting: StellarMomentVestingV2?, you: StellarMomentDetailV2.You?, phase: StellarMomentPhaseV2) -> String? {
+        guard phase != .expired, vesting?.vests != false else { return nil }
+        let owed: String? = if let vesting { vesting.collector?.total } else { you?.entitlement }
+        guard let owed, (Int64(owed) ?? 0) > 0 else { return nil }
+        return owed
+    }
+
+    /// When a Moment waiting to graduate can expire once an attempt now records its first failure: the later of its
+    /// deadline and the earlier of `stuckExpiry` after that failure and its backstop (contracts v2 §9.2, the API's
+    /// expiry). Nil unless it waits to graduate.
+    static func expiry(afterFailureOf status: StellarMomentStatusV2, stuckExpiry: Int, at now: Date) -> Date? {
+        guard status.state == "graduation_pending", let deadline = StellarFormat.date(status.deadline) else { return nil }
+        let failure = (status.stuckSince.flatMap(StellarFormat.date) ?? now).addingTimeInterval(TimeInterval(stuckExpiry))
+        let clock = status.backstopAt.flatMap(StellarFormat.date).map { min($0, failure) } ?? failure
+        return max(deadline, clock)
+    }
+
+    /// The Moment as a page shows it: what the API's indexer recorded (`detail`), field by field, else what its opener
+    /// knew (`listing`).
+    static func merged(_ listing: StellarMomentListingV2, detail: StellarMomentDetailV2?) -> StellarMomentListingV2 {
+        guard let row = detail?.moment, row.nft == listing.nft else { return listing }
+        let read = StellarMomentListingV2(row)
+        return StellarMomentListingV2(nft: listing.nft, name: read.name ?? listing.name, symbol: read.symbol ?? listing.symbol, image: read.image ?? listing.image,
+                                      video: read.video ?? listing.video, place: read.place ?? listing.place, takenOn: read.takenOn ?? listing.takenOn)
+    }
+
+    /// A span of time in the app's language, at most two units: "30 days", "10 minutes", "1 day, 12 hours".
+    static func duration(_ seconds: Int) -> String {
+        let formatter = DateComponentsFormatter()
+        var calendar = Calendar.current
+        calendar.locale = L10n.locale
+        formatter.calendar = calendar
+        formatter.unitsStyle = .full
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: TimeInterval(seconds)) ?? "—"
     }
 
     /// The FDV the coin opens at, in USDC base units: BPS·T·(BPS + r) / ((BPS − allocation)·r) (moments-v2's bundle

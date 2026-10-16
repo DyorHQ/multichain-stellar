@@ -4,17 +4,19 @@
 // Rules (docs/DESIGN-stellar-parity.md §4.4, §4.9, §5.2): the right network and source; short time bounds; the fee
 // caps; the memo the user confirmed; only the operation types the intent names; the sponsor only in an account
 // activation; payments and new accounts only to the address the user confirmed; contract calls only to allowlisted
-// contracts and functions, each bound by its call rule; Soroban auth only through the source account; restores only as
-// their own intent, of allowlisted data; and the user's total outflow per asset (classic payments + every token
-// transfer/burn/approve in the authorized invocation tree) never above what the intent declares.
+// contracts and functions, each bound by its call rule; Soroban auth only through the source account, of the call itself
+// only, with nothing beneath it but spends of the user's own tokens; a positive minimum wherever a trade encodes one;
+// restores only as their own intent, of allowlisted data; and the user's total outflow per asset (classic payments +
+// every token transfer/burn/approve in the authorized invocation tree) never above what the intent declares.
 //
 // Contracts v2 (docs/DESIGN-stellar-contracts-v2.md §20.4): the live generation's contracts are pinned by role, and
 // the ones it creates at runtime (launch tokens, Moment NFTs and coins) are allowed only by their pinned WASM hash. A
 // call to launchpad-v2, moments-v2 or the lp-locker is judged by that contract's own rules, since v1's launchpad and
 // Moments use some of the same function names with other arguments: a launch binds its terms to the pins (the
 // executors, the locker, the token's WASM and the durations) and pays exactly its terms' fee, at most the pinned bound,
-// to the launchpad; refunds, collects and claims act for the user; a call anyone may make carries none of the user's
-// authorization.
+// to the launchpad, and the creator-fee recipient, exemptions, creator fee and sharing are the ones the intent shows (a
+// Moment's price, allocation and window likewise); refunds, collects and claims act for the user; a call anyone may
+// make carries none of the user's authorization.
 //
 // Both verifiers judge the same vectors (backend/tests/vectors/gen-vectors.ts) and give the same reasons: the Swift
 // one's are these with a capital letter and a full stop.
@@ -123,7 +125,16 @@ export interface VerifyContext {
   runtimeContracts?: Record<string, string>;
 }
 
-const TOKEN_SPEND_FNS = new Set(["transfer", "transfer_from", "burn", "burn_from", "approve"]);
+/** The token-spend functions (SEP-41 and the SAC), with the position of the account the tokens leave, of the amount,
+ *  and their arity: transfer(from, to, amount) · burn(from, amount) · approve(from, spender, amount, live_until) ·
+ *  transfer_from(spender, from, to, amount) · burn_from(spender, from, amount). */
+const TOKEN_SPENDS: Record<string, { from: number; amount: number; arity: number }> = {
+  transfer: { from: 0, amount: 2, arity: 3 },
+  burn: { from: 0, amount: 1, arity: 2 },
+  approve: { from: 0, amount: 2, arity: 4 },
+  transfer_from: { from: 1, amount: 3, arity: 4 },
+  burn_from: { from: 1, amount: 2, arity: 3 },
+};
 const MAX_VALIDITY_S = 30 * 60;
 const MAX_I64 = 2n ** 63n - 1n;
 const MIN_I64 = -(2n ** 63n);
@@ -142,6 +153,16 @@ const LAUNCH_FEE_LIMIT = "the launch fee is above the limit";
 const LAUNCH_FEE_TO = "the launch fee goes to another address than the launchpad";
 const LAUNCH_FEE_AMOUNT = "the launch fee is not the one in the terms";
 const MOMENT_TERMS = "the Moment's terms are not the ones this app pins";
+const CREATION = "the transaction asks to authorize contract creation";
+/** An authorization entry whose root is not the call being judged (a second call the user would authorize). */
+const EXTRA_AUTH = "the transaction asks you to authorize a call other than this one";
+/** A node beneath the call's own authorization that is not a spend of the user's own tokens. */
+const OTHER_AUTH = "the transaction asks you to authorize a call that is not a spend of your tokens";
+const NO_MINIMUM = "the transaction sets no minimum received";
+const ROUTE = "the swap route goes through a token this app doesn't list";
+const LAUNCH_RECIPIENT = "the creator fees go to another address than the one you confirmed";
+const LAUNCH_SETTINGS = "the launch settings are not the ones shown";
+const MOMENT_SETTINGS = "the Moment's price, allocation or window is not the one shown";
 
 // Contract structs as their ScVal maps name their fields (contracts/launchpad-v2/src/storage.rs, contracts/moments-v2,
 // contracts/common/src/types.rs). A struct is read only when it has exactly these fields.
@@ -230,9 +251,42 @@ function soleMinimum(intent: Intent): bigint | null {
   return entries.length === 1 ? units(entries[0]) : null;
 }
 
+/** The call's minimum is positive and at least the intent's quote: a minimum of 0 protects nothing, whatever the
+ *  intent says. */
 function atLeast(min: bigint | null, quoted: bigint | null) {
   if (min === null) fail(ARGUMENTS);
+  if (min <= 0n) fail(NO_MINIMUM);
   if (quoted === null || min < quoted) fail(MINIMUM);
+}
+
+/** A swap's tokens (a Soroswap path, an Aquarius chain's hops) run their code inside the user's swap, so each must be
+ *  on the allowlist; only the token sold, when the intent spends it, and the token bought, when the intent quotes its
+ *  minimum, may be outside it (the user's own choice, which the phone binds to its form). */
+function routeListed(rc: RuleContext, tokens: string[], sold: string, bought: string) {
+  const ends = new Set<string>();
+  if (Object.hasOwn(rc.intent.spend, sold)) ends.add(sold);
+  if (rc.intent.receive && Object.hasOwn(rc.intent.receive, bought)) ends.add(bought);
+  for (const t of tokens) if (!rc.listed(t) && !ends.has(t)) fail(ROUTE);
+}
+
+/** A display field of the intent, when it has it. */
+function shown(intent: Intent, key: string): string | number | boolean | null | undefined {
+  return intent.display && Object.hasOwn(intent.display, key) ? intent.display[key] : undefined;
+}
+
+/** A displayed whole number equal to the call's `n`. */
+function sameNumber(v: unknown, n: bigint | null): boolean {
+  return typeof v === "number" && Number.isSafeInteger(v) && n !== null && BigInt(v) === n;
+}
+
+/** A displayed amount (base units as a decimal string) equal to the call's `n`. */
+function sameUnits(v: unknown, n: bigint | null): boolean {
+  const u = units(v);
+  return u !== null && n !== null && u === n;
+}
+
+function boolOf(v: xdr.ScVal | undefined): boolean | null {
+  return v && v.switch() === xdr.ScValType.scvBool() ? v.b() : null;
 }
 
 /** A Monad address (0x + 40 hex) as the 32 bytes CCTP mints to; null for anything else. */
@@ -283,6 +337,8 @@ interface RuleContext {
   user: string;
   intent: Intent;
   allowedContracts: Set<string>;
+  /** Whether a contract is on the allowlist: pinned, a launch token, or a v2 runtime contract with a pinned WASM. */
+  listed: (contract: string) => boolean;
   monadDomain: number | null;
   /** The XLM Stellar Asset Contract: a v2 launch pays its fee in it. */
   xlm: string;
@@ -372,10 +428,11 @@ const CALL_RULES: Record<string, CallRule> = {
   swap_exact_tokens_for_tokens: (args, rc) => {
     arity(args, 5);
     if (addrOf(args[3]) !== rc.user) fail("swap output goes to another account");
-    const path = vecOf(args[2]);
-    if (!path || path.length === 0) fail(ARGUMENTS);
-    const out = addrOf(path[path.length - 1]);
-    if (out === null) fail(ARGUMENTS);
+    const path = vecOf(args[2])?.map(addrOf);
+    if (!path || path.length === 0 || path.some((t) => t === null)) fail(ARGUMENTS);
+    const tokens = path as string[];
+    const out = tokens[tokens.length - 1];
+    routeListed(rc, tokens, tokens[0], out);
     atLeast(intOf(args[1]), minimumFor(rc.intent, out));
   },
   // Aquarius router swap_chained(user, swaps_chain, token_in, in_amount, out_min); each hop is
@@ -384,9 +441,18 @@ const CALL_RULES: Record<string, CallRule> = {
     arity(args, 5);
     actsFor(rc, args[0]);
     const chain = vecOf(args[1]);
-    const hop = chain && chain.length > 0 ? vecOf(chain[chain.length - 1]) : null;
-    const out = hop && hop.length === 3 ? addrOf(hop[2]) : null;
-    if (out === null) fail(ARGUMENTS);
+    const tokenIn = addrOf(args[2]);
+    if (!chain || chain.length === 0 || tokenIn === null) fail(ARGUMENTS);
+    const tokens = [tokenIn];
+    let out: string | null = null;
+    for (const h of chain) {
+      const hop = vecOf(h);
+      const pair = hop && hop.length === 3 ? vecOf(hop[0])?.map(addrOf) : null;
+      out = hop && hop.length === 3 ? addrOf(hop[2]) : null;
+      if (!pair || pair.some((t) => t === null) || out === null) fail(ARGUMENTS);
+      tokens.push(...(pair as string[]), out);
+    }
+    routeListed(rc, tokens, tokenIn, out!);
     atLeast(intOf(args[4]), minimumFor(rc.intent, out));
   },
   // Launchpad launch(creator, quote, name, symbol, uri, creator_fee_bps, initial_buy, min_tokens_out).
@@ -498,6 +564,21 @@ const LAUNCHPAD_V2_RULES: Record<string, CallRule> = {
     }
     if (transfers.some((x, i) => i !== feeAt && x.to !== rc.contract)) fail(DESTINATION);
     if (initialBuy > 0n) atLeast(minOut, soleMinimum(rc.intent));
+    // What the user chose: the creator fees go to the address they confirmed (intent.to), or to themselves when it is
+    // absent, for the launch's whole life; the displayed exemptions, creator fee and sharing are the call's.
+    const recipient = p.get("creator_fee_recipient")!;
+    const isVoid = recipient.switch() === xdr.ScValType.scvVoid();
+    const payee = rc.intent.to ?? rc.user;
+    const recipientOk = rc.intent.to === undefined ? isVoid || addrOf(recipient) === rc.user : !isVoid && addrOf(recipient) === rc.intent.to;
+    if (!recipientOk || shown(rc.intent, "recipient") !== payee) fail(LAUNCH_RECIPIENT);
+    const exempt = vecOf(p.get("snipe_exempt"))?.map(addrOf) ?? null;
+    const listedExempt = shown(rc.intent, "snipeExempt");
+    const exemptShown = typeof listedExempt === "string" ? (listedExempt === "" ? [] : listedExempt.split(",")) : null;
+    const settingsOk = exempt !== null && exemptShown !== null && exempt.length === exemptShown.length &&
+      exempt.every((a, i) => a !== null && a === exemptShown[i]) &&
+      sameNumber(shown(rc.intent, "creatorFeeBps"), intOf(p.get("creator_fee_bps"))) &&
+      boolOf(p.get("holder_sharing")) !== null && shown(rc.intent, "holderSharing") === boolOf(p.get("holder_sharing"));
+    if (!settingsOk) fail(LAUNCH_SETTINGS);
   },
   buy: CALL_RULES.buy,
   sell: CALL_RULES.sell,
@@ -557,6 +638,11 @@ const MOMENTS_V2_RULES: Record<string, CallRule> = {
       hash32(t.get("coin_wasm_hash")) === v2.runtimeWasmHashes.momentCoin &&
       sameDurations(t.get("durations"), MOMENTS_DURATION_KEYS, v2.durations.moments);
     if (!pinned) fail(MOMENT_TERMS);
+    // What the user chose: the displayed price, creator allocation and collect window are the call's.
+    const chosen = sameUnits(shown(rc.intent, "price"), intOf(p.get("price"))) &&
+      sameNumber(shown(rc.intent, "allocationBps"), intOf(p.get("creator_alloc_bps"))) &&
+      sameNumber(shown(rc.intent, "windowSecs"), intOf(p.get("window_secs")));
+    if (!chosen) fail(MOMENT_SETTINGS);
   },
   // collect(collector, nft, qty, max_total): the collector pays at most max_total, in the one asset the intent spends.
   collect: (args, rc) => {
@@ -657,36 +743,54 @@ function restorable(key: xdr.LedgerKey, allowed: (contract: string) => boolean, 
   }
 }
 
-/** Adds every token outflow the user authorizes in an invocation tree. Every movement of the user's tokens needs the
- *  user's authorization, so the authorized tree is the complete list of what the transaction can take. A transfer
- *  outside a call that has its own rule (`covered`) must go to the address the user confirmed. */
-function walkAuth(inv: xdr.SorobanAuthorizedInvocation, rc: Pick<RuleContext, "user" | "intent">, covered: boolean, add: (id: string, n: bigint) => void) {
-  const f = inv.function();
-  if (f.switch() !== xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) {
-    fail("the transaction asks to authorize contract creation");
-  }
-  const c = f.contractFn();
-  const contract = scAddressString(c.contractAddress());
-  if (contract === null) fail("the transaction asks to authorize contract creation");
+/** The amount a node spends of the user's own tokens: a token-spend function, with its own arity, whose tokens leave
+ *  the user. Null for any other node. */
+function ownSpend(c: xdr.InvokeContractArgs, user: string): xdr.ScVal | null {
   const fn = c.functionName().toString();
+  if (!Object.hasOwn(TOKEN_SPENDS, fn)) return null;
+  const { from, amount, arity } = TOKEN_SPENDS[fn];
   const args = c.args();
-  if (TOKEN_SPEND_FNS.has(fn)) {
-    // transfer(from, to, amount) · burn(from, amount) · approve(from, spender, amount, live_until) ·
-    // transfer_from(spender, from, to, amount) · burn_from(spender, from, amount). An approval counts in full: the
-    // spender may take it later.
-    const layout: Record<string, [number, number]> = { transfer: [0, 2], burn: [0, 1], approve: [0, 2], transfer_from: [1, 3], burn_from: [1, 2] };
-    const [from, amount] = layout[fn];
-    if (args.length > amount && addrOf(args[from]) === rc.user) {
+  return args.length === arity && addrOf(args[from]) === user ? args[amount] : null;
+}
+
+/** Adds every token outflow the user authorizes in one authorization entry, and refuses anything else in it. The
+ *  user's authorization moves their tokens, but it also lets a contract act for them in any other way (a Blend
+ *  withdrawal to a third party, a creator-fee recipient change), which no outflow shows. So the entry's root must be
+ *  the call being judged, byte for byte, which its own rule binds, and every node beneath it, at any depth, a spend
+ *  of the user's own tokens (transfer, burn, approve, transfer_from or burn_from from the user), counted toward the
+ *  outflow the intent declares. An approval counts in full: the spender may take it later. */
+function walkAuth(entry: xdr.SorobanAuthorizationEntry, call: string, user: string, add: (id: string, n: bigint) => void) {
+  const root = entry.rootInvocation();
+  const f = root.function();
+  if (f.switch() !== xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) fail(CREATION);
+  const c = f.contractFn();
+  if (c.toXDR("base64") !== call) fail(EXTRA_AUTH);
+  // The call itself may be a spend (a send, an approval); its rule has checked its arguments.
+  const fn = c.functionName().toString();
+  if (Object.hasOwn(TOKEN_SPENDS, fn)) {
+    const { from, amount } = TOKEN_SPENDS[fn];
+    const args = c.args();
+    if (args.length > amount && addrOf(args[from]) === user) {
       const n = intOf(args[amount]);
       if (n === null) fail(AMOUNT);
-      add(contract, n);
+      add(scAddressString(c.contractAddress())!, n);
     }
   }
-  if (!covered && (fn === "transfer" || fn === "transfer_from")) {
-    const [from, to] = fn === "transfer" ? [0, 1] : [1, 2];
-    if (args.length > to && addrOf(args[from]) === rc.user && !isConfirmed(args[to], rc.intent)) fail(DESTINATION);
-  }
-  for (const sub of inv.subInvocations()) walkAuth(sub, rc, covered, add);
+  for (const sub of root.subInvocations()) walkSpends(sub, user, add);
+}
+
+function walkSpends(inv: xdr.SorobanAuthorizedInvocation, user: string, add: (id: string, n: bigint) => void) {
+  const f = inv.function();
+  if (f.switch() !== xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn()) fail(CREATION);
+  const c = f.contractFn();
+  const contract = scAddressString(c.contractAddress());
+  if (contract === null) fail(CREATION);
+  const spent = ownSpend(c, user);
+  if (spent === null) fail(OTHER_AUTH);
+  const n = intOf(spent);
+  if (n === null) fail(AMOUNT);
+  add(contract, n);
+  for (const sub of inv.subInvocations()) walkSpends(sub, user, add);
 }
 
 export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyContext): { outflow: Record<string, string> } {
@@ -742,9 +846,12 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
       case "pathPaymentStrictSend":
         if (op.destination !== ctx.user) fail("swap output goes to another account");
         add(assetId(op.sendAsset, ctx.passphrase), stroops(op.sendAmount));
-        if (intent.receive) {
+        {
+          // The intent must quote the minimum: a path payment without one is refused, not let through.
+          const min = stroops(op.destMin);
+          if (min <= 0n) fail(NO_MINIMUM);
           const want = minimumFor(intent, assetId(op.destAsset, ctx.passphrase));
-          if (want === null || stroops(op.destMin) < want) fail(MINIMUM);
+          if (want === null || min < want) fail(MINIMUM);
         }
         break;
       case "changeTrust": {
@@ -783,18 +890,15 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
         const rules = rulesFor(contract, v2);
         if (!Object.hasOwn(rules, name)) fail(`function ${name} is not on the allowlist`);
         const auth = (op.auth ?? []) as xdr.SorobanAuthorizationEntry[];
-        const rc: RuleContext = { ...base, contract, call: ic, auth };
+        const rc: RuleContext = { ...base, listed: allowed, contract, call: ic, auth };
         rules[name](ic.args(), rc);
         const call = ic.toXDR("base64");
         for (const entry of auth) {
           if (entry.credentials().switch() !== xdr.SorobanCredentialsType.sorobanCredentialsSourceAccount()) {
             fail("the transaction needs a signature from another address");
           }
-          // The authorization of the call itself is bound by the call's rule; any other root is bound here.
-          const root = entry.rootInvocation().function();
-          const covered = root.switch() === xdr.SorobanAuthorizedFunctionType.sorobanAuthorizedFunctionTypeContractFn() &&
-            root.contractFn().toXDR("base64") === call;
-          walkAuth(entry.rootInvocation(), rc, covered, add);
+          // Only the call itself, bound by its rule, with the user's own token spends beneath it.
+          walkAuth(entry, call, ctx.user, add);
         }
         break;
       }
@@ -821,6 +925,41 @@ export function verifyTransaction(tx: Transaction, intent: Intent, ctx: VerifyCo
     if (cap === null || amount > cap) fail(`the transaction spends more than this action declares (${asset})`);
   }
   return { outflow: Object.fromEntries([...outflow].map(([k, v]) => [k, v.toString()])) };
+}
+
+/** The WASM hash (lowercase hex) a contract created at runtime counts by for `runtimeContracts`, from its instance
+ *  ledger entry (LedgerEntryData, as getLedgerEntries returns it). A pinned runtime WASM alone proves nothing: anyone
+ *  can deploy an instance of an uploaded WASM with constructor arguments of their choosing. So an instance of a pinned
+ *  v2 runtime WASM counts only when the pinned singleton created it (launch-token-v2's stored Launchpad is launchpad-v2;
+ *  a Moment NFT's or coin's stored Minter is moments-v2), and the entry must be the contract asked for. Null for a
+ *  Stellar Asset Contract or any other entry, for another contract's entry and for such an instance; any other WASM's
+ *  hash as read. StellarCore's RuntimeProvenance is the same check (shared vectors: Vectors/runtime.json). */
+export function runtimeWasmHashOf(entry: xdr.LedgerEntryData, contract: string, v2: Pick<V2Pins, "launchpad" | "moments" | "runtimeWasmHashes"> | null): string | null {
+  if (entry.switch() !== xdr.LedgerEntryType.contractData()) return null;
+  const data = entry.contractData();
+  const owner = data.contract();
+  if (owner.switch() !== xdr.ScAddressType.scAddressTypeContract() || Address.fromScAddress(owner).toString() !== contract) return null;
+  if (data.key().switch() !== xdr.ScValType.scvLedgerKeyContractInstance()) return null;
+  const val = data.val();
+  if (val.switch() !== xdr.ScValType.scvContractInstance()) return null;
+  const executable = val.instance().executable();
+  if (executable.switch() !== xdr.ContractExecutableType.contractExecutableWasm()) return null;
+  const hash = Buffer.from(executable.wasmHash()).toString("hex");
+  const pinned = v2?.runtimeWasmHashes;
+  const maker = !pinned ? null : hash === pinned.launchTokenV2.toLowerCase()
+    ? { field: "Launchpad", is: v2!.launchpad }
+    : hash === pinned.momentNft.toLowerCase() || hash === pinned.momentCoin.toLowerCase()
+    ? { field: "Minter", is: v2!.moments }
+    : null;
+  if (!maker) return hash;
+  // A unit variant of a #[contracttype] enum is stored as a one-symbol vector.
+  const stored = (val.instance().storage() ?? []).find((slot) => {
+    const name = vecOf(slot.key());
+    return name !== null && name.length === 1 && name[0].switch() === xdr.ScValType.scvSymbol() &&
+      Buffer.from(name[0].sym() as string | Buffer).toString() === maker.field;
+  });
+  const by = stored ? addrOf(stored.val()) : null;
+  return by !== null && maker.is !== "" && by === maker.is ? hash : null;
 }
 
 /** Who pays a step's network fee, as the phone can check it (§4.3): DyorHQ for an activation whose source is the

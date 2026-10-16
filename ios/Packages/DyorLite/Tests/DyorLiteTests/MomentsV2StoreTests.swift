@@ -5,8 +5,10 @@ import XCTest
 /// `MomentsV2Store` (docs/DESIGN-stellar-contracts-v2.md §20.2–20.3, §21): v2 Moments keyed by their NFT address. Reads
 /// ask for their routes without a prompt; every plan is built once a session is held, then priced and verified on the
 /// phone; a collect confirms the USDC its plan pulls and never more than price × quantity; a ticker the contracts would
-/// refuse is refused before anything is sent; the terms guard names what a publish binds that its review didn't show; a
-/// Moment's phase moves with its deadline; settled publishes and collects read their NFT address and edition numbers.
+/// refuse is refused before anything is sent; the terms guard names what a publish binds that its review didn't show,
+/// and refuses a publish it can't see yet; claims, withdrawals, graduations (or a recorded failed attempt) and expiries
+/// settle with their own words; a Moment's phase moves with its deadline; settled publishes and collects read their NFT
+/// address and edition numbers.
 @MainActor
 final class MomentsV2StoreTests: XCTestCase {
     private var server: FakeLite!
@@ -37,6 +39,7 @@ final class MomentsV2StoreTests: XCTestCase {
             switch (request.method, request.path) {
             case ("GET", "/v1/economics"): return (200, Data(Self.economics.utf8))
             case ("GET", "/v1/moments/\(Self.nft)/status"): return (200, Data(Self.status(state: "collecting").utf8))
+            case ("GET", "/v1/moments/v2/\(Self.nft)"): return (200, FakeLite.fixture("moment-v2"))
             case ("GET", "/v1/moments/\(Self.nft)/vesting"):
                 guard request.token != nil || request.route.contains("address=") else { return (401, FakeLite.error("unauthorized", "Sign in.")) }
                 return (200, Data(Self.vesting.utf8))
@@ -93,7 +96,24 @@ final class MomentsV2StoreTests: XCTestCase {
         XCTAssertEqual(status.nft, Self.nft)
         let vesting = try await moments.vesting(Self.nft)
         XCTAssertEqual(vesting.claimable.total, "200000000")
+        let detail = try await moments.detail(Self.nft)
+        XCTAssertEqual(detail.you?.editions, [3])
+        let listing = StellarMomentListingV2(detail.moment)
+        XCTAssertEqual([listing.name, listing.symbol, listing.place, listing.takenOn], ["Harbour at dusk", "DUSK", "Accra", "2026-10-13"])
+        XCTAssertEqual(listing.image, detail.moment.posterUrl, "a video's image is its cover frame")
+        XCTAssertEqual(listing.video, detail.moment.mediaUrl)
         XCTAssertEqual(tally.prompts, 0, "reads ask nothing")
+    }
+
+    /// Publish enables USDC first when the account can't hold it: the publish is then built at once, and its review can
+    /// check it.
+    func testAnAccountWithoutUSDCEnablesItBeforeItPublishes() async throws {
+        let (_, moments) = try await ready()
+        let enabled = await moments.needsUSDC()
+        XCTAssertFalse(enabled, "USDC enabled")
+        server.update { $0.usdc = false }
+        let needs = await moments.needsUSDC()
+        XCTAssertTrue(needs, "read again: USDC not enabled")
     }
 
     func testAV1ServerHasNoV2Moments() async throws {
@@ -202,6 +222,12 @@ final class MomentsV2StoreTests: XCTestCase {
 
     func testTheTermsGuardPassesAPublishOfTheReviewedTerms() throws {
         XCTAssertEqual(MomentsV2Store.termsChanges(try plan(Self.publishPlan()), terms: try terms(), form: form), [])
+        XCTAssertFalse(MomentsV2Store.publishWaits(try plan(Self.publishPlan())))
+        // The step kind v2's builder gives a step, built or not, or v1's: the built publish is found by its intent.
+        for kind in ["moment_publish", "moment_v2_publish"] {
+            let shape = Self.publishPlan().replacingOccurrences(of: #""stepKind":"moment_v2_publish""#, with: #""stepKind":"\#(kind)""#)
+            XCTAssertEqual(MomentsV2Store.termsChanges(try plan(shape), terms: try terms(), form: form), [], kind)
+        }
     }
 
     func testTheTermsGuardNamesWhatChanged() throws {
@@ -216,8 +242,11 @@ final class MomentsV2StoreTests: XCTestCase {
         let missing = try plan(Self.publishPlan(overrides: ["pendingBackstop": "null"]))
         XCTAssertEqual(MomentsV2Store.termsChanges(missing, terms: try terms(), form: form), ["pendingBackstop"])
         XCTAssertEqual(MomentsV2Store.termsChanges(try plan(Self.collectPlan(total: "1", editions: 1)), terms: try terms(), form: form), ["publish"])
-        // Behind the account's USDC trustline the publish isn't built yet: nothing to compare until it is.
-        XCTAssertNil(MomentsV2Store.termsChanges(try plan(Self.trustThenPublish), terms: try terms(), form: form))
+        // Behind the account's USDC trustline the publish isn't built yet (the API's shape: no intent, v2's step kind):
+        // nothing it binds can be compared, so it doesn't go.
+        let trustFirst = try plan(Self.trustThenPublish)
+        XCTAssertEqual(MomentsV2Store.termsChanges(trustFirst, terms: try terms(), form: form), ["publish"])
+        XCTAssertTrue(MomentsV2Store.publishWaits(trustFirst))
     }
 
     // MARK: - Claims
@@ -236,6 +265,112 @@ final class MomentsV2StoreTests: XCTestCase {
         let action = try await moments.claimAllPlan(nfts: [Self.nft, Self.nft, Self.publishedNft], maxClaimIds: 20, title: "Claim all")
         XCTAssertEqual(action.limits, [:])
         XCTAssertEqual(builds.last?["nfts"] as? [String], [Self.nft, Self.publishedNft])
+        XCTAssertEqual(action.summary.kind, "moment_claim_all")
+        XCTAssertEqual(action.section, .moments)
+        let words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Claimed vested coins", "across 2 Moments"])
+        XCTAssertEqual(action.titles, ["s1": "Claim vested coins from 2 Moments"], "never the server's English")
+    }
+
+    // MARK: - Claim, withdraw, graduate and expire: each with its own words
+
+    func testAClaimSettlesWithItsOwnWords() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.plan("moment_claim", display: #"{"generation":2,"nft":"\#(Self.nft)","collectorAmount":"200000000","creatorAmount":"0","total":"200000000"}"#)
+        let action = try await moments.claimPlan(nft: Self.nft, name: "Dusk", symbol: "DUSK", title: "Claim")
+        XCTAssertEqual(builds.last?["action"] as? String, "claim")
+        XCTAssertEqual(action.summary.kind, "moment_claim")
+        XCTAssertEqual(action.reference, "stellar:moment/\(Self.nft)")
+        let words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Claimed $DUSK", "\(MomentsV2Store.written(200_000_000)) vested coins"])
+        XCTAssertEqual(action.title(of: action.plan.steps[0]), "Claim your vested coins")
+    }
+
+    func testAWithdrawalSettlesAsTheCreatorsProceeds() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.plan("moment_withdraw", display: #"{"generation":2,"nft":"\#(Self.nft)","amount":"40000000","quote":"USDC","to":"G"}"#)
+        var action = try await moments.withdrawPlan(nft: Self.nft, name: "Dusk", symbol: nil, proceeds: 125_000_000, title: "Withdraw")
+        XCTAssertEqual(action.summary.kind, "moment_withdraw", "never a launch's creator fees")
+        var words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Collected Dusk proceeds", "\(MomentsV2Store.written(40_000_000)) USDC creator proceeds"], "the plan's own amount")
+        // Behind the account's USDC trustline the withdrawal isn't built: the page's figure, and the phone's title.
+        answer.plan = Self.trustThen("moment_v2_withdraw", label: "Withdraw proceeds")
+        action = try await moments.withdrawPlan(nft: Self.nft, name: "Dusk", symbol: "DUSK", proceeds: 125_000_000, title: "Withdraw")
+        words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Collected $DUSK proceeds", "\(MomentsV2Store.written(125_000_000)) USDC creator proceeds"])
+        XCTAssertEqual(action.titles, ["s2": "Withdraw your proceeds"])
+    }
+
+    /// The API offers an attempt that only records a failure: its review and its notification say so, never that the
+    /// Moment graduated.
+    func testAGraduationThatOnlyRecordsAFailureIsNeverAnnouncedAsAGraduation() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.plan("moment_graduate", display: #"{"generation":2,"nft":"\#(Self.nft)","outcome":"failed","failureOrigin":10,"failureCode":11003,"failureName":"GraduationInvalid"}"#)
+        var action = try await moments.graduatePlan(nft: Self.nft, name: "Dusk", symbol: "DUSK", reserve: 75_000_000, title: "Graduate")
+        XCTAssertEqual(MomentsV2Store.graduation(in: action.plan), StellarGraduationAttemptV2(failed: true, failure: "GraduationInvalid"))
+        XCTAssertEqual(action.summary.kind, "moment_graduate")
+        var words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Recorded a failed graduation of $DUSK", "GraduationInvalid"])
+        XCTAssertEqual(action.title(of: action.plan.steps[0]), "Record a failed graduation attempt")
+
+        answer.plan = Self.plan("moment_graduate", display: #"{"generation":2,"nft":"\#(Self.nft)","outcome":"failed","failureOrigin":10,"failureCode":11003,"failureName":null}"#)
+        action = try await moments.graduatePlan(nft: Self.nft, name: "Dusk", symbol: "DUSK", reserve: 75_000_000, title: "Graduate")
+        XCTAssertEqual(MomentsV2Store.graduation(in: action.plan)?.failure, "10 · 11003", "a failure the API's table doesn't name")
+
+        answer.plan = Self.plan("moment_graduate", display: #"{"generation":2,"nft":"\#(Self.nft)","outcome":"graduated","failureOrigin":null,"failureCode":null,"failureName":null}"#)
+        action = try await moments.graduatePlan(nft: Self.nft, name: "Dusk", symbol: "DUSK", reserve: 75_000_000, title: "Graduate")
+        XCTAssertEqual(MomentsV2Store.graduation(in: action.plan), StellarGraduationAttemptV2(failed: false, failure: nil))
+        words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Graduated $DUSK", "\(MomentsV2Store.written(75_000_000)) USDC reserve into a locked pool"])
+        XCTAssertEqual(action.title(of: action.plan.steps[0]), "Graduate this Moment")
+    }
+
+    func testAnExpirySettlesWithItsOwnWords() async throws {
+        let (_, moments) = try await ready()
+        answer.plan = Self.plan("moment_expire", display: #"{"generation":2,"nft":"\#(Self.nft)","backstop":false,"reserve":"40000000","creatorShare":"28000000","treasuryShare":"12000000","quote":"USDC"}"#)
+        let action = try await moments.expirePlan(nft: Self.nft, name: "Dusk", title: "Expire")
+        XCTAssertEqual(builds.last?["action"] as? String, "expire")
+        XCTAssertEqual(action.summary.kind, "moment_expire")
+        let words = LiteTitles.settled(action.summary, results: [])
+        XCTAssertEqual([words.title, words.body], ["Expired Dusk", "\(MomentsV2Store.written(40_000_000)) USDC reserve wound down"])
+        XCTAssertEqual(action.title(of: action.plan.steps[0]), "Expire this Moment")
+    }
+
+    // MARK: - The words' table
+
+    /// Resources/MomentsV2.xcstrings: every entry has a note for its translator and the four languages the app ships,
+    /// with the values its key takes, and names as they are.
+    func testEveryWordHasANoteAndTheFourLanguages() throws {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { url.deleteLastPathComponent() } // MomentsV2StoreTests.swift → DyorLiteTests → Tests → DyorLite
+        url.appendPathComponent("Sources/DyorLite/Resources/MomentsV2.xcstrings")
+        guard let data = try? Data(contentsOf: url) else { throw XCTSkip("the package's sources aren't readable from here") }
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let strings = try XCTUnwrap(json["strings"] as? [String: [String: Any]])
+        XCTAssertGreaterThan(strings.count, 10)
+        let specifier = try NSRegularExpression(pattern: #"%(?:\d+\$)?(@|lld)"#)
+        func specifiers(_ text: String) -> [String] {
+            specifier.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { String(text[Range($0.range(at: 1), in: text)!]) }.sorted()
+        }
+        func values(_ localization: [String: Any]) -> [String] {
+            if let unit = localization["stringUnit"] as? [String: Any], let value = unit["value"] as? String { return [value] }
+            let plural = (localization["variations"] as? [String: Any])?["plural"] as? [String: Any] ?? [:]
+            return plural.values.compactMap { (($0 as? [String: Any])?["stringUnit"] as? [String: Any])?["value"] as? String }
+        }
+        for (key, entry) in strings {
+            XCTAssertFalse((entry["comment"] as? String ?? "").isEmpty, "no note for the translator: \(key)")
+            let localizations = entry["localizations"] as? [String: [String: Any]] ?? [:]
+            for language in ["es", "fr", "ko", "zh-Hans"] {
+                let found = localizations[language].map(values) ?? []
+                XCTAssertFalse(found.isEmpty, "\(language) is missing: \(key)")
+                for value in found {
+                    XCTAssertEqual(specifiers(value), specifiers(key), "\(language) takes other values than its key: \(key) → \(value)")
+                    for name in ["Moment", "USDC", "Soroswap"] where key.contains(name) {
+                        XCTAssertTrue(value.contains(name), "\(language) translates or drops \(name): \(key) → \(value)")
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Phases
@@ -337,7 +472,7 @@ final class MomentsV2StoreTests: XCTestCase {
     nonisolated static func collectPlan(total: String, editions: Int, terminal: Bool = false, asset: String = usdc) -> String {
         """
         {"planId":"collect-\(total)","kind":"moment_collect","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
-         {"id":"s1","label":"Collect \(editions)","status":"pending","stepKind":"moment_collect","maxFee":"51250","feePayer":"user","reserveDelta":0,
+         {"id":"s1","label":"Collect \(editions)","status":"pending","stepKind":"moment_v2_collect","maxFee":"51250","feePayer":"user","reserveDelta":0,
           "intent":{"kind":"moment_collect","summary":"Collect","spend":{"\(asset)":"\(total)"},"calls":[{"contract":"\(contract)","fn":"collect"}],
            "display":{"generation":2,"nft":"\(nft)","quantity":3,"editions":\(editions),"total":"\(total)","quote":"USDC",
             "entitlement":"6000000000","terminal":\(terminal)}}}]}
@@ -365,7 +500,7 @@ final class MomentsV2StoreTests: XCTestCase {
         let fields = display.map { "\"\($0.0)\":\($0.1)" }.joined(separator: ",")
         return """
         {"planId":"publish-1","kind":"moment_publish","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
-         {"id":"s1","label":"Publish DUSK","status":"pending","stepKind":"moment_publish","maxFee":"51250","feePayer":"user","reserveDelta":0,
+         {"id":"s1","label":"Publish DUSK","status":"pending","stepKind":"moment_v2_publish","maxFee":"51250","feePayer":"user","reserveDelta":0,
           "intent":{"kind":"moment_publish","summary":"Publish","spend":{},"calls":[{"contract":"\(contract)","fn":"publish"}],"display":{\(fields)}}}]}
         """
     }
@@ -374,12 +509,28 @@ final class MomentsV2StoreTests: XCTestCase {
     {"planId":"publish-2","kind":"moment_publish","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
      {"id":"s1","label":"Enable USDC","status":"pending","stepKind":"trust","maxFee":"10000","feePayer":"user","reserveDelta":1,
       "intent":{"kind":"trust","summary":"Enable USDC","spend":{},"display":{"asset":"USDC"}}},
-     {"id":"s2","label":"Publish DUSK","status":"pending","stepKind":"moment_publish","maxFee":"51250","feePayer":"user","reserveDelta":0}]}
+     {"id":"s2","label":"Publish DUSK","status":"pending","stepKind":"moment_v2_publish","maxFee":"51250","feePayer":"user","reserveDelta":0}]}
     """
 
-    nonisolated static let claimAllPlan = """
-    {"planId":"claim-all","kind":"moment_claim_all","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
-     {"id":"s1","label":"Claim coins from 2 Moments","status":"pending","stepKind":"moment_claim_all","maxFee":"51250","feePayer":"user",
-      "reserveDelta":0}]}
-    """
+    nonisolated static let claimAllPlan = plan("moment_claim_all", display: #"{"generation":2,"moments":2,"nfts":"\#(nft),\#(publishedNft)","total":"400000000"}"#)
+
+    /// A plan of one built `kind` step (v2's builder kind as its step kind) whose intent displays `display`.
+    nonisolated static func plan(_ kind: String, display: String) -> String {
+        let builder = "moment_v2_" + kind.dropFirst("moment_".count)
+        return """
+        {"planId":"\(kind)-\(UUID().uuidString)","kind":"\(kind)","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
+         {"id":"s1","label":"Server words","status":"pending","stepKind":"\(builder)","maxFee":"51250","feePayer":"user","reserveDelta":0,
+          "intent":{"kind":"\(kind)","summary":"Server words","spend":{},"calls":[{"contract":"\(contract)","fn":"x"}],"display":\(display)}}]}
+        """
+    }
+
+    /// The account's USDC trustline, then the `builder` step the server builds once it confirmed.
+    nonisolated static func trustThen(_ builder: String, label: String) -> String {
+        """
+        {"planId":"trust-\(builder)","kind":"x","expiresAt":"2030-01-01T00:00:00.000Z","steps":[
+         {"id":"s1","label":"Enable USDC","status":"pending","stepKind":"trust","maxFee":"10000","feePayer":"user","reserveDelta":1,
+          "intent":{"kind":"trust","summary":"Enable USDC","spend":{},"display":{"asset":"USDC"}}},
+         {"id":"s2","label":"\(label)","status":"pending","stepKind":"\(builder)","maxFee":"51250","feePayer":"user","reserveDelta":0}]}
+        """
+    }
 }

@@ -171,6 +171,35 @@ export async function checkDepth(quote: (sellStroops: bigint) => Promise<bigint>
   return { ok, rate1, sell, out, reason };
 }
 
+/** The depth check on one venue's route: what it found, and the venue the run then buys on. */
+export interface VenueDepth extends Depth {
+  venue: string | null;
+}
+
+/** The depth check per venue (F10): each venue the 1-XLM quote prices, best rate first, is held to checkDepth against its
+ *  own 1-XLM rate and its own quote for the full sale; the first that passes is the venue the run buys on. A thin pool
+ *  with the best small-trade rate (testnet's Soroswap XLM/USDC) must not hide a deep route (SDEX), and a deep route
+ *  must not pass against another venue's rate. `quotes` answers each venue's USDC for a sale of so many stroops. */
+export async function checkDepthByVenue(quotes: (sellStroops: bigint) => Promise<Record<string, bigint>>, need: bigint): Promise<VenueDepth> {
+  let first: Record<string, bigint>;
+  try {
+    first = await quotes(ONE);
+  } catch (e) {
+    return { ok: false, rate1: 0n, sell: 0n, out: 0n, reason: `the route didn't quote (${(e as Error).message})`, venue: null };
+  }
+  const venues = Object.entries(first).filter(([, out]) => out > 0n).sort(([, a], [, b]) => (b > a ? 1 : b < a ? -1 : 0)).map(([v]) => v);
+  if (venues.length === 0) return { ok: false, rate1: 0n, sell: 0n, out: 0n, reason: "1 XLM quotes no USDC", venue: null };
+  const tried: string[] = [];
+  let last: VenueDepth | null = null;
+  for (const venue of venues) {
+    const d = await checkDepth(async (sell) => (sell === ONE ? first[venue] : (await quotes(sell))[venue] ?? 0n), need);
+    if (d.ok) return { ...d, venue };
+    tried.push(`${venue}: ${d.reason}`);
+    last ??= { ...d, venue: null };
+  }
+  return { ...last!, reason: tried.join("; ") };
+}
+
 /** The message a failed depth check stops the USDC journeys with. */
 export const THIN = "testnet XLM→USDC liquidity too thin";
 
@@ -581,8 +610,10 @@ async function keeperOr<R>(what: string, done: () => Promise<R | null>, act: () 
 
 /** A lite.keeper_skip row (F5, V5), inserted before the step the keeper could race; the run deletes it at the end. */
 async function keeperSkip(r: Run, kind: "launch" | "moment", target: string, jobs: string[], why: string): Promise<void> {
+  // The jobs as a text[] literal (fixed names): postgres.js serializes sql.array() as plain text while its array types
+  // are still loading, which is when the run's first query goes (2026-10-16).
   const [row] = await r.db`
-    insert into lite.keeper_skip (kind, target, jobs, note) values (${kind}, ${target}, ${r.db.array(jobs)}, ${`${NOTE}: ${why}`})
+    insert into lite.keeper_skip (kind, target, jobs, note) values (${kind}, ${target}, ${`{${jobs.join(",")}}`}::text[], ${`${NOTE}: ${why}`})
     returning id`;
   r.skips.push(Number(row.id));
   say(`    · keeper_skip ${kind} ${short(target)}: ${jobs.join(", ")} (${why})`);
@@ -614,8 +645,12 @@ async function balance(r: Run, sac: string, who: string): Promise<bigint> {
 async function usdcTo(r: Run, to: Actor, amount: bigint): Promise<void> {
   const bank = r.usdc.bank;
   if (!bank) throw new Error("internal: no USDC was acquired for a USDC journey");
-  const plan = await api(r, bank.token, "POST", "/send", { asset: "USDC", to: to.address, amount: amount.toString() });
-  await runPlan(r, bank, plan);
+  // One send at a time, each built after the last settled: a plan's transaction carries the bank's next sequence
+  // number when it is built, so plans built side by side would all carry the same one.
+  await serial(`send ${bank.address}`, async () => {
+    const plan = await api(r, bank.token, "POST", "/send", { asset: "USDC", to: to.address, amount: amount.toString() });
+    await runPlan(r, bank, plan);
+  });
 }
 
 /** testnet-qa's QA asset for `to`: its trustline, then a payment from the QA issuer. */
@@ -973,6 +1008,13 @@ async function launchedAndCompleted(r: Run, s: LaunchSpec, creator: Phone, buyer
   if (s.mode) await setMode(r, token, s.mode);
   const own = await bought(r, creator, token, s.creatorBuy, { afterSnipe: false, extra });
   if (BigInt(own.snipeFee ?? "0") !== 0n) throw new Error(`the creator's buy paid a snipe tax of ${own.snipeFee}`);
+  // With holder sharing, the creator's buy queued the launch's first reward, released from the next ledger. A buy
+  // simulated before that ledger writes no holder entry for its buyer (launch-token-v2 writes them lazily, while no
+  // reward is released) and traps on chain when the release runs first (2026-10-16): the buyer waits a ledger.
+  if (s.sharing) {
+    const at = await r.chain.latestLedger();
+    await until("the ledger after the creator's buy", WAIT.account, async () => ((await r.chain.latestLedger()) > at ? true : null));
+  }
   if (s.skip) await keeperSkip(r, "launch", token, s.skip, `${s.journey}: before the curve completes`);
   await bought(r, buyer, token, s.buyBudget, { afterSnipe: true, extra });
   const st = await launchState(r, token, buyer);
@@ -980,11 +1022,22 @@ async function launchedAndCompleted(r: Run, s: LaunchSpec, creator: Phone, buyer
   return { token, symbol, creator, buyer, quote: quoteOf(r, s.quote).contract, extra };
 }
 
-/** A phase action as the phone (graduate, graduate_fallback, mark_stuck, rescue): its return value. */
+/** The queue of the run's steps that may create a Soroswap pair. The factory stores each new pair under
+ *  PairAddressesNIndexed(<pairs so far>), so a graduation simulated before another pair lands traps on chain (a key
+ *  outside its footprint, 2026-10-16): the run's own graduations go one at a time, each built after the last settled.
+ *  The stack's keeper and other testnet users can still race one; that is the app's retry (the step fails, nothing
+ *  moves). */
+const PAIRS = "soroswap pair";
+
+/** A phase action as the phone (graduate, graduate_fallback, mark_stuck, rescue): its return value. A graduation is
+ *  built and sent in the PAIRS queue. */
 async function phased(r: Run, p: Phone, l: Launched, action: string): Promise<unknown> {
-  const plan = await api(r, p.token, "POST", "/launches/build", { action, token: l.token });
-  const [{ status }] = await runPlan(r, p, plan, l.extra);
-  return status.returnValue;
+  const go = async () => {
+    const plan = await api(r, p.token, "POST", "/launches/build", { action, token: l.token });
+    const [{ status }] = await runPlan(r, p, plan, l.extra);
+    return status.returnValue;
+  };
+  return action === "graduate" || action === "graduate_fallback" ? await serial(PAIRS, go) : await go();
 }
 
 /** A phase action refused before it opens: 409 not_available, with when it opens. */
@@ -1105,14 +1158,14 @@ async function journeyLaunch(r: Run): Promise<string> {
   }
   if ((await balance(r, l.token, treasury)) <= 0n) throw new Error("the treasury holds none of the launch tokens its harvest share paid it");
 
-  // The creator's curve fees, paid out by anyone to the current recipient.
-  const fees = BigInt(rewarded.creatorFees);
-  if (fees <= 0n) throw new Error("no creator fees are booked");
-  const [{ status: claim }] = await runPlan(r, creator, await api(r, creator.token, "POST", "/launches/build", { action: "claim", token: l.token }));
-  if (BigInt(claim.returnValue) !== fees) throw new Error(`the creator's claim paid ${claim.returnValue}, not the ${units(fees)} USDC booked`);
+  // With holder sharing the creator's part of every curve fee goes to the holders (launchpad-v2 split_fees, §5 of the
+  // design: `holder_sharing && creator_part > 0` → notify_reward), so nothing is booked for the creator and the claim
+  // is refused before it is built. The creator's booked fees and claim are the fallback journey's (sharing off).
+  if (BigInt(rewarded.creatorFees) !== 0n) throw new Error(`a sharing launch booked ${rewarded.creatorFees} creator fees; its creator part goes to the holders`);
+  refusedNamed(await call(r, creator.token, "POST", "/launches/build", { action: "claim", token: l.token }), "launchpad-v2", "NothingToClaim", "the creator's claim on a sharing launch");
   const swept = await protocolSwept(r, l);
   return `${l.symbol}: graduated on Soroswap by the ${g.who}; harvest by the ${harvest}; holder claimed ${units(inQuote)} USDC and ${units(inToken)} ${l.symbol}; ` +
-    `creator claimed ${units(fees)} USDC; the treasury earns no rewards; ${swept}`;
+    `no creator fees on a sharing launch (claim refused); the treasury earns no rewards; ${swept}`;
 }
 
 /** The failing venue (mode 0) → stuck → graduate_fallback refused before fallback_delay → the fallback; then, with
@@ -1497,7 +1550,7 @@ async function journeyMoment(r: Run): Promise<string> {
   const { value: grad, by } = await keeperOr("the Moment's graduation", async () => {
     const s = await momentStatus(r, nft, "a graduated Moment");
     return s.state === "graduated" ? s : null;
-  }, () => momentAction(r, b, { action: "graduate", nft }));
+  }, () => serial(PAIRS, () => momentAction(r, b, { action: "graduate", nft })));
   const coin = grad.coin;
   const pool = grad.pool;
   const startsAt = Date.parse(grad.graduatedAt) / 1000;
@@ -1876,10 +1929,14 @@ async function acquireUsdc(r: Run, journeys: Journey[], results: Result[]): Prom
   if (total === 0n) return journeys;
   say(`USDC: ${units(total)} for ${USDC_JOURNEYS.filter((j) => journeys.includes(j)).join(", ")} (their needs times 1.13)`);
   const bank = await phone(r, "USDC bank");
-  const quote = async (sell: bigint) =>
-    BigInt((await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 })).best.amountOut);
-  const depth = await checkDepth(quote, total);
-  say(`  depth check: 1 XLM → ${units(depth.rate1)} USDC; ${units(depth.sell)} XLM → ${units(depth.out)} USDC: ${depth.ok ? "deep enough" : "too thin"}`);
+  // Every venue's route the API quotes (its routes list), so the check holds each venue to its own rate.
+  const quotes = async (sell: bigint) => {
+    const q = await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 });
+    return Object.fromEntries((q.routes as any[]).map((x) => [String(x.venue), BigInt(x.amountOut)]));
+  };
+  const depth = await checkDepthByVenue(quotes, total);
+  say(`  depth check${depth.venue ? ` (${depth.venue})` : ""}: 1 XLM → ${units(depth.rate1)} USDC; ${units(depth.sell)} XLM → ${units(depth.out)} USDC: ` +
+    (depth.ok ? "deep enough" : `too thin (${depth.reason})`));
   const spendable = BigInt((await api(r, bank.token, "GET", "/account")).xlm.spendable);
   const affordable = depth.ok && (depth.sell * 103n) / 100n <= spendable;
   const next = afterDepth(journeys, affordable ? depth : { ...depth, ok: false, reason: depth.reason ?? `${units(depth.sell)} XLM is more than one Friendbot account holds` });
@@ -1888,9 +1945,10 @@ async function acquireUsdc(r: Run, journeys: Journey[], results: Result[]): Prom
     for (const j of next.stopped) results.push({ journey: j, outcome: "SKIP", detail: next.message });
     return next.run;
   }
+  // On the venue that passed the check, never on another route the API ranks first.
   const swap = async (sell: bigint) => {
     const q = await api(r, bank.token, "POST", "/swap/quote", { sell: "XLM", buy: "USDC", amount: sell.toString(), slippageBps: 300 });
-    await runPlan(r, bank, await api(r, bank.token, "POST", "/swap/build", { quoteId: q.quoteId }));
+    await runPlan(r, bank, await api(r, bank.token, "POST", "/swap/build", { quoteId: q.quoteId, venue: depth.venue }));
   };
   await swap(depth.sell);
   const got = await balance(r, r.ids.usdc, bank.address);
@@ -2000,24 +2058,27 @@ async function main(): Promise<number> {
   say(`  venues: Soroswap ${r.ids.venues.soroswap}, QaFail ${r.ids.venues.qaFail}${r.ids.venues.aquarius === null ? "" : `, Aquarius ${r.ids.venues.aquarius}`}`);
   try {
     journeys = await acquireUsdc(r, journeys, results);
+    // Each journey's outcome is told as it ends, a failure too: the others may run on for most of an hour.
     const settled = await Promise.allSettled(journeys.map(async (j) => {
       say(`▶ ${j}`);
-      const detail = await RUNNERS[j](r);
-      say(`✓ ${j}: ${detail}`);
-      return detail;
+      try {
+        const detail = await RUNNERS[j](r);
+        say(`✓ ${j}: ${detail}`);
+        return detail;
+      } catch (e) {
+        say(`✗ ${j}: ${(e as Error)?.message ?? e}`);
+        throw e;
+      }
     }));
     settled.forEach((s, i) => {
       const journey = journeys[i];
       if (s.status === "fulfilled") results.push({ journey, outcome: "PASS", detail: s.value });
-      else {
-        results.push({ journey, outcome: "FAIL", detail: String((s.reason as Error)?.message ?? s.reason) });
-        say(`✗ ${journey}: ${(s.reason as Error)?.message ?? s.reason}`);
-      }
+      else results.push({ journey, outcome: "FAIL", detail: String((s.reason as Error)?.message ?? s.reason) });
     });
   } catch (e) {
     for (const j of journeys) if (!results.some((x) => x.journey === j)) results.push({ journey: j, outcome: "FAIL", detail: `setup: ${(e as Error).message}` });
   } finally {
-    if (r.skips.length) await r.db`delete from lite.keeper_skip where id = any(${r.db.array(r.skips)})`;
+    if (r.skips.length) await r.db`delete from lite.keeper_skip where id = any(${`{${r.skips.join(",")}}`}::bigint[])`;
     await r.db.end();
   }
   results.sort((a, b) => JOURNEYS.indexOf(a.journey) - JOURNEYS.indexOf(b.journey));
@@ -2080,6 +2141,30 @@ Deno.test("USDC: the depth check passes within 3% of the 1-XLM rate and stops th
   assertTest((stop.message ?? "").startsWith(THIN), `with the clear message: ${stop.message}`);
   const go = afterDepth(JOURNEYS, deep);
   assertTest(go.run.length === JOURNEYS.length && go.stopped.length === 0 && go.message === null, "a deep route runs everything");
+});
+
+Deno.test("USDC: the depth check holds each venue to its own 1-XLM rate, and a thin pool with the best rate hides no deep route (F10)", async () => {
+  const need = 69n * ONE;
+  // testnet on 2026-10-16: Soroswap's XLM/USDC pool quotes 4.03 USDC for 1 XLM but ~94% of that on the full sale; SDEX
+  // quotes 0.89 flat.
+  const soroswap = (sell: bigint) => sell === ONE ? 40_271_591n : (sell * 40_271_591n * 94n) / (ONE * 100n);
+  const sdex = (sell: bigint) => (sell * 8_924_080n) / ONE;
+  const both = (sell: bigint) => Promise.resolve({ soroswap: soroswap(sell), sdex: sdex(sell) });
+  const d = await checkDepthByVenue(both, need);
+  assertTest(d.ok && d.venue === "sdex" && d.rate1 === 8_924_080n && d.out >= need, `the deep venue passes on its own rate: ${d.venue} ${d.reason}`);
+  // The best route alone, as the check read it before: too thin.
+  assertTest(!(await checkDepth((s) => Promise.resolve(soroswap(s)), need)).ok, "the thin pool alone fails");
+  // Both thin: no venue passes, and the reason names each one.
+  const thin = await checkDepthByVenue((s) => Promise.resolve({ soroswap: soroswap(s), sdex: s === ONE ? 8_924_080n : (sdex(s) * 90n) / 100n }), need);
+  assertTest(!thin.ok && thin.venue === null && (thin.reason ?? "").includes("soroswap:") && (thin.reason ?? "").includes("sdex:"), `no venue passes: ${thin.reason}`);
+  assertTest(afterDepth(["launch", "fallback"], thin).stopped.join() === "launch", "and the USDC journeys stop");
+  // A venue isn't held to another's rate: SDEX's flat 0.89 doesn't pass against Soroswap's 4.03 (it is checked alone).
+  const sdexAt4 = await checkDepth((s) => Promise.resolve(s === ONE ? 40_271_591n : sdex(s)), need);
+  assertTest(!sdexAt4.ok, "a deep route quoted against another venue's 1-XLM rate fails");
+  const none = await checkDepthByVenue(() => Promise.resolve({ soroswap: 0n }), need);
+  assertTest(!none.ok && none.reason === "1 XLM quotes no USDC", `no route: ${none.reason}`);
+  const down = await checkDepthByVenue(() => Promise.reject(new Error("503")), need);
+  assertTest(!down.ok && (down.reason ?? "").startsWith("the route didn't quote"), `a quote that doesn't answer: ${down.reason}`);
 });
 
 Deno.test("the run refuses every deployment but testnet-qa, and any API but a local stack", () => {

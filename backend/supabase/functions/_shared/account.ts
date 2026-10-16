@@ -196,10 +196,13 @@ async function horizonRecord(path: string): Promise<unknown> {
   }
 }
 
+/** How many times Horizon is asked for Friendbot's transaction, a second apart: it lists a ledger's transactions a
+ *  few seconds after RPC shows the account they created. */
+const HORIZON_TRIES = 6;
+
 /** Asks testnet's Friendbot to fund `address` with its grant (networks.ts faucet.amount) and waits until the account
- *  is on the ledger: Friendbot's transaction, or null when Friendbot found the account already funded, so funded it no
- *  further. Friendbot's answer names the transaction; Horizon's record of it gives its ledger and fees, and, when the
- *  answer names none, the account's first transaction is Friendbot's. */
+ *  is on the ledger: Friendbot's transaction, or null only when Friendbot found the account already funded, so funded
+ *  it no further. A funding is never answered without its transaction (fundingTx). */
 export async function friendbotFund(address: string): Promise<FriendbotTx | null> {
   const url = env.network.friendbotUrl;
   if (!url) throw new ApiError(400, "no_friendbot", "Friendbot only exists on testnet.");
@@ -209,24 +212,39 @@ export async function friendbotFund(address: string): Promise<FriendbotTx | null
     throw new ApiError(502, "friendbot_failed", "Testnet Friendbot didn't answer. Try again.", { status: res.status });
   }
   for (let i = 0; i < 20; i++) {
-    if (await loadAccount(address)) {
-      if (!res.ok) return null;
-      let answer: unknown = null;
-      try {
-        answer = JSON.parse(body);
-      } catch {
-        // Not a record: the account's first transaction says which it was.
-      }
-      const answered = friendbotTx(answer);
-      if (answered?.maxFee) return answered;
-      const record = answered
-        ? await horizonRecord(`/transactions/${answered.hash}`)
-        : ((await horizonRecord(`/accounts/${address}/transactions?order=asc&limit=1`)) as { _embedded?: { records?: unknown[] } } | null)?._embedded?.records?.[0];
-      return friendbotTx(record) ?? answered;
-    }
+    if (await loadAccount(address)) return res.ok ? await fundingTx(address, body) : null;
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  throw new ApiError(504, "friendbot_slow", "Testnet is slow to create the account. Try again in a minute.");
+  throw friendbotSlow();
+}
+
+function friendbotSlow(): ApiError {
+  return new ApiError(504, "friendbot_slow", "Testnet is slow to create the account. Try again in a minute.");
+}
+
+/** The transaction Friendbot funded `address` with, from its answer (`body`): Friendbot answers with Horizon's record
+ *  of it; when that lacks the fees, Horizon's record of the hash gives them, and when it names no transaction, the
+ *  account's first one on Horizon is Friendbot's. Horizon is asked again while it doesn't list it yet. A funding that
+ *  nothing names is refused (504 friendbot_slow), so a caller never takes it for no funding at all. */
+async function fundingTx(address: string, body: string): Promise<FriendbotTx> {
+  let answer: unknown = null;
+  try {
+    answer = JSON.parse(body);
+  } catch {
+    // Not a record: the account's first transaction says which it was.
+  }
+  const answered = friendbotTx(answer);
+  if (answered?.maxFee) return answered;
+  for (let k = 0; k < HORIZON_TRIES; k++) {
+    if (k > 0) await new Promise((r) => setTimeout(r, 1_000));
+    const record = answered
+      ? await horizonRecord(`/transactions/${answered.hash}`)
+      : ((await horizonRecord(`/accounts/${address}/transactions?order=asc&limit=1`)) as { _embedded?: { records?: unknown[] } } | null)?._embedded?.records?.[0];
+    const found = friendbotTx(record);
+    if (found) return found;
+  }
+  if (answered) return answered;
+  throw friendbotSlow();
 }
 
 export function usdcAsset(): AssetInfo {

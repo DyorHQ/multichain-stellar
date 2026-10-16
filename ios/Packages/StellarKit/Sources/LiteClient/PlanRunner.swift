@@ -200,7 +200,7 @@ public struct PlanRunner: Sendable {
 
 /// Reads contract instances straight from Stellar RPC (not through the Lite API) to recognise the contracts created at
 /// runtime: a contract counts as a launch token, a Moment NFT or a Moment coin only if its WASM hash is the pinned one
-/// (`PlanRunner.runtimeContracts`).
+/// (`PlanRunner.runtimeContracts`) and, for v2, the pinned singleton created it (`RuntimeProvenance`).
 public struct ContractInspector: Sendable {
     public let rpcURL: URL
     private let session: URLSession
@@ -228,13 +228,14 @@ public struct ContractInspector: Sendable {
         guard !unknown.isEmpty, runtimePinned else { return [:] }
         var out: [String: String] = [:]
         for c in unknown {
-            if let hash = try await wasmHash(of: c) { out[c] = hash }
+            if let hash = try await wasmHash(of: c, pinned: pinned) { out[c] = hash }
         }
         return out
     }
 
-    /// The hex WASM hash of a contract instance, or nil for a Stellar Asset Contract / missing contract.
-    public func wasmHash(of contract: String) async throws -> String? {
+    /// The hex WASM hash `contract` counts by, or nil for a Stellar Asset Contract, a missing contract, an entry of
+    /// another contract, or an instance of a pinned v2 WASM that the pinned singleton didn't create (RuntimeProvenance).
+    public func wasmHash(of contract: String, pinned: PinnedContracts) async throws -> String? {
         let key = try Self.instanceKey(contract)
         let body: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "getLedgerEntries", "params": ["keys": [key]]]
         var req = URLRequest(url: rpcURL)
@@ -251,7 +252,7 @@ public struct ContractInspector: Sendable {
               let entries = result["entries"] as? [[String: Any]],
               let xdr = entries.first?["xdr"] as? String,
               let bytes = Data(base64Encoded: xdr) else { return nil }
-        return try Self.instanceWasmHash([UInt8](bytes))
+        return try RuntimeProvenance.wasmHash(ofInstance: [UInt8](bytes), contract: contract, pinned: pinned)
     }
 
     /// LedgerKey::ContractData { contract, ScVal::LedgerKeyContractInstance, persistent }, base64.
@@ -263,19 +264,5 @@ public struct ContractInspector: Sendable {
         w.uint32(20) // SCV_LEDGER_KEY_CONTRACT_INSTANCE
         w.uint32(1) // PERSISTENT
         return Data(w.bytes).base64EncodedString()
-    }
-
-    /// LedgerEntryData::ContractData → ScVal::ContractInstance → ContractExecutable::Wasm(hash).
-    static func instanceWasmHash(_ bytes: [UInt8]) throws -> String? {
-        var r = XDRReader(bytes)
-        guard try r.int32() == 6 else { return nil } // CONTRACT_DATA
-        _ = try r.int32() // ext
-        guard try r.int32() == 1 else { return nil } // contract address
-        _ = try r.fixed(32)
-        guard try r.int32() == 20 else { return nil } // key: ledger key contract instance
-        _ = try r.int32() // durability
-        guard try r.int32() == 19 else { return nil } // SCV_CONTRACT_INSTANCE
-        guard try r.int32() == 0 else { return nil } // CONTRACT_EXECUTABLE_WASM (1 = Stellar asset)
-        return try r.fixed(32).map { String(format: "%02x", $0) }.joined()
     }
 }

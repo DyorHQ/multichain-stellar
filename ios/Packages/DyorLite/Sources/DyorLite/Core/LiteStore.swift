@@ -419,25 +419,25 @@ public final class LiteStore {
                            summary: .launchTrade(buy: buy, symbol: code(token), amount: amount, quoteCode: code(quote)))
     }
 
-    /// A new coin: its image uploaded and its metadata written first, then the launch (with the developer buy). A
-    /// ticker that isn't 2 to 10 ASCII letters or digits is refused before anything is sent, as the server refuses it
-    /// (422 `bad_symbol`).
+    /// A new coin: its image uploaded and its metadata written first, then the launch (with the developer buy). The
+    /// ticker is checked as typed: one that isn't 2 to 10 ASCII letters or digits is refused before anything is sent,
+    /// as the server refuses it (422 `bad_symbol`); the rest go out upper-cased.
     public func launchCreatePlan(_ form: StellarLaunchForm, image: Data?) async throws -> PreparedAction {
-        guard Self.isLaunchSymbol(form.symbol) else {
+        guard let symbol = Self.launchSymbol(form.symbol) else {
             throw LiteAPIError.server(status: 422, code: "bad_symbol", message: tr("Use 2 to 10 letters or digits for the symbol."), detail: nil)
         }
         try await ensureSession()
         let imageUrl = try await image.asyncMap { try await upload($0, contentType: "image/jpeg") }
-        let uri = try await api.launchMetadata(name: form.name, symbol: form.symbol, description: form.description, imageUrl: imageUrl,
+        let uri = try await api.launchMetadata(name: form.name, symbol: symbol, description: form.description, imageUrl: imageUrl,
                                                website: form.website, x: form.x, telegram: form.telegram)
-        var request = LiteAPI.LaunchRequest(action: "create", quote: form.quote, name: form.name, symbol: form.symbol, uri: uri,
+        var request = LiteAPI.LaunchRequest(action: "create", quote: form.quote, name: form.name, symbol: symbol, uri: uri,
                                             creatorFeeBps: form.creatorFeeBps)
         request.amount = String(form.developerBuy)
         request.minOut = String(form.minOut)
         let plan = try await api.buildLaunch(request)
         let quote = asset(form.quote)?.contract ?? form.quote
         return try prepare(plan, limits: form.developerBuy > 0 ? [quote: form.developerBuy] : [:], title: tr("Launch a coin"),
-                           section: .launch, reference: nil, summary: .launchCreate(symbol: form.symbol, name: form.name))
+                           section: .launch, reference: nil, summary: .launchCreate(symbol: symbol, name: form.name))
     }
 
     /// Whether `symbol` can be a coin's ticker: 2 to 10 ASCII letters or digits as typed, spaces around it aside, the
@@ -446,6 +446,12 @@ public final class LiteStore {
     public nonisolated static func isLaunchSymbol(_ symbol: String) -> Bool {
         let scalars = symbol.trimmingCharacters(in: .whitespacesAndNewlines).unicodeScalars
         return (2...10).contains(scalars.count) && scalars.allSatisfy { ("A"..."Z").contains($0) || ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+    }
+
+    /// The ticker Create sends for what the user typed: trimmed and upper-cased once it passes `isLaunchSymbol`, nil
+    /// otherwise. Checked before upper-casing, which turns letters outside ASCII into ASCII ones ("ß" into "SS").
+    public nonisolated static func launchSymbol(_ typed: String) -> String? {
+        isLaunchSymbol(typed) ? typed.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() : nil
     }
 
     /// Moves a coin whose curve is full to its Soroswap pool (anyone may; the user pays only the network fee).
@@ -546,11 +552,17 @@ public final class LiteStore {
     }
 
     /// Testnet's Friendbot: its test XLM for an account that already existed, once per address, ever (the server
-    /// refuses a second claim with 429 `faucet_used`). The account is read again, so `firstFunding.faucet.claimed` says
-    /// it is done.
+    /// refuses a second claim with 429 `faucet_used`). The account is read again whatever the answer, so
+    /// `firstFunding.faucet.claimed` says what the server now holds: done after the claim, and after a refusal for a
+    /// claim made before or one the server is still settling.
     public func faucet() async throws {
         try await ensureSession()
-        _ = try await api.faucet()
+        do {
+            _ = try await api.faucet()
+        } catch {
+            await refreshAccount()
+            throw error
+        }
         await refreshAccount()
     }
 

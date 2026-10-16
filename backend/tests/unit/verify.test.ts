@@ -203,9 +203,9 @@ Deno.test("the vectors cover v2's bindings (§20.4), with the verdict each gives
 Deno.test("the vectors keep the cases where a decoder or a comparison could tell the two verifiers apart", () => {
   const byName = new Map(vectors.map((v) => [v.name, v.expect]));
   const fails: [string, string][] = [
-    // An authorization is of the call itself only byte for byte.
-    ["auth root that is the call in another normalization", "the destination is not the one you confirmed"],
-    ["auth root that is the call with another error code", "the destination is not the one you confirmed"],
+    // An authorization is of the call itself only byte for byte: a twin root is a second call.
+    ["auth root that is the call in another normalization", "the transaction asks you to authorize a call other than this one"],
+    ["auth root that is the call with another error code", "the transaction asks you to authorize a call other than this one"],
     // A function name is read as written.
     ["call to a function name with a byte-order mark", "call \ufefftransfer is not part of this action"],
     // A trust limit is positive.
@@ -214,6 +214,64 @@ Deno.test("the vectors keep the cases where a decoder or a comparison could tell
   ];
   for (const [name, reason] of fails) assertEquals(byName.get(name), { ok: false, reason }, name);
   assertEquals(byName.get("soroban swap with a footprint ok")?.ok, true);
+});
+
+/** The authorization tree, swap routes, minimums and what the user typed into a v2 launch or Moment, with the verdict
+ *  each gives (StellarCoreTests' testCoversTheBindingCases keeps the same list). */
+const BINDING_CASES: [string, string | null][] = [
+  // Only the call itself is authorized, with the user's own token spends beneath it.
+  ["swap with a non-token call nested under its own authorization", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["swap with a non-token call nested under a token spend", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["swap with a nested spend of another account's tokens", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["swap with a nested spend with extra arguments", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["blend submit with a nested withdrawal", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["v2 launch with a non-token call nested under its own authorization", "the transaction asks you to authorize a call that is not a spend of your tokens"],
+  ["swap with a second root authorizing another call", "the transaction asks you to authorize a call other than this one"],
+  ["swap with a second root transferring to the confirmed address", "the transaction asks you to authorize a call other than this one"],
+  ["transfer in another root to another account", "the transaction asks you to authorize a call other than this one"],
+  ["v2 curve buy with a creator-fee recipient change as a second root", "the transaction asks you to authorize a call other than this one"],
+  ["v2 claim rewards with a second root", "the transaction asks you to authorize a call other than this one"],
+  // Every token a route runs is listed, but for the user's own sold and bought tokens.
+  ["soroswap through an unlisted middle token", "the swap route goes through a token this app doesn't list"],
+  ["soroswap to an unlisted token the intent doesn't quote", "the swap route goes through a token this app doesn't list"],
+  ["aquarius through an unlisted hop token", "the swap route goes through a token this app doesn't list"],
+  ["soroswap through a listed middle token ok", null],
+  ["soroswap to an unlisted token the intent quotes ok", null],
+  ["soroswap from an unlisted token the intent spends ok", null],
+  ["aquarius through listed hops ok", null],
+  // A minimum above 0 wherever a trade encodes one; a path payment's intent quotes one.
+  ["soroswap with no minimum", "the transaction sets no minimum received"],
+  ["aquarius with no minimum", "the transaction sets no minimum received"],
+  ["curve buy with no minimum", "the transaction sets no minimum received"],
+  ["curve sell with no minimum", "the transaction sets no minimum received"],
+  ["v2 launch initial buy with no minimum", "the transaction sets no minimum received"],
+  ["path payment without a quoted minimum", "the minimum received is lower than quoted"],
+  // A v2 launch's recipient is intent.to (the user when absent); its exemptions, fee and sharing the ones shown.
+  ["v2 launch creator fees to a third party", "the creator fees go to another address than the one you confirmed"],
+  ["v2 launch creator fees to another than the confirmed recipient", "the creator fees go to another address than the one you confirmed"],
+  ["v2 launch creator fees to the user when a recipient was confirmed", "the creator fees go to another address than the one you confirmed"],
+  ["v2 launch showing another recipient", "the creator fees go to another address than the one you confirmed"],
+  ["v2 launch without its settings shown", "the creator fees go to another address than the one you confirmed"],
+  ["v2 launch with a snipe exemption not shown", "the launch settings are not the ones shown"],
+  ["v2 launch with snipe exemptions in another order", "the launch settings are not the ones shown"],
+  ["v2 launch with another creator fee", "the launch settings are not the ones shown"],
+  ["v2 launch with holder sharing other than shown", "the launch settings are not the ones shown"],
+  ["v2 launch creator fees to the user named ok", null],
+  ["v2 launch creator fees to the confirmed recipient ok", null],
+  ["v2 launch with its snipe exemptions shown ok", null],
+  // A Moment's price, allocation and window are the ones shown.
+  ["v2 moments publish at another price", "the Moment's price, allocation or window is not the one shown"],
+  ["v2 moments publish with another allocation", "the Moment's price, allocation or window is not the one shown"],
+  ["v2 moments publish with another window", "the Moment's price, allocation or window is not the one shown"],
+  ["v2 moments publish without its settings shown", "the Moment's price, allocation or window is not the one shown"],
+];
+
+Deno.test("the vectors cover the authorization tree, swap routes, minimums and what the user typed, with the verdict each gives", () => {
+  const byName = new Map(vectors.map((v) => [v.name, v.expect]));
+  for (const [name, reason] of BINDING_CASES) {
+    if (reason === null) assertEquals(byName.get(name)?.ok, true, name);
+    else assertEquals(byName.get(name), { ok: false, reason }, name);
+  }
 });
 
 // ------------------------------------------------------------------------------------------------ offline transactions
