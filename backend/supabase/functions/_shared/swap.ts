@@ -1,16 +1,16 @@
 // Swap aggregation (docs/DESIGN-stellar-parity.md §6.8): SDEX (Horizon path finding), Soroswap (router) and Aquarius
-// (find-path API) quote in parallel; every venue's route is kept with the quote, and /swap/build redeems the one the
-// user picked, the best by default. The swap pays its user (`to` and the minimum out are bound, as WP-11's call rules
-// check). Where activation is sponsored, a swap of a registry asset into XLM by an account with no XLM to spend is the
-// account's one starter swap, which DyorHQ pays for (§4.3).
-import { Asset, Operation, xdr } from "@stellar/stellar-sdk";
+// (find-path API) quote in parallel; every venue's route that both verifiers would sign is kept with the quote, and
+// /swap/build redeems the one the user picked, the best by default. The swap pays its user (`to` and the minimum out
+// are bound, as WP-11's call rules check). Where activation is sponsored, a swap of a registry asset into XLM by an
+// account with no XLM to spend is the account's one starter swap, which DyorHQ pays for (§4.3).
+import { Address, Asset, Operation, xdr } from "@stellar/stellar-sdk";
 import type { QuoteRoute, StarterSwapReason, SwapQuote, SwapRoute, SwapVenue } from "./contract.ts";
 import { resolveAsset, ResolvedAsset } from "./assets.ts";
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { baseReserve, positionOf, starterSwapEligibility } from "./fees.ts";
 import { ApiError, bad, notFound } from "./http.ts";
-import { assetById } from "./networks.ts";
+import { assetById, contractAllowlist } from "./networks.ts";
 import { createPlan, registerBuilder, StepSpec } from "./plans.ts";
 import { starterUsed } from "./sponsor.ts";
 import { classicAsset, classicBalances, fromStroops, horizon, invoke, newTx, requireAccount, sv, view } from "./stellar.ts";
@@ -91,6 +91,38 @@ async function quoteAquarius(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: 
   }
 }
 
+/** The tokens a route's contract call runs the code of, as both verifiers read them from the call (verify.ts
+ *  routeListed, TxVerifier): a Soroswap path, or each hop's pool tokens and token out of an Aquarius chain; null for a
+ *  chain that isn't (tokens, pool, token out) hops. None for the Stellar DEX: a path payment runs no token code. */
+function routeTokens(route: Route): string[] | null {
+  if (route.venue === "sdex") return [];
+  if (route.venue === "soroswap") return route.path;
+  try {
+    const hops = xdr.ScVal.fromXDR(String(route.chainXdr), "base64").vec();
+    if (!hops || hops.length === 0) return null;
+    const tokens: string[] = [];
+    for (const h of hops) {
+      const hop = h.vec();
+      const pool = hop?.length === 3 ? hop[0].vec() : null;
+      if (!hop || !pool) return null;
+      tokens.push(...pool.map((t) => Address.fromScAddress(t.address()).toString()), Address.fromScAddress(hop[2].address()).toString());
+    }
+    return tokens;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether both verifiers would sign `route`: every token it goes through is on the allowlist, but for the one sold and
+ *  the one bought, the user's own choice. A route through any other token is never offered, since /swap/build would
+ *  be refused for it (testnet's Aquarius routes XLM → USDC through AQUA and USDT). */
+function signable(route: Route, sell: ResolvedAsset, buy: ResolvedAsset): boolean {
+  const tokens = routeTokens(route);
+  if (tokens === null) return false;
+  const listed = new Set(Object.values(contractAllowlist(env.network)).flat());
+  return tokens.every((t) => t === sell.contract || t === buy.contract || listed.has(t));
+}
+
 function pickBest(routes: Route[]): Route | null {
   const valid = routes.filter((r) => BigInt(r.amountOut) > 0n);
   if (valid.length === 0) return null;
@@ -149,7 +181,7 @@ export async function quote(user: string, sellId: string, buyId: string, amountI
     Promise.all([quoteSdex(sell, buy, amountIn), quoteSoroswap(sell, buy, amountIn), quoteAquarius(sell, buy, amountIn)]),
     holder(user, buy),
   ]);
-  const routes = found.filter((r): r is Route => r !== null && BigInt(r.amountOut) > 0n);
+  const routes = found.filter((r): r is Route => r !== null && BigInt(r.amountOut) > 0n && signable(r, sell, buy));
   const best = pickBest(routes);
   if (!best) throw new ApiError(404, "no_route", `No route from ${sell.code} to ${buy.code} right now.`);
   const ranked = [best, ...routes.filter((r) => r !== best).sort((a, b) => (BigInt(b.amountOut) > BigInt(a.amountOut) ? 1 : -1))];
