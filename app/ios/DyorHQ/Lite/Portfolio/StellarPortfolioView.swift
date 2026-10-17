@@ -321,7 +321,8 @@ struct StellarPortfolioView: View {
     // MARK: Activity
 
     /// The period's activity as `/v1/portfolio` lists it, each row worded as Recent Activity words it when the account's
-    /// activity holds its details (`StellarActivityPresenter`), else in the server's words.
+    /// activity holds its details (`StellarActivityPresenter`), else in the server's words. A past bridge's row is plain
+    /// history, in grey: Stellar has no Bridge for now, so nothing here offers one.
     private var activityCard: some View {
         let rows = StellarPortfolioModel.rows(live)
         let shown = showAll ? rows : Array(rows.prefix(12))
@@ -347,7 +348,7 @@ struct StellarPortfolioView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
-                        StellarPortfolioActivityRow(row: row, details: details[row.id], color: color(row.section))
+                        StellarPortfolioActivityRow(row: row, details: details[row.id], color: row.section.map(color) ?? .secondary)
                         if index < shown.count - 1 { Divider().padding(.leading, 44) }
                     }
                 }
@@ -399,7 +400,7 @@ private struct StellarPortfolioActivityRow: View {
     private var content: some View {
         let presentation = details.map(StellarActivityPresenter.present)
         return HStack(spacing: 12) {
-            Image(systemName: row.section.symbol)
+            Image(systemName: row.symbol)
                 .font(.footnote.weight(.bold))
                 .frame(width: 32, height: 32)
                 .background(color.opacity(0.16), in: Circle())
@@ -423,7 +424,7 @@ private struct StellarPortfolioActivityRow: View {
     private func subtitle(_ presentation: StellarActivityPresentation?) -> Text {
         if let subtitle = presentation?.subtitle { return StellarActivityRow.subtitle(subtitle) }
         if let subtitle = row.item.subtitle, !subtitle.isEmpty { return Text(verbatim: subtitle) }
-        return Text(verbatim: row.section.title)
+        return Text(verbatim: row.sectionTitle)
     }
 }
 

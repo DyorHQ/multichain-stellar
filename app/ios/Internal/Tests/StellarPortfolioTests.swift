@@ -257,9 +257,16 @@ final class StellarPortfolioTests: XCTestCase {
     func testActivityIsTheServersListInItsOrder() throws {
         let read = try fixture(StellarPortfolio.self, "portfolio.json")
         let rows = StellarPortfolioModel.rows(read)
-        XCTAssertEqual(rows.map(\.id), read.activity.filter { $0.section != "bridge" }.map(\.id))
-        XCTAssertEqual(rows.map(\.section), [.launch], "a past bridge is no row of Portfolio's: Stellar has no Bridge for now")
-        XCTAssertEqual(read.activity.map(\.section), ["launch", "bridge"])
+        XCTAssertEqual(rows.map(\.id), read.activity.map(\.id))
+        XCTAssertEqual(read.activity.map(\.section), ["launch", StellarPortfolioModel.pastBridge])
+        // A past bridge stays, as plain history: in no section (so no card or total counts it), Monad's Bridge mark, and
+        // worded as Recent Activity words it.
+        XCTAssertEqual(rows.map(\.section), [.launch, nil])
+        XCTAssertEqual(rows.map(\.symbol), [PortfolioModel.Section.launch.symbol, PortfolioModel.Section.bridge.symbol])
+        XCTAssertEqual(rows.map(\.sectionTitle), [PortfolioModel.Section.launch.title, PortfolioModel.Section.bridge.title])
+        let pastBridge = try XCTUnwrap(rows.first { $0.section == nil }, "a past bridge's row")
+        let bridge = try XCTUnwrap(try fixture(ActivityPage.self, "activity.json").items.first { $0.id == pastBridge.id })
+        XCTAssertEqual(StellarActivityPresenter.present(bridge).title, .bridged(code: "USDC"), "Bridged USDC")
         XCTAssertTrue(rows.allSatisfy { $0.time != nil })
         XCTAssertEqual(read.coverage.note, "Swaps made outside DyorHQ between non-launch assets aren't counted.", "shown verbatim under Activity")
 
@@ -268,10 +275,12 @@ final class StellarPortfolioTests: XCTestCase {
              "pricing": {"kind": "reference", "source": "Kraken", "network": "mainnet", "note": null},
              "totals": \(Self.zero), "sections": {"spot": \(Self.zero), "earn": \(Self.zero), "launch": \(Self.zero), "moments": \(Self.zero), "bridge": \(Self.zero)},
              "activity": [{"id": "a", "section": "account", "kind": "trust", "title": "Enabled USDC", "subtitle": null, "at": "2026-10-15T09:00:00.000Z", "usd": null, "hash": null},
-                          {"id": "b", "section": "spot", "kind": "swap", "title": "Swapped", "subtitle": "XLM → USDC", "at": "2026-10-15T08:00:00.000Z", "usd": 1.5, "hash": "ab"}],
+                          {"id": "b", "section": "spot", "kind": "swap", "title": "Swapped", "subtitle": "XLM → USDC", "at": "2026-10-15T08:00:00.000Z", "usd": 1.5, "hash": "ab"},
+                          {"id": "c", "section": "cash", "kind": "deposit", "title": "Transaction", "subtitle": null, "at": "2026-10-15T07:00:00.000Z", "usd": 2, "hash": null},
+                          {"id": "d", "section": "bridge", "kind": "stellar_to_monad", "title": "Bridged USDC", "subtitle": "Stellar → Monad", "at": "2026-10-15T06:00:00.000Z", "usd": 3, "hash": "cd"}],
              "coverage": {"from": null, "note": null}}
             """)
-        XCTAssertEqual(StellarPortfolioModel.rows(other).map(\.id), ["b"], "only the four sections' items")
+        XCTAssertEqual(StellarPortfolioModel.rows(other).map(\.id), ["b", "d"], "only the four sections' items, and a past bridge's")
         XCTAssertTrue(StellarPortfolioModel.rows(nil).isEmpty)
     }
 

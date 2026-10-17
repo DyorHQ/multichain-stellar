@@ -137,10 +137,20 @@ final class StellarPortfolioModel {
     /// One action of the period, in Activity.
     struct Row: Identifiable, Equatable {
         let item: StellarPortfolio.Item
-        let section: Section
+        /// Its section; nil for a past bridge's (`pastBridge`), listed as plain history that no section or total counts.
+        let section: Section?
         let time: Date?
         var id: String { item.id }
+
+        /// Its section's mark, or Monad's Bridge mark for a past bridge's.
+        var symbol: String { section?.symbol ?? PortfolioModel.Section.bridge.symbol }
+        /// Its section's name, or Monad's "Bridge" for a past bridge's: what the row says when nothing else words it.
+        var sectionTitle: String { section?.title ?? PortfolioModel.Section.bridge.title }
     }
+
+    /// The server's section for a bridge between Monad and Stellar. Stellar has no Bridge for now, but an account's past
+    /// bridges stay in Activity, as plain history.
+    nonisolated static let pastBridge = "bridge"
 
     /// A token the Assets card lists: a Spot holding or a launch coin.
     enum Asset: Identifiable, Equatable {
@@ -219,10 +229,13 @@ final class StellarPortfolioModel {
         return savedFigures[key].map { Shown(figures: $0, savedAt: $0.readAt) }
     }
 
-    /// The period's activity as the server lists it, in its order: each item in a section Portfolio shows.
+    /// The period's activity as the server lists it, in its order: each item in a section Portfolio shows, and each past
+    /// bridge's.
     static func rows(_ portfolio: StellarPortfolio?) -> [Row] {
         (portfolio?.activity ?? []).compactMap { item in
-            Section(rawValue: item.section).map { Row(item: item, section: $0, time: StellarFormat.date(item.at)) }
+            let section = Section(rawValue: item.section)
+            guard section != nil || item.section == pastBridge else { return nil }
+            return Row(item: item, section: section, time: StellarFormat.date(item.at))
         }
     }
 
