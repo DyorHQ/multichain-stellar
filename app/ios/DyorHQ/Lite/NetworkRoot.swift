@@ -132,7 +132,7 @@ struct NetworkRoot: View {
     /// prompt, the first time. Its settled actions post to the notification center, and Sign out of Stellar erases what
     /// this iPhone saved for it and goes back to Monad (§8.12.2), under Profile, where it was asked for: the next switch
     /// signs in again. The app's own sign-out and erase sign the session out too (`StellarLiveSession`), and leave the
-    /// network to them.
+    /// network to them. It is given no Monad wallet: Stellar has no Bridge for now, so nothing on Stellar signs on Monad.
     private func makeSession(for owner: Address) -> LiteSession {
         // Passkey accounts only: a seed account's key is in the Keychain, and its setup never needs a ceremony.
         var setupKey: (@Sendable (String) async throws -> LiteSession.UnlockResult)?
@@ -146,7 +146,7 @@ struct NetworkRoot: View {
         }
         let lite = LiteSession(env: LiteGate.environment,
                                stellarAddress: DyorHQLiteKeys.stellarAddress(for: owner),
-                               monad: MonadBridgeAdapter(session: session),
+                               monad: nil,
                                keys: DyorHQLiteKeys.provider(session: session, settings: settings),
                                setupKey: setupKey,
                                resolveKeys: resolveKeys)

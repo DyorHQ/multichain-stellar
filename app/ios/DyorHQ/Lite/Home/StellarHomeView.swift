@@ -16,14 +16,14 @@ struct StellarAssetPage: Hashable, Identifiable {
 }
 
 /// Stellar's Home, laid out as Monad's: the add-funds card while the account needs funds, the balance card (the
-/// network chip, the total and its 24h change, Total Volume, Avail. Balance and In Use, the four-part split), the four
+/// network chip, the total and its 24h change, Total Volume, Avail. Balance and In Use, the four-part split), the
 /// actions, the allocation ring, Top Tokens and My Holdings. Every figure is a viewer or public read (`/v1/holdings`,
 /// `/v1/account`, `/v1/markets`), so Home fills with or without a session; Total Volume is DyorHQ's history
 /// (`/v1/portfolio`), which a passkey account whose session is gone signs in for, only when it taps to (decision 6).
 ///
 /// Nothing locks: after a relaunch, an expired session or the background, Home shows what it saved for the account,
 /// then the fresh figures, with no prompt. Paused (maintenance, an update needed, access turned off), the balance card
-/// says why and offers Monad. A Stellar destination for Home's tab (a bridge's notification) opens over it.
+/// says why and offers Monad.
 struct StellarHomeView: View {
     @Environment(\.stellarSession) private var session
     @Environment(Session.self) private var account
@@ -36,7 +36,6 @@ struct StellarHomeView: View {
     @State private var tokenTab: HomeTokenTab = .popular
     @State private var holdingTab: StellarHoldingCategory = .spot
     @State private var showReceive = false
-    @State private var showBridge = false
     @State private var showSend = false
     @State private var showTransfer = false
     @State private var showSearch = false
@@ -134,7 +133,6 @@ struct StellarHomeView: View {
             .sensoryFeedback(.success, trigger: funding.phase.isArrival) { _, arrived in arrived }
             .overlay { if firstRead { ProgressView().controlSize(.large) } }
             .sheet(isPresented: $showReceive) { StellarReceiveSheet() }
-            .sheet(isPresented: $showBridge) { StellarBridgeView() }
             .sheet(isPresented: $showSend) { StellarSendSheet() }
             .sheet(isPresented: $showTransfer) { StellarTransferSheet(direction: .toEarn, market: nil) }
             .sheet(isPresented: $showSearch) {
@@ -142,11 +140,6 @@ struct StellarHomeView: View {
                     showSearch = false
                     searchTarget = StellarAssetPage(asset: asset)
                 }
-            }
-            .onChange(of: router.pendingStellar, initial: true) { _, pending in
-                guard case .bridge = pending else { return }
-                router.pendingStellar = nil
-                showBridge = true
             }
         }
     }
@@ -189,7 +182,6 @@ struct StellarHomeView: View {
 
     private func addFundsCard(store: LiteStore, address: StellarAccountID) -> some View {
         StellarAddFundsCard(phase: funding.phase, address: address, isTestnet: session?.isTestnet ?? true,
-                            onBridge: { showBridge = true },
                             onShowQR: { showReceive = true },
                             onFriendbot: { try await store.faucet() },
                             onSwap: { sell, buy, starter in router.openStellarSwap(sell: sell, buy: buy, starter: starter) },
@@ -329,8 +321,8 @@ struct StellarHomeView: View {
 
     private var volumeKey: VolumePeriodKey? { VolumePeriodKey(rawValue: router.period.rawValue) }
 
-    /// The period's Total Volume read in this session (`LiteStore.portfolio`).
-    private var liveVolume: Double? { volumeKey.flatMap { store?.portfolio[$0]?.totals.volume } }
+    /// The period's Total Volume read in this session (`LiteStore.portfolio`), as Portfolio totals it.
+    private var liveVolume: Double? { volumeKey.flatMap { store?.portfolio[$0] }.map { StellarPortfolioModel.totals($0).volume } }
 
     private var shownVolume: Double? {
         guard !needsSignIn else { return nil }
@@ -370,12 +362,11 @@ struct StellarHomeView: View {
 
     // MARK: Quick actions
 
-    /// Monad's four actions: Bridge once Home is ready; Deposit whenever the account's address is known; Withdraw and
-    /// Transfer once Home is ready, for an account that can sign on this iPhone.
+    /// Monad's actions but the Bridge, which Stellar doesn't have for now: Deposit whenever the account's address is
+    /// known; Withdraw and Transfer once Home is ready, for an account that can sign on this iPhone. Each takes an equal
+    /// share of the row, as Monad's do.
     private var quickActions: some View {
         HStack(spacing: 10) {
-            StellarHomeAction(title: "Bridge", symbol: "point.3.connected.trianglepath.dotted") { showBridge = true }
-                .disabled(!isReady)
             StellarHomeAction(title: "Deposit", symbol: "creditcard") { showReceive = true }
                 .disabled(session?.address == nil)
             StellarHomeAction(title: "Withdraw", symbol: "arrow.up") { showSend = true }

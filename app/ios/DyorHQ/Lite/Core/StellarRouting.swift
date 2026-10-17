@@ -42,9 +42,10 @@ struct StellarSwapRequest: Hashable {
 /// | `stellar:moment[/<id>]` | Moments; a retired v1 Moment by its number |
 /// | `stellar:moment/<C…>` | A v2 Moment, by its NFT contract |
 /// | `stellar:portfolio` | Portfolio |
-/// | `stellar:bridge[/<id>]` | Bridge |
 ///
-/// The starter swap is never in a reference: a notification never offers DyorHQ's fee again.
+/// The starter swap is never in a reference: a notification never offers DyorHQ's fee again. Stellar has no Bridge for
+/// now: a bridge's reference ("stellar:bridge[/<id>]", from a notification posted before) names no destination, so it
+/// opens Stellar Home (`Router.openStellar(reference:)`).
 enum StellarDestination: Hashable {
     case home
     case swap(StellarSwapRequest)
@@ -55,7 +56,6 @@ enum StellarDestination: Hashable {
     /// A v2 Moment over the Moments tab, by its NFT contract (its id): `StellarMomentDetailView(nft:)`.
     case momentV2(nft: String)
     case portfolio
-    case bridge(id: String?)
 
     /// What starts every Stellar reference.
     static let scheme = "stellar:"
@@ -85,7 +85,6 @@ enum StellarDestination: Hashable {
             if StrKey.isValid(.contract, id) { self = .momentV2(nft: id); return }
             guard id.allSatisfy(\.isASCII), let number = Int(id), number >= 0 else { return nil }
             self = .moment(id: number)
-        case "bridge": self = .bridge(id: id)
         default: return nil
         }
     }
@@ -102,7 +101,6 @@ enum StellarDestination: Hashable {
         case .moment(let id): path = id.map { "moment/\($0)" } ?? "moment"
         case .momentV2(let nft): path = "moment/\(nft)"
         case .portfolio: path = "portfolio"
-        case .bridge(let id): path = id.map { "bridge/\($0)" } ?? "bridge"
         }
         return Self.scheme + path
     }
@@ -110,7 +108,7 @@ enum StellarDestination: Hashable {
     /// The tab it opens; nil for Portfolio, which opens over the tabs.
     var tab: StellarTab? {
         switch self {
-        case .home, .bridge: .home
+        case .home: .home
         case .swap, .earn: .earn
         case .launch: .launch
         case .moment, .momentV2: .moments
@@ -175,12 +173,12 @@ extension Router {
         switch destination {
         case .swap: stellarTradeMode = .swap
         case .earn: stellarTradeMode = .earn
-        case .home, .launch, .moment, .momentV2, .portfolio, .bridge: break
+        case .home, .launch, .moment, .momentV2, .portfolio: break
         }
         switch destination {
         case .home, .portfolio, .earn(market: nil), .launch(token: nil), .moment(id: nil):
             pendingStellar = nil
-        case .swap, .earn, .launch, .moment, .momentV2, .bridge:
+        case .swap, .earn, .launch, .moment, .momentV2:
             pendingStellar = destination
         }
         if destination == .portfolio { presented = .portfolio }

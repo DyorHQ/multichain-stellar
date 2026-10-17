@@ -93,8 +93,8 @@ final class Router {
     var stellarTab: StellarTab = .home
     /// Which side of Stellar's Earn tab is shown (Swap vs Earn): it opens on Earn, and the side stays through tab switches.
     var stellarTradeMode: StellarTradeMode = .earn
-    /// What Stellar's tab opens once it is on screen (a swap's pair, a market, a launch, a Moment, a bridge), set by
-    /// `openStellar` and cleared by the screen that opens it.
+    /// What Stellar's tab opens once it is on screen (a swap's pair, a market, a launch, a Moment), set by `openStellar`
+    /// and cleared by the screen that opens it.
     var pendingStellar: StellarDestination?
     /// Whether the account signed in can use Stellar on this iPhone: the network control offers it and its session exists
     /// (`NetworkRoot.follow`). A Stellar destination switches to Stellar only then (`ensureStellar`).
