@@ -771,7 +771,9 @@ public final class LiteStore {
     }
 
     func limit(_ asset: String, _ amount: String) -> [String: Int64] {
-        let contract = config?.asset(asset)?.contract ?? asset
+        // A classic asset outside the registry (CODE:ISSUER, or native) is capped by its asset contract: the verifier
+        // counts a step's outflow by that contract, so a cap keyed by CODE:ISSUER would match nothing and refuse the run.
+        let contract = config?.asset(asset)?.contract ?? Self.assetContract(asset, network: env.pinned.network) ?? asset
         return [contract: Int64(amount) ?? 0]
     }
 

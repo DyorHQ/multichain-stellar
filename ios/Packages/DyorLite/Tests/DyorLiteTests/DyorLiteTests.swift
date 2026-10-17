@@ -125,6 +125,11 @@ final class KeyProviderTests: XCTestCase {
         let store = LiteStore(env: env, backend: TestBackend(api: LiteAPI(baseURL: env.apiURL)), address: address, monad: nil, config: nil)
         // Without config, an id passes through unchanged (launch tokens are already contract ids).
         XCTAssertEqual(store.limit("CABC", "10"), ["CABC": 10])
+        // A classic asset the registry doesn't list is capped by its asset contract, the id the verifier counts by.
+        let classic = "QAT:\(address)"
+        let sac = LiteStore.assetContract(classic, network: env.pinned.network)!
+        XCTAssertEqual(store.limit(classic, "10"), [sac: 10])
+        XCTAssertEqual(store.limit("native", "5"), [LiteStore.assetContract("native", network: env.pinned.network)!: 5])
     }
 
     func testTheEnvironmentPinsTheMediaBaseUntilTheHostSetsIt() {
