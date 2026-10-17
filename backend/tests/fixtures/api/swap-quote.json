@@ -40,7 +40,7 @@
       "venue": "sdex",
       "amountOut": "18911200",
       "minOut": "18816644",
-      "priceImpactBps": null,
+      "priceImpactBps": 3,
       "path": [
         "native",
         "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"

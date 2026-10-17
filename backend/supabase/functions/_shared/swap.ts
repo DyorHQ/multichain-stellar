@@ -1,16 +1,16 @@
-// Swap aggregation (docs/DESIGN-stellar-parity.md §6.8): SDEX (Horizon path finding), Soroswap (router) and Aquarius
-// (find-path API) quote in parallel; every venue's route is kept with the quote, and /swap/build redeems the one the
-// user picked, the best by default. The swap pays its user (`to` and the minimum out are bound, as WP-11's call rules
-// check). Where activation is sponsored, a swap of a registry asset into XLM by an account with no XLM to spend is the
-// account's one starter swap, which DyorHQ pays for (§4.3).
-import { Asset, Operation, xdr } from "@stellar/stellar-sdk";
+// Swap aggregation (docs/DESIGN-stellar-parity.md §6.8): SDEX (Horizon path finding) and Soroswap (router) quote in
+// parallel, and Aquarius (find-path API) where it is on (SWAP_VENUES); every venue's route that both verifiers would
+// sign is kept with the quote, and /swap/build redeems the one the user picked, the best by default. The swap pays its user (`to` and the minimum out
+// are bound, as WP-11's call rules check). Where activation is sponsored, a swap of a registry asset into XLM by an
+// account with no XLM to spend is the account's one starter swap, which DyorHQ pays for (§4.3).
+import { Address, Asset, Operation, xdr } from "@stellar/stellar-sdk";
 import type { QuoteRoute, StarterSwapReason, SwapQuote, SwapRoute, SwapVenue } from "./contract.ts";
 import { resolveAsset, ResolvedAsset } from "./assets.ts";
 import { sql } from "./db.ts";
 import { env } from "./env.ts";
 import { baseReserve, positionOf, starterSwapEligibility } from "./fees.ts";
 import { ApiError, bad, notFound } from "./http.ts";
-import { assetById } from "./networks.ts";
+import { assetById, contractAllowlist } from "./networks.ts";
 import { createPlan, registerBuilder, StepSpec } from "./plans.ts";
 import { starterUsed } from "./sponsor.ts";
 import { classicAsset, classicBalances, fromStroops, horizon, invoke, newTx, requireAccount, sv, view } from "./stellar.ts";
@@ -35,20 +35,32 @@ interface PricedRoute extends Route {
 
 const VENUE_NAMES: Record<Venue, string> = { sdex: "SDEX", soroswap: "Soroswap", aquarius: "Aquarius" };
 
-async function quoteSdex(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route | null> {
-  if (!sell.classic || !buy.classic) return null;
+/** The venues a quote asks. Aquarius is off for now (decision O7, 2026-10-15: Soroswap only, so Aquarius isn't tested):
+ *  no quote asks find-path, so no Aquarius route or price impact is ever offered. Its quote, impact and builder stay
+ *  here for later. */
+export const SWAP_VENUES: readonly Venue[] = ["sdex", "soroswap"];
+
+/** Every path Horizon finds on the Stellar DEX from `sell` to `buy` for `amountIn`, with what it brings, the best first. */
+async function sdexRoutes(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route[]> {
+  if (!sell.classic || !buy.classic) return [];
   try {
     const call = horizon().strictSendPaths(classicAsset(sell.classic), fromStroops(amountIn), [classicAsset(buy.classic)]);
     const res = await call.call();
-    const best = res.records.sort((a: any, b: any) => Number(b.destination_amount) - Number(a.destination_amount))[0];
-    if (!best) return null;
     const toSpec = (p: any) => (p.asset_type === "native" ? "native" : `${p.asset_code}:${p.asset_issuer}`);
-    const [i, f = ""] = String(best.destination_amount).split(".");
-    const out = BigInt(i) * 10_000_000n + BigInt((f + "0000000").slice(0, 7));
-    return { venue: "sdex", amountOut: out.toString(), path: [sell.classic, ...best.path.map(toSpec), buy.classic] };
+    return res.records
+      .sort((a: any, b: any) => Number(b.destination_amount) - Number(a.destination_amount))
+      .map((r: any): Route => {
+        const [i, f = ""] = String(r.destination_amount).split(".");
+        const out = BigInt(i) * 10_000_000n + BigInt((f + "0000000").slice(0, 7));
+        return { venue: "sdex", amountOut: out.toString(), path: [sell.classic!, ...r.path.map(toSpec), buy.classic!] };
+      });
   } catch {
-    return null;
+    return [];
   }
+}
+
+async function quoteSdex(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<Route | null> {
+  return (await sdexRoutes(sell, buy, amountIn))[0] ?? null;
 }
 
 /** Soroswap's output for `amountIn` along `path`, or null. */
@@ -91,18 +103,69 @@ async function quoteAquarius(sell: ResolvedAsset, buy: ResolvedAsset, amountIn: 
   }
 }
 
+/** The tokens a route's contract call runs the code of, as both verifiers read them from the call (verify.ts
+ *  routeListed, TxVerifier): a Soroswap path, or each hop's pool tokens and token out of an Aquarius chain; null for a
+ *  chain that isn't (tokens, pool, token out) hops. None for the Stellar DEX: a path payment runs no token code. */
+function routeTokens(route: Route): string[] | null {
+  if (route.venue === "sdex") return [];
+  if (route.venue === "soroswap") return route.path;
+  try {
+    const hops = xdr.ScVal.fromXDR(String(route.chainXdr), "base64").vec();
+    if (!hops || hops.length === 0) return null;
+    const tokens: string[] = [];
+    for (const h of hops) {
+      const hop = h.vec();
+      const pool = hop?.length === 3 ? hop[0].vec() : null;
+      if (!hop || !pool) return null;
+      tokens.push(...pool.map((t) => Address.fromScAddress(t.address()).toString()), Address.fromScAddress(hop[2].address()).toString());
+    }
+    return tokens;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether both verifiers would sign `route`: every token it goes through is on the allowlist, but for the one sold and
+ *  the one bought, the user's own choice. A route through any other token is never offered, since /swap/build would
+ *  be refused for it (testnet's Aquarius routes XLM → USDC through AQUA and USDT). */
+function signable(route: Route, sell: ResolvedAsset, buy: ResolvedAsset): boolean {
+  const tokens = routeTokens(route);
+  if (tokens === null) return false;
+  const listed = new Set(Object.values(contractAllowlist(env.network)).flat());
+  return tokens.every((t) => t === sell.contract || t === buy.contract || listed.has(t));
+}
+
 function pickBest(routes: Route[]): Route | null {
   const valid = routes.filter((r) => BigInt(r.amountOut) > 0n);
   if (valid.length === 0) return null;
   return valid.reduce((a, b) => (BigInt(b.amountOut) > BigInt(a.amountOut) ? b : a));
 }
 
-/** Soroswap's price impact in basis points: how much worse the rate for `amountIn` is than for a thousandth of it.
- *  Null where the small trade rounds to nothing. */
-async function soroswapImpact(route: Route, amountIn: bigint): Promise<number | null> {
+/** What `route`'s venue brings for `amountIn` along the very same way: Soroswap's path, the Stellar DEX's path when
+ *  Horizon still finds it, Aquarius's chain when find-path answers that amount with the same one. Null when the venue
+ *  doesn't answer, or answers along another path or chain: that prices other pools, so it never stands in. */
+async function venueOut(route: Route, sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<bigint | null> {
+  switch (route.venue) {
+    case "soroswap":
+      return await soroswapOut(route.path, amountIn);
+    case "sdex": {
+      const same = (await sdexRoutes(sell, buy, amountIn)).find((r) => r.path.join() === route.path.join());
+      return same ? BigInt(same.amountOut) : null;
+    }
+    case "aquarius": {
+      const found = await quoteAquarius(sell, buy, amountIn);
+      return found && found.chainXdr === route.chainXdr ? BigInt(found.amountOut) : null;
+    }
+  }
+}
+
+/** A route's price impact in basis points, for every venue as Monad works it out for its pools: how much worse the rate
+ *  for `amountIn` is than the same path's rate for a thousandth of it. Null where the small trade rounds to nothing, or
+ *  the venue doesn't answer it along that path (`venueOut`). */
+async function priceImpact(route: Route, sell: ResolvedAsset, buy: ResolvedAsset, amountIn: bigint): Promise<number | null> {
   const small = amountIn / 1_000n;
   if (small === 0n) return null;
-  const smallOut = await soroswapOut(route.path, small);
+  const smallOut = await venueOut(route, sell, buy, small);
   if (!smallOut || smallOut === 0n) return null;
   // rate(full) / rate(small) = (out × small) / (smallOut × amountIn)
   const ratio = (BigInt(route.amountOut) * small * 10_000n) / (smallOut * amountIn);
@@ -140,23 +203,30 @@ async function starterSwapFor(user: string, sell: ResolvedAsset, buy: ResolvedAs
   return starterSwapEligibility({ ...input, used: await starterUsed(user) }, policy);
 }
 
-export async function quote(user: string, sellId: string, buyId: string, amountIn: bigint, slippageBps: number): Promise<SwapQuote> {
+/** POST /v1/swap/quote: every route of `venues` (Swap's, SWAP_VENUES) for `amountIn` of `sellId`, the best first. */
+export async function quote(user: string, sellId: string, buyId: string, amountIn: bigint, slippageBps: number,
+  venues: readonly Venue[] = SWAP_VENUES): Promise<SwapQuote> {
   const sell = await resolveAsset(sellId);
   const buy = await resolveAsset(buyId);
   if (sell.contract === buy.contract) throw bad("same_asset", "Pick two different assets.");
   if (slippageBps < 1 || slippageBps > 1_000) throw bad("bad_slippage", "Slippage must be between 0.01% and 10%.");
+  const ask = (venue: Venue, find: () => Promise<Route | null>) => (venues.includes(venue) ? find() : Promise.resolve(null));
   const [found, account] = await Promise.all([
-    Promise.all([quoteSdex(sell, buy, amountIn), quoteSoroswap(sell, buy, amountIn), quoteAquarius(sell, buy, amountIn)]),
+    Promise.all([
+      ask("sdex", () => quoteSdex(sell, buy, amountIn)),
+      ask("soroswap", () => quoteSoroswap(sell, buy, amountIn)),
+      ask("aquarius", () => quoteAquarius(sell, buy, amountIn)),
+    ]),
     holder(user, buy),
   ]);
-  const routes = found.filter((r): r is Route => r !== null && BigInt(r.amountOut) > 0n);
+  const routes = found.filter((r): r is Route => r !== null && BigInt(r.amountOut) > 0n && signable(r, sell, buy));
   const best = pickBest(routes);
   if (!best) throw new ApiError(404, "no_route", `No route from ${sell.code} to ${buy.code} right now.`);
   const ranked = [best, ...routes.filter((r) => r !== best).sort((a, b) => (BigInt(b.amountOut) > BigInt(a.amountOut) ? 1 : -1))];
   const priced: PricedRoute[] = await Promise.all(ranked.map(async (r) => ({
     ...r,
     minOut: minOut(r.amountOut, slippageBps),
-    priceImpactBps: r.venue === "soroswap" ? await soroswapImpact(r, amountIn) : null,
+    priceImpactBps: await priceImpact(r, sell, buy, amountIn),
   })));
   const starterSwap = await starterSwapFor(user, sell, buy, account.spendable, priced[0].minOut);
   const request = { sell: sell.id, buy: buy.id, amountIn: amountIn.toString(), slippageBps };

@@ -96,7 +96,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     return Response.json({ _embedded: { records: [{ base_reserve_in_stroops: 5_000_000, base_fee_in_stroops: 100 }] }, _links: {} });
   }
   if (url.host === "horizon-testnet.stellar.org" && url.pathname === "/paths/strict-send") {
-    return Response.json({ _embedded: { records: [{ destination_amount: "1.8911200", path: [] }] }, _links: {} });
+    // 10 XLM, and the thousandth of it the price impact is read against.
+    const amount = Number(url.searchParams.get("source_amount"));
+    const out = amount === 10 ? "1.8911200" : amount === 0.01 ? "0.0018915" : null;
+    return Response.json({ _embedded: { records: out ? [{ destination_amount: out, path: [] }] : [] }, _links: {} });
   }
   if (url.host === "soroban-testnet.stellar.org") {
     const body = await req.json();

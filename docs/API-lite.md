@@ -378,7 +378,7 @@ last amount, Soroswap's last `Vec<i128>` element, Aquarius's `u128`, a curve buy
 | `quoteId`, `sell`, `buy`, `amountIn`, `slippageBps`, `expiresAt` | |
 | `best` | `{venue, amountOut, path, minOut}`, kept for older clients. |
 | `alternatives[]` | `{venue, amountOut, path}`, kept for older clients. |
-| `routes[]` *added* | Every venue that answered: `{venue, amountOut, minOut, priceImpactBps, path, best}`. `venue` is `sdex`, `soroswap` or `aquarius`; `priceImpactBps` is null where unknown. |
+| `routes[]` *added* | Every venue that answered: `{venue, amountOut, minOut, priceImpactBps, path, best}`. `venue` is `sdex` or `soroswap`; `aquarius` is off for now (decision O7). `priceImpactBps` compares the rate with the same path's rate for a thousandth of the amount, and is null where unknown, or where the venue answers that size along another path. |
 | `needsEnable` *added* | Asset ids to enable before receiving (the build adds a user-paid `trust` step). |
 | `starterSwap` *added* | `{eligible, reason}`. `reason` when not eligible: `activation` (the network doesn't sponsor), `buy_not_xlm`, `sell_not_registry`, `has_xlm` (spendable ≥ 0.05 XLM), `too_small` (min out < 1 XLM), `used`. |
 

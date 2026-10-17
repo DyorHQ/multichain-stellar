@@ -12,8 +12,9 @@ import SwiftUI
 ///
 /// The review shows what the transaction is bound to, from the plan itself (§5.2): every amount the user pays ("You pay",
 /// or "You pay at most" where the contract may take less), the minimum it must bring back ("Minimum"), the account it
-/// pays (`intent.to`) and its memo. The caller's `details` add what the plan can't say (a route, a rate). Then each asset
-/// the plan enables and its reserve, any archived data it restores, the most its network fees can come to (or, when the
+/// pays (`intent.to`, unless the plan may pay only the user's own) and its memo. The caller's `details` add what the
+/// plan can't say (a route, a rate); Swap's review puts them in Monad's order instead (`receives`). Then each asset the
+/// plan enables and its reserve, any archived data it restores, the most its network fees can come to (or, when the
 /// phone checked it, that DyorHQ pays), and whether the account's XLM covers it all.
 ///
 /// Signing follows Monad's Confirm (decision 6): Confirm runs the plan (`LiteStore.run`), whose key provider asks for Face
@@ -35,11 +36,19 @@ struct StellarConfirmationSheet<Details: View>: View {
     /// The caller's own guard on the built plan (a Moment's terms that changed since the form was filled, §8.11.4): its
     /// message, and Confirm stays off; nil when the plan may go.
     var check: ((PreparedAction) -> LocalizedStringResource?)? = nil
+    /// Swap's review (§8.6.1): what the quote brings, shown in Monad's swap order. The plan's spends ("You pay"), then
+    /// "You receive" with this amount, then the plan's minimum as "Minimum received", then `details`. Nil for every other
+    /// review: `details`, then the plan's rows.
+    var receives: String? = nil
+    /// What the caller's screen called the assets it trades, by id and contract (Swap's two sides): they name the plan's
+    /// rows for an asset the registry doesn't list (`StellarBoundRows.named`).
+    var named: [String: StellarBoundRows.Name] = [:]
     @ViewBuilder var details: Details
 
     init(title: LocalizedStringResource, confirmTitle: LocalizedStringResource, build: @escaping () async throws -> PreparedAction,
          onDone: @escaping () -> Void, onCompleted: (([TxStatus]) -> Void)? = nil, onView: ((String) -> Void)? = nil,
-         check: ((PreparedAction) -> LocalizedStringResource?)? = nil, @ViewBuilder details: () -> Details) {
+         check: ((PreparedAction) -> LocalizedStringResource?)? = nil, receives: String? = nil, named: [String: StellarBoundRows.Name] = [:],
+         @ViewBuilder details: () -> Details) {
         self.title = title
         self.confirmTitle = confirmTitle
         self.build = build
@@ -47,6 +56,8 @@ struct StellarConfirmationSheet<Details: View>: View {
         self.onCompleted = onCompleted
         self.onView = onView
         self.check = check
+        self.receives = receives
+        self.named = named
         self.details = details()
     }
 
@@ -88,8 +99,17 @@ struct StellarConfirmationSheet<Details: View>: View {
         NavigationStack {
             List {
                 Section {
-                    details
-                    if let action { StellarBoundRows(action: action, store: store) }
+                    if let receives {
+                        // Monad's swap rows, in Monad's order.
+                        if let action { StellarBoundRows(action: action, store: store, parts: [.spends], named: named) }
+                        DetailRow("You receive", verbatim: receives)
+                        if let action { StellarBoundRows(action: action, store: store, parts: [.minimums], minimumReceived: true, named: named) }
+                        details
+                        if let action { StellarBoundRows(action: action, store: store, parts: [.destination]) }
+                    } else {
+                        details
+                        if let action { StellarBoundRows(action: action, store: store, named: named) }
+                    }
                 } header: {
                     if AppNetwork.stellar.isTestnet { StellarNetworkLine() }
                 } footer: {
@@ -499,21 +519,48 @@ struct StellarXLMShortage: Equatable {
 
 /// The review's rows that come from the plan itself, as the phone checks it before signing (§5.2): what the user pays,
 /// the least it must bring back, the account it pays and its memo. Never a display string the server chose.
-private struct StellarBoundRows: View {
+struct StellarBoundRows: View {
+    /// The plan's rows, in the order they show.
+    enum Part { case spends, minimums, destination }
+
     let action: PreparedAction
     let store: LiteStore?
+    /// The rows shown: every one, unless a review places them among its own (Swap's, in Monad's order).
+    var parts: Set<Part> = [.spends, .minimums, .destination]
+    /// The minimum's label: Monad's swap says "Minimum received"; every other review "Minimum".
+    var minimumReceived = false
+    /// What the review's own screen called an asset, by its id and the contract the phone derives from it (Swap's two
+    /// sides, as Monad's review names both by symbol): it names a row for an asset the registry doesn't list (a DyorHQ
+    /// coin, a pasted asset) before anything a step's intent says, and reads its units at the decimals that screen used.
+    var named: [String: Name] = [:]
+
+    /// An asset as a row names it: its code, and the decimals its units are read at.
+    struct Name: Equatable {
+        let code: String
+        var decimals = StellarFormat.decimals
+    }
 
     var body: some View {
-        ForEach(spends, id: \.asset) { spend in
-            DetailRow(spend.atMost
-                      ? Text("You pay at most", tableName: "StellarReview", comment: "The Stellar review: the most this transaction may spend of an asset (the contract may take less)")
-                      : Text("You pay"),
-                      Text(verbatim: StellarFormat.amount(spend.units, code: code(spend.asset))))
+        if parts.contains(.spends) {
+            ForEach(spends, id: \.asset) { spend in
+                DetailRow(spend.atMost
+                          ? Text("You pay at most", tableName: "StellarReview", comment: "The Stellar review: the most this transaction may spend of an asset (the contract may take less)")
+                          : Text("You pay"),
+                          Text(verbatim: amount(spend)))
+            }
         }
-        ForEach(minimums, id: \.asset) { minimum in
-            DetailRow(Text("Minimum"), Text(verbatim: StellarFormat.amount(minimum.units, code: code(minimum.asset))))
+        if parts.contains(.minimums) {
+            ForEach(minimums, id: \.asset) { minimum in
+                DetailRow(minimumReceived ? Text("Minimum received") : Text("Minimum"), Text(verbatim: amount(minimum)))
+            }
         }
-        if let to = intents.lazy.compactMap(\.to).first {
+        if parts.contains(.destination) { destination }
+    }
+
+    /// The account the plan pays and its memo. No "To" for a plan the run holds to the user's own account (`.own`, as a
+    /// swap's): every step may pay only the user, so there is no other address to check.
+    @ViewBuilder private var destination: some View {
+        if let to = Self.recipient(action.bindings, intents: intents) {
             // The whole address the transaction pays, never a short form: a look-alike address can share its first and
             // last characters, so the user checks every one (§5.2). Monospaced, selectable, read out character by character.
             LabeledContent {
@@ -539,6 +586,13 @@ private struct StellarBoundRows: View {
                       Text(verbatim: memo.value))
                 .textSelection(.enabled)
         }
+    }
+
+    /// The address the review shows as "To": the first a step's intent names, unless the plan is bound to the user's own
+    /// account (`PlanBindings.Destination.own`), under which the run refuses any other address.
+    static func recipient(_ bindings: PlanBindings, intents: [Intent]) -> String? {
+        guard bindings.destination != .own else { return nil }
+        return intents.lazy.compactMap(\.to).first
     }
 
     private var intents: [Intent] { action.plan.steps.compactMap(\.intent) }
@@ -570,15 +624,22 @@ private struct StellarBoundRows: View {
         return found.sorted { $0.key < $1.key }.map { Line(asset: $0.key, units: $0.value) }
     }
 
-    /// An asset's code: the registry's, else what a step's intent calls it, else its short contract id.
-    private func code(_ asset: String) -> String {
-        if let known = store?.asset(asset)?.code { return known }
+    private func amount(_ line: Line) -> String {
+        let name = Self.name(line.asset, store: store, named: named, intents: intents)
+        return StellarFormat.amount(line.units, code: name.code, decimals: name.decimals)
+    }
+
+    /// An asset's name: the registry's code, else what the review's screen called it (`named`), else what a step's
+    /// intent calls it, else its short contract id.
+    static func name(_ asset: String, store: LiteStore?, named: [String: Name], intents: [Intent]) -> Name {
+        if let known = store?.asset(asset)?.code { return Name(code: known) }
+        if let shown = named[asset] { return shown }
         for intent in intents {
             let display = intent.display ?? [:]
-            if case .string(let token)? = display["token"], token == asset, case .string(let symbol)? = display["symbol"] { return symbol }
+            if case .string(let token)? = display["token"], token == asset, case .string(let symbol)? = display["symbol"] { return Name(code: symbol) }
         }
-        if asset == "native" { return "XLM" }
-        return StellarAccountID(asset)?.short ?? asset
+        if asset == "native" { return Name(code: "XLM") }
+        return Name(code: StellarAccountID(asset)?.short ?? asset)
     }
 }
 #endif
