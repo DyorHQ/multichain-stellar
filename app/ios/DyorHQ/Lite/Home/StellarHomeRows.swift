@@ -229,6 +229,8 @@ struct StellarLaunchHoldingRow: View {
 /// what it has earned in dollars, unknown ("—") in the public view, which has none of DyorHQ's records.
 struct StellarEarnPositionRow: View {
     let position: EarnPosition
+    /// Blend's markets as last read, which price the earnings.
+    @Environment(\.stellarSession) private var session
 
     var body: some View {
         HStack(spacing: 12) {
@@ -248,7 +250,7 @@ struct StellarEarnPositionRow: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                if let earned = Self.earnedUsd(position) {
+                if let earned = Self.earnedUsd(position, markets: session?.store?.earnMarkets ?? []) {
                     Text(PriceFormat.usdValue(earned, signed: true))
                         .font(.subheadline.weight(.medium)).monospacedDigit()
                         .foregroundStyle(earned < 0 ? Color.negative : earned > 0 ? Color.positive : Color.primary)
@@ -263,11 +265,10 @@ struct StellarEarnPositionRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// What the position has earned, in dollars at the price its value is counted at (its value over the amount
-    /// supplied, both in the asset's base units); nil when DyorHQ has no record of it (the public view), when the record
-    /// misses a deposit, or nothing prices it: Earn's own figure (`StellarEarnModel.earnedUsd`).
-    static func earnedUsd(_ position: EarnPosition) -> Double? {
-        StellarEarnModel.earnedUsd(position)
+    /// What the position has earned, in dollars at its market's price; nil when DyorHQ has no record of it (the public
+    /// view), when the record misses a deposit, or nothing prices it: Earn's own figure (`StellarEarnModel.earnedUsd`).
+    static func earnedUsd(_ position: EarnPosition, markets: [EarnMarket]) -> Double? {
+        StellarEarnModel.earnedUsd(position, market: StellarEarnModel.market(of: position, in: markets))
     }
 }
 

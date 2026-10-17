@@ -44,8 +44,9 @@ enum StellarRateRange: String, CaseIterable, Identifiable {
 /// Earn's reads and rules, as Monad's `PerpsModel` keeps Perps'. Blend's markets are public and the account's positions a
 /// viewer read (`/v1/holdings`' Earn part), so Earn fills with or without a session (decision 6): in the public view a
 /// position's `earned` is nil, and Earn shows that figure unread, never 0. The figures live in `LiteStore`; this model
-/// reads them again every 30 seconds while Earn is on screen, keeps the rate history and the Blend test asset's swap
-/// route, and holds the ticket's rules, which the screen and the tests share.
+/// reads them again every 30 seconds while Earn is on screen, keeps the rate history, the History tab's deposits and
+/// withdrawals (apart from the account's activity, which other screens word their rows from) and the Blend test asset's
+/// swap route, and holds the ticket's rules, which the screen and the tests share.
 @MainActor
 @Observable
 final class StellarEarnModel {
@@ -65,13 +66,13 @@ final class StellarEarnModel {
         let points: [StellarEarnHistory.Point]
     }
 
-    /// Every position's figures together, for the Assets tab and Portfolio's Earn card: each nil while it can't be told (a
-    /// position or a balance not priced, a record DyorHQ doesn't have), never 0.
+    /// Every position's figures together, for the Assets tab: each nil while it can't be told (a position or a balance not
+    /// priced, a record DyorHQ doesn't have), never 0.
     struct Totals: Equatable {
         /// What every position is worth now, in dollars.
         let supplied: Double?
-        /// What the positions have earned so far, in dollars at the prices their values are counted at: those whose
-        /// earnings are known, nil when none's are (the public view).
+        /// What the positions have earned so far, in dollars at their markets' prices: those whose earnings are known, nil
+        /// when none's are (the public view).
         let earned: Double?
         /// Whether `earned` counts every position: false when one's earnings aren't known (a deposit DyorHQ has no record
         /// of, a position with no price), so `earned` is a lower bound, shown with "*" as Portfolio's P&L is.
@@ -90,8 +91,19 @@ final class StellarEarnModel {
     private(set) var historyLoading = false
     /// Whether a swap into a pool's own test asset finds a route, by market id: absent until a quote said.
     private(set) var routes: [String: Bool] = [:]
+    /// The History tab's last read: one market's deposits and withdrawals.
+    private(set) var marketActivity: MarketActivity?
     private var loads = 0
     @ObservationIgnored private var historyGeneration = 0
+    @ObservationIgnored private var activityGeneration = 0
+
+    /// One market's deposits and withdrawals as the History tab shows them, with how their last read went: the items stay
+    /// on screen while a later read fails.
+    struct MarketActivity: Equatable {
+        let market: String
+        var items: [StellarActivityItem]
+        var status: LiteReadStatus
+    }
 
     /// A market and a range of the rate chart.
     struct RateKey: Hashable {
@@ -153,6 +165,34 @@ final class StellarEarnModel {
     /// Whether the last history read of `market` over `range` failed.
     func historyFailed(market: EarnMarket, range: StellarRateRange) -> Bool {
         failedHistory == RateKey(market: market.id, range: range)
+    }
+
+    /// `market`'s deposits and withdrawals (`/v1/activity?section=earn&market=<pool>:<asset>`, DyorHQ's history), read on
+    /// their own: the account's activity in `LiteStore`, which Portfolio and Recent Activity word their rows from, stays as
+    /// it was. A passkey account with no session gets `.needsSignIn`, and nothing asks. A read that a later one overtook
+    /// changes nothing.
+    func loadActivity(store: LiteStore, market: EarnMarket) async {
+        activityGeneration &+= 1
+        let generation = activityGeneration
+        let status: LiteReadStatus
+        var items: [StellarActivityItem]?
+        do {
+            items = Self.history(try await store.earnActivity(pool: market.pool, asset: market.asset), market: market)
+            status = .read
+        } catch LiteAPIError.notSignedIn {
+            status = .needsSignIn
+        } catch {
+            status = .failed
+        }
+        guard generation == activityGeneration else { return }
+        let kept = marketActivity?.market == market.id ? marketActivity?.items ?? [] : []
+        marketActivity = MarketActivity(market: market.id, items: items ?? kept, status: status)
+    }
+
+    /// The History tab's items and status for `market`: none and unread until its own read answered.
+    func activity(for market: EarnMarket) -> MarketActivity {
+        guard let marketActivity, marketActivity.market == market.id else { return MarketActivity(market: market.id, items: [], status: .unread) }
+        return marketActivity
     }
 
     /// Asks Swap whether `twin` (the wallet's asset) can be swapped into `own` (a pool's own test asset), once per market:
@@ -220,6 +260,26 @@ final class StellarEarnModel {
         canSign && position.map { units($0.supplied) > 0 } == true
     }
 
+    /// Whether a withdrawal of `amount` takes the whole position (`supplied`, as last read): it then asks for everything,
+    /// with the interest earned until it goes through, so nothing stays behind in the pool; `amount` is the least it
+    /// receives.
+    static func takesEverything(_ side: Side, amount: Int64, supplied: Int64) -> Bool {
+        side == .withdraw && supplied > 0 && amount >= supplied
+    }
+
+    /// "Blend · TestnetV2": the protocol and the pool, the pool's name without the "Blend" it may already start with.
+    static func poolLabel(_ poolName: String) -> String {
+        let pool = poolShortName(poolName)
+        return pool.isEmpty ? "Blend" : "Blend · \(pool)"
+    }
+
+    /// The pool's own name, "TestnetV2" of "Blend TestnetV2", for where Blend is already said.
+    static func poolShortName(_ poolName: String) -> String {
+        let name = poolName.trimmingCharacters(in: .whitespaces)
+        guard name.lowercased().hasPrefix("blend ") else { return name.lowercased() == "blend" ? "" : name }
+        return String(name.dropFirst("blend ".count)).trimmingCharacters(in: .whitespaces)
+    }
+
     /// What's wrong with `amount` (base units, nil when the field isn't a number) for `side`, in the app's language; nil
     /// when the review may open. A deposit spends at most what's available (`LiteStore.maxAmount`: for XLM, what keeps
     /// the network fee and the minimum balance back), a withdrawal takes back at most what's supplied.
@@ -272,12 +332,18 @@ final class StellarEarnModel {
         return position.earned.flatMap { Int64($0) }
     }
 
-    /// What a position has earned in dollars, at the price its value is counted at; nil without a record or a value.
-    static func earnedUsd(_ position: EarnPosition) -> Double? {
-        guard let earned = earned(position), let value = position.valueUsd, value.isFinite else { return nil }
-        let supplied = units(position.supplied)
-        guard supplied > 0 else { return nil }
-        return Double(earned) / Double(supplied) * value
+    /// The market a position is in: its pool's market for its asset, else another pool's market for the asset (priced and
+    /// counted the same); nil when the markets aren't read.
+    static func market(of position: EarnPosition, in markets: [EarnMarket]) -> EarnMarket? {
+        markets.first { $0.pool == position.pool && $0.asset == position.asset } ?? markets.first { $0.asset == position.asset }
+    }
+
+    /// What a position has earned in dollars, at its market's price (the reference price Blend's figures are valued at,
+    /// as Portfolio's P&L values them); nil without a record or a price. Never derived from the position's value, which is
+    /// rounded to the cent: a small position's would price its earnings wrong, and an emptied one's not at all.
+    static func earnedUsd(_ position: EarnPosition, market: EarnMarket?) -> Double? {
+        guard let earned = earned(position), let market, let price = market.priceUsd, price.isFinite, price >= 0 else { return nil }
+        return whole(earned, decimals: market.decimals) * price
     }
 
     /// Every position together, and what the wallet holds of the markets' assets (`spot`: nil while the holdings aren't
@@ -286,7 +352,7 @@ final class StellarEarnModel {
         let held = positions.filter { units($0.supplied) > 0 }
         let values = held.map(\.valueUsd)
         let supplied: Double? = values.contains(where: { $0 == nil }) ? nil : values.reduce(0) { $0 + ($1 ?? 0) }
-        let earnings = held.map(earnedUsd)
+        let earnings = held.map { earnedUsd($0, market: market(of: $0, in: markets)) }
         let known = earnings.compactMap { $0 }
         let earned: Double? = !held.isEmpty && known.isEmpty ? nil : known.reduce(0, +)
         var weighted = 0.0
@@ -305,11 +371,17 @@ final class StellarEarnModel {
         return Totals(supplied: supplied, earned: earned, earnedComplete: known.count == held.count, averageApy: averageApy, wallet: wallet)
     }
 
-    /// What the account's positions have earned so far, in dollars, as Earn's Assets tab and Portfolio's Earn card show it:
-    /// signed, with "*" when a position's earnings aren't known (a lower bound, as Portfolio's P&L); nil (unread) while
-    /// none are known.
+    /// What the account's positions have earned so far, in dollars, as Earn's Assets tab shows it: signed, with "*" when a
+    /// position's earnings aren't known (a lower bound, as Portfolio's P&L); nil (unread) while none are known.
     static func earnedText(_ totals: Totals) -> String? {
         totals.earned.map { PriceFormat.usdValue($0, signed: true) + (totals.earnedComplete ? "" : "*") }
+    }
+
+    /// What the account's Earn has earned so far, as Portfolio's Earn card says it whatever the period: the all-time Earn
+    /// P&L (`/v1/portfolio?period=all`), which counts every market with a recorded deposit, open or withdrawn in full, at
+    /// today's prices, with "*" when one's earnings aren't known.
+    static func earnedSoFarText(_ lifetime: StellarPortfolioModel.Stats) -> String {
+        PriceFormat.usdValue(lifetime.pnl, signed: true) + (lifetime.pnlComplete ? "" : "*")
     }
 
     /// The account's deposits into and withdrawals from `market`, from the activity read (`/v1/activity`, which keys an

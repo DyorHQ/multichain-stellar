@@ -1,8 +1,9 @@
 // Stellar's Earn (docs/DESIGN-stellar-parity.md §8.6.3; decision 6): the pool status chip and a frozen pool's Deposit,
-// the default market, the ticket's rules (Max, the percent buttons, what a deposit and a withdrawal may take), the
-// estimated interest, the earned figure unread in the public view, the Assets totals, the History tab's rows, Blend's test
-// USDC and its swap, the rate chart's points and range, the market picker's search, Earn's destinations, and the source
-// rules Earn keeps.
+// the default market, the ticket's rules (Max, the percent buttons, what a deposit and a withdrawal may take, a
+// withdrawal of everything), the pool's name, the estimated interest, the earned figure unread in the public view and
+// priced at its market's price, the Assets totals, the History tab's rows and their read (which leaves the account's
+// activity as other screens read it), Portfolio's "Earned so far", Blend's test USDC and its swap, the rate chart's points
+// and range, the market picker's search, Earn's destinations, and the source rules Earn keeps.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -148,6 +149,13 @@ final class StellarEarnTests: XCTestCase {
         XCTAssertNil(StellarEarnModel.problem(.withdraw, amount: 50, available: 0, supplied: 50), "the whole position, with nothing in the wallet")
         XCTAssertEqual(StellarEarnModel.problem(.withdraw, amount: 51, available: 1_000, supplied: 50)?.table, "StellarEarn")
 
+        // The whole position typed (or Withdraw on the Position card) asks for everything: the supplied figure read is the
+        // least that arrives, and the interest earned since comes too, so no dust stays in the pool.
+        XCTAssertTrue(StellarEarnModel.takesEverything(.withdraw, amount: 1_000_000_526, supplied: 1_000_000_526))
+        XCTAssertFalse(StellarEarnModel.takesEverything(.withdraw, amount: 1_000_000_525, supplied: 1_000_000_526), "part of it: that amount")
+        XCTAssertFalse(StellarEarnModel.takesEverything(.deposit, amount: 50, supplied: 50), "a deposit is of its amount")
+        XCTAssertFalse(StellarEarnModel.takesEverything(.withdraw, amount: 50, supplied: 0), "no position")
+
         // The field: a plain decimal in the asset's decimals, a decimal comma read as a point, nothing else.
         XCTAssertEqual(StellarEarnModel.amount("12.5", decimals: 7), 125_000_000)
         XCTAssertEqual(StellarEarnModel.amount("0,5", decimals: 7), 5_000_000)
@@ -162,6 +170,16 @@ final class StellarEarnTests: XCTestCase {
         XCTAssertEqual(StellarEarnModel.share(100, of: 1_000_000_003), 1_000_000_003)
         XCTAssertEqual(StellarEarnModel.share(50, of: 0), 0)
         XCTAssertEqual(StellarFormat.plain(units: StellarEarnModel.share(50, of: 125_000_001)), "6.25", "the field reads back as written")
+    }
+
+    /// The pool's server name already says Blend ("Blend TestnetV2"): the chip, the review and VoiceOver say it once.
+    func testThePoolIsNamedWithBlendOnce() throws {
+        XCTAssertEqual(StellarEarnModel.poolLabel(try market().poolName), "Blend · TestnetV2", "§8.6.3's chip")
+        XCTAssertEqual(StellarEarnModel.poolShortName("Blend TestnetV2"), "TestnetV2", "VoiceOver: Lends through Blend, pool TestnetV2")
+        XCTAssertEqual(StellarEarnModel.poolLabel("Fixed XLM-USDC"), "Blend · Fixed XLM-USDC", "a name without Blend keeps all of it")
+        XCTAssertEqual(StellarEarnModel.poolLabel("blend  YieldBlox "), "Blend · YieldBlox")
+        XCTAssertEqual(StellarEarnModel.poolLabel("Blend"), "Blend")
+        XCTAssertEqual(StellarEarnModel.poolShortName("Blendex"), "Blendex", "only the word Blend")
     }
 
     func testTheEstimatedYearlyInterestIsTheAmountAtTodaysRate() throws {
@@ -187,16 +205,17 @@ final class StellarEarnTests: XCTestCase {
 
     func testTheEarnedFigureIsUnreadInThePublicViewNeverZero() throws {
         let owner = try position(earned: "10000000")
+        let xlm = try market(priceUsd: 0.1901)
         XCTAssertEqual(StellarEarnModel.earned(owner), 10_000_000)
-        XCTAssertEqual(try XCTUnwrap(StellarEarnModel.earnedUsd(owner)), 0.1901, accuracy: 1e-12, "1 XLM earned of 100 supplied worth $19.01")
+        XCTAssertEqual(try XCTUnwrap(StellarEarnModel.earnedUsd(owner, market: xlm)), 0.1901, accuracy: 1e-12, "1 XLM earned, at XLM's $0.1901")
         let publicView = try position(earned: nil)
         XCTAssertNil(StellarEarnModel.earned(publicView), "the public view has no record")
-        XCTAssertNil(StellarEarnModel.earnedUsd(publicView))
-        let onlyPublic = StellarEarnModel.totals(positions: [publicView], markets: [], spot: nil)
+        XCTAssertNil(StellarEarnModel.earnedUsd(publicView, market: xlm))
+        let onlyPublic = StellarEarnModel.totals(positions: [publicView], markets: [xlm], spot: nil)
         XCTAssertNil(onlyPublic.earned, "nothing known: unread, never $0")
         XCTAssertNil(StellarEarnModel.earnedText(onlyPublic))
         // Short of one, the total is what is known, said to be a lower bound as Portfolio's P&L is.
-        let mixed = StellarEarnModel.totals(positions: [owner, publicView], markets: [], spot: nil)
+        let mixed = StellarEarnModel.totals(positions: [owner, publicView], markets: [xlm], spot: nil)
         XCTAssertEqual(try XCTUnwrap(mixed.earned), 0.1901, accuracy: 1e-12)
         XCTAssertFalse(mixed.earnedComplete)
         XCTAssertEqual(StellarEarnModel.earnedText(mixed), "+$0.19*")
@@ -206,23 +225,49 @@ final class StellarEarnTests: XCTestCase {
     }
 
     /// A position whose deposit DyorHQ has no record of (made elsewhere, or before deposits were recorded): the server's
-    /// `earned` is then the whole position, which isn't earnings, so Earn, Home and Portfolio show it unknown.
+    /// `earned` is then the whole position, which isn't earnings, so Earn and Home show it unknown.
     func testAPositionWithNoRecordedDepositShowsNoEarnings() throws {
+        let xlm = try market(priceUsd: 0.1901)
         let elsewhere = try position(earned: "1000000000", complete: false)
         XCTAssertNil(StellarEarnModel.earned(elsewhere), "100 XLM supplied isn't 100 XLM earned")
-        XCTAssertNil(StellarEarnModel.earnedUsd(elsewhere))
-        XCTAssertNil(StellarEarnPositionRow.earnedUsd(elsewhere), "Home's Earn row shows Earn's figure")
-        let totals = StellarEarnModel.totals(positions: [elsewhere, try position(valueUsd: 19.01)], markets: [], spot: nil)
+        XCTAssertNil(StellarEarnModel.earnedUsd(elsewhere, market: xlm))
+        XCTAssertNil(StellarEarnPositionRow.earnedUsd(elsewhere, markets: [xlm]), "Home's Earn row shows Earn's figure")
+        let totals = StellarEarnModel.totals(positions: [elsewhere, try position(valueUsd: 19.01)], markets: [xlm], spot: nil)
         XCTAssertEqual(try XCTUnwrap(totals.earned), 0.1901, accuracy: 1e-12, "only the recorded one counts")
         XCTAssertFalse(totals.earnedComplete)
-        XCTAssertEqual(StellarEarnPositionRow.earnedUsd(try position()) ?? 0, 0.1901, accuracy: 1e-12)
+        XCTAssertEqual(StellarEarnPositionRow.earnedUsd(try position(), markets: [xlm]) ?? 0, 0.1901, accuracy: 1e-12)
+    }
+
+    /// Earnings in dollars are the earnings at the market's price, as Portfolio's P&L counts them, never a share of the
+    /// position's value, which the server rounds to the cent: small and emptied positions were priced wrong that way.
+    func testEarningsArePricedAtTheirMarketsPriceNotThePositionsRoundedValue() throws {
+        let xlm = try market(priceUsd: 0.18)
+        // 0.03 XLM supplied ($0.0054, which the server writes $0.01) that earned 0.0331 XLM: $0.005958, not the $0.011 its
+        // rounded value would make of it.
+        let small = try position(supplied: "300000", earned: "331000", valueUsd: 0.01)
+        XCTAssertEqual(try XCTUnwrap(StellarEarnModel.earnedUsd(small, market: xlm)), 0.0331 * 0.18, accuracy: 1e-12)
+        // Dust a withdrawal left behind (936 stroops, valued $0.00) after earning 2,632 stroops: still priced.
+        let dust = try position(supplied: "936", earned: "2632", valueUsd: 0)
+        XCTAssertEqual(try XCTUnwrap(StellarEarnModel.earnedUsd(dust, market: xlm)), 0.0002632 * 0.18, accuracy: 1e-15)
+        XCTAssertEqual(StellarEarnModel.totals(positions: [small, dust], markets: [xlm], spot: nil).earned ?? 0, (0.0331 + 0.0002632) * 0.18, accuracy: 1e-12)
+        // The pool's market, else another pool's market of the asset; without one, or without a price, unknown, never $0.
+        let otherPool = try decode(EarnMarket.self, """
+            {"pool": "CBOTHERPOOL", "poolName": "Blend Fixed", "asset": "\(Self.xlm)", "code": "XLM", "decimals": 7, "supplyApy": 0.02, "borrowApy": 0.04,
+             "utilization": 0.5, "totalSupplied": 10, "note": null, "totalSuppliedUsd": 1.8, "freeLiquidityUsd": 0.9, "priceUsd": 0.18, "poolStatus": "active"}
+            """)
+        XCTAssertEqual(StellarEarnModel.market(of: small, in: [otherPool, xlm])?.pool, Self.pool, "its own pool's market first")
+        XCTAssertEqual(StellarEarnModel.market(of: small, in: [otherPool])?.pool, "CBOTHERPOOL", "the asset is priced the same in any pool")
+        XCTAssertNil(StellarEarnModel.market(of: small, in: [try market(Self.blendUSDC, code: "USDC")]))
+        XCTAssertNil(StellarEarnModel.earnedUsd(small, market: nil), "the markets not read")
+        XCTAssertNil(StellarEarnModel.earnedUsd(small, market: try market(priceUsd: nil)), "no price")
+        XCTAssertNil(StellarEarnModel.totals(positions: [small], markets: [], spot: nil).earned)
     }
 
     /// The figures a testnet account had on a local stack (WP-35, 2026-10-17): 100 XLM supplied to Blend TestnetV2 and 40
     /// withdrawn 20 seconds later (Horizon's balance changes: exactly 100 and 40 XLM), as `/v1/holdings` answered at once.
     /// Blend's own position for the account then, read on chain, was 253,794,932 b-tokens × get_reserve's b_rate
     /// 2.364119164290 = 60.0001462 XLM at the reserve's last accrual: the API's 60.0001603 is it plus the seconds of
-    /// interest since, which Blend's SDK accrues to the time of the read.
+    /// interest since, which Blend's SDK accrues to the time of the read. XLM's reference price then: $0.181059.
     func testEarnedSoFarIsTheValueNowPlusWithdrawalsLessDeposits() throws {
         let row = try decode(EarnPosition.self, """
             {"pool": "\(Self.pool)", "asset": "\(Self.xlm)", "code": "XLM", "supplied": "600001603", "poolName": "Blend TestnetV2",
@@ -232,10 +277,11 @@ final class StellarEarnTests: XCTestCase {
         let earned = try XCTUnwrap(StellarEarnModel.earned(row))
         XCTAssertEqual(earned, StellarEarnModel.units(row.supplied) + 400_000_000 - 1_000_000_000)
         XCTAssertEqual(StellarEarnPositionCard.signed(earned, code: "XLM", decimals: 7), "+0.00016 XLM", "in the asset, in the app's number style")
-        let usd = try XCTUnwrap(StellarEarnModel.earnedUsd(row))
-        XCTAssertEqual(usd, 0.0001603 * 10.81 / 60.0001603, accuracy: 1e-12, "in dollars, at the price its value is counted at")
+        let xlm = try market(priceUsd: 0.181059)
+        let usd = try XCTUnwrap(StellarEarnModel.earnedUsd(row, market: xlm))
+        XCTAssertEqual(usd, 0.0001603 * 0.181059, accuracy: 1e-15, "in dollars, at the market's price")
         XCTAssertEqual(PriceFormat.usdValue(usd, signed: true), "+<$0.01")
-        let totals = StellarEarnModel.totals(positions: [row], markets: [], spot: nil)
+        let totals = StellarEarnModel.totals(positions: [row], markets: [xlm], spot: nil)
         XCTAssertEqual(try XCTUnwrap(totals.earned), usd, accuracy: 1e-15, "the Earn total is the positions'")
         XCTAssertTrue(totals.earnedComplete)
     }
@@ -249,13 +295,13 @@ final class StellarEarnTests: XCTestCase {
              {"id": "USDC", "kind": "registry", "contract": "\(Self.usdc)", "classic": null, "code": "USDC", "name": "USD Coin", "decimals": 7,
               "balance": "20000000", "enabled": true, "verified": true, "badges": [], "note": null, "logo": "USDC", "priceUsd": 1, "valueUsd": 2, "change24h": 0}]
             """)
-        let markets = [try market(), try market(Self.blendUSDC, code: "USDC")]
+        let markets = [try market(priceUsd: 0.19), try market(Self.blendUSDC, code: "USDC", priceUsd: 0.9999)]
         let totals = StellarEarnModel.totals(positions: [xlm, busdc], markets: markets, spot: spot)
         XCTAssertEqual(try XCTUnwrap(totals.supplied), 40, accuracy: 1e-9)
         XCTAssertEqual(try XCTUnwrap(totals.averageApy), 3.75, accuracy: 1e-9, "3% on $30 and 6% on $10")
-        XCTAssertEqual(try XCTUnwrap(totals.earned), 0.3 + 0.1, accuracy: 1e-9)
+        XCTAssertEqual(try XCTUnwrap(totals.earned), 1 * 0.19 + 0.1 * 0.9999, accuracy: 1e-9, "1 XLM and 0.1 USDC earned, at their markets' prices")
         XCTAssertTrue(totals.earnedComplete)
-        XCTAssertEqual(StellarEarnModel.earnedText(totals), "+$0.40", "Earn's Assets tab and Portfolio's Earn card")
+        XCTAssertEqual(StellarEarnModel.earnedText(totals), "+$0.29", "Earn's Assets tab")
         XCTAssertEqual(try XCTUnwrap(totals.wallet), 12.3, accuracy: 1e-9, "the wallet's XLM; its USDC isn't an asset Earn lends here")
         XCTAssertNil(StellarEarnModel.totals(positions: [xlm], markets: markets, spot: nil).wallet, "the holdings not read: unread")
         let none = StellarEarnModel.totals(positions: [], markets: markets, spot: [])
@@ -263,8 +309,8 @@ final class StellarEarnTests: XCTestCase {
         XCTAssertEqual(none.earned, 0)
         XCTAssertTrue(none.earnedComplete)
         // A loss (a pool that lost value) is signed as one.
-        let loss = StellarEarnModel.totals(positions: [try position(earned: "-5000000", valueUsd: 20)], markets: markets, spot: [])
-        XCTAssertEqual(StellarEarnModel.earnedText(loss), "−$0.10")
+        let loss = StellarEarnModel.totals(positions: [try position(earned: "-10000000", valueUsd: 20)], markets: markets, spot: [])
+        XCTAssertEqual(StellarEarnModel.earnedText(loss), "−$0.19")
         XCTAssertNil(none.averageApy, "no position, no rate")
         XCTAssertNil(StellarEarnModel.totals(positions: [try position(valueUsd: nil)], markets: markets, spot: []).supplied, "an unpriced position")
     }
@@ -282,6 +328,102 @@ final class StellarEarnTests: XCTestCase {
             """)
         XCTAssertEqual(StellarEarnModel.history(items, market: try market()).map(\.id), ["a"])
         XCTAssertEqual(StellarEarnModel.history(items, market: try market(Self.blendUSDC, code: "USDC")).map(\.id), ["b"])
+        // Nothing shown under another market's name, and unread until its own read answers.
+        let model = StellarEarnModel()
+        XCTAssertEqual(model.activity(for: try market()), .init(market: try market().id, items: [], status: .unread))
+    }
+
+    /// The History tab reads its market's deposits and withdrawals on its own (`section=earn&market=<pool>:<asset>`): the
+    /// account's activity, which Portfolio and Recent Activity word their rows from, keeps every section's items, and its
+    /// read status stays its own.
+    func testTheHistoryTabsReadLeavesTheAccountsActivityAsItWas() async throws {
+        let server = EarnServer()
+        let store = try await resumedStore(server, seed: (0..<32).map { _ in UInt8.random(in: 0...255) })
+        await store.refreshActivity()
+        let all = store.activity.map(\.id)
+        XCTAssertEqual(all, ["swap-1", "launch-1", "earn-xlm"], "the account's activity, every section")
+        XCTAssertEqual(store.status(.activity), .read)
+
+        let xlm = try market()
+        let model = StellarEarnModel()
+        await model.loadActivity(store: store, market: xlm)
+        XCTAssertEqual(model.activity(for: xlm).items.map(\.id), ["earn-xlm"])
+        XCTAssertEqual(model.activity(for: xlm).status, .read)
+        XCTAssertEqual(model.activity(for: try market(Self.blendUSDC, code: "USDC")).status, .unread, "another market's isn't this one's")
+        XCTAssertEqual(store.activity.map(\.id), all, "the account's activity is as it was: Earn's read never replaces it")
+        XCTAssertEqual(store.status(.activity), .read)
+        let read = try XCTUnwrap(server.requests.last { $0.path == "/v1/activity" })
+        XCTAssertEqual(read.query, ["section": "earn", "market": "\(Self.pool):\(Self.xlm)"])
+
+        // A read that fails keeps the rows shown, and says so.
+        server.failActivity = true
+        await model.loadActivity(store: store, market: xlm)
+        XCTAssertEqual(model.activity(for: xlm).items.map(\.id), ["earn-xlm"])
+        XCTAssertEqual(model.activity(for: xlm).status, .failed)
+        XCTAssertEqual(store.status(.activity), .read, "Earn's failure isn't the account's activity's")
+    }
+
+    /// A passkey account in the public view: the History tab waits for the sign-in, nothing is asked, and the account's
+    /// activity status is untouched.
+    func testTheHistoryTabWaitsForTheSignInWithoutAsking() async throws {
+        let server = EarnServer()
+        let store = try await resumedStore(server, seed: nil)
+        let before = store.status(.activity)
+        let model = StellarEarnModel()
+        await model.loadActivity(store: store, market: try market())
+        XCTAssertEqual(model.activity(for: try market()).status, .needsSignIn)
+        XCTAssertEqual(store.status(.activity), before, "Earn's read leaves the account's activity's status as it was")
+        XCTAssertFalse(server.requests.contains { $0.path == "/v1/activity" || $0.path.hasPrefix("/v1/auth") }, "nothing asked")
+    }
+
+    // MARK: - Portfolio's Earn card
+
+    /// "Earned so far" is the all-time Earn P&L, whatever the period shown: every market with a recorded deposit, open or
+    /// withdrawn in full, at today's prices, as the P&L reads with All chosen. Portfolio reads it beside the period's.
+    func testPortfoliosEarnedSoFarIsTheAllTimeEarnPnL() async throws {
+        let server = EarnServer()
+        let store = try await resumedStore(server, seed: (0..<32).map { _ in UInt8.random(in: 0...255) })
+        let folder = FileManager.default.temporaryDirectory.appending(path: "stellar-earn-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let model = StellarPortfolioModel(saved: StellarSaved(screens: SavedScreens(directory: folder, build: "test")))
+        await model.load(store, period: .week, force: false)
+        XCTAssertEqual(Set(server.requests.filter { $0.path == "/v1/portfolio" }.map { $0.query["period"] }), ["week", "all"])
+        let lifetime = try XCTUnwrap(model.shown(.all, live: store.portfolio[.all], status: store.status(.portfolio))?.figures.stats(.earn))
+        XCTAssertEqual(StellarEarnModel.earnedSoFarText(lifetime), "+$1.25*", "the all-time Earn P&L, a lower bound when a market's isn't known")
+        XCTAssertEqual(store.portfolio[.week]?.sections.earn.pnl, 0.0023, "the week's own P&L beside it")
+
+        // Read once; again with a pull; never twice when All is the period shown.
+        let lifetimeReads = { server.requests.filter { $0.path == "/v1/portfolio" && $0.query["period"] == "all" }.count }
+        await model.load(store, period: .month, force: false)
+        XCTAssertEqual(lifetimeReads(), 1)
+        await model.load(store, period: .month, force: true)
+        XCTAssertEqual(lifetimeReads(), 2)
+        await model.load(store, period: .all, force: true)
+        XCTAssertEqual(lifetimeReads(), 3)
+        XCTAssertEqual(StellarEarnModel.earnedSoFarText(StellarPortfolioModel.Stats()), "$0.00", "nothing earned yet")
+    }
+
+    // MARK: - Reads against a Lite server
+
+    /// The store of a session resumed as an account set up on this iPhone, against `server`: a seed account with its key
+    /// here, which signs in silently, or (`seed` nil) an account with no key and no session here, as a passkey account in
+    /// the public view, which nothing may prompt.
+    private func resumedStore(_ server: EarnServer, seed: [UInt8]?) async throws -> LiteStore {
+        let address = try StellarSigner(seed: seed ?? (0..<32).map { _ in UInt8.random(in: 0...255) }).address
+        UserDefaults.standard.set(true, forKey: LiteSession.activatedKey(address))
+        addTeardownBlock {
+            server.stop()
+            StellarKeychain.erase(account: address)
+            UserDefaults.standard.removeObject(forKey: LiteSession.activatedKey(address))
+        }
+        let keys = seed.map { seed in
+            GatedSeedKeyProvider(address: address, methodLabel: "Email & Password", network: "testnet", appLockApplies: { false }, seed: { seed })
+        }
+        let session = LiteSession(env: server.environment, stellarAddress: address, monad: nil, keys: keys)
+        // The store holds its session weakly: the test holds it until it ends.
+        addTeardownBlock { withExtendedLifetime(session) {} }
+        await session.resumeAtLaunch()
+        return try XCTUnwrap(session.store)
     }
 
     // MARK: - Blend's test USDC
@@ -356,6 +498,9 @@ final class StellarEarnTests: XCTestCase {
     func testEarnIsNoLongerASeamAndKeepsNoneOfTheOldScreensStyling() throws {
         for (name, text) in try earnSources() {
             XCTAssertFalse(text.contains("SEAM("), name)
+            // Earn's history is its own read: the account's activity, which other screens word their rows from, is never
+            // replaced by Earn's.
+            XCTAssertFalse(text.contains("refreshActivity("), name)
             for gone in ["LiteLegacyScreens", "LiteChrome", "LiteStyle", "LiteParagraph", "LitePrimaryButton", "LiteInlineError", "liteFormSheet",
                          "EarnMarketSheet", "AssetBadge", "unlock", "Unlock", "env.history", "AsyncImage"] {
                 XCTAssertFalse(text.contains(gone), "\(name): \(gone)")
@@ -384,5 +529,175 @@ final class StellarEarnTests: XCTestCase {
                 check(unit?["value"] as? String ?? "", "\(key) [\(language)]")
             }
         }
+    }
+}
+
+/// A Lite server for one test, on a host of its own under `.stellar-earn.test`: the config, the fees, a seed account's
+/// sign-in and, only with the session it issued, the account's activity (`section` and `market` filter it, as the API's
+/// do) and the portfolio of any period, the all-time one's Earn P&L $1.25 and short of a market's. It keeps every request.
+final class EarnServer: @unchecked Sendable {
+    struct Request: Sendable {
+        let method: String
+        /// Below the API's base: "/v1/activity".
+        let path: String
+        let query: [String: String]
+        let authorization: String?
+        let body: Data?
+    }
+
+    static let pool = "CCEBVDYM32YNYCVNRXQKDFFPISJJCV557CDZEIRBEE4NCV4KHPQ44HGF"
+    static let xlm = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+
+    let host = "lite-\(UUID().uuidString.lowercased()).stellar-earn.test"
+    private let lock = NSLock()
+    private var seen: [Request] = []
+    private var issued: String?
+    private var failing = false
+
+    init() {
+        URLProtocol.registerClass(EarnStub.self)
+        EarnStub.serve(host: host) { [self] in answer($0) }
+    }
+
+    var environment: LiteEnvironment { LiteEnvironment(apiURL: URL(string: "https://\(host)/lite")!, pinned: .testnet, buildNumber: 1000) }
+
+    /// Every request, in order.
+    var requests: [Request] { lock.withLock { seen } }
+
+    /// The activity's reads fail, as the API's do when it can't read the history.
+    var failActivity: Bool {
+        get { lock.withLock { failing } }
+        set { lock.withLock { failing = newValue } }
+    }
+
+    func stop() { EarnStub.serve(host: host, nil) }
+
+    /// The account's activity: a swap, a launch trade and a deposit to Blend's XLM market, with the market each is of.
+    private static let activity: [(section: String, market: String?, json: String)] = [
+        ("spot", nil, #"{"type": "tx", "id": "swap-1", "kind": "swap", "summary": "Swapped", "status": "success", "at": "2026-10-17T10:00:00Z", "section": "spot", "hash": "aa", "ref": null}"#),
+        ("launch", nil, #"{"type": "tx", "id": "launch-1", "kind": "launch_buy", "summary": "Bought", "status": "success", "at": "2026-10-17T09:00:00Z", "section": "launch", "hash": "bb", "ref": null}"#),
+        ("earn", "\(pool):\(xlm)", #"{"type": "tx", "id": "earn-xlm", "kind": "earn_deposit", "summary": "Supplied XLM", "status": "success", "at": "2026-10-17T08:00:00Z", "section": "earn", "hash": "cc", "ref": {"market": "\#(pool):\#(xlm)"}}"#),
+    ]
+
+    private func answer(_ request: Request) -> (status: Int, body: Data) {
+        let (session, failing) = lock.withLock {
+            seen.append(request)
+            return (issued.map { request.authorization == "Bearer \($0)" } ?? false, self.failing)
+        }
+        switch (request.method, request.path) {
+        case ("GET", "/v1/config"): return (200, Data(Self.config.utf8))
+        case ("GET", "/v1/fees"): return (200, Data(Self.fees.utf8))
+        case ("POST", "/v1/auth/challenge"):
+            let address = request.body.flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }?["address"] ?? ""
+            let nonce = "earn-nonce-0123456789"
+            let message = ["DyorHQ Lite sign-in", "Network: testnet", "Address: \(address)", "Nonce: \(nonce)", "Issued: \(Self.time(0))"].joined(separator: "\n")
+            return (200, try! JSONSerialization.data(withJSONObject: ["nonce": nonce, "message": message, "expiresAt": Self.time(300)]))
+        case ("POST", "/v1/auth/verify"):
+            let token = "jwt-\(UUID().uuidString)"
+            lock.withLock { issued = token }
+            let body: [String: Any] = ["token": token, "expiresAt": Self.time(3600), "refreshToken": "lrt_earn", "refreshExpiresAt": Self.time(30 * 86_400),
+                                       "tester": ["address": "G", "label": NSNull()]]
+            return (200, try! JSONSerialization.data(withJSONObject: body))
+        case ("GET", "/v1/activity"):
+            guard session else { return (401, Self.error("not_signed_in", "Sign in again.")) }
+            if failing { return (503, Self.error("rpc_unavailable", "The history couldn't be read just now.")) }
+            let items = Self.activity.filter { item in
+                (request.query["section"].map { $0 == item.section } ?? true) && (request.query["market"].map { $0 == item.market } ?? true)
+            }
+            return (200, Data(#"{"items": [\#(items.map(\.json).joined(separator: ", "))]}"#.utf8))
+        case ("GET", "/v1/portfolio"):
+            guard session else { return (401, Self.error("not_signed_in", "Sign in again.")) }
+            return (200, Self.portfolio(period: request.query["period"] ?? "week"))
+        default:
+            return (404, Self.error("not_found", "No such route."))
+        }
+    }
+
+    /// StellarKit's `portfolio.json` over `period`; the all-time one's Earn P&L $1.25, short of a market whose isn't known.
+    private static func portfolio(period: String) -> Data {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() } // StellarEarnTests.swift → Tests → Internal → ios → app → S
+        let url = root.appending(path: "ios/Packages/StellarKit/Tests/LiteClientTests/Fixtures/portfolio.json")
+        guard var json = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
+              var sections = json["sections"] as? [String: Any], var earn = sections["earn"] as? [String: Any] else { return Data() }
+        json["period"] = period
+        if period == "all" {
+            earn["pnl"] = 1.25
+            earn["pnlComplete"] = false
+            sections["earn"] = earn
+            json["sections"] = sections
+        }
+        return (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
+    }
+
+    private static let config = """
+        {"network":"testnet","passphrase":"Test SDF Network ; September 2015","rpcUrl":"http://127.0.0.1:9/rpc",
+         "horizonUrl":"http://127.0.0.1:9/horizon","activation":"friendbot","sponsor":"\(PinnedContracts.testnet.sponsor)",
+         "assets":[{"id":"XLM","code":"XLM","name":"Stellar Lumens","decimals":7,"contract":"\(xlm)","classic":"native","note":null}],
+         "contracts":{"launchpad":null,"moments":null,"soroswapRouter":"C","blendPools":[{"id":"\(pool)","name":"Blend TestnetV2"}]},"allowlist":{},
+         "bridge":{"routes":[],"monad":null},"flags":{"enabled":true},"minBuild":1,"inviteRequired":false,"faucet":{"amount":"10000"}}
+        """
+
+    private static let fees = """
+        {"network":"testnet","baseReserve":"5000000","baseFee":"100","inclusionFee":{"classic":"100","soroban":"150"},
+         "estimates":{"blend_submit_withdraw":"500000"},"estimateBasis":{},"updatedAt":null}
+        """
+
+    private static func error(_ code: String, _ message: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["error": ["code": code, "message": message]])
+    }
+
+    /// `seconds` from now, as the API writes times.
+    private static func time(_ seconds: TimeInterval) -> String { ISO8601DateFormatter().string(from: Date().addingTimeInterval(seconds)) }
+}
+
+/// Answers the requests to `.stellar-earn.test` hosts (`URLSession.shared`, which `LiteAPI` uses, asks the registered
+/// protocols), each with its host's server; every other request goes out as usual.
+final class EarnStub: URLProtocol {
+    typealias Handler = @Sendable (EarnServer.Request) -> (status: Int, body: Data)
+
+    private static let lock = NSLock()
+    private static var handlers: [String: Handler] = [:]
+
+    static func serve(host: String, _ handler: Handler?) { lock.withLock { handlers[host] = handler } }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host?.hasSuffix(".stellar-earn.test") ?? false
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let query = Dictionary(items.compactMap { item in item.value.map { (item.name, $0) } }, uniquingKeysWith: { first, _ in first })
+        let seen = EarnServer.Request(method: request.httpMethod ?? "GET", path: String(url.path.dropFirst("/lite".count)), query: query,
+                                      authorization: request.value(forHTTPHeaderField: "authorization"), body: Self.body(of: request))
+        guard let handler = Self.lock.withLock({ Self.handlers[url.host ?? ""] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotFindHost))
+            return
+        }
+        let (status, body) = handler(seen)
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["content-type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+
+    private static func body(of request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            data.append(buffer, count: read)
+        }
+        return data
     }
 }

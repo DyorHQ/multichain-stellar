@@ -188,12 +188,14 @@ struct StellarEarnMarketView: View {
     }
 
     /// A deposit or a withdrawal under review: its market and amount are fixed at the tap, so a poll that lands meanwhile
-    /// can't change what the review shows and the plan does.
+    /// can't change what the review shows and the plan does. `all`: a withdrawal of the whole position, `amount` (the
+    /// supplied figure shown) the least it receives, with the interest earned until it goes through.
     struct Review: Identifiable {
         let id = UUID()
         let side: StellarEarnModel.Side
         let market: EarnMarket
         let amount: Int64
+        var all = false
     }
 
     /// A transfer the ⋯ menu opened.
@@ -278,11 +280,11 @@ struct StellarEarnMarketView: View {
             }
         }
         // The History tab's deposits and withdrawals (DyorHQ's history), while the tab is on screen, and again once a
-        // passkey account signs in for it.
+        // passkey account signs in for it: Earn's own read, which leaves the account's activity as other screens read it.
         .task(id: HistoryRead(visible: bottomTab == .history && scenePhase == .active, access: stellar?.access)) {
             guard bottomTab == .history, scenePhase == .active else { return }
             while !Task.isCancelled {
-                await store.refreshActivity(section: "earn")
+                await model.loadActivity(store: store, market: market)
                 try? await Task.sleep(for: StellarEarnModel.pollInterval)
             }
         }
@@ -411,6 +413,8 @@ struct StellarEarnMarketView: View {
         }
         .padding(3)
         .background(Color(.tertiarySystemFill), in: Capsule())
+        // The glyphs sit in fixed frames: past the largest standard size they would spill out of them.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 
     private var menu: some View {
@@ -435,6 +439,7 @@ struct StellarEarnMarketView: View {
                 .background(Color(.tertiarySystemFill), in: Circle())
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge) // the glyph's circle is fixed, as the view-mode pill's frames
         }
         .accessibilityLabel("More options")
     }
@@ -519,7 +524,7 @@ struct StellarEarnMarketView: View {
             // The pool the market lends through: static, as Perps' Isolated chip.
             HStack(spacing: 5) {
                 Image(systemName: "building.columns").font(.caption2)
-                Text(verbatim: "Blend · \(market.poolName)").font(.subheadline.weight(.semibold)) // not localized: Blend is a protocol's name, the pool's is its own
+                Text(verbatim: StellarEarnModel.poolLabel(market.poolName)).font(.subheadline.weight(.semibold)) // not localized: Blend is a protocol's name, the pool's is its own
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).minimumScaleFactor(0.7)
                     .multilineTextAlignment(.center)
             }
@@ -527,7 +532,7 @@ struct StellarEarnMarketView: View {
             .frame(maxWidth: .infinity).padding(.vertical, 10)
             .overlay(Capsule().stroke(Color(.separator), lineWidth: 1))
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text("Lends through Blend, pool \(market.poolName)", tableName: "StellarEarn", comment: "VoiceOver: the chip on Stellar Earn's ticket naming the Blend pool the market lends through. The value is the pool's name (Blend TestnetV2). Blend is never translated"))
+            .accessibilityLabel(Text("Lends through Blend, pool \(StellarEarnModel.poolShortName(market.poolName))", tableName: "StellarEarn", comment: "VoiceOver: the chip on Stellar Earn's ticket naming the Blend pool the market lends through. The value is the pool's own name (TestnetV2). Blend is never translated"))
 
             // Available + add funds
             statRow(Text("Available"), balancesRead ? Text(verbatim: StellarFormat.amount(available, code: market.code, decimals: market.decimals)) : nil) {
@@ -693,14 +698,16 @@ struct StellarEarnMarketView: View {
         ticketError = nil
         amountFocused = false
         Haptics.commit()
-        review = Review(side: side, market: market, amount: amount)
+        // The whole position typed: everything, with the interest earned since it was read, so no dust stays behind.
+        review = Review(side: side, market: market, amount: amount, all: StellarEarnModel.takesEverything(side, amount: amount, supplied: supplied))
     }
 
-    /// The whole position back to the wallet, from the Position tab: its review at once.
+    /// The whole position back to the wallet, from the Position tab: its review at once. It asks for everything, with the
+    /// interest earned until it goes through, so nothing stays behind in the pool.
     private func withdrawAll() {
         guard canSign, supplied > 0 else { return }
         Haptics.commit()
-        review = Review(side: .withdraw, market: market, amount: supplied)
+        review = Review(side: .withdraw, market: market, amount: supplied, all: true)
     }
 
     private func reviewSheet(_ review: Review) -> some View {
@@ -709,15 +716,24 @@ struct StellarEarnMarketView: View {
         return StellarConfirmationSheet(
             title: deposit ? StellarEarnWords.supplyToEarn : LocalizedStringResource("Withdraw to Spot"),
             confirmTitle: deposit ? LocalizedStringResource("Deposit") : LocalizedStringResource("Withdraw"),
-            build: { try await store.earnPlan(deposit: deposit, market: market, amount: review.amount) },
+            build: { try await store.earnPlan(deposit: deposit, market: market, amount: review.amount, all: review.all) },
             onDone: {
                 amountText = ""
                 Task { await model.load(store: store) }
             },
-            onCompleted: { _ in Task { await store.refreshActivity(section: "earn") } }
+            // The History tab's rows again, once it has been read: Earn's own read, never the account's activity.
+            onCompleted: { _ in
+                guard model.marketActivity?.market == market.id else { return }
+                Task { await model.loadActivity(store: store, market: market) }
+            }
         ) {
             DetailRow("Amount", verbatim: StellarFormat.amount(review.amount, code: market.code, decimals: market.decimals))
-            DetailRow(deposit ? "To" : "From", verbatim: "Blend · \(market.poolName)")
+            if review.all {
+                Text("Your whole position, with what it earns until the withdrawal goes through.", tableName: "StellarEarn", comment: "Stellar Earn's withdrawal review, under the amount, when the whole position is withdrawn: the amount shown is the least that arrives, and the interest earned in the meantime comes too")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            DetailRow(deposit ? "To" : "From", verbatim: StellarEarnModel.poolLabel(market.poolName))
             DetailRow(StellarEarnWords.supplyAPY, Text(verbatim: NumberStyle.percent(market.supplyApyPercent, signed: false)))
         }
     }
@@ -827,13 +843,13 @@ struct StellarEarnMarketView: View {
         let totals = StellarEarnModel.totals(positions: positions, markets: store.earnMarkets, spot: store.holdings?.spot)
         let earnedTint: Color = (totals.earned ?? 0) < 0 ? .negative : (totals.earned ?? 0) > 0 ? .positive : .primary
         return DetailRows {
-            DetailRow(StellarEarnWords.totalSupplied, assetFigure(positionsRead ? PriceFormat.usdValue(totals.supplied) : nil))
+            assetRow(StellarEarnWords.totalSupplied, assetFigure(positionsRead ? PriceFormat.usdValue(totals.supplied) : nil))
             // What every position has earned so far, in dollars ("*": a position's earnings aren't known).
-            DetailRow(StellarEarnWords.earned, assetFigure(positionsRead ? StellarEarnModel.earnedText(totals) : nil), tint: totals.earned == nil ? .primary : earnedTint)
-            DetailRow(Text("Average APY", tableName: "StellarEarn", comment: "[tight] Stellar Earn's Assets tab: the supply rate across the account's positions, weighted by their values, a label"),
-                      assetFigure(positionsRead ? totals.averageApy.map { NumberStyle.percent($0, signed: false) } ?? "—" : nil))
-            DetailRow(Text("Available in wallet", tableName: "StellarEarn", comment: "[tight] Stellar Earn's Assets tab: what the wallet (Spot) holds of the assets Earn lends, in dollars, a label"),
-                      assetFigure(positionsRead ? PriceFormat.usdValue(totals.wallet) : nil))
+            assetRow(StellarEarnWords.earned, assetFigure(positionsRead ? StellarEarnModel.earnedText(totals) : nil), tint: totals.earned == nil ? .primary : earnedTint)
+            assetRow(Text("Average APY", tableName: "StellarEarn", comment: "[tight] Stellar Earn's Assets tab: the supply rate across the account's positions, weighted by their values, a label"),
+                     assetFigure(positionsRead ? totals.averageApy.map { NumberStyle.percent($0, signed: false) } ?? "—" : nil))
+            assetRow(Text("Available in wallet", tableName: "StellarEarn", comment: "[tight] Stellar Earn's Assets tab: what the wallet (Spot) holds of the assets Earn lends, in dollars, a label"),
+                     assetFigure(positionsRead ? PriceFormat.usdValue(totals.wallet) : nil))
         }
     }
 
@@ -843,17 +859,33 @@ struct StellarEarnMarketView: View {
         Text(verbatim: value ?? "—")
     }
 
+    /// One Assets line: a `DetailRow`; at accessibility sizes the figure goes under its label, whole, where beside it the
+    /// two would share one line and the figure would wrap mid-number.
+    @ViewBuilder private func assetRow(_ label: Text, _ value: Text, tint: Color = .primary) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 2) {
+                label.foregroundStyle(.secondary)
+                value.monospacedDigit().foregroundStyle(tint)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+        } else {
+            DetailRow(label, value, tint: tint)
+        }
+    }
+
     /// This market's deposits and withdrawals, newest first, each opening its transaction on StellarExpert.
     @ViewBuilder private var historyList: some View {
-        let items = StellarEarnModel.history(store.activity, market: market)
-        switch store.status(.activity) {
+        let read = model.activity(for: market)
+        let items = read.items
+        switch read.status {
         case .needsSignIn:
             StellarSignInRow()
         case .failed where items.isEmpty:
             HStack(alignment: .firstTextBaseline) {
                 if let error = store.lastError { InlineError(message: error) } else { InlineError(message: StellarEarnView.unreadHistory) }
                 Spacer(minLength: 8)
-                Button("Retry") { Task { await store.refreshActivity(section: "earn") } }.font(.footnote.weight(.semibold))
+                Button("Retry") { Task { await model.loadActivity(store: store, market: market) } }.font(.footnote.weight(.semibold))
             }
         case .unread where items.isEmpty:
             ProgressView().frame(maxWidth: .infinity).padding(.vertical, 24)
@@ -923,7 +955,8 @@ struct StellarPoolStatusChip: View {
 
 /// The account's position in a market, as Perps' `PositionCard`: the asset and its pool, what's supplied and worth, what
 /// it has earned (signed and tinted; unread in the public view, where DyorHQ's record isn't shown, never 0) and the rate,
-/// with Supply More and Withdraw (the whole position back to the wallet).
+/// with Supply More and Withdraw (the whole position back to the wallet, with what it earns until then: nothing stays
+/// behind).
 struct StellarEarnPositionCard: View {
     let position: EarnPosition
     let market: EarnMarket
@@ -937,7 +970,7 @@ struct StellarEarnPositionCard: View {
 
     private var supplied: Int64 { StellarEarnModel.units(position.supplied) }
     private var earned: Int64? { StellarEarnModel.earned(position) }
-    private var earnedUsd: Double? { StellarEarnModel.earnedUsd(position) }
+    private var earnedUsd: Double? { StellarEarnModel.earnedUsd(position, market: market) }
     private var apy: Double? { position.supplyApyPercent ?? market.supplyApyPercent }
 
     /// "+0.42 XLM", "−0.01 XLM", or "0 XLM".
@@ -962,7 +995,7 @@ struct StellarEarnPositionCard: View {
                 stat(StellarEarnWords.supplied, Text(verbatim: StellarFormat.amount(supplied, code: market.code, decimals: market.decimals)))
                 stat(Text("Value"), Text(verbatim: PriceFormat.usdValue(position.valueUsd)))
                 if let earned {
-                    // What it has earned so far, in the asset and in dollars (at the price its value is counted at).
+                    // What it has earned so far, in the asset and in dollars (at the market's price).
                     stat(StellarEarnWords.earned, Text(verbatim: Self.signed(earned, code: market.code, decimals: market.decimals)),
                          detail: earnedUsd.map { Text(verbatim: PriceFormat.usdValue($0, signed: true)) },
                          tint: earned < 0 ? .negative : earned > 0 ? .positive : .primary)

@@ -172,6 +172,12 @@ public final class LiteStore {
         }
     }
 
+    /// One Earn market's deposits and withdrawals (DyorHQ's history), for Earn's History tab: read on their own, so the
+    /// account's activity (`activity`, which every other screen words its rows from) stays as it was.
+    public func earnActivity(pool: String, asset: String) async throws -> [StellarActivityItem] {
+        try await history(nil) { try await self.api.activity(section: "earn", market: "\(pool):\(asset)") }
+    }
+
     /// Portfolio over `period` (DyorHQ's history).
     public func refreshPortfolio(_ period: VolumePeriodKey) async {
         guard let portfolio = try? await history(.portfolio, { try await self.api.portfolio(period: period) }) else { return }
@@ -276,24 +282,25 @@ public final class LiteStore {
     }
 
     /// A read of DyorHQ's history (a session route). With no session a seed account signs in silently first; a passkey
-    /// account that can't renew by itself reports `.needsSignIn` for `part`, and nothing asks.
-    private func history<T>(_ part: LitePart, _ read: () async throws -> T) async throws -> T {
+    /// account that can't renew by itself reports `.needsSignIn` for `part`, and nothing asks. A read that isn't one of
+    /// the store's parts (nil) keeps every part's status as it was.
+    private func history<T>(_ part: LitePart?, _ read: () async throws -> T) async throws -> T {
         if let session, session.access == .publicView {
             if session.needsSignIn {
-                parts[part] = .needsSignIn
+                if let part { parts[part] = .needsSignIn }
                 throw LiteAPIError.notSignedIn
             }
             try? await session.renew()
         }
         do {
             let value = try await read()
-            parts[part] = .read
+            if let part { parts[part] = .read }
             return value
         } catch LiteAPIError.notSignedIn where session?.needsSignIn == true {
-            parts[part] = .needsSignIn
+            if let part { parts[part] = .needsSignIn }
             throw LiteAPIError.notSignedIn
         } catch {
-            parts[part] = .failed
+            if let part { parts[part] = .failed }
             report(error)
             throw error
         }
@@ -402,10 +409,11 @@ public final class LiteStore {
         return try prepare(plan, limits: [:], title: tr("Enable \(code)"), section: .account, reference: "stellar:home", summary: .enable(code: code))
     }
 
-    /// A deposit to an Earn market, or a withdrawal from it.
-    public func earnPlan(deposit: Bool, market: EarnMarket, amount: Int64) async throws -> PreparedAction {
+    /// A deposit to an Earn market, or a withdrawal from it; with `all`, a withdrawal of the whole position, with what it
+    /// earns until it goes through (`amount`, what the screen showed, is then the least it receives).
+    public func earnPlan(deposit: Bool, market: EarnMarket, amount: Int64, all: Bool = false) async throws -> PreparedAction {
         try await ensureSession()
-        let plan = try await api.buildEarn(deposit: deposit, pool: market.pool, asset: market.asset, amount: amount)
+        let plan = try await api.buildEarn(deposit: deposit, pool: market.pool, asset: market.asset, amount: amount, all: !deposit && all)
         let main = LiteTitles.intent(kind: deposit ? "earn_deposit" : "earn_withdraw", display: ["amount": .string(String(amount)), "asset": .string(market.code)])
         // A withdrawal receives what the user asked for, at least.
         return try prepare(plan, limits: deposit ? [market.asset: amount] : [:],

@@ -350,8 +350,12 @@ public actor LiteAPI {
         try await request("GET", Self.path("earn/history", ["pool": pool, "asset": asset, "range": range.rawValue]), access: .publicPending)
     }
 
-    public func buildEarn(deposit: Bool, pool: String, asset: String, amount: Int64) async throws -> PlanView {
-        try await request("POST", "earn/build", body: ["action": deposit ? "deposit" : "withdraw", "pool": pool, "asset": asset, "amount": String(amount)])
+    /// A deposit of `amount`, or a withdrawal of it; with `all`, a withdrawal of the whole position with whatever it earns
+    /// until the transaction goes through, `amount` then being the least the user accepts (what their screen showed).
+    public func buildEarn(deposit: Bool, pool: String, asset: String, amount: Int64, all: Bool = false) async throws -> PlanView {
+        struct Body: Encodable { let action: String; let pool: String; let asset: String; let amount: String; let all: Bool? }
+        return try await request("POST", "earn/build", body: Body(action: deposit ? "deposit" : "withdraw", pool: pool, asset: asset, amount: String(amount),
+                                                                  all: all ? true : nil))
     }
 
     /// A viewer read, like the board.

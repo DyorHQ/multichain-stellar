@@ -525,7 +525,7 @@
       }
     },
     "Earned so far: %@" : {
-      "comment" : "Stellar Portfolio's Earn card, under its figures: what the account's Blend positions have earned so far, whatever the period, in dollars (+$0.42; a trailing * when a position's earnings aren't known)",
+      "comment" : "Stellar Portfolio's Earn card, under its figures: what the account's Blend lending has earned so far, whatever the period, in dollars (+$0.42; a trailing * when a market's earnings aren't known)",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -705,7 +705,7 @@
       }
     },
     "Lends through Blend, pool %@" : {
-      "comment" : "VoiceOver: the chip on Stellar Earn's ticket naming the Blend pool the market lends through. The value is the pool's name (Blend TestnetV2). Blend is never translated",
+      "comment" : "VoiceOver: the chip on Stellar Earn's ticket naming the Blend pool the market lends through. The value is the pool's own name (TestnetV2). Blend is never translated",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -1373,6 +1373,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂时无法读取你的理财仓位。"
+          }
+        }
+      }
+    },
+    "Your whole position, with what it earns until the withdrawal goes through." : {
+      "comment" : "Stellar Earn's withdrawal review, under the amount, when the whole position is withdrawn: the amount shown is the least that arrives, and the interest earned in the meantime comes too",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toda tu posición, con lo que gane hasta que se complete el retiro."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toute votre position, avec ce qu'elle rapporte jusqu'à ce que le retrait soit effectué."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "포지션 전체를, 출금이 완료될 때까지 쌓이는 이자와 함께 받아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的全部仓位，连同提现完成前产生的收益。"
           }
         }
       }

@@ -311,17 +311,18 @@ struct StellarPortfolioView: View {
         .cardBackground()
     }
 
-    /// What the account's Earn positions have earned so far, whatever the period: Earn's own figure (Blend's value now,
-    /// plus what was withdrawn, less what was deposited), from the holdings, a viewer read. A placeholder until they are
-    /// read; "—" where DyorHQ has no record (the public view), "*" when a position's earnings aren't known.
+    /// What the account's Earn has earned so far, whatever the period: the all-time Earn P&L (Blend's value now, plus what
+    /// was withdrawn, less what was deposited, for every market with a recorded deposit, open or withdrawn in full, at
+    /// today's prices), as the P&L reads with All chosen. Saved figures until that period's read lands, a placeholder
+    /// before; "—" while DyorHQ's history needs a sign-in (the public view has no record), "*" when a market's earnings
+    /// aren't known.
     private var earnedSoFar: some View {
-        let read = store?.status(.earn) == .read
-        let totals = StellarEarnModel.totals(positions: store?.holdings?.earn ?? [], markets: [], spot: nil)
-        let earned = read ? totals.earned : nil
-        return Text("Earned so far: \(read ? StellarEarnModel.earnedText(totals) ?? "—" : "—")", tableName: "StellarEarn", comment: "Stellar Portfolio's Earn card, under its figures: what the account's Blend positions have earned so far, whatever the period, in dollars (+$0.42; a trailing * when a position's earnings aren't known)")
+        let lifetime = model.shown(.all, live: store?.portfolio[.all], status: status)?.figures.stats(.earn)
+        let earned = lifetime?.pnl
+        return Text("Earned so far: \(lifetime.map(StellarEarnModel.earnedSoFarText) ?? "—")", tableName: "StellarEarn", comment: "Stellar Portfolio's Earn card, under its figures: what the account's Blend lending has earned so far, whatever the period, in dollars (+$0.42; a trailing * when a market's earnings aren't known)")
             .font(.caption2).monospacedDigit()
             .foregroundStyle(earned.map { $0 < 0 ? Color.negative : $0 > 0 ? Color.positive : Color.secondary } ?? Color.secondary)
-            .unreadFigure((store?.status(.earn) ?? .unread) == .unread)
+            .unreadFigure(lifetime == nil && status != .needsSignIn)
     }
 
     private func small(_ title: LocalizedStringKey, _ value: String, tint: Color = .primary, unread: Bool) -> some View {

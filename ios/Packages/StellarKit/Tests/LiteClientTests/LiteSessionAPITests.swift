@@ -434,6 +434,31 @@ final class LiteSessionAPITests: XCTestCase {
 }
 
 /// A count shared with `@Sendable` closures.
+/// An Earn plan says `all` only for a withdrawal of the whole position (POST /v1/earn/build): every other plan is of its
+/// amount, as servers before `all` build it.
+final class EarnBuildRequestTests: XCTestCase {
+    private let base = URL(string: "https://lite.test/functions/v1/lite")!
+
+    override func setUp() {
+        SessionServer.reset()
+    }
+
+    func testOnlyAWithdrawalOfEverythingSaysAll() async throws {
+        let plan = try ApiFixtures.data("plan")
+        SessionServer.handle { _ in (200, plan) }
+        let api = LiteAPI(baseURL: base, network: "testnet", session: SessionServer.session)
+        await api.restore(token: "live", expiresAt: Date().addingTimeInterval(3_600))
+        _ = try await api.buildEarn(deposit: false, pool: "CPOOL", asset: "CASSET", amount: 1_000_000_526, all: true)
+        _ = try await api.buildEarn(deposit: false, pool: "CPOOL", asset: "CASSET", amount: 400_000_000)
+        _ = try await api.buildEarn(deposit: true, pool: "CPOOL", asset: "CASSET", amount: 1_000_000_000)
+        XCTAssertEqual(SessionServer.seen.map(\.route), Array(repeating: "/v1/earn/build", count: 3))
+        let bodies = try SessionServer.seen.map { try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap($0.body)) as? NSDictionary) }
+        XCTAssertEqual(bodies[0], ["action": "withdraw", "pool": "CPOOL", "asset": "CASSET", "amount": "1000000526", "all": true])
+        XCTAssertEqual(bodies[1], ["action": "withdraw", "pool": "CPOOL", "asset": "CASSET", "amount": "400000000"], "no all: that amount")
+        XCTAssertEqual(bodies[2], ["action": "deposit", "pool": "CPOOL", "asset": "CASSET", "amount": "1000000000"])
+    }
+}
+
 private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0

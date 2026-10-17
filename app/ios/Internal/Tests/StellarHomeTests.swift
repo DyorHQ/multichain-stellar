@@ -312,9 +312,11 @@ final class StellarHomeTests: XCTestCase {
         XCTAssertEqual(StellarLaunchHoldingRow.percent(full), 99, "floored: never 100% before the curve is full")
 
         let position = try XCTUnwrap(read.earn.first)
-        XCTAssertEqual(try XCTUnwrap(StellarEarnPositionRow.earnedUsd(position)), 0.1901, accuracy: 1e-12, "1 XLM earned of 100 supplied worth $19.01")
+        let market = try decode(EarnMarket.self, #"{"pool": "\#(pool)", "poolName": "Blend TestnetV2", "asset": "\#(xlmContract)", "code": "XLM", "decimals": 7, "supplyApy": 0.031, "borrowApy": 0.05, "utilization": 0.6, "totalSupplied": 1000, "note": null, "totalSuppliedUsd": 190.1, "freeLiquidityUsd": 76, "priceUsd": 0.1901, "poolStatus": "active"}"#)
+        XCTAssertEqual(try XCTUnwrap(StellarEarnPositionRow.earnedUsd(position, markets: [market])), 0.1901, accuracy: 1e-12, "1 XLM earned, at its market's $0.1901")
+        XCTAssertNil(StellarEarnPositionRow.earnedUsd(position, markets: []), "no market read: no price, never $0")
         let publicView = try decode(EarnPosition.self, #"{"pool": "\#(pool)", "asset": "\#(xlmContract)", "code": "XLM", "supplied": "1000000000", "earned": null, "valueUsd": 19.01}"#)
-        XCTAssertNil(StellarEarnPositionRow.earnedUsd(publicView), "unknown in the public view, never $0")
+        XCTAssertNil(StellarEarnPositionRow.earnedUsd(publicView, markets: [market]), "unknown in the public view, never $0")
 
         let board = try decode([StellarMoment].self, """
             [{"id": 3, "creator": "\(stellar)", "uri": "ipfs://x", "title": "Sunset", "mediaUrl": null, "price": "10000000", "quote": "\(usdcContract)",
