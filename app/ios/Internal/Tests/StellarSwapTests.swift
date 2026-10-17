@@ -762,6 +762,12 @@ final class StellarSwapTests: XCTestCase {
             XCTAssertEqual([model.sell, model.buy], ["XLM", coin])
             model.amountText = "10"
             await model.learnSides()
+            if model.tokenOut.code == StellarSwapModel.shortCode(coin) {
+                // A --no-loop stack indexes no launches, so nothing it answers names the coin: Top Tokens names it here as
+                // a backend that lists it does, so the review's rows are checked against a symbol, not the short id.
+                model.markets.append(try row(coin, code: "COIN", contract: coin, classic: nil, phase: "graduated"))
+            }
+            XCTAssertNotEqual(model.tokenOut.code, StellarSwapModel.shortCode(coin))
             XCTAssertNil(model.curveToken, "a graduated coin trades on Swap")
             let (coinReview, bought) = try await swapOnTestnet(model, store: store)
             XCTAssertEqual(coinReview.route.venue, "soroswap")
