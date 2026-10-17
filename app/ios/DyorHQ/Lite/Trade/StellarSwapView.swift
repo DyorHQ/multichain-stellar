@@ -62,7 +62,8 @@ struct StellarSwapView: View {
                 }
             }
             .sheet(item: $reviewing) { review in confirmation(review) }
-            .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps) }
+            // Monad's sheet, within what a Stellar swap takes: a custom value outside it is capped, and the sheet says so.
+            .sheet(isPresented: $showSlippage) { SlippageSheet(slippageBps: $model.slippageBps, range: StellarSwapModel.slippageRange) }
             .onChange(of: model.slippageBps) { _, _ in model.saveSlippage() }
             // The account's figures as Swap opens: its balances and XLM position, its holdings (a coin bought on a pool is
             // listed there, not in the account's balances), the fee estimates Max keeps back, and Top Tokens for the sides'
@@ -365,10 +366,11 @@ struct StellarSwapView: View {
     }
 }
 
-/// Builds the plan for the reviewed quote through the venue it shows, then hands it to the Stellar review sheet. What
-/// the account pays and the least it receives are the plan's own rows (`StellarConfirmationSheet`), checked against the
-/// review before anything is signed; the network fee, any asset the swap enables, and DyorHQ paying a starter swap's fee
-/// (only when the phone proved it) come from the plan too.
+/// Builds the plan for the reviewed quote through the venue it shows, then hands it to the Stellar review sheet, with
+/// Monad's rows in Monad's order (§8.6.1): You pay, You receive, Minimum received, Venue, Route, Slippage. What the
+/// account pays and the least it receives are the plan's own rows (`StellarConfirmationSheet`'s `receives`), checked
+/// against the review before anything is signed; the network fee, any asset the swap enables, and DyorHQ paying a
+/// starter swap's fee (only when the phone proved it) come from the plan too.
 private struct StellarSwapConfirmation: View {
     let review: StellarSwapReview
     let build: () async throws -> PreparedAction
@@ -379,11 +381,11 @@ private struct StellarSwapConfirmation: View {
 
     var body: some View {
         let route = review.route
-        StellarConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: build, onDone: onDone, onCompleted: { _ in onCompleted() }) {
-            DetailRow("You receive", verbatim: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals))
+        StellarConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: build, onDone: onDone, onCompleted: { _ in onCompleted() },
+                                 receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals)) {
             DetailRow("Venue", verbatim: StellarSwapRoute.name(route.venue))
             DetailRow("Route", verbatim: pathText)
-            DetailRow("Slippage", NumberStyle.basisPoints(review.quote.slippageBps))
+            DetailRow("Slippage", NumberStyle.basisPoints(review.slippageBps))
         }
     }
 }

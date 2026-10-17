@@ -670,6 +670,11 @@ final class SwapModel {
 /// or a custom percentage. The old control was a bare menu of numbers with no explanation.
 struct SlippageSheet: View {
     @Binding var slippageBps: Int
+    #if STELLAR_LITE
+    /// The slippage a network's swaps take, in basis points, where it's narrower than the sheet's own: Stellar's take 0.01%
+    /// to 10%. A custom value outside it is capped to it, and the sheet says so. Nil: Monad's sheet as it is.
+    var range: ClosedRange<Int>? = nil
+    #endif
     @Environment(\.dismiss) private var dismiss
     @State private var customText = ""
     private let presets = [10, 50, 100, 300]
@@ -710,17 +715,25 @@ struct SlippageSheet: View {
                             .monospacedDigit()
                             .frame(maxWidth: 80)
                             .onChange(of: customText) { _, value in
+                                #if STELLAR_LITE
+                                if let bps = Self.customBps(value, range: range) { slippageBps = bps }
+                                #else
                                 if let pct = Double(value), pct > 0, pct <= 50 { slippageBps = Int((pct * 100).rounded()) }
+                                #endif
                             }
                         Text(verbatim: "%").foregroundStyle(.secondary)
                     }
                 } footer: {
+                    #if STELLAR_LITE
+                    customFooter
+                    #else
                     if slippageBps >= 500 {
                         Label("A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs.", systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(Color.attention)
                     } else if slippageBps <= 10 {
                         Paragraph("A tight tolerance protects your price, but a swap can fail in a fast-moving market.").font(.caption)
                     }
+                    #endif
                 }
             }
             .listStyle(.insetGrouped)
@@ -741,6 +754,42 @@ struct SlippageSheet: View {
         }
     }
 }
+#if STELLAR_LITE
+
+extension SlippageSheet {
+    /// Under the custom value: with a `range`, the slippage the network's swaps take, then Monad's tolerance notes.
+    @ViewBuilder fileprivate var customFooter: some View {
+        if let range {
+            VStack(alignment: .leading, spacing: 6) {
+                Paragraph(LocalizedStringResource("On Stellar, slippage is from \(NumberStyle.basisPoints(range.lowerBound)) to \(NumberStyle.basisPoints(range.upperBound)). A custom value outside that range is capped.", table: "StellarSwap", comment: "Swap's slippage sheet on Stellar, under the custom value: the range a Stellar swap takes, and that a custom value outside it is capped to it. The values are percentages (0.01%, 10%). Stellar is never translated"))
+                    .font(.caption)
+                toleranceNote
+            }
+        } else {
+            toleranceNote
+        }
+    }
+
+    /// Monad's notes on a high or a tight tolerance.
+    @ViewBuilder private var toleranceNote: some View {
+        if slippageBps >= 500 {
+            Label("A high tolerance can fill at a much worse price. Use it only for volatile or thin pairs.", systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(Color.attention)
+        } else if slippageBps <= 10 {
+            Paragraph("A tight tolerance protects your price, but a swap can fail in a fast-moving market.").font(.caption)
+        }
+    }
+
+    /// A custom value as Monad's sheet takes it (a percentage above 0 and at most 50), capped to `range` where a
+    /// network's swaps take less (Stellar's: 15% is 10%, 0.004% is 0.01%); nil when it isn't one.
+    static func customBps(_ text: String, range: ClosedRange<Int>?) -> Int? {
+        guard let pct = Double(text), pct > 0, pct <= 50 else { return nil }
+        let bps = Int((pct * 100).rounded())
+        guard let range else { return bps }
+        return min(max(bps, range.lowerBound), range.upperBound)
+    }
+}
+#endif
 
 /// One row in the swap-history list: a "sold → bought" line and when, linking to the transaction.
 struct SwapHistoryItem: Identifiable, Hashable {

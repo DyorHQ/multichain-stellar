@@ -88,6 +88,35 @@
         }
       }
     },
+    "On Stellar, slippage is from %@ to %@. A custom value outside that range is capped." : {
+      "comment" : "Swap's slippage sheet on Stellar, under the custom value: the range a Stellar swap takes, and that a custom value outside it is capped to it. The values are percentages (0.01%, 10%). Stellar is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En Stellar, el deslizamiento va del %1$@ al %2$@. Un valor manual fuera de ese rango se ajusta a él."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur Stellar, le slippage va de %1$@ à %2$@. Une valeur personnalisée hors de cette plage y est ramenée."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar에서는 슬리피지를 %1$@부터 %2$@까지 설정할 수 있어요. 이 범위를 벗어난 직접 입력 값은 범위 안으로 맞춰져요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 Stellar 上，滑点范围为 %1$@ 至 %2$@。超出此范围的自定义值会被限制在范围内。"
+          }
+        }
+      }
+    },
     "This coin trades on its Launch page until it graduates." : {
       "comment" : "Swap on Stellar, when one side is a DyorHQ coin still on its launchpad's curve: no venue can swap it yet, it trades on its Launch page",
       "localizations" : {

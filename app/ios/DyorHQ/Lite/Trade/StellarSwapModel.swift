@@ -89,8 +89,9 @@ struct StellarVenueSelection: Equatable {
 }
 
 /// What the review sheet shows and builds, frozen when Review is tapped: the quote, the venue picked and its route, and
-/// the request it answers. Quotes refresh every 15 s and a Max can land late, but the sheet builds its plan once, so
-/// everything it shows and binds comes from here, never from the live form.
+/// the request it answers (the amount typed, the two sides and the slippage, which the quote was checked to echo).
+/// Quotes refresh every 15 s and a Max can land late, but the sheet builds its plan once, so everything it shows and
+/// binds comes from here, never from the live form.
 struct StellarSwapReview: Identifiable {
     let id = UUID()
     let quote: SwapQuote
@@ -98,6 +99,7 @@ struct StellarSwapReview: Identifiable {
     let sell: StellarSwapToken
     let buy: StellarSwapToken
     let amountIn: Int64
+    let slippageBps: Int
 }
 
 /// Stellar's spot swaps, as Monad's `SwapModel`: every venue quotes at once, the best preselected; the person can pick
@@ -111,11 +113,17 @@ final class StellarSwapModel {
 
     /// Slippage until the person picks another, in basis points (§8.6.1).
     static let defaultSlippageBps = 100
+    /// The slippage a Stellar swap takes, in basis points: 0.01% to 10%. The quote refuses any other (/v1/swap/quote),
+    /// so the slippage sheet caps a custom value to it and a value saved outside it is never used.
+    static let slippageRange = 1...1_000
     /// How often a quote is asked for again while it is on screen.
     static let refreshInterval: Duration = .seconds(15)
+    /// The venues Swap offers: the Stellar DEX and Soroswap. Aquarius is off for now (decision O7: Soroswap only, so
+    /// Aquarius isn't tested), so no Aquarius route, or its price impact, shows whatever a server quotes.
+    static let venues: Set<String> = ["sdex", "soroswap"]
     /// The step kinds a swap is priced at, by venue. Max keeps back the costliest: the quote may route through any of
     /// them, and the venue picked can change once Max has filled the field.
-    static let swapStepKinds = ["swap_sdex", "swap_soroswap", "swap_aquarius"]
+    static let swapStepKinds = ["swap_sdex", "swap_soroswap"]
 
     var sell = "XLM"
     var buy = "USDC"
@@ -132,6 +140,8 @@ final class StellarSwapModel {
     @ObservationIgnored private let defaults: UserDefaults
     /// The contracts this build signs calls to (`LiteGate.pinned`): the tokens a route may go through.
     @ObservationIgnored private let listed: Set<String>
+    /// The network the build signs for, which names a classic asset's contract (`assetContract`).
+    @ObservationIgnored private let network: StellarNetwork
     /// The account the quotes are asked for: part of `quoteKey`, so no quote made for another account stays reviewable.
     private(set) var account: String?
     /// Rows looked up for sides Top Tokens doesn't list.
@@ -155,6 +165,7 @@ final class StellarSwapModel {
     init(defaults: UserDefaults = .standard, pinned: PinnedContracts = LiteGate.pinned) {
         self.defaults = defaults
         listed = pinned.allContracts
+        network = pinned.network
     }
 
     /// Reads and acts through `source` from now on: a new account starts afresh, with its own slippage.
@@ -178,9 +189,11 @@ final class StellarSwapModel {
     /// Where the account's slippage is kept: per address, as every Stellar default, under "lite." (§3.10 rule 9).
     static func slippageKey(_ address: String) -> String { "lite.slippage.\(address)" }
 
+    /// The slippage kept for `address`; the default when none is, or when the one kept is outside what a swap takes (an
+    /// earlier build saved any custom value, and the quote refuses those).
     static func storedSlippage(for address: String, defaults: UserDefaults) -> Int {
         let stored = defaults.integer(forKey: slippageKey(address))
-        return stored > 0 ? stored : defaultSlippageBps
+        return slippageRange.contains(stored) ? stored : defaultSlippageBps
     }
 
     /// Keeps the slippage picked for the account.
@@ -443,12 +456,16 @@ final class StellarSwapModel {
     /// or while the amount can't be swapped).
     var review: StellarSwapReview? {
         guard let quote = currentResult, let route = shownRoute, !insufficient, curveToken == nil else { return nil }
-        return StellarSwapReview(quote: quote, route: route, sell: tokenIn, buy: tokenOut, amountIn: amountIn)
+        return StellarSwapReview(quote: quote, route: route, sell: tokenIn, buy: tokenOut, amountIn: amountIn, slippageBps: slippageBps)
     }
 
-    /// The plan for `review`, through the venue it shows: the store binds that route's minimum (`LiteStore.swapPlan`).
+    /// The plan for `review`, through the venue it shows: the store binds the quote's amount as the spend and that route's
+    /// minimum (`LiteStore.swapPlan`), so the quote must be the one for the request reviewed (`answers`).
     func plan(for review: StellarSwapReview) async throws -> PreparedAction {
         guard let source else { throw LiteAPIError.notSignedIn }
+        guard answers(review.quote, sell: review.sell.id, buy: review.buy.id, amount: review.amountIn, slippageBps: review.slippageBps) else {
+            throw PlanRunner.Failure.refused(step: tr("Swap"), reason: "the quote isn't for the amount you typed")
+        }
         return try await source.swapPlan(review.quote, venue: review.route.venue)
     }
 
@@ -482,16 +499,20 @@ final class StellarSwapModel {
             }
             quoting = true
             let key = quoteKey
+            let request = (sell: sell, buy: buy, amount: amountIn, slippageBps: slippageBps)
             var wait = Self.refreshInterval
             do {
-                let answer = try await source.swapQuote(sell: sell, buy: buy, amount: amountIn, slippageBps: slippageBps)
+                let answer = try await source.swapQuote(sell: request.sell, buy: request.buy, amount: request.amount, slippageBps: request.slippageBps)
                 if Task.isCancelled { return }
-                let offered = Self.routes(answer, listed: listed)
+                // Only the answer to this very request: the review binds the answer's amount and minimum, so an answer
+                // for another amount, pair, direction or slippage is never shown or reviewed.
+                let matches = answers(answer, sell: request.sell, buy: request.buy, amount: request.amount, slippageBps: request.slippageBps)
+                let offered = matches ? Self.routes(answer, listed: listed) : []
                 // An answer whose every route the phone would refuse to sign is no route at all: Monad's words, and
                 // nothing to review (a server that offered such a route before it kept to the allowlist itself).
                 result = offered.isEmpty ? nil : answer
                 resultKey = key
-                error = offered.isEmpty ? Self.noRoute : nil
+                error = !matches ? Self.unanswered : offered.isEmpty ? Self.noRoute : nil
                 selection = selection.following(offered)
                 if !offered.isEmpty { wait = Self.refreshDelay(expiresAt: answer.expiresAt, now: now()) }
             } catch {
@@ -505,8 +526,36 @@ final class StellarSwapModel {
         }
     }
 
+    /// Whether `quote` answers exactly what was asked: `amount` of `sell` for `buy`, in that direction, at `slippageBps`.
+    /// The server names a side by its registry id where it has one ("USDC" for its contract or CODE:ISSUER), so two ids
+    /// name the same side when they are equal or name the same contract (`assetContract`).
+    func answers(_ quote: SwapQuote, sell: String, buy: String, amount: Int64, slippageBps: Int) -> Bool {
+        Int64(quote.amountIn) == amount && quote.slippageBps == slippageBps && sameAsset(quote.sell, sell) && sameAsset(quote.buy, buy)
+    }
+
+    private func sameAsset(_ a: String, _ b: String) -> Bool {
+        if a == b { return true }
+        guard let contract = assetContract(a) else { return false }
+        return contract == assetContract(b)
+    }
+
+    /// The contract an asset id names: a registry asset's (by its id or contract), a C… as it is, or a classic asset's
+    /// ("native", CODE:ISSUER) as Stellar derives it; nil for anything else.
+    private func assetContract(_ id: String) -> String? {
+        if let registry = source?.config?.asset(id) { return registry.contract }
+        if StrKey.isValid(.contract, id) { return id }
+        if id == "native" { return AssetContract.id(.native, network: network) }
+        let parts = id.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, (1...12).contains(parts[0].count), StrKey.isValid(.accountID, parts[1]) else { return nil }
+        return AssetContract.id(.credit(code: parts[0], issuer: parts[1]), network: network)
+    }
+
     /// What Swap says when no venue offers a route it would sign, as Monad's Swap says it.
     static var noRoute: String { tr("No venue can route this pair right now.") }
+
+    /// What Swap says when the answer isn't the quote it asked for: an answer the app can't use, as every Stellar screen
+    /// words it (`LiteErrorText`). The next refresh asks again.
+    static var unanswered: String { LiteErrorText.describe(LiteAPIError.decoding("the swap quote")) }
 
     /// A failed quote, as a person reads it: the server finding no route at all reads as Monad's Swap words it; anything
     /// else as every Stellar error does (`LiteErrorText`).
@@ -523,16 +572,17 @@ final class StellarSwapModel {
         return .milliseconds(Int64(max(1, left) * 1000))
     }
 
-    /// A quote's routes, the best first: one per venue that answered (`SwapQuote.routes`), but for a route the phone would
-    /// refuse to sign (`signable`), so the first left is the best. An older server's answer without them is its best route
-    /// only, the one the store binds without them.
+    /// A quote's routes, the best first: one per venue that answered (`SwapQuote.routes`), but for a venue Swap doesn't
+    /// offer (`venues`) and a route the phone would refuse to sign (`signable`), so the first left is the best. An older
+    /// server's answer without them is its best route only, the one the store binds without them.
     static func routes(_ quote: SwapQuote, listed: Set<String>) -> [StellarSwapRoute] {
         guard let routes = quote.routes, !routes.isEmpty else {
             let best = quote.best
+            guard venues.contains(best.venue.lowercased()) else { return [] }
             return [route(venue: best.venue, amountOut: best.amountOut, minOut: best.minOut, impact: nil, path: best.path, best: true,
                           slippageBps: quote.slippageBps)]
         }
-        let kept = routes.filter { signable(venue: $0.venue, path: $0.path, listed: listed) }
+        let kept = routes.filter { venues.contains($0.venue.lowercased()) && signable(venue: $0.venue, path: $0.path, listed: listed) }
         let best = kept.first(where: \.best)?.venue ?? kept.first?.venue
         return kept.map { route(venue: $0.venue, amountOut: $0.amountOut, minOut: $0.minOut, impact: $0.priceImpactBps, path: $0.path,
                                 best: $0.venue == best, slippageBps: quote.slippageBps) }

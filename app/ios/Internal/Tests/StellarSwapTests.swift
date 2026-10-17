@@ -1,8 +1,10 @@
 // Stellar's Swap (docs/DESIGN-stellar-parity.md §8.6.1, §8.6.2, §4.5): the review builds the venue on screen and binds the
-// minimum the screen shows, a route the phone would refuse to sign is never offered, quotes refresh every 15 seconds or
-// at expiry, Max and the percent buttons keep XLM's fee and minimum balance back, the starter swap fills the whole
-// balance, a coin on its curve is never quoted, Swap History shows what each swap really brought in a read of its own,
-// the source rules Swap keeps, and, against a Lite server on testnet, swaps that settle.
+// minimum the screen shows, only the answer to the request on screen is shown or reviewed, a route the phone would
+// refuse to sign is never offered and neither is Aquarius (decision O7), quotes refresh every 15 seconds or at expiry,
+// a custom slippage is capped to what a Stellar swap takes, Max and the percent buttons keep XLM's fee and minimum
+// balance back, the starter swap fills the whole balance, a coin on its curve is never quoted, Swap History shows what
+// each swap really brought in a read of its own, the review's rows in Monad's order with no "To" for the account
+// itself, the source rules Swap keeps, and, against a Lite server on testnet, swaps that settle.
 @testable import DyorHQ
 import DyorKit
 import DyorLite
@@ -109,6 +111,20 @@ final class StellarSwapTests: XCTestCase {
             """)
     }
 
+    /// `/v1/config`'s registry: XLM and USDC by their ids, contracts and classic assets (EURC isn't one of them).
+    private func config() throws -> LiteConfig {
+        let asset = { (id: String, contract: String, classic: String) in
+            "{\"id\": \"\(id)\", \"code\": \"\(id)\", \"name\": \"\(id)\", \"decimals\": 7, \"contract\": \"\(contract)\", \"classic\": \"\(classic)\"}"
+        }
+        return try decode(LiteConfig.self, """
+            {"network": "testnet", "passphrase": "Test SDF Network ; September 2015", "rpcUrl": "https://soroban-testnet.stellar.org",
+             "horizonUrl": "https://horizon-testnet.stellar.org", "activation": "friendbot", "sponsor": "",
+             "assets": [\(asset("XLM", xlmContract, "native")), \(asset("USDC", usdcContract, usdcClassic))],
+             "contracts": {"soroswapRouter": "CCJUD55AG6W5HAI5LRVNKAE5WDP5XGZBUDS5WNTIVDU7O264UZZE7BRD", "blendPools": []},
+             "allowlist": {}, "bridge": {"routes": []}, "flags": {"enabled": true}, "minBuild": 1}
+            """)
+    }
+
     /// A Top Tokens row: a registry asset, or a DyorHQ coin in `phase`.
     private func row(_ id: String, code: String, contract: String, classic: String?, price: Double? = nil, phase: String? = nil) throws -> StellarMarketRow {
         try decode(StellarMarketRow.self, """
@@ -126,20 +142,22 @@ final class StellarSwapTests: XCTestCase {
          try row("EURC", code: "EURC", contract: eurcContract, classic: eurcClassic, price: 1.1)]
     }
 
-    /// `/v1/swap/quote` for 10 XLM → USDC: each route's venue, amount out, minimum, and whether it is the best; a route's
-    /// path when `paths` names one for its venue (XLM → USDC direct otherwise).
+    /// `/v1/swap/quote` for 10 XLM → USDC at 1% (or what `sell`, `buy`, `amountIn` and `slippageBps` say): each route's
+    /// venue, amount out, minimum, and whether it is the best; a route's path when `paths` names one for its venue (XLM →
+    /// USDC direct otherwise).
     private func quote(_ routes: [(venue: String, out: Int64, minOut: Int64)], expiresIn: TimeInterval = 60, needsEnable: [String] = [],
-                       paths: [String: [String]] = [:]) throws -> SwapQuote {
+                       paths: [String: [String]] = [:], impacts: [String: Int] = ["soroswap": 42], sell: String = "XLM", buy: String = "USDC",
+                       amountIn: Int64 = 100_000_000, slippageBps: Int = 100) throws -> SwapQuote {
         let rows = routes.enumerated().map { index, route in
             let path = paths[route.venue] ?? (route.venue == "sdex" ? ["native", usdcClassic] : [xlmContract, usdcContract])
             return """
-            {"venue": "\(route.venue)", "amountOut": "\(route.out)", "minOut": "\(route.minOut)", "priceImpactBps": \(route.venue == "soroswap" ? "42" : "null"),
+            {"venue": "\(route.venue)", "amountOut": "\(route.out)", "minOut": "\(route.minOut)", "priceImpactBps": \(impacts[route.venue].map(String.init) ?? "null"),
              "path": [\(path.map { "\"\($0)\"" }.joined(separator: ", "))], "best": \(index == 0)}
             """
         }
         let best = try XCTUnwrap(routes.first)
         return try decode(SwapQuote.self, """
-            {"quoteId": "\(UUID().uuidString.lowercased())", "sell": "XLM", "buy": "USDC", "amountIn": "100000000", "slippageBps": 100,
+            {"quoteId": "\(UUID().uuidString.lowercased())", "sell": "\(sell)", "buy": "\(buy)", "amountIn": "\(amountIn)", "slippageBps": \(slippageBps),
              "best": {"venue": "\(best.venue)", "amountOut": "\(best.out)", "path": [], "minOut": "\(best.minOut)"}, "alternatives": [],
              "expiresAt": "\(iso(now.addingTimeInterval(expiresIn)))", "routes": [\(rows.joined(separator: ", "))],
              "needsEnable": [\(needsEnable.map { "\"\($0)\"" }.joined(separator: ", "))], "starterSwap": {"eligible": false, "reason": null}}
@@ -188,19 +206,19 @@ final class StellarSwapTests: XCTestCase {
     }
 
     /// Owner bug 1a: testnet's Aquarius quoted XLM → USDC best through AQUA and USDT, tokens off the allowlist, so Review
-    /// built a route both verifiers refuse and every swap failed. Swap never offers such a route: the best left is the one
-    /// preselected, named Best, and built.
+    /// built a route both verifiers refuse and every swap failed. Swap never offers such a route, whichever venue quotes
+    /// it: the best left is the one preselected, named Best, and built.
     func testARouteThroughATokenThePhoneWouldRefuseIsNeverOffered() async throws {
         let aqua = "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE"
         let usdt = "CBL6KD2LFMLAUKFFWNNXWOXFN73GAXLEA4WMJRLQ5L76DMYTM3KWQVJN"
         let source = FakeSwapSource()
-        source.quotes = [try quote([("aquarius", 76_955_448, 76_185_893), ("sdex", 44_593_109, 44_147_177), ("soroswap", 5_307_000, 5_253_930)],
-                                   paths: ["aquarius": [xlmContract, aqua, usdt, usdcContract]])]
+        source.quotes = [try quote([("soroswap", 76_955_448, 76_185_893), ("sdex", 44_593_109, 44_147_177)],
+                                   paths: ["soroswap": [xlmContract, aqua, usdt, usdcContract]], amountIn: 500_000_000)]
         let model = try model(source)
         model.amountText = "50"
         await quoteOnce(model)
-        XCTAssertEqual(model.routes.map(\.venue), ["sdex", "soroswap"], "Aquarius's route goes through AQUA and USDT")
-        XCTAssertEqual(model.routes.map(\.best), [true, false], "the best left is the best")
+        XCTAssertEqual(model.routes.map(\.venue), ["sdex"], "Soroswap's route goes through AQUA and USDT")
+        XCTAssertEqual(model.routes.map(\.best), [true], "the best left is the best")
         XCTAssertEqual(model.shownRoute?.venue, "sdex", "and is preselected")
         let review = try XCTUnwrap(model.review)
         XCTAssertEqual(review.route.minimum, 44_147_177)
@@ -214,6 +232,35 @@ final class StellarSwapTests: XCTestCase {
                       "through a pinned token to the coin chosen")
         XCTAssertFalse(StellarSwapModel.signable(venue: "soroswap", path: [xlmContract, coin, usdcContract], listed: pinned))
         XCTAssertTrue(StellarSwapModel.signable(venue: "sdex", path: ["native", eurcClassic, usdcClassic], listed: pinned))
+    }
+
+    /// Owner bug 8: an Aquarius route showed an impact read along another chain (64% for a direct pool's 0.85%). Aquarius
+    /// is off for swaps (decision O7): whatever a server quotes, no Aquarius route, impact or review shows, and the best
+    /// left is the one preselected and built.
+    func testAquariusIsNeverOfferedWhileItIsOff() async throws {
+        let source = FakeSwapSource()
+        source.quotes = [try quote([("aquarius", 32_244_608_678, 31_922_162_591), ("sdex", 31_000_000_000, 30_690_000_000),
+                                    ("soroswap", 3_000_000_000, 2_970_000_000)], impacts: ["aquarius": 6_417, "soroswap": 42],
+                                   amountIn: 50_000_000_000)]
+        let model = try model(source)
+        model.amountText = "5000"
+        await quoteOnce(model)
+        XCTAssertEqual(model.routes.map(\.venue), ["sdex", "soroswap"])
+        XCTAssertEqual(model.routes.map(\.best), [true, false], "the Stellar DEX is the best Swap offers")
+        XCTAssertEqual(model.routes.compactMap(\.priceImpactBps), [42], "Soroswap's own impact only, never Aquarius's 64.17%")
+        let review = try XCTUnwrap(model.review)
+        _ = try? await model.plan(for: review)
+        XCTAssertEqual(source.built, ["sdex"])
+        XCTAssertFalse(StellarSwapModel.venues.contains("aquarius"))
+        XCTAssertFalse(StellarSwapModel.swapStepKinds.contains("swap_aquarius"), "Max keeps back what an offered venue costs")
+
+        // An older server's answer whose only route is Aquarius's offers nothing.
+        let legacy = try decode(SwapQuote.self, """
+            {"quoteId": "q", "sell": "XLM", "buy": "USDC", "amountIn": "100000000", "slippageBps": 100,
+             "best": {"venue": "aquarius", "amountOut": "19000000", "path": ["\(xlmContract)", "\(usdcContract)"], "minOut": "18810000"},
+             "alternatives": [], "expiresAt": "\(iso(now))"}
+            """)
+        XCTAssertTrue(StellarSwapModel.routes(legacy, listed: PinnedContracts.testnet.allContracts).isEmpty)
     }
 
     func testAPickIsKeptUntilAnAnswerDoesntQuoteIt() throws {
@@ -276,6 +323,70 @@ final class StellarSwapTests: XCTestCase {
         XCTAssertTrue(model.awaitingQuote)
     }
 
+    /// The review binds the answer's amount as the spend and its route's minimum (`LiteStore.swapPlan`), so only the
+    /// answer to the request on screen counts: an answer for another amount, direction, asset or slippage is never shown
+    /// or reviewed, and the next refresh asks again.
+    func testOnlyTheAnswerForTheRequestOnScreenIsShownOrReviewed() async throws {
+        let routes: [(venue: String, out: Int64, minOut: Int64)] = [("sdex", 94_690_160, 93_743_258)]
+        let wrong = [
+            ("another amount", try quote(routes)), // 10 XLM, for the 50 typed
+            ("the other direction", try quote(routes, sell: "USDC", buy: "XLM", amountIn: 500_000_000)),
+            ("another asset", try quote(routes, buy: "EURC", amountIn: 500_000_000)),
+            ("another slippage", try quote(routes, amountIn: 500_000_000, slippageBps: 1_000)),
+        ]
+        for (what, answer) in wrong {
+            let source = FakeSwapSource()
+            source.quotes = [answer]
+            let model = try model(source)
+            model.amountText = "50"
+            var waits: [Duration] = []
+            await model.quote(sleep: { wait in
+                waits.append(wait)
+                if waits.count == 2 { throw Stop() }
+            }, now: { self.now })
+            XCTAssertEqual(source.quoted.map(\.amount), [500_000_000], what)
+            XCTAssertNil(model.currentResult, what)
+            XCTAssertTrue(model.routes.isEmpty, what)
+            XCTAssertNil(model.shownRoute, "\(what): no amount under You Receive")
+            XCTAssertNil(model.review, "\(what): nothing to review")
+            XCTAssertEqual(model.currentError, StellarSwapModel.unanswered, what)
+            XCTAssertEqual(waits, [.milliseconds(400), .seconds(15)], "\(what): asked again at the next refresh")
+        }
+
+        // The same request, with each side named as the server names it: its registry id for a contract or a CODE:ISSUER,
+        // and a classic asset the registry doesn't list by CODE:ISSUER for its contract.
+        let source = FakeSwapSource()
+        source.config = try config()
+        let model = try model(source)
+        model.select(usdcContract, for: .receive)
+        model.amountText = "50"
+        source.quotes = [try quote(routes, amountIn: 500_000_000)]
+        await quoteOnce(model)
+        XCTAssertEqual(source.quoted.last?.buy, usdcContract)
+        XCTAssertNotNil(model.review, "USDC's contract, answered as USDC")
+        model.select(usdcClassic, for: .receive)
+        await quoteOnce(model)
+        XCTAssertNotNil(model.review, "USDC's CODE:ISSUER, answered as USDC")
+        model.select(eurcContract, for: .receive)
+        source.quotes = [try quote(routes, buy: eurcClassic, amountIn: 500_000_000)]
+        await quoteOnce(model)
+        XCTAssertNotNil(model.review, "EURC's contract, answered as EURC:ISSUER")
+        XCTAssertFalse(model.answers(try quote(routes, buy: eurcClassic, amountIn: 500_000_000), sell: "XLM", buy: usdcContract, amount: 500_000_000,
+                                     slippageBps: 100))
+
+        // A review is built only from the answer to its own request.
+        let review = try XCTUnwrap(model.review)
+        let stale = StellarSwapReview(quote: try quote(routes, buy: eurcClassic), route: review.route, sell: review.sell, buy: review.buy,
+                                      amountIn: review.amountIn, slippageBps: review.slippageBps)
+        do {
+            _ = try await model.plan(for: stale)
+            XCTFail("a plan for another amount")
+        } catch {
+            XCTAssertEqual(error as? PlanRunner.Failure, .refused(step: tr("Swap"), reason: "the quote isn't for the amount you typed"))
+        }
+        XCTAssertTrue(source.built.isEmpty, "never asked to build it")
+    }
+
     func testAFailedQuoteSaysWhyAndCantBeReviewed() async throws {
         let source = FakeSwapSource()
         let model = try model(source)
@@ -286,14 +397,15 @@ final class StellarSwapTests: XCTestCase {
         XCTAssertTrue(model.routes.isEmpty)
     }
 
-    /// A server that answers only with routes the phone would refuse to sign (before it kept to the allowlist itself,
-    /// testnet's Aquarius alone could answer a pair through AQUA and USDT) has offered no route: Swap says so in Monad's
+    /// A server that answers only with routes the phone would refuse to sign (before it kept to the allowlist itself, a
+    /// venue alone could answer a pair through AQUA and USDT) has offered no route: Swap says so in Monad's
     /// words, offers nothing to review, and asks again at the next refresh. The server's own "no route" reads the same.
     func testAnAnswerWithNoRouteThePhoneWouldSignReadsAsNoRoute() async throws {
         let aqua = "CDNVQW44C3HALYNVQ4SOBXY5EWYTGVYXX6JPESOLQDABJI5FC5LTRRUE"
         let usdt = "CBL6KD2LFMLAUKFFWNNXWOXFN73GAXLEA4WMJRLQ5L76DMYTM3KWQVJN"
         let source = FakeSwapSource()
-        source.quotes = [try quote([("aquarius", 76_955_448, 76_185_893)], paths: ["aquarius": [xlmContract, aqua, usdt, usdcContract]])]
+        source.quotes = [try quote([("soroswap", 76_955_448, 76_185_893)], paths: ["soroswap": [xlmContract, aqua, usdt, usdcContract]],
+                                   amountIn: 500_000_000)]
         let model = try model(source)
         model.amountText = "50"
         var waits: [Duration] = []
@@ -323,7 +435,7 @@ final class StellarSwapTests: XCTestCase {
         // 10,000 XLM with USDC enabled: 1.5 XLM is kept, and the costliest venue's fee (0.05 XLM) with a quarter more.
         model.applyMax()
         XCTAssertEqual(Set(source.maxAsked.map(\.stepKind)), Set(StellarSwapModel.swapStepKinds))
-        XCTAssertEqual(source.maxAsked.map(\.newReserves), [0, 0, 0], "USDC is enabled: nothing to hold back for it")
+        XCTAssertEqual(source.maxAsked.map(\.newReserves), [0, 0], "USDC is enabled: nothing to hold back for it")
         XCTAssertEqual(model.maxIn, 99_984_375_000, "9,998.4375 XLM (§4.5)")
         XCTAssertEqual(model.amountText, "9998.43", "rounded down to six significant digits")
         XCTAssertFalse(model.insufficient)
@@ -411,7 +523,7 @@ final class StellarSwapTests: XCTestCase {
 
     func testACoinOnItsCurveIsNeverQuoted() async throws {
         let source = FakeSwapSource()
-        source.quotes = [try quote([("soroswap", 1, 1)])]
+        source.quotes = [try quote([("soroswap", 1, 1)], paths: ["soroswap": [xlmContract, coin]], buy: coin)]
         let model = try model(source)
         model.markets += [try row(coin, code: "ECAT", contract: coin, classic: nil, phase: "curve")]
         model.select(coin, for: .receive)
@@ -426,6 +538,7 @@ final class StellarSwapTests: XCTestCase {
         XCTAssertNil(model.curveToken)
         await quoteOnce(model)
         XCTAssertEqual(source.quoted.count, 1, "a graduated coin trades on Swap")
+        XCTAssertNotNil(model.review)
         XCTAssertFalse(model.needsEnable, "a coin lives on Soroban: no trustline")
     }
 
@@ -448,7 +561,7 @@ final class StellarSwapTests: XCTestCase {
     /// cadence: its price follows its pool, and a coin that graduates while Swap is on screen is quoted from then on.
     func testASideLookedUpIsReadAgainSoItsPriceAndPhaseFollowTheMarket() async throws {
         let source = FakeSwapSource()
-        source.quotes = [try quote([("soroswap", 1, 1)])]
+        source.quotes = [try quote([("soroswap", 1, 1)], paths: ["soroswap": [xlmContract, coin]], buy: coin)]
         let model = StellarSwapModel(defaults: try temporaryDefaults())
         source.account = try account()
         source.fees = try fees()
@@ -487,6 +600,48 @@ final class StellarSwapTests: XCTestCase {
     }
 
     // MARK: - Slippage
+
+    /// Owner bug: a custom 15% (or 0.004%) made every quote fail, and Swap stayed broken each time it opened, the value
+    /// being saved. A Stellar swap takes 0.01% to 10%: Monad's sheet, given that range, caps a custom value to it (and says
+    /// so), takes the rest as Monad does, and a value an earlier build saved outside it is never used.
+    func testACustomSlippageIsCappedToWhatAStellarSwapTakes() async throws {
+        let range = StellarSwapModel.slippageRange
+        XCTAssertEqual(range, 1...1_000, "/v1/swap/quote takes 1 to 1,000 bps")
+        XCTAssertEqual(SlippageSheet.customBps("15", range: range), 1_000, "above 10%: 10%")
+        XCTAssertEqual(SlippageSheet.customBps("0.004", range: range), 1, "under 0.01%: 0.01%")
+        XCTAssertEqual(SlippageSheet.customBps("0.5", range: range), 50, "inside the range, as Monad takes it")
+        XCTAssertEqual(SlippageSheet.customBps("10", range: range), 1_000)
+        for ignored in ["60", "0", "-1", "", "abc"] { XCTAssertNil(SlippageSheet.customBps(ignored, range: range), ignored) }
+        XCTAssertEqual(SlippageSheet.customBps("15", range: nil), 1_500, "Monad's sheet is unchanged")
+        XCTAssertEqual(SlippageSheet.customBps("0.004", range: nil), 0)
+
+        // A value saved outside the range by an earlier build reads as the default, and the quote asks for that.
+        let defaults = try temporaryDefaults()
+        let source = FakeSwapSource()
+        for (saved, read) in [(1_500, 100), (0, 100), (-5, 100), (1_000, 1_000), (1, 1)] {
+            defaults.set(saved, forKey: StellarSwapModel.slippageKey(source.address))
+            XCTAssertEqual(StellarSwapModel.storedSlippage(for: source.address, defaults: defaults), read, "saved \(saved)")
+        }
+        defaults.set(1_500, forKey: StellarSwapModel.slippageKey(source.address))
+        source.account = try account()
+        source.fees = try fees()
+        source.quotes = [try quote([("sdex", 18_938_032, 18_748_651)])]
+        let model = StellarSwapModel(defaults: defaults)
+        model.attach(source)
+        model.markets = try markets()
+        model.amountText = "10"
+        await quoteOnce(model)
+        XCTAssertEqual(source.quoted.map(\.slippageBps), [100])
+        XCTAssertNotNil(model.review)
+
+        // The highest a swap takes is quoted and reviewed like any other.
+        model.slippageBps = try XCTUnwrap(SlippageSheet.customBps("15", range: range))
+        source.quotes = [try quote([("sdex", 18_938_032, 17_044_228)], slippageBps: 1_000)]
+        await quoteOnce(model)
+        XCTAssertEqual(source.quoted.last?.slippageBps, 1_000)
+        XCTAssertEqual(model.review?.route.minimum, 17_044_228)
+        XCTAssertEqual(model.review?.slippageBps, 1_000)
+    }
 
     func testSlippageIsKeptPerAddressUnderLite() throws {
         let defaults = try temporaryDefaults()
@@ -753,6 +908,8 @@ final class StellarSwapTests: XCTestCase {
         let review = try XCTUnwrap(model.review, "no review: \(model.currentError ?? "no quote") \(model.actionTitle); amount \(model.amountIn), max \(model.maxIn.map(String.init) ?? "nil"), enable \(model.needsEnable), \(position)")
         let action = try await model.plan(for: review)
         XCTAssertEqual(Array(action.bindings.minimums.values), [review.route.minimum], "the minimum shown is the one bound")
+        XCTAssertEqual(action.limits.values.first, review.amountIn, "the amount typed is the one spent")
+        XCTAssertNil(StellarBoundRows.recipient(action.bindings, intents: action.plan.steps.compactMap(\.intent)), "no To row: it pays the account")
         XCTAssertEqual(action.plan.steps.last.map { $0.label }, "Swap via \(review.route.venue == "sdex" ? "SDEX" : StellarSwapRoute.name(review.route.venue))",
                        "the venue on screen is the one built")
         let results = try await store.run(action, reason: "Confirm Swap")
@@ -780,6 +937,51 @@ final class StellarSwapTests: XCTestCase {
         let (data, _) = try await URLSession.shared.data(from: url)
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(body["fee_account"] as? String, address, "Horizon's fee_account")
+    }
+
+    // MARK: - The review
+
+    /// The review's "To" row is for a plan that pays an address the user typed or confirmed. A swap's plan is held to the
+    /// account itself (`.own`: the run refuses any other address), so its review lists no "To" with the user's own G….
+    func testTheReviewShowsNoToRowForAPlanHeldToTheAccountItself() throws {
+        let me = FakeSwapSource().address
+        let friend = "GDQNY3PBOJOKYZSRMK2S7LHHGWZIUISD4QORETLMXEWXBI7KFZZMKTL3"
+        let swap = try decode(Intent.self, """
+            {"kind": "swap", "summary": "Swap 10 XLM for at least 1.8 USDC", "spend": {"\(xlmContract)": "100000000"},
+             "receive": {"\(usdcContract)": "18000000"}, "to": "\(me)"}
+            """)
+        let send = try decode(Intent.self, """
+            {"kind": "payment", "summary": "Send 5 USDC", "spend": {"\(usdcContract)": "50000000"}, "to": "\(friend)"}
+            """)
+        XCTAssertNil(StellarBoundRows.recipient(PlanBindings(minimums: [usdcContract: 18_000_000]), intents: [swap]), "a swap pays the account itself")
+        XCTAssertEqual(StellarBoundRows.recipient(PlanBindings(destination: .confirmed(to: friend, memo: nil)), intents: [send]), friend,
+                       "a send shows the address typed, whole")
+        XCTAssertEqual(StellarBoundRows.recipient(PlanBindings(destination: .unchecked), intents: [send]), friend)
+    }
+
+    /// Monad's review rows in Monad's order (§8.6.1, SwapView.swift's SwapConfirmation): You pay, You receive, Minimum
+    /// received, Venue, Route, Slippage. You pay and Minimum received are the plan's own rows (`receives` puts them).
+    func testTheReviewListsMonadsRowsInMonadsOrder() throws {
+        var folder = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { folder.deleteLastPathComponent() }
+        let sheet = try String(contentsOf: folder.appendingPathComponent("DyorHQ/Lite/Wallet/StellarConfirmationSheet.swift"), encoding: .utf8)
+        let order = ["parts: [.spends]", "DetailRow(\"You receive\", verbatim: receives)", "parts: [.minimums], minimumReceived: true", "details",
+                     "parts: [.destination]"]
+        let start = try XCTUnwrap(sheet.range(of: "if let receives {"))
+        var at = start.upperBound
+        for part in order {
+            let found = try XCTUnwrap(sheet.range(of: part, range: at..<sheet.endIndex), part)
+            at = found.upperBound
+        }
+        XCTAssertTrue(sheet.contains("minimumReceived ? Text(\"Minimum received\") : Text(\"Minimum\")"), "Monad's label for the bound minimum")
+        let view = try XCTUnwrap(try swapSources().first { $0.name == "StellarSwapView.swift" }?.text)
+        let confirmation = try XCTUnwrap(view.range(of: "receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals)) {"))
+        let rest = view[confirmation.upperBound...]
+        let venue = try XCTUnwrap(rest.range(of: "DetailRow(\"Venue\""))
+        let route = try XCTUnwrap(rest.range(of: "DetailRow(\"Route\""))
+        let slippage = try XCTUnwrap(rest.range(of: "DetailRow(\"Slippage\", NumberStyle.basisPoints(review.slippageBps))"))
+        XCTAssertTrue(venue.lowerBound < route.lowerBound && route.lowerBound < slippage.lowerBound)
+        XCTAssertFalse(rest.prefix(upTo: slippage.upperBound).contains("You receive"), "You receive is the sheet's, after You pay")
     }
 
     // MARK: - Source rules
