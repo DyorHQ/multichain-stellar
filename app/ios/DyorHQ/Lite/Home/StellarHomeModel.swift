@@ -329,11 +329,11 @@ final class StellarHomeModel {
         takeVolumes(store.portfolio, now: now)
     }
 
-    /// Takes in Portfolio's reads, by period: Total Volume, for what Home saves.
+    /// Takes in Portfolio's reads, by period: Total Volume, as Portfolio totals it, for what Home saves.
     func takeVolumes(_ portfolios: [VolumePeriodKey: StellarPortfolio], now: Date = Date()) {
         var changed = false
         for (key, portfolio) in portfolios {
-            let volume = Volume(usd: portfolio.totals.volume, readAt: StellarFormat.date(portfolio.asOf).map { min($0, now) } ?? now)
+            let volume = Volume(usd: StellarPortfolioModel.totals(portfolio).volume, readAt: StellarFormat.date(portfolio.asOf).map { min($0, now) } ?? now)
             if liveVolumes[key] != volume {
                 liveVolumes[key] = volume
                 changed = true

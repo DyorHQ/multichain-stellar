@@ -65,35 +65,6 @@
         }
       }
     },
-    "Bridge from Monad" : {
-      "comment" : "Stellar Home, the add-funds card: a row that opens the bridge, to move USDC from the user's Monad account to Stellar. Monad is never translated",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Puente desde Monad"
-          }
-        },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Bridge depuis Monad"
-          }
-        },
-        "ko" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Monad에서 브리지하기"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "从 Monad 跨链转入"
-          }
-        }
-      }
-    },
     "Closed" : {
       "comment" : "[tight] Stellar Home, My Holdings' Moments tab: the Moment's collecting window has closed or it sold out, so no more editions can be collected (an adjective)",
       "localizations" : {

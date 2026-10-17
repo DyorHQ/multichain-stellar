@@ -77,7 +77,6 @@ final class StellarRoutingTests: XCTestCase {
             .earn(market: nil), .earn(market: "\(token)XLM"),
             .launch(token: nil), .launch(token: token),
             .moment(id: nil), .moment(id: 0), .moment(id: 42),
-            .bridge(id: nil), .bridge(id: "6f1c2a4e-0b7d-4c55-9a51-2d1e0f3b8c90"),
         ]
         for destination in destinations {
             XCTAssertTrue(destination.reference.hasPrefix("stellar:"), destination.reference)
@@ -98,7 +97,6 @@ final class StellarRoutingTests: XCTestCase {
         XCTAssertEqual(StellarDestination(reference: "stellar:earn/\(token)XLM"), .earn(market: "\(token)XLM"))
         XCTAssertEqual(StellarDestination(reference: "stellar:launch"), .launch(token: nil))
         XCTAssertEqual(StellarDestination(reference: "stellar:moment"), .moment(id: nil))
-        XCTAssertEqual(StellarDestination(reference: "stellar:bridge/abc-123"), .bridge(id: "abc-123"))
     }
 
     func testMonadReferencesAreRefused() {
@@ -233,6 +231,49 @@ final class StellarRoutingTests: XCTestCase {
         XCTAssertEqual(router.stellarTab, .home)
     }
 
+    /// Stellar has no Bridge for now: no destination is the bridge, and a bridge's notification posted before (its
+    /// reference "stellar:bridge[/<id>]", `LiteStore`) opens Stellar Home, with nothing pending over it.
+    func testThereIsNoBridgeAndABridgesNotificationOpensStellarHome() throws {
+        let references = ["stellar:bridge", "stellar:bridge/6f1c2a4e-0b7d-4c55-9a51-2d1e0f3b8c90", "stellar:bridge/abc-123"]
+        for reference in references {
+            XCTAssertNil(StellarDestination(reference: reference), reference)
+            let router = makeRouter(on: .monad)
+            router.stellarTab = .moments
+            router.pendingStellar = .moment(id: 5)
+            router.presented = .notifications
+            router.open(route: .home, reference: reference)
+            XCTAssertEqual(router.network, .stellar, reference)
+            XCTAssertEqual(router.stellarTab, .home, reference)
+            XCTAssertNil(router.pendingStellar, reference)
+            XCTAssertNil(router.presented, reference)
+        }
+        var routing = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { routing.deleteLastPathComponent() } // StellarRoutingTests.swift → Tests → Internal → ios
+        let text = try String(contentsOf: routing.appending(path: "DyorHQ/Lite/Core/StellarRouting.swift"), encoding: .utf8)
+        XCTAssertFalse(text.contains("case bridge"), "no Stellar destination is the bridge")
+        XCTAssertFalse(text.contains("case \"bridge\""), "no Stellar reference reads as the bridge")
+    }
+
+    /// Nothing on Stellar opens a bridge or signs on Monad: no Stellar source presents one or hands the session a Monad
+    /// wallet, and the Stellar bridge screen is gone.
+    func testNoStellarSourceOpensABridgeOrSignsOnMonad() throws {
+        var lite = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { lite.deleteLastPathComponent() } // StellarRoutingTests.swift → Tests → Internal → ios
+        lite.append(path: "DyorHQ/Lite")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: lite, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 20)
+        for file in files {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for gone in ["StellarBridgeView", "LiteLegacyScreens.bridge", "MonadBridgeAdapter", "LiteMonadBridge", "bridgeIn(", "bridgeOutPlan(", "claimOnMonad("] {
+                XCTAssertFalse(text.contains(gone), "\(file.lastPathComponent): \(gone)")
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: lite.appending(path: "Bridge").path), "the Stellar bridge screen is gone")
+        let root = try String(contentsOf: lite.appending(path: "NetworkRoot.swift"), encoding: .utf8)
+        XCTAssertTrue(root.contains("monad: nil,"), "the Stellar session has no Monad wallet")
+    }
+
     func testEachDestinationsTabSideAndPending() {
         let cases: [(StellarDestination, StellarTab, StellarTradeMode, StellarDestination?)] = [
             (.home, .home, .earn, nil),
@@ -243,7 +284,6 @@ final class StellarRoutingTests: XCTestCase {
             (.launch(token: token), .launch, .earn, .launch(token: token)),
             (.moment(id: nil), .moments, .earn, nil),
             (.moment(id: 5), .moments, .earn, .moment(id: 5)),
-            (.bridge(id: "t1"), .home, .earn, .bridge(id: "t1")),
         ]
         for (destination, tab, mode, pending) in cases {
             let router = makeRouter()

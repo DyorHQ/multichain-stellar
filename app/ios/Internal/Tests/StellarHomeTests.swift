@@ -189,6 +189,28 @@ final class StellarHomeTests: XCTestCase {
         XCTAssertTrue(afterSignOut.savedVolumes.isEmpty)
     }
 
+    /// Stellar has no Bridge for now: Total Volume is Portfolio's cumulative volume, its four sections added up, never the
+    /// server's total, which counts a past bridge too.
+    func testTotalVolumeLeavesOutAPastBridgeAsPortfolioDoes() async throws {
+        func stats(_ volume: Double) -> String {
+            #"{"volume": \#(volume), "fees": 0, "pnl": 0, "claimedFees": 0, "trades": 1, "pnlComplete": true, "networkFeesXlm": "0", "networkFeesUsd": 0}"#
+        }
+        let asOf = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-120))
+        let read = try decode(StellarPortfolio.self, """
+            {"period": "all", "since": null, "asOf": "\(asOf)",
+             "pricing": {"kind": "reference", "source": "Kraken", "network": "mainnet", "note": null},
+             "totals": \(stats(54.5)), "sections": {"spot": \(stats(30)), "earn": \(stats(10)), "launch": \(stats(2)), "moments": \(stats(0)), "bridge": \(stats(12.5))},
+             "activity": [], "coverage": {"from": null, "note": null}}
+            """)
+        let saved = temporarySaved()
+        let first = model(saved)
+        first.take(try holdings(asOf: asOf), statuses: Self.allRead)
+        first.takeVolumes([.all: read])
+        try await waitForSave(saved, volume: true)
+        XCTAssertEqual(model(saved).savedVolumes[.all]?.usd, 42, "Spot, Earn, Launch and Moments: the past bridge's 12.5 isn't counted")
+        XCTAssertEqual(StellarPortfolioModel.totals(read).volume, 42, "the figure Portfolio's Cumulative Volume shows")
+    }
+
     // MARK: - Top Tokens
 
     private func market(_ id: String, code: String, price: Double?, change: Double?, badges: [String] = [], isNew: Bool = false,
@@ -426,6 +448,33 @@ final class StellarHomeTests: XCTestCase {
                 XCTAssertFalse(text.contains(gone), "\(name): \(gone)")
             }
         }
+    }
+
+    /// Stellar has no Bridge for now (owner, 2026-10-16): Home's actions are Monad's but the Bridge, Deposit, Withdraw and
+    /// Transfer, in Monad's row (equal widths, its spacing), and nothing on Home, the add-funds card included, opens a
+    /// bridge. Monad's Home keeps its Bridge.
+    func testHomesActionsAreDepositWithdrawAndTransferAndNothingOpensABridge() throws {
+        let sources = Dictionary(uniqueKeysWithValues: try homeSources().map { ($0.name, $0.text) })
+        let view = try XCTUnwrap(sources["StellarHomeView.swift"])
+        let start = try XCTUnwrap(view.range(of: "private var quickActions: some View {"))
+        let end = try XCTUnwrap(view.range(of: "// MARK: Allocation", range: start.upperBound..<view.endIndex))
+        let row = String(view[start.upperBound..<end.lowerBound])
+        XCTAssertTrue(row.contains("HStack(spacing: 10) {"), "Monad's row and spacing")
+        let tile = try NSRegularExpression(pattern: #"StellarHomeAction\(title: "([^"]+)""#)
+        let titles = tile.matches(in: view, range: NSRange(view.startIndex..., in: view)).map { String(view[Range($0.range(at: 1), in: view)!]) }
+        XCTAssertEqual(titles, ["Deposit", "Withdraw", "Transfer"], "the row's tiles, and no other on Home")
+        XCTAssertEqual(tile.numberOfMatches(in: row, range: NSRange(row.startIndex..., in: row)), 3, "all three in the row")
+        XCTAssertTrue(try XCTUnwrap(sources["StellarHomeRows.swift"]).contains(".frame(maxWidth: .infinity)"), "each tile takes an equal share of the row")
+        for (name, text) in sources {
+            for gone in ["StellarBridgeView", "showBridge", "onBridge", "Bridge from Monad", "point.3.connected.trianglepath.dotted", ".bridge"] {
+                XCTAssertFalse(text.contains(gone), "\(name): \(gone)")
+            }
+        }
+        var monad = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { monad.deleteLastPathComponent() } // StellarHomeTests.swift → Tests → Internal → ios
+        let monadHome = try String(contentsOf: monad.appending(path: "DyorHQ/Home/HomeView.swift"), encoding: .utf8)
+        XCTAssertTrue(monadHome.contains(#"HomeAction(title: "Bridge", symbol: "point.3.connected.trianglepath.dotted") { showBridge = true }"#),
+                      "Monad's Home keeps its Bridge")
     }
 
     func testPasteboardDefaultsAndCoinValueRules() throws {
