@@ -1,0 +1,1382 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ market, supply APY %@" : {
+      "comment" : "VoiceOver: Stellar Earn's market header. The values are the asset's code (XLM) and the market's supply rate (4.21%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ market, supply APY %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mercado %1$@, APY de depósito %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marché %1$@, APY de dépôt %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 마켓, 예치 APY %2$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 市场，存款年化 %2$@"
+          }
+        }
+      }
+    },
+    "%@ market, supply APY %@, test network" : {
+      "comment" : "VoiceOver: Stellar Earn's market header on the test network. The values are the asset's code (XLM) and the market's supply rate (4.21%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ market, supply APY %2$@, test network"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mercado %1$@, APY de depósito %2$@, red de prueba"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marché %1$@, APY de dépôt %2$@, réseau de test"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 마켓, 예치 APY %2$@, 테스트 네트워크"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ 市场，存款年化 %2$@，测试网络"
+          }
+        }
+      }
+    },
+    "%@, %@ supplied, %@ APY" : {
+      "comment" : "VoiceOver: the account's position on Stellar Earn when what it earned isn't known. The values are the asset's code (XLM), the amount lent with its code (100 XLM) and the supply rate (4.21%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@ supplied, %3$@ APY"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ depositados, APY %3$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ fournis, APY %3$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ 예치, APY %3$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，已存入 %2$@，年化 %3$@"
+          }
+        }
+      }
+    },
+    "%@, %@ supplied, earned %@, %@ APY" : {
+      "comment" : "VoiceOver: the account's position on Stellar Earn. The values are the asset's code (XLM), the amount lent with its code (100 XLM), the interest earned so far with its sign and code, and in dollars when priced (+0.42 XLM (+$0.08)), and the supply rate (4.21%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@ supplied, earned %3$@, %4$@ APY"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ depositados, ganado %3$@, APY %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ fournis, gagné %3$@, APY %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@ 예치, 수익 %3$@, APY %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，已存入 %2$@，已赚取 %3$@，年化 %4$@"
+          }
+        }
+      }
+    },
+    "%@, %@, supply APY %@, utilization %@" : {
+      "comment" : "VoiceOver: a market in Stellar Earn's market picker. The values are the asset's code (XLM), the Blend pool's name, the supply rate (4.21%) and how much of the pool is lent out (62.30%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@, %2$@, supply APY %3$@, utilization %4$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@, APY de depósito %3$@, uso %4$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@, APY de dépôt %3$@, utilisation %4$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, %2$@, 예치 APY %3$@, 이용률 %4$@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@，%2$@，存款年化 %3$@，利用率 %4$@"
+          }
+        }
+      }
+    },
+    "Active" : {
+      "comment" : "[tight] Stellar Earn's header: a Blend pool's status chip; the pool takes deposits and lends as usual (an adjective)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actif"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "활성"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正常"
+          }
+        }
+      }
+    },
+    "At today's rate, which moves with demand." : {
+      "comment" : "Stellar Earn's ticket, under the estimated yearly interest: the estimate uses the current supply rate, which changes as borrowing changes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al tipo actual, que varía según la demanda."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Au taux actuel, qui varie selon la demande."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "현재 이율 기준이며, 이율은 수요에 따라 바뀌어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "按当前利率计算，利率随需求变化。"
+          }
+        }
+      }
+    },
+    "Available in wallet" : {
+      "comment" : "[tight] Stellar Earn's Assets tab: what the wallet (Spot) holds of the assets Earn lends, in dollars, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponible en la billetera"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponible dans le portefeuille"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지갑 잔액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "钱包可用"
+          }
+        }
+      }
+    },
+    "Average APY" : {
+      "comment" : "[tight] Stellar Earn's Assets tab: the supply rate across the account's positions, weighted by their values, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY promedio"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY moyen"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "평균 APY"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "平均年化"
+          }
+        }
+      }
+    },
+    "Blend's markets couldn't be loaded. Try again." : {
+      "comment" : "Stellar Earn with no market to show: Blend's lending markets couldn't be read. A Try Again button follows. Blend is a protocol's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron cargar los mercados de Blend. Inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de charger les marchés de Blend. Réessayez."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 마켓을 불러올 수 없어요. 다시 시도해 주세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载 Blend 的市场，请重试。"
+          }
+        }
+      }
+    },
+    "Blend's rate history couldn't be loaded. Retrying every 30 seconds." : {
+      "comment" : "Stellar Earn's chart view, in place of the chart: the market's rate history couldn't be read; DyorHQ tries again by itself. Blend is a protocol's name, never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cargar el historial de tasas de Blend. Se reintenta cada 30 segundos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de charger l'historique des taux de Blend. Nouvel essai toutes les 30 secondes."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 이율 기록을 불러올 수 없어요. 30초마다 다시 시도해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法加载 Blend 的利率历史，每 30 秒重试一次。"
+          }
+        }
+      }
+    },
+    "Borrow APY" : {
+      "comment" : "[tight] Stellar Earn's rates column: the yearly rate borrowers pay this Blend market (annual percentage yield), a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de préstamo"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY d'emprunt"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대출 APY"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "借款年化"
+          }
+        }
+      }
+    },
+    "Borrowing paused" : {
+      "comment" : "[tight] Stellar Earn's header: a Blend pool's status chip; the pool is on ice: Blend paused borrowing, deposits and withdrawals still work",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Préstamos en pausa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Emprunts suspendus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대출 일시 중지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "借款已暂停"
+          }
+        }
+      }
+    },
+    "Changes the market." : {
+      "comment" : "VoiceOver hint on Stellar Earn's market header: tapping it opens the market picker",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambia el mercado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Change de marché."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마켓을 바꿔요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "切换市场。"
+          }
+        }
+      }
+    },
+    "Deposits paused" : {
+      "comment" : "[tight] Stellar Earn's header: a Blend pool's status chip; the pool is frozen: Blend paused deposits and borrowing, withdrawals still work while it has free liquidity",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depósitos en pausa"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dépôts suspendus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치 일시 중지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存款已暂停"
+          }
+        }
+      }
+    },
+    "DyorHQ records this market's rate every 10 minutes from when it's listed." : {
+      "comment" : "Stellar Earn's chart view, under No Rate History Yet: where the chart's points come from. DyorHQ is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ registra la tasa de este mercado cada 10 minutos desde que se lista."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ enregistre le taux de ce marché toutes les 10 minutes depuis son ajout."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ는 이 마켓이 등록된 때부터 10분마다 이율을 기록해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "DyorHQ 自该市场上线起每 10 分钟记录一次其利率。"
+          }
+        }
+      }
+    },
+    "Earned" : {
+      "comment" : "[tight] Stellar Earn: the interest the account's lending has earned so far, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ganado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gagné"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "수익"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已赚取"
+          }
+        }
+      }
+    },
+    "Earned so far: %@" : {
+      "comment" : "Stellar Portfolio's Earn card, under its figures: what the account's Blend positions have earned so far, whatever the period, in dollars (+$0.42; a trailing * when a position's earnings aren't known)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ganado hasta ahora: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gagné jusqu'ici : %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금까지 수익: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "累计已赚取：%@"
+          }
+        }
+      }
+    },
+    "Enter an amount to deposit." : {
+      "comment" : "Stellar Earn, under the ticket: Deposit was tapped with no amount in the field",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa un monto para depositar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez un montant à déposer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치할 금액을 입력하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入存入金额。"
+          }
+        }
+      }
+    },
+    "Enter an amount to withdraw." : {
+      "comment" : "Stellar Earn, under the ticket: Withdraw was tapped with no amount in the field",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ingresa un monto para retirar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saisissez un montant à retirer."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "출금할 금액을 입력하세요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入提取金额。"
+          }
+        }
+      }
+    },
+    "Est. yearly interest" : {
+      "comment" : "[tight] Stellar Earn's ticket: what the amount typed would earn in a year at today's supply rate, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Interés anual est."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intérêts annuels est."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예상 연 이자"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "预计年利息"
+          }
+        }
+      }
+    },
+    "Free to withdraw" : {
+      "comment" : "[tight] Stellar Earn's rates column: what lenders could take out of this Blend market at once (lent less borrowed), in dollars, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disponible para retirar"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retirable"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "출금 가능액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可提取"
+          }
+        }
+      }
+    },
+    "From %@ to %@" : {
+      "comment" : "VoiceOver: the value of a chart on Stellar Earn, a rate's first and last points over the range shown. The values are percentages (3.10%, 4.21%)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "From %1$@ to %2$@"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De %1$@ a %2$@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De %1$@ à %2$@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@에서 %2$@까지"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从 %1$@ 到 %2$@"
+          }
+        }
+      }
+    },
+    "Lends through Blend, pool %@" : {
+      "comment" : "VoiceOver: the chip on Stellar Earn's ticket naming the Blend pool the market lends through. The value is the pool's name (Blend TestnetV2). Blend is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Presta a través de Blend, pool %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prête via Blend, pool %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend를 통해 빌려줘요, 풀 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "通过 Blend 出借，池子 %@"
+          }
+        }
+      }
+    },
+    "More than you've supplied." : {
+      "comment" : "Stellar Earn, under the ticket: Withdraw was tapped with more than the account has lent in this market",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Más de lo que depositaste."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plus que ce que vous avez fourni."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치한 금액보다 많아요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "超过你的存入金额。"
+          }
+        }
+      }
+    },
+    "No Rate History Yet" : {
+      "comment" : "Stellar Earn's chart view, in place of the chart: DyorHQ hasn't recorded enough of this market's rates to draw one (title case)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no hay historial de tasas"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pas encore d'historique des taux"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "아직 이율 기록 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无利率历史"
+          }
+        }
+      }
+    },
+    "No deposits or withdrawals in this market yet." : {
+      "comment" : "Stellar Earn's History tab when the account hasn't supplied to or withdrawn from this market",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aún no hay depósitos ni retiros en este mercado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucun dépôt ni retrait sur ce marché pour l'instant."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 마켓에는 아직 예치나 출금 내역이 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此市场暂无存入或提取记录。"
+          }
+        }
+      }
+    },
+    "No position in this market" : {
+      "comment" : "Stellar Earn's Position tab when the account has lent nothing to this market",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin posición en este mercado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aucune position sur ce marché"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 마켓에 포지션 없음"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此市场暂无仓位"
+          }
+        }
+      }
+    },
+    "On testnet, Blend's pool uses its own test %@, not the %@ in your wallet." : {
+      "comment" : "Stellar Earn, under the market of Blend's own test USDC on the test network: it isn't the USDC the wallet holds. Both values are the asset's code (USDC). Blend is never translated",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "On testnet, Blend's pool uses its own test %1$@, not the %2$@ in your wallet."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En testnet, el pool de Blend usa su propio %1$@ de prueba, no el %2$@ de tu billetera."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sur le testnet, le pool de Blend utilise son propre %1$@ de test, pas le %2$@ de votre portefeuille."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트넷에서 Blend 풀은 지갑의 %2$@가 아닌 자체 테스트 %1$@를 사용해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在测试网上，Blend 的池子使用它自己的测试 %1$@，而不是你钱包里的 %2$@。"
+          }
+        }
+      }
+    },
+    "Pool status: %@" : {
+      "comment" : "VoiceOver: the chip on Stellar Earn's market header with the Blend pool's status. The value is the status (Active, Borrowing paused, Deposits paused)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estado del pool: %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "État du pool : %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "풀 상태: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "池子状态：%@"
+          }
+        }
+      }
+    },
+    "Rates from Blend" : {
+      "comment" : "Stellar Earn's ⋯ menu, a line that isn't a button: the rates shown come from Blend, the Stellar lending protocol. Blend is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tasas de Blend"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Taux de Blend"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 제공 이율"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利率来自 Blend"
+          }
+        }
+      }
+    },
+    "Select Market" : {
+      "comment" : "The title of Stellar Earn's market picker: choose which Blend market the screen shows (title case)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccionar mercado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choisir un marché"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "마켓 선택"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "选择市场"
+          }
+        }
+      }
+    },
+    "Supplied" : {
+      "comment" : "[tight] Stellar Earn: how much the account has lent to this market, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depositado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fourni"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已存入"
+          }
+        }
+      }
+    },
+    "Supply APY" : {
+      "comment" : "[tight] Stellar Earn: the yearly rate a market pays to those who lend to it (annual percentage yield), a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de depósito"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de dépôt"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치 APY"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存款年化"
+          }
+        }
+      }
+    },
+    "Supply APY %@" : {
+      "comment" : "[tight] Stellar Earn's market header, under the asset: the market's yearly rate for lenders. The value is a percentage (4.21%)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de depósito %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de dépôt %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치 APY %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存款年化 %@"
+          }
+        }
+      }
+    },
+    "Supply APY over the past month" : {
+      "comment" : "Stellar Earn's chart view: the title over the chart of the market's supply rate for the last 30 days. APY: annual percentage yield",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de depósito del último mes"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de dépôt sur le dernier mois"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최근 한 달 예치 APY"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "近一个月存款年化"
+          }
+        }
+      }
+    },
+    "Supply APY over the past week" : {
+      "comment" : "Stellar Earn's chart view: the title over the chart of the market's supply rate for the last 7 days. APY: annual percentage yield",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de depósito de la última semana"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "APY de dépôt sur la dernière semaine"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "최근 일주일 예치 APY"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "近一周存款年化"
+          }
+        }
+      }
+    },
+    "Supply More" : {
+      "comment" : "[tight] A button on the account's Earn position: lend more to this market (goes back to the ticket)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depositar más"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fournir plus"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "추가 예치"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续存入"
+          }
+        }
+      }
+    },
+    "Supply to Earn" : {
+      "comment" : "Stellar Earn: lend from the wallet (Spot) to a Blend market. A menu item, and the title of the deposit's review",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Depositar en Rendimientos"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Placer dans Rendement"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "예치하기"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存入理财"
+          }
+        }
+      }
+    },
+    "Swap for Blend test %@" : {
+      "comment" : "Stellar Earn's ticket on testnet, for the market of Blend's own test USDC: opens Swap to swap the wallet's USDC into it. The value is the asset's code (USDC). Blend is never translated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar por %@ de prueba de Blend"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échanger contre du %@ de test de Blend"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blend 테스트 %@로 스왑"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "兑换为 Blend 测试 %@"
+          }
+        }
+      }
+    },
+    "Testnet rates come from test activity, not real markets." : {
+      "comment" : "Stellar Earn on the test network, a footnote: the rates shown are set by testers' lending and borrowing, not by a real market",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las tasas de testnet provienen de la actividad de prueba, no de mercados reales."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Les taux du testnet viennent de l'activité de test, pas de vrais marchés."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "테스트넷 이율은 실제 시장이 아닌 테스트 활동에서 나와요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试网利率来自测试活动，而非真实市场。"
+          }
+        }
+      }
+    },
+    "Total supplied" : {
+      "comment" : "[tight] Stellar Earn: a label. In the rates column, what everyone has lent to the market; on the Assets tab, what the account has lent across every market, in dollars",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total depositado"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Total fourni"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "총 예치액"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "总存入"
+          }
+        }
+      }
+    },
+    "Utilization" : {
+      "comment" : "[tight] Stellar Earn: how much of what was lent to a Blend market is borrowed out, a label",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uso"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilisation"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이용률"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用率"
+          }
+        }
+      }
+    },
+    "Utilization %@" : {
+      "comment" : "[tight] Stellar Earn: how much of a Blend market's lending is borrowed out. Under a market in the market picker, and VoiceOver's name for the rates column's gauge. The value is a percentage (62.30%)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uso %@"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Utilisation %@"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이용률 %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "利用率 %@"
+          }
+        }
+      }
+    },
+    "Your Earn history couldn't be read just now." : {
+      "comment" : "Stellar Earn's History tab when the account's deposits and withdrawals couldn't be read. A Retry button follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer tu historial de rendimientos en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire votre historique de rendement pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 예치 내역을 읽을 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的理财记录。"
+          }
+        }
+      }
+    },
+    "Your Earn positions couldn't be read just now." : {
+      "comment" : "Stellar Earn's Position tab when the account's positions couldn't be read: what it lends on Blend is unknown for now",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron leer tus posiciones de rendimiento en este momento."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de lire vos positions de rendement pour le moment."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 예치 포지션을 읽을 수 없어요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时无法读取你的理财仓位。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

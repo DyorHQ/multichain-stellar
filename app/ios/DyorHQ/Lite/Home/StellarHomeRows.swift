@@ -264,12 +264,10 @@ struct StellarEarnPositionRow: View {
     }
 
     /// What the position has earned, in dollars at the price its value is counted at (its value over the amount
-    /// supplied, both in the asset's base units); nil when DyorHQ has no record of it (the public view) or nothing
-    /// prices it.
+    /// supplied, both in the asset's base units); nil when DyorHQ has no record of it (the public view), when the record
+    /// misses a deposit, or nothing prices it: Earn's own figure (`StellarEarnModel.earnedUsd`).
     static func earnedUsd(_ position: EarnPosition) -> Double? {
-        guard let earned = position.earned.flatMap(Double.init), let value = position.valueUsd,
-              let supplied = Double(position.supplied), supplied > 0 else { return nil }
-        return earned / supplied * value
+        StellarEarnModel.earnedUsd(position)
     }
 }
 
