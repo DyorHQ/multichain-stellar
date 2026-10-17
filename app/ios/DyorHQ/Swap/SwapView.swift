@@ -780,13 +780,17 @@ extension SlippageSheet {
         }
     }
 
-    /// A custom value as Monad's sheet takes it (a percentage above 0 and at most 50), capped to `range` where a
-    /// network's swaps take less (Stellar's: 15% is 10%, 0.004% is 0.01%); nil when it isn't one.
+    /// A custom value in basis points; nil when it isn't one. Without a `range`, as Monad's sheet takes it: a percentage
+    /// above 0 and at most 50. With one, every percentage above 0 is capped to it, as the sheet says (Stellar's: 60% and
+    /// 15% are 10%, 0.004% is 0.01%), and the decimal comma the region's decimal pad types is a decimal point ("2,5").
     static func customBps(_ text: String, range: ClosedRange<Int>?) -> Int? {
-        guard let pct = Double(text), pct > 0, pct <= 50 else { return nil }
-        let bps = Int((pct * 100).rounded())
-        guard let range else { return bps }
-        return min(max(bps, range.lowerBound), range.upperBound)
+        guard let range else {
+            guard let pct = Double(text), pct > 0, pct <= 50 else { return nil }
+            return Int((pct * 100).rounded())
+        }
+        guard let point = Amount.decimalPoint(text), let pct = Double(point), pct.isFinite, pct > 0 else { return nil }
+        // Capped before it becomes an Int, so a pasted 1e30 is the cap too.
+        return max(Int(min((pct * 100).rounded(), Double(range.upperBound))), range.lowerBound)
     }
 }
 #endif

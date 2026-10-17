@@ -611,9 +611,18 @@ final class StellarSwapTests: XCTestCase {
         XCTAssertEqual(SlippageSheet.customBps("0.004", range: range), 1, "under 0.01%: 0.01%")
         XCTAssertEqual(SlippageSheet.customBps("0.5", range: range), 50, "inside the range, as Monad takes it")
         XCTAssertEqual(SlippageSheet.customBps("10", range: range), 1_000)
-        for ignored in ["60", "0", "-1", "", "abc"] { XCTAssertNil(SlippageSheet.customBps(ignored, range: range), ignored) }
+        // Every value above 0 is capped, as the sheet says: 60% was ignored (the slippage stayed at the 6% its first digit
+        // set), 75% read as 7% and 99% as 9%.
+        for above in ["60", "75", "99", "50.5", "1000", "1e30"] { XCTAssertEqual(SlippageSheet.customBps(above, range: range), 1_000, above) }
+        // The decimal pad types the region's separator: "2,5" (fr, es) is 2.5%, not nothing.
+        XCTAssertEqual(SlippageSheet.customBps("2,5", range: range), 250)
+        XCTAssertEqual(SlippageSheet.customBps("0,5", range: range), 50)
+        XCTAssertEqual(SlippageSheet.customBps("15,5", range: range), 1_000)
+        for ignored in ["0", "0,0", "-1", "", "abc", "inf", "nan", "1,2,3"] { XCTAssertNil(SlippageSheet.customBps(ignored, range: range), ignored) }
         XCTAssertEqual(SlippageSheet.customBps("15", range: nil), 1_500, "Monad's sheet is unchanged")
         XCTAssertEqual(SlippageSheet.customBps("0.004", range: nil), 0)
+        XCTAssertNil(SlippageSheet.customBps("60", range: nil), "Monad's sheet takes at most 50%")
+        XCTAssertNil(SlippageSheet.customBps("2,5", range: nil))
 
         // A value saved outside the range by an earlier build reads as the default, and the quote asks for that.
         let defaults = try temporaryDefaults()
@@ -909,7 +918,15 @@ final class StellarSwapTests: XCTestCase {
         let action = try await model.plan(for: review)
         XCTAssertEqual(Array(action.bindings.minimums.values), [review.route.minimum], "the minimum shown is the one bound")
         XCTAssertEqual(action.limits.values.first, review.amountIn, "the amount typed is the one spent")
-        XCTAssertNil(StellarBoundRows.recipient(action.bindings, intents: action.plan.steps.compactMap(\.intent)), "no To row: it pays the account")
+        let intents = action.plan.steps.compactMap(\.intent)
+        XCTAssertNil(StellarBoundRows.recipient(action.bindings, intents: intents), "no To row: it pays the account")
+        // You pay and Minimum received name the sides as Swap showed them (a coin by its symbol, not its contract).
+        for asset in action.limits.keys {
+            XCTAssertEqual(StellarBoundRows.name(asset, store: store, named: review.named, intents: intents).code, review.sell.code, "You pay")
+        }
+        for asset in (intents.last?.receive ?? [:]).keys {
+            XCTAssertEqual(StellarBoundRows.name(asset, store: store, named: review.named, intents: intents).code, review.buy.code, "Minimum received")
+        }
         XCTAssertEqual(action.plan.steps.last.map { $0.label }, "Swap via \(review.route.venue == "sdex" ? "SDEX" : StellarSwapRoute.name(review.route.venue))",
                        "the venue on screen is the one built")
         let results = try await store.run(action, reason: "Confirm Swap")
@@ -975,13 +992,56 @@ final class StellarSwapTests: XCTestCase {
         }
         XCTAssertTrue(sheet.contains("minimumReceived ? Text(\"Minimum received\") : Text(\"Minimum\")"), "Monad's label for the bound minimum")
         let view = try XCTUnwrap(try swapSources().first { $0.name == "StellarSwapView.swift" }?.text)
-        let confirmation = try XCTUnwrap(view.range(of: "receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals)) {"))
+        let receives = try XCTUnwrap(view.range(of: "receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals),"))
+        let confirmation = try XCTUnwrap(view.range(of: "named: review.named) {", range: receives.upperBound..<view.endIndex))
         let rest = view[confirmation.upperBound...]
         let venue = try XCTUnwrap(rest.range(of: "DetailRow(\"Venue\""))
         let route = try XCTUnwrap(rest.range(of: "DetailRow(\"Route\""))
         let slippage = try XCTUnwrap(rest.range(of: "DetailRow(\"Slippage\", NumberStyle.basisPoints(review.slippageBps))"))
         XCTAssertTrue(venue.lowerBound < route.lowerBound && route.lowerBound < slippage.lowerBound)
         XCTAssertFalse(rest.prefix(upTo: slippage.upperBound).contains("You receive"), "You receive is the sheet's, after You pay")
+    }
+
+    /// Monad's review names both sides by symbol in You pay, You receive and Minimum received. You pay and Minimum
+    /// received are the plan's rows, keyed by contract: for a side the registry doesn't list (a graduated DyorHQ coin, a
+    /// pasted classic asset) they read the short contract ("CBGQ…3X2V") while You receive said "ECAT". They read what Swap
+    /// showed, by the id and the contract the phone derives from it, never a plan's display strings.
+    func testTheReviewNamesBothSidesAsSwapShowedThem() async throws {
+        let source = FakeSwapSource()
+        source.config = try config()
+        source.quotes = [try quote([("soroswap", 4_000_000_000, 3_960_000_000)], paths: ["soroswap": [xlmContract, coin]], buy: coin)]
+        let model = try model(source)
+        model.markets += [try row(coin, code: "ECAT", contract: coin, classic: nil, phase: "graduated")]
+        model.select(coin, for: .receive)
+        model.amountText = "10"
+        await quoteOnce(model)
+        let review = try XCTUnwrap(model.review)
+        // The plan's step, as /v1/swap/build names it (backend swap.ts swapIntent): spends and receives by contract, and a
+        // display with the server's codes, which the rows never read.
+        let buy = try decode(Intent.self, """
+            {"kind": "swap", "summary": "Swap 10 XLM for at least 396 ECAT", "spend": {"\(xlmContract)": "100000000"},
+             "receive": {"\(coin)": "3960000000"}, "to": "\(source.address)",
+             "display": {"venue": "soroswap", "sell": "XLM", "buy": "SERVER", "amountIn": "100000000", "minOut": "3960000000"}}
+            """)
+        XCTAssertEqual(StellarBoundRows.name(coin, store: nil, named: [:], intents: [buy]).code, "CBGQ…3X2V", "what the review showed before")
+        XCTAssertEqual(StellarBoundRows.name(coin, store: nil, named: review.named, intents: [buy]), StellarBoundRows.Name(code: "ECAT", decimals: 7),
+                       "Minimum received names the coin as You receive does")
+        XCTAssertEqual(StellarBoundRows.name("XLM", store: nil, named: review.named, intents: [buy]).code, "XLM")
+
+        // Sold back: You pay names the coin by the contract the plan's limit is keyed by, its id (`LiteStore.limit`).
+        let sale = StellarSwapReview(quote: review.quote, route: review.route, sell: review.buy, buy: review.sell, amountIn: 4_000_000_000,
+                                     slippageBps: review.slippageBps)
+        XCTAssertEqual(StellarBoundRows.name(coin, store: nil, named: sale.named, intents: []).code, "ECAT", "You pay names the coin")
+
+        // A classic asset the registry doesn't list, by its CODE:ISSUER: the plan keys what it brings by the asset's Stellar
+        // Asset Contract, which the phone derives as the store binds it.
+        let pasted = StellarSwapReview(quote: review.quote, route: review.route, sell: review.sell, buy: model.token(eurcClassic), amountIn: review.amountIn,
+                                       slippageBps: review.slippageBps)
+        XCTAssertEqual(LiteStore.assetContract(eurcClassic, network: .testnet), eurcContract)
+        XCTAssertEqual(StellarBoundRows.name(eurcContract, store: nil, named: pasted.named, intents: []).code, "EURC")
+        XCTAssertEqual(StellarBoundRows.name(eurcClassic, store: nil, named: pasted.named, intents: []).code, "EURC")
+        XCTAssertEqual(StellarBoundRows.name("CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526", store: nil, named: pasted.named, intents: []).code,
+                       "CAAQ…C526", "an asset neither side is: its short id")
     }
 
     // MARK: - Source rules

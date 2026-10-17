@@ -366,6 +366,22 @@ struct StellarSwapView: View {
     }
 }
 
+extension StellarSwapReview {
+    /// The two sides as Swap showed them, for the review's You pay and Minimum received rows (Monad's name both by symbol,
+    /// as You receive does): a DyorHQ coin or an asset the registry doesn't list would otherwise read as its short contract.
+    /// Keyed by each side's id and the contract the phone derives from it, as `LiteStore.swapPlan` binds them (a coin's
+    /// id is its contract; a classic asset's "CODE:ISSUER" has its Stellar Asset Contract), never by a server's string.
+    var named: [String: StellarBoundRows.Name] {
+        var named: [String: StellarBoundRows.Name] = [:]
+        for side in [sell, buy] {
+            let name = StellarBoundRows.Name(code: side.code, decimals: side.decimals)
+            named[side.id] = name
+            if let contract = LiteStore.assetContract(side.id, network: LiteGate.pinned.network) { named[contract] = name }
+        }
+        return named
+    }
+}
+
 /// Builds the plan for the reviewed quote through the venue it shows, then hands it to the Stellar review sheet, with
 /// Monad's rows in Monad's order (§8.6.1): You pay, You receive, Minimum received, Venue, Route, Slippage. What the
 /// account pays and the least it receives are the plan's own rows (`StellarConfirmationSheet`'s `receives`), checked
@@ -382,7 +398,8 @@ private struct StellarSwapConfirmation: View {
     var body: some View {
         let route = review.route
         StellarConfirmationSheet(title: "Review Swap", confirmTitle: "Swap", build: build, onDone: onDone, onCompleted: { _ in onCompleted() },
-                                 receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals)) {
+                                 receives: StellarFormat.amount(route.amountOut, code: review.buy.code, decimals: review.buy.decimals),
+                                 named: review.named) {
             DetailRow("Venue", verbatim: StellarSwapRoute.name(route.venue))
             DetailRow("Route", verbatim: pathText)
             DetailRow("Slippage", NumberStyle.basisPoints(review.slippageBps))

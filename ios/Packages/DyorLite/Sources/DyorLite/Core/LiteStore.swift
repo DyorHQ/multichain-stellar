@@ -695,7 +695,7 @@ public final class LiteStore {
     }
 
     /// A classic asset's contract ("native", or CODE:ISSUER), as Stellar derives it; nil for anything else.
-    nonisolated static func assetContract(_ classic: String, network: StellarNetwork) -> String? {
+    public nonisolated static func assetContract(_ classic: String, network: StellarNetwork) -> String? {
         if classic == "native" { return AssetContract.id(.native, network: network) }
         let parts = classic.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2, (1...12).contains(parts[0].count), StrKey.isValid(.accountID, parts[1]) else { return nil }
