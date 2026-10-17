@@ -143,7 +143,7 @@ private struct StellarMomentPage: View {
         .navigationTitle(Text(verbatim: shown.symbol.map { "$\($0)" } ?? name))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) { StellarMomentShareButton(nft: nft, name: name, symbol: shown.symbol) }
+            ToolbarItem(placement: .topBarTrailing) { StellarMomentShareButton(nft: nft, name: name, symbol: shown.symbol, image: shown.image) }
         }
         .refreshable { await load() }
         .task { await clock.run(showing: { face(at: $0) }) }
@@ -690,22 +690,49 @@ private struct StellarMomentPage: View {
 // MARK: - Share
 
 /// Monad's Share button for a Stellar Moment, at the top right of its page: the Moment's title and ticker, with the link
-/// that opens it (`StellarMomentText.shareLink`).
+/// that opens it (`StellarMomentText.share`), and the artwork the page shows as the share sheet's preview, as Monad's.
+///
+/// Its label is a `Label`, never a bare image: the navigation bar takes a ShareLink labelled so as one of its own buttons,
+/// which the whole round button answers, as Back does. With a bare image it hosts the link as a view of its own, the
+/// glyph's width, and a tap on the rest of the button did nothing.
 struct StellarMomentShareButton: View {
     let nft: String
     /// The Moment's name, as its page shows it.
     let name: String
     let symbol: String?
+    /// The Moment's image or its video's poster, as the page's header shows it.
+    let image: String?
 
     var body: some View {
-        if let link = StellarMomentText.shareLink(nft: nft) {
-            ShareLink(item: link, subject: Text(verbatim: name), message: Text(verbatim: StellarMomentText.shareMessage(title: name, symbol: symbol)),
-                      preview: SharePreview(name, image: Image(.wordmark))) {
-                Image(systemName: "square.and.arrow.up")
+        if let share = StellarMomentText.share(nft: nft, title: name, symbol: symbol) {
+            ShareLink(item: share.link, subject: Text(verbatim: share.subject), message: Text(verbatim: share.message),
+                      preview: SharePreview(share.subject, image: artwork)) {
+                Label("Share this Moment", systemImage: "square.and.arrow.up")
             }
-            .accessibilityLabel("Share this Moment")
         }
     }
+
+    /// The artwork the page's header shows, from memory, or the wordmark (Monad's preview).
+    private var artwork: Image {
+        if let shown = RemoteImageLoader.shared.memoryImage(Self.artworkSources(image), bucket: ImageSizeBucket.largest) {
+            return Image(uiImage: UIImage(cgImage: shown.image))
+        }
+        return Image(.wordmark)
+    }
+
+    /// Where the header's picture is kept: its sources at a page header's size, the largest bucket, which the header's
+    /// art box reaches on every iPhone (`StellarMomentArtwork`).
+    static func artworkSources(_ image: String?) -> [RemoteImageSource] {
+        StellarImages.sources(image, pointSize: CGFloat(ImageSizeBucket.largest) / ImageSizeBucket.scale)
+    }
+}
+
+/// What a Moment's Share sends: the link that opens it, its title (the share's subject and the preview's title), and its
+/// title and ticker as the message.
+struct StellarMomentShare: Equatable {
+    let link: URL
+    let subject: String
+    let message: String
 }
 
 // MARK: - The state badge
@@ -1090,6 +1117,11 @@ enum StellarMomentText {
     /// The words shared with it: the Moment's title and its coin's ticker ("Harbour at dusk ($DUSK)").
     static func shareMessage(title: String, symbol: String?) -> String {
         symbol.map { "\(title) ($\($0))" } ?? title
+    }
+
+    /// What the Share button sends for the Moment `nft` titled `title`; nil without a link (an address that isn't one).
+    static func share(nft: String, title: String, symbol: String?) -> StellarMomentShare? {
+        shareLink(nft: nft).map { StellarMomentShare(link: $0, subject: title, message: shareMessage(title: title, symbol: symbol)) }
     }
 
     /// The most editions one collect may take: the contract's limit, and at least 1 (a stepper over 1...0 would trap).

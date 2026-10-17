@@ -162,6 +162,64 @@ final class StellarMomentsTests: XCTestCase {
         XCTAssertEqual(StellarMomentText.shareMessage(title: "Harbour at dusk", symbol: "DUSK"), "Harbour at dusk ($DUSK)")
         XCTAssertEqual(StellarMomentText.shareMessage(title: "Harbour at dusk", symbol: nil), "Harbour at dusk")
         XCTAssertNil(StellarMomentText.shareLink(nft: "not-an-address"))
+        // What the button hands its ShareLink: that link, the title as the subject and preview, title and ticker as the words.
+        XCTAssertEqual(StellarMomentText.share(nft: Self.nft, title: "Harbour at dusk", symbol: "DUSK"),
+                       StellarMomentShare(link: link, subject: "Harbour at dusk", message: "Harbour at dusk ($DUSK)"))
+        XCTAssertNil(StellarMomentText.share(nft: "not-an-address", title: "Harbour at dusk", symbol: "DUSK"), "no link, no button")
+    }
+
+    /// Share is one of the navigation bar's own buttons, enabled, so the whole round button takes the tap, as Back's does.
+    /// A ShareLink labelled with a bare image was hosted in the bar as a view of its own, the glyph's width: a tap on the
+    /// rest of the button did nothing.
+    func testShareIsOneOfTheNavigationBarsOwnButtons() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.lazy.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        window.rootViewController = UIHostingController(rootView: NavigationStack {
+            Color.clear.toolbar {
+                ToolbarItem(placement: .topBarTrailing) { StellarMomentShareButton(nft: Self.nft, name: "Harbour at dusk", symbol: "DUSK", image: nil) }
+            }
+        })
+        window.makeKeyAndVisible()
+        var items: [UIBarButtonItem] = []
+        let deadline = Date().addingTimeInterval(5)
+        while items.isEmpty, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            items = Self.barButtons(in: window)
+        }
+        let share = try XCTUnwrap(items.first, "the toolbar shows the Share button")
+        XCTAssertEqual(items.count, 1)
+        XCTAssertNil(share.customView, "a button of the bar's own, not a view hosted in it")
+        XCTAssertTrue(share.isEnabled)
+    }
+
+    /// The preview is the picture the page's header keeps: the header's art box is a page header's size on every iPhone,
+    /// so the Share button looks up the header's own sources.
+    func testSharesPreviewIsTheHeadersPicture() {
+        for side: CGFloat in [288, 343, 370, 408] {
+            XCTAssertEqual(ImageSizeBucket.bucket(points: side), ImageSizeBucket.largest, "\(side) pt")
+            XCTAssertEqual(StellarMomentShareButton.artworkSources(Self.photo).map(\.url), StellarImages.sources(Self.photo, pointSize: side).map(\.url), "\(side) pt")
+        }
+        XCTAssertFalse(StellarMomentShareButton.artworkSources(Self.photo).isEmpty, "an upload of this build's media base")
+        XCTAssertTrue(StellarMomentShareButton.artworkSources(nil).isEmpty, "no picture: the wordmark")
+    }
+
+    /// The bar buttons of every navigation bar in `window`, each once.
+    private static func barButtons(in window: UIWindow) -> [UIBarButtonItem] {
+        var bars: [UINavigationBar] = []
+        var views: [UIView] = [window]
+        while let view = views.popLast() {
+            if let bar = view as? UINavigationBar { bars.append(bar) }
+            views += view.subviews
+        }
+        var buttons: [UIBarButtonItem] = []
+        var seen = Set<ObjectIdentifier>()
+        for item in bars.flatMap({ $0.items ?? [] }) {
+            let groups: [UIBarButtonItemGroup] = item.leadingItemGroups + item.trailingItemGroups
+            let all: [UIBarButtonItem] = (item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? []) + groups.flatMap(\.barButtonItems)
+            buttons += all.filter { seen.insert(ObjectIdentifier($0)).inserted }
+        }
+        return buttons
     }
 
     /// When is a day and a time: the page shows its day, Monad's way, where it is read; a day alone is that day anywhere.
