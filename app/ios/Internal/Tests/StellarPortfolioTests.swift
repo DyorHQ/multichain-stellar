@@ -47,7 +47,8 @@ final class StellarPortfolioTests: XCTestCase {
         return model
     }
 
-    /// `/v1/portfolio` over `period`, every section's figures `volume` apart, read `asOf`.
+    /// `/v1/portfolio` over `period`, every section's figures `volume` apart (a past bridge's too, which the server's
+    /// totals count), read `asOf`.
     private func portfolio(_ period: String, volume: Double, asOf: Date = Date().addingTimeInterval(-120)) throws -> StellarPortfolio {
         func stats(_ v: Double) -> String {
             #"{"volume": \#(v), "fees": 0.5, "pnl": -1.25, "claimedFees": 0.25, "trades": 3, "pnlComplete": false, "networkFeesXlm": "1500000", "networkFeesUsd": 0.03}"#
@@ -75,13 +76,18 @@ final class StellarPortfolioTests: XCTestCase {
     func testTheFiguresAreTheServersForThePeriodAndNetworkFeesStayApart() throws {
         let read = try fixture(StellarPortfolio.self, "portfolio.json")
         let figures = StellarPortfolioModel.Figures(read)
-        XCTAssertEqual(figures.totals.volume, read.totals.volume)
-        XCTAssertEqual(figures.totals.fees, read.totals.fees, "Fees paid is the server's: DyorHQ's fees only")
-        XCTAssertEqual(figures.totals.pnl, read.totals.pnl)
-        XCTAssertEqual(figures.totals.claimedFees, read.totals.claimedFees)
-        XCTAssertEqual(figures.totals.trades, read.totals.trades)
+        // The totals are the four sections': the server's, less its Bridge's (a completed transfer in the fixture).
+        let bridge = read.sections.bridge
+        XCTAssertGreaterThan(bridge.volume, 0)
+        XCTAssertEqual(figures.totals.volume, read.totals.volume - bridge.volume, accuracy: 1e-9)
+        XCTAssertEqual(figures.totals.fees, read.totals.fees - bridge.fees, accuracy: 1e-9, "Fees paid is the server's: DyorHQ's fees only")
+        XCTAssertEqual(figures.totals.pnl, read.totals.pnl - bridge.pnl, accuracy: 1e-9)
+        XCTAssertEqual(figures.totals.claimedFees, read.totals.claimedFees - bridge.claimedFees, accuracy: 1e-9)
+        XCTAssertEqual(figures.totals.trades, read.totals.trades - bridge.trades)
         XCTAssertEqual(figures.totals.pnlComplete, read.totals.pnlComplete)
-        XCTAssertEqual(figures.totals.networkFeesStroops, Int64(read.totals.networkFeesXlm), "network fees in XLM, on their own line")
+        XCTAssertEqual(figures.totals.networkFeesStroops, try XCTUnwrap(Int64(read.totals.networkFeesXlm)) - (Int64(bridge.networkFeesXlm) ?? 0),
+                       "network fees in XLM, on their own line")
+        XCTAssertEqual(StellarPortfolioModel.totals(read), figures.totals, "Home's Total Volume is Portfolio's")
         for section in StellarPortfolioModel.Section.allCases {
             let server = section.stats(read.sections)
             let shown = try XCTUnwrap(figures.stats(section), section.rawValue)
@@ -92,8 +98,9 @@ final class StellarPortfolioTests: XCTestCase {
             XCTAssertEqual(shown.trades, server.trades, section.rawValue)
             XCTAssertEqual(shown.networkFeesStroops, Int64(server.networkFeesXlm), section.rawValue)
         }
-        XCTAssertEqual(StellarPortfolioModel.Section.allCases.map(\.rawValue), ["spot", "earn", "launch", "moments", "bridge"],
-                       "Monad's five sections, Earn in Perps' place")
+        XCTAssertEqual(StellarPortfolioModel.Section.allCases.map(\.rawValue), ["spot", "earn", "launch", "moments"],
+                       "Monad's sections, Earn in Perps' place and no Bridge: Stellar doesn't have one for now")
+        XCTAssertNil(figures.sections["bridge"], "nothing of the Bridge is kept or saved")
     }
 
     func testEachPeriodShowsItsOwnRead() throws {
@@ -102,10 +109,10 @@ final class StellarPortfolioTests: XCTestCase {
         let all = try portfolio("all", volume: 7)
         XCTAssertNil(model.shown(.week, live: nil, status: .unread), "nothing read or saved: placeholders, never $0.00")
         let shownWeek = try XCTUnwrap(model.shown(.week, live: week, status: .read))
-        XCTAssertEqual(shownWeek.figures.totals.volume, 10)
+        XCTAssertEqual(shownWeek.figures.totals.volume, 8, "the four sections: the server's Bridge isn't counted")
         XCTAssertNil(shownWeek.savedAt, "this session's figures")
-        XCTAssertEqual(model.shown(.all, live: all, status: .read)?.figures.totals.volume, 35)
-        XCTAssertEqual(model.shown(.all, live: all, status: .failed)?.figures.totals.volume, 35, "a failed read keeps the last figures read")
+        XCTAssertEqual(model.shown(.all, live: all, status: .read)?.figures.totals.volume, 28)
+        XCTAssertEqual(model.shown(.all, live: all, status: .failed)?.figures.totals.volume, 28, "a failed read keeps the last figures read")
     }
 
     // MARK: - Saved figures and sign-in
@@ -119,7 +126,7 @@ final class StellarPortfolioTests: XCTestCase {
         // A cold launch: each period's figures are there before any read, said to be saved.
         let relaunched = model(saved)
         let week = try XCTUnwrap(relaunched.shown(.week, live: nil, status: .unread))
-        XCTAssertEqual(week.figures.totals.volume, 10)
+        XCTAssertEqual(week.figures.totals.volume, 8)
         XCTAssertEqual(week.figures.stats(.earn)?.volume, 2)
         XCTAssertNotNil(week.savedAt, "a SavedLine says when they were read")
         XCTAssertNil(relaunched.shown(.day, live: nil, status: .unread), "a period never read has none")
@@ -206,7 +213,7 @@ final class StellarPortfolioTests: XCTestCase {
         XCTAssertEqual(store.status(.activity), .read, "read again too: its rows are worded in the app's language")
         XCTAssertEqual(store.activity.map(\.id), try fixture(ActivityPage.self, "activity.json").items.map(\.id))
         let shown = try XCTUnwrap(model.shown(.week, live: store.portfolio[.week], status: store.status(.portfolio)))
-        XCTAssertEqual(shown.figures.totals, StellarPortfolioModel.Stats(try fixture(StellarPortfolio.self, "portfolio.json").totals))
+        XCTAssertEqual(shown.figures.totals, StellarPortfolioModel.totals(try fixture(StellarPortfolio.self, "portfolio.json")))
         XCTAssertNil(shown.savedAt, "this session's figures")
         XCTAssertFalse(StellarPortfolioModel.waitsForSignIn(store))
         XCTAssertEqual(prompts.value, 1, "the reads ask nothing more")
@@ -225,7 +232,7 @@ final class StellarPortfolioTests: XCTestCase {
 
     func testASectionHeaderLandsOnItsStellarTabOrSide() {
         let expected: [(StellarPortfolioModel.Section, StellarTab, StellarTradeMode?)] = [
-            (.spot, .earn, .swap), (.earn, .earn, .earn), (.launch, .launch, nil), (.moments, .moments, nil), (.bridge, .home, nil),
+            (.spot, .earn, .swap), (.earn, .earn, .earn), (.launch, .launch, nil), (.moments, .moments, nil),
         ]
         for (section, tab, mode) in expected {
             let router = Router()
@@ -251,7 +258,15 @@ final class StellarPortfolioTests: XCTestCase {
         let read = try fixture(StellarPortfolio.self, "portfolio.json")
         let rows = StellarPortfolioModel.rows(read)
         XCTAssertEqual(rows.map(\.id), read.activity.map(\.id))
-        XCTAssertEqual(rows.map(\.section), [.launch, .bridge])
+        XCTAssertEqual(read.activity.map(\.section), ["launch", StellarPortfolioModel.pastBridge])
+        // A past bridge stays, as plain history: in no section (so no card or total counts it), Monad's Bridge mark, and
+        // worded as Recent Activity words it.
+        XCTAssertEqual(rows.map(\.section), [.launch, nil])
+        XCTAssertEqual(rows.map(\.symbol), [PortfolioModel.Section.launch.symbol, PortfolioModel.Section.bridge.symbol])
+        XCTAssertEqual(rows.map(\.sectionTitle), [PortfolioModel.Section.launch.title, PortfolioModel.Section.bridge.title])
+        let pastBridge = try XCTUnwrap(rows.first { $0.section == nil }, "a past bridge's row")
+        let bridge = try XCTUnwrap(try fixture(ActivityPage.self, "activity.json").items.first { $0.id == pastBridge.id })
+        XCTAssertEqual(StellarActivityPresenter.present(bridge).title, .bridged(code: "USDC"), "Bridged USDC")
         XCTAssertTrue(rows.allSatisfy { $0.time != nil })
         XCTAssertEqual(read.coverage.note, "Swaps made outside DyorHQ between non-launch assets aren't counted.", "shown verbatim under Activity")
 
@@ -260,10 +275,12 @@ final class StellarPortfolioTests: XCTestCase {
              "pricing": {"kind": "reference", "source": "Kraken", "network": "mainnet", "note": null},
              "totals": \(Self.zero), "sections": {"spot": \(Self.zero), "earn": \(Self.zero), "launch": \(Self.zero), "moments": \(Self.zero), "bridge": \(Self.zero)},
              "activity": [{"id": "a", "section": "account", "kind": "trust", "title": "Enabled USDC", "subtitle": null, "at": "2026-10-15T09:00:00.000Z", "usd": null, "hash": null},
-                          {"id": "b", "section": "spot", "kind": "swap", "title": "Swapped", "subtitle": "XLM → USDC", "at": "2026-10-15T08:00:00.000Z", "usd": 1.5, "hash": "ab"}],
+                          {"id": "b", "section": "spot", "kind": "swap", "title": "Swapped", "subtitle": "XLM → USDC", "at": "2026-10-15T08:00:00.000Z", "usd": 1.5, "hash": "ab"},
+                          {"id": "c", "section": "cash", "kind": "deposit", "title": "Transaction", "subtitle": null, "at": "2026-10-15T07:00:00.000Z", "usd": 2, "hash": null},
+                          {"id": "d", "section": "bridge", "kind": "stellar_to_monad", "title": "Bridged USDC", "subtitle": "Stellar → Monad", "at": "2026-10-15T06:00:00.000Z", "usd": 3, "hash": "cd"}],
              "coverage": {"from": null, "note": null}}
             """)
-        XCTAssertEqual(StellarPortfolioModel.rows(other).map(\.id), ["b"], "only the five sections' items")
+        XCTAssertEqual(StellarPortfolioModel.rows(other).map(\.id), ["b", "d"], "only the four sections' items, and a past bridge's")
         XCTAssertTrue(StellarPortfolioModel.rows(nil).isEmpty)
     }
 

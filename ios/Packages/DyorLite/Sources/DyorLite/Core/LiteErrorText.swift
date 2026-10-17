@@ -11,6 +11,14 @@ public enum LiteErrorText {
         switch error {
         case let api as LiteAPIError: return describe(api)
         case let runner as PlanRunner.Failure: return describe(runner)
+        // A Privy account's wallet: a signature that doesn't verify for the account (never attached), Privy's own
+        // refusals and outages, a wallet only the user doesn't control.
+        case is StellarSigningError: return privySigningFailed
+        case let privy as PrivyAPIError: return describe(privy)
+        case PrivyWalletCheck.Failure.listNotFresh, PrivyWalletCheck.Failure.noIdentityToken:
+            return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case is PrivyWalletCheck.Failure:
+            return tr("Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed.")
         default: return LiteSession.failure(for: error).errorDescription ?? error.localizedDescription
         }
     }
@@ -125,6 +133,19 @@ public enum LiteErrorText {
     }
 
     private static var notEnoughForFee: String { tr("Not enough XLM for the network fee.") }
+    private static var privySigningFailed: String { tr("Couldn't sign with your Privy wallet. Nothing was sent.") }
+
+    /// Privy's client API, as a Privy account meets it: an expired Privy session needs a sign-in to DyorHQ again; a wallet
+    /// Privy won't show this user, or an outage, isn't available now; another refusal or an answer this build can't read
+    /// means no signature.
+    private static func describe(_ privy: PrivyAPIError) -> String {
+        switch privy {
+        case .transport: return tr("No connection. Check your network and try again.")
+        case .refused(401, _): return tr("Sign in to DyorHQ again to use Stellar.")
+        case .unavailable, .refused(403, _), .refused(404, _): return tr("Stellar isn't available for this sign-in right now. Try again later.")
+        case .refused, .decoding: return privySigningFailed
+        }
+    }
     private static var notEnoughForReserve: String { tr("Not enough XLM for Stellar's minimum balance.") }
 
     /// "Not enough XLM. 1.5 XLM stays in your account." when the refusal says what stays.

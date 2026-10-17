@@ -455,7 +455,12 @@ struct NetworkSheetContent: View {
                 .padding(.top, 16).padding(.horizontal, 24)
             VStack(alignment: .leading, spacing: 14) {
                 confirmLine("square.split.2x1", LocalizedStringResource("Stellar has its own balance and activity. Your Monad funds stay on Monad.", table: "Lite", comment: "The network sheet, before the first switch to Stellar: balances aren't shared between the networks"))
-                confirmLine("key", LocalizedStringResource("Same account: your Stellar key comes from the secret you already use.", table: "Lite", comment: "The network sheet, before the first switch to Stellar. “Secret”: the passkey, recovery phrase or password the account uses"))
+                if let method, DyorHQLiteKeys.isPrivy(method) {
+                    // Apple, Google, an email code or a Privy passkey: Privy holds the key, as it holds the Monad wallet's.
+                    confirmLine("key", LocalizedStringResource("Same account: Privy keeps your Stellar key, as it keeps your Monad wallet's.", table: "Lite", comment: "The network sheet, before the first switch to Stellar, for an account that signs in with Apple, Google or an email code: Privy (a company's name, never translated) holds the account's keys, its Monad wallet's and now its Stellar one"))
+                } else {
+                    confirmLine("key", LocalizedStringResource("Same account: your Stellar key comes from the secret you already use.", table: "Lite", comment: "The network sheet, before the first switch to Stellar. “Secret”: the passkey, recovery phrase or password the account uses"))
+                }
                 confirmLine("fuelpump", LocalizedStringResource("You pay Stellar's network fees in XLM, as you pay MON on Monad.", table: "StellarSetup", comment: "The network sheet, before the first switch to Stellar: every Stellar transaction's network fee is paid by the user in XLM, Stellar's coin, as Monad's are paid in MON, Monad's coin. Stellar, Monad, XLM and MON are never translated"))
                 if AppNetwork.stellar.isTestnet {
                     confirmLine("testtube.2", LocalizedStringResource("This is Stellar's testnet. Balances there have no value.", table: "Lite", comment: "The network sheet, before the first switch to Stellar: it runs on Stellar's test network"))

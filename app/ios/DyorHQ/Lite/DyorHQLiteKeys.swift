@@ -10,21 +10,27 @@ enum DyorHQLiteKeys {
     /// The Stellar address of `evm`'s account on this iPhone (public), stored once its key was derived here; nil before.
     /// An email & password or imported account has it only with its seed in the Keychain (`LiteKeyBootstrap.save`), so
     /// for them it also says the Stellar key is on this iPhone (`LiteGate.availability`).
-    static func stellarAddress(for evm: Address) -> String? { UserDefaults.standard.string(forKey: key(evm)) }
-    fileprivate static func store(_ stellar: String, for evm: Address) { UserDefaults.standard.set(stellar, forKey: key(evm)) }
+    static func stellarAddress(for evm: Address, defaults: UserDefaults = .standard) -> String? { defaults.string(forKey: key(evm)) }
+    static func store(_ stellar: String, for evm: Address, defaults: UserDefaults = .standard) { defaults.set(stellar, forKey: key(evm)) }
     fileprivate static func key(_ evm: Address) -> String { "lite.stellar.\(evm)" }
 
     /// The network the Keychain files the seeds and sessions under: the build's pinned one.
     static var network: String { LiteGate.pinned.network.name }
 
     /// The provider for the signed-in account, made without a prompt; nil while its Stellar address isn't known (a passkey
-    /// account before its setup ceremony). A seed account signs its sign-in with no prompt and asks for Face ID or the
+    /// account before its setup ceremony, a Privy account before its first switch). A seed account signs its sign-in with no prompt and asks for Face ID or the
     /// passcode once per confirmed action while App Lock applies, as `settings` say at that moment; a passkey account asks
     /// for its passkey once per signature, never App Lock.
     @MainActor
     static func provider(session: Session, settings: AppSettings) -> LiteKeyProvider? {
         guard let account = session.account, let stellar = stellarAddress(for: account.address) else { return nil }
         let evm = account.address
+        if isPrivy(account.method) {
+            // A Privy account: its wallet, as this iPhone checked and kept it (`resolvePrivy`), confirmed at Privy again
+            // before the session's first signature.
+            guard let wallet = keptPrivyWallet(for: evm), wallet.address == stellar else { return nil }
+            return privyProvider(session: session, settings: settings, method: account.method, evm: evm, wallet: wallet, recheck: true)
+        }
         let mera = session.mera
         return make(method: account.method, stellar: stellar,
                     appLockApplies: { [session, settings] in settings.appLockApplies(to: session.account) },
@@ -102,6 +108,8 @@ enum DyorHQLiteKeys {
     /// UserDefaults is wiped: it holds the Stellar address the Keychain items are filed under.
     static func forget(evm: Address) {
         let defaults = UserDefaults.standard
+        // A Privy wallet lookup under way keeps nothing now.
+        PrivyLookupEpochs.shared.forgot(evm)
         if let stellar = stellarAddress(for: evm) {
             revokeSession(of: stellar)
             StellarKeychain.erase(account: stellar)
@@ -111,6 +119,7 @@ enum DyorHQLiteKeys {
         }
         StellarSaved.shared.forget(evm)
         defaults.removeObject(forKey: key(evm))
+        defaults.removeObject(forKey: privyKey(evm))
         AppNetwork.forget(evm)
     }
 
@@ -201,7 +210,7 @@ final class StellarSeedSigningRun: LiteSigningRun, @unchecked Sendable {
         self.seed = seed
     }
 
-    func signer(reason: String) async throws -> StellarSigner {
+    func signer(reason: String) async throws -> any StellarHashSigner {
         guard !lock.withLock({ ended }) else { throw LiteSession.Failure.cancelled }
         return try Self.signer(seed: seed, address: address)
     }

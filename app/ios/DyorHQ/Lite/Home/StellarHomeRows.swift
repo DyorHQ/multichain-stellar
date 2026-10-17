@@ -48,13 +48,13 @@ private func stellarLogo(code: String, classic: String?, image: String?, size: C
     StellarTokenLogo.init(symbol: code, classic: classic, image: image, size: size)
 }
 
-/// One of the four Home actions: an SF Symbol over a label, filling its share of the row. Faded while it can't be used
+/// One of Home's actions: an SF Symbol over a label, filling its share of the row. Faded while it can't be used
 /// (Home not ready yet, or an account that can't sign on this iPhone), so the card above says why.
 struct StellarHomeAction: View {
     let title: LocalizedStringKey
     let symbol: String
     let action: () -> Void
-    /// One height for every symbol, so the four tiles and their labels line up: Transfer's arrows stand taller.
+    /// One height for every symbol, so the tiles and their labels line up: Transfer's arrows stand taller.
     @ScaledMetric(relativeTo: .body) private var symbolHeight: CGFloat = 24
     @Environment(\.isEnabled) private var isEnabled
 

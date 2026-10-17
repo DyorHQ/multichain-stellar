@@ -66,7 +66,6 @@ or a submodule) and its own workflow for the internal TestFlight group.
 | `NetworkSheet.swift` | The sheet: Select → Confirm (first switch to Stellar only) → Setup checklist, sized to its content |
 | `StellarProfile.swift` | Profile › Network › Stellar account (pushes DyorLite's account screen), and Profile › Wallet's Receive and Send on Stellar (DyorLite's deposit and withdraw sheets) |
 | `DyorHQLiteKeys.swift` | The Stellar key from the account's secret: unlock (passkey reveal, or Face ID and the Keychain seed), the key provider, and `LiteKeyBootstrap` (the hooks' entry points) |
-| `MonadBridgeAdapter.swift` | Signs the Monad side of the bridge with the account's Monad wallet |
 | `LiteMode.swift` | `LiteGate`: availability (remote flag, debug force-on, account kind), API URL, pinned network |
 | `StellarRemoteFlag.swift` | The `stellarLite` remote flag (§3) |
 | `LiteText.swift` | `liteTr()`: text from table `Lite` |
@@ -121,11 +120,10 @@ answers. DyorKit's `RemoteFlags` is untouched. Turn it on for testers with
 
 ## 6. Bridge
 
-`MonadBridgeAdapter` signs the Monad side with the account's Monad wallet (`session.wallet(for: nil)`), through
-DyorKit's `TransactionSender(rpc: RPCClient(url:), chainId: 10143)`. On testnet that is Monad testnet, where CCTP v2 is
-registered both ways. Mainnet would use NEAR Intents through the same protocol (`LiteMonadBridge`). A passkey account
-gets a passkey prompt for every Monad testnet transaction, since chain 10143 is outside the Mera signing policy's Monad
-check. Never run live end to end.
+Stellar has no Bridge for now. `NetworkRoot` gives the account's `LiteSession` no Monad wallet (`monad: nil`), so nothing
+on Stellar signs on Monad, and no Stellar screen, link or notification opens a bridge. Past bridges still show in
+Portfolio's Activity, as plain history. The backend's bridge routes stay in place, unused by the app. Monad's Bridge is
+unchanged.
 
 ## 7. Running it locally
 

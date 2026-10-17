@@ -666,6 +666,35 @@
         }
       }
     },
+    "Same account: Privy keeps your Stellar key, as it keeps your Monad wallet's." : {
+      "comment" : "The network sheet, before the first switch to Stellar, for an account that signs in with Apple, Google or an email code: Privy (a company's name, never translated) holds the account's keys, its Monad wallet's and now its Stellar one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La misma cuenta: Privy guarda tu clave de Stellar, como guarda la de tu billetera de Monad."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le même compte : Privy garde votre clé Stellar, comme celle de votre portefeuille Monad."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "같은 계정이에요. Privy가 Monad 지갑 키처럼 Stellar 키도 보관해요."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "同一个账户：Privy 保管你的 Stellar 密钥，就像保管你的 Monad 钱包密钥一样。"
+          }
+        }
+      }
+    },
     "Same account: your Stellar key comes from the secret you already use." : {
       "comment" : "The network sheet, before the first switch to Stellar. “Secret”: the passkey, recovery phrase or password the account uses",
       "localizations" : {

@@ -9,10 +9,11 @@ import DyorLite
 import StellarKit
 import SwiftUI
 
-/// The Portfolio for DyorHQ on Stellar, laid out as Monad's: cumulative volume across Spot, Earn, Launch, Moments and
-/// Bridge for the chosen period, then fees paid, P&L, fees received and trade counts, in total and per section, with the
-/// network fees paid in XLM apart, the account's holdings and the activity behind the numbers. Opened over the Stellar
-/// tabs from the side menu, Earn's menu, a Stellar notification or Home's Total Volume, which share the period.
+/// The Portfolio for DyorHQ on Stellar, laid out as Monad's but with no Bridge, which Stellar doesn't have for now:
+/// cumulative volume across Spot, Earn, Launch and Moments for the chosen period, then fees paid, P&L, fees received and
+/// trade counts, in total and per section, with the network fees paid in XLM apart, the account's holdings and the
+/// activity behind the numbers. Opened over the Stellar tabs from the side menu, Earn's menu, a Stellar notification or
+/// Home's Total Volume, which share the period.
 ///
 /// The figures are DyorHQ's history (`/v1/portfolio`): a passkey account whose session is gone sees them unread, with
 /// "Sign in with your passkey" under the hero, and nothing prompts until it is tapped; the holdings fill in either way.
@@ -150,7 +151,7 @@ struct StellarPortfolioView: View {
                     .lineLimit(1).minimumScaleFactor(0.6)
                     .contentTransition(.numericText(value: totals.volume))
                     .unreadFigure(unread)
-                Paragraph(LocalizedStringResource("Across Spot, Earn, Launch, Moments and Bridge", table: "StellarPortfolio", comment: "Stellar Portfolio, under the cumulative volume: the five sections it adds up, as the cards below name them"))
+                Paragraph(LocalizedStringResource("Across Spot, Earn, Launch and Moments", table: "StellarPortfolio", comment: "Stellar Portfolio, under the cumulative volume: the four sections it adds up, as the cards below name them"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             // DyorHQ's history with no session (a passkey account whose session is gone): the figures wait for a sign-in
@@ -264,7 +265,6 @@ struct StellarPortfolioView: View {
         case .earn: return .allocationPerps
         case .launch: return .allocationLaunchpad
         case .moments: return .allocationMoments
-        case .bridge: return .brand
         }
     }
 
@@ -336,7 +336,8 @@ struct StellarPortfolioView: View {
     // MARK: Activity
 
     /// The period's activity as `/v1/portfolio` lists it, each row worded as Recent Activity words it when the account's
-    /// activity holds its details (`StellarActivityPresenter`), else in the server's words.
+    /// activity holds its details (`StellarActivityPresenter`), else in the server's words. A past bridge's row is plain
+    /// history, in grey: Stellar has no Bridge for now, so nothing here offers one.
     private var activityCard: some View {
         let rows = StellarPortfolioModel.rows(live)
         let shown = showAll ? rows : Array(rows.prefix(12))
@@ -362,7 +363,7 @@ struct StellarPortfolioView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, row in
-                        StellarPortfolioActivityRow(row: row, details: details[row.id], color: color(row.section))
+                        StellarPortfolioActivityRow(row: row, details: details[row.id], color: row.section.map(color) ?? .secondary)
                         if index < shown.count - 1 { Divider().padding(.leading, 44) }
                     }
                 }
@@ -414,7 +415,7 @@ private struct StellarPortfolioActivityRow: View {
     private var content: some View {
         let presentation = details.map(StellarActivityPresenter.present)
         return HStack(spacing: 12) {
-            Image(systemName: row.section.symbol)
+            Image(systemName: row.symbol)
                 .font(.footnote.weight(.bold))
                 .frame(width: 32, height: 32)
                 .background(color.opacity(0.16), in: Circle())
@@ -438,7 +439,7 @@ private struct StellarPortfolioActivityRow: View {
     private func subtitle(_ presentation: StellarActivityPresentation?) -> Text {
         if let subtitle = presentation?.subtitle { return StellarActivityRow.subtitle(subtitle) }
         if let subtitle = row.item.subtitle, !subtitle.isEmpty { return Text(verbatim: subtitle) }
-        return Text(verbatim: row.section.title)
+        return Text(verbatim: row.sectionTitle)
     }
 }
 

@@ -1763,6 +1763,35 @@
         }
       }
     },
+    "Couldn't sign with your Privy wallet. Nothing was sent." : {
+      "comment" : "An error: Privy (the company that holds the key of accounts that sign in with Apple, Google or an email code) didn't sign, or its signature didn't pass the phone's check",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo firmar con tu billetera de Privy. No se envió nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de signer avec votre portefeuille Privy. Rien n'a été envoyé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy 지갑으로 서명하지 못했습니다. 아무것도 전송되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法使用你的 Privy 钱包签名。未发送任何内容。"
+          }
+        }
+      }
+    },
     "Create your Stellar account" : {
       "comment" : "A transaction's title: DyorHQ creates the account on Stellar and pays for it.",
       "localizations" : {
@@ -4995,6 +5024,35 @@
         }
       }
     },
+    "Privy didn't confirm this Stellar wallet as yours, so DyorHQ won't use it. Nothing was signed." : {
+      "comment" : "An error: the Stellar wallet found for an Apple, Google, email-code or Privy-passkey account isn't one Privy (the company holding the key) says only the user controls",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy no confirmó esta billetera de Stellar como tuya, así que DyorHQ no la usará. No se firmó nada."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy n'a pas confirmé que ce portefeuille Stellar est le vôtre, donc DyorHQ ne l'utilisera pas. Rien n'a été signé."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy가 이 Stellar 지갑을 회원님의 지갑으로 확인하지 않아 DyorHQ는 이 지갑을 사용하지 않습니다. 아무것도 서명되지 않았습니다."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privy 未确认此 Stellar 钱包属于你，因此 DyorHQ 不会使用它。未签署任何内容。"
+          }
+        }
+      }
+    },
     "Publish" : {
       "comment" : "A transaction's title: publish a Moment (a verb).",
       "localizations" : {
@@ -5691,31 +5749,31 @@
         }
       }
     },
-    "Send only Stellar assets to this address. To move USDC from Monad, use Bridge on Home." : {
-      "comment" : "The Deposit sheet, under the Stellar address. “Bridge” is the Home action of that name; Monad is a network's name.",
+    "Send only Stellar assets to this address." : {
+      "comment" : "The Deposit sheet, under the Stellar address. Stellar is a network's name.",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Envía solo activos de Stellar a esta dirección. Para mover USDC desde Monad, usa Puente en Inicio."
+            "value" : "Envía solo activos de Stellar a esta dirección."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "N'envoyez que des actifs Stellar à cette adresse. Pour transférer des USDC depuis Monad, utilisez Bridge sur l'Accueil."
+            "value" : "N'envoyez que des actifs Stellar à cette adresse."
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 주소로는 Stellar 자산만 보내세요. Monad에서 USDC를 옮기려면 홈의 브리지를 사용하세요."
+            "value" : "이 주소로는 Stellar 자산만 보내세요."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "只能向此地址发送 Stellar 资产。如需从 Monad 转入 USDC，使用首页的跨链桥。"
+            "value" : "只能向此地址发送 Stellar 资产。"
           }
         }
       }
@@ -6035,6 +6093,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "在 Stellar 上登录以继续。"
+          }
+        }
+      }
+    },
+    "Sign in to DyorHQ again to use Stellar." : {
+      "comment" : "An error: the account's Privy sign-in (Apple, Google, an email code) expired, so its Stellar wallet can't be reached",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vuelve a iniciar sesión en DyorHQ para usar Stellar."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnectez-vous à DyorHQ pour utiliser Stellar."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar를 사용하려면 DyorHQ에 다시 로그인하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请重新登录 DyorHQ 以使用 Stellar。"
           }
         }
       }
@@ -6383,6 +6470,35 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Stellar 地址"
+          }
+        }
+      }
+    },
+    "Stellar isn't available for this sign-in right now. Try again later." : {
+      "comment" : "An error: an account that signs in with Apple, Google, an email code or a Privy passkey can't get its Stellar wallet now (DyorHQ's service is off or Privy is down)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar no está disponible para este inicio de sesión en este momento. Vuelve a intentarlo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stellar n'est pas disponible pour ce mode de connexion pour le moment. Réessayez plus tard."
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "지금은 이 로그인 방식으로 Stellar를 사용할 수 없습니다. 나중에 다시 시도하십시오."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此登录方式目前无法使用 Stellar。请稍后重试。"
           }
         }
       }

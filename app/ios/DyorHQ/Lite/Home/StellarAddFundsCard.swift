@@ -126,8 +126,8 @@ enum StellarFunding {
                        friendbot: friendbot, balances: balances, traded: traded)
     }
 
-    /// Whether `activity` shows a trade: anything the account did past its setup and funding (a bridge in from Monad is
-    /// how the card funds it, so it doesn't count).
+    /// Whether `activity` shows a trade: anything the account did past its setup and funding (a past bridge in from Monad
+    /// funded it, so it doesn't count).
     static func hasTraded(_ activity: [StellarActivityItem]) -> Bool {
         activity.contains { $0.type == "tx" && !setupKinds.contains($0.kind) }
     }
@@ -194,15 +194,15 @@ enum StellarFunding {
     }
 }
 
-/// Stellar Home's "Add funds to start trading" card, as Monad's `AddFundsCard`: the address (tap to reveal it in full), a
-/// QR code, Copy, Share, Bridge from Monad and, on testnet while the address may claim it, Fund with Friendbot; it
-/// watches the balance (`StellarFundingWatch`). An account short of XLM but holding another asset gets "Get XLM for
-/// network fees" instead. When a deposit lands it says "Funds arrived", then offers the first trade.
+/// Stellar Home's "Add funds to start trading" card, as Monad's `AddFundsCard` with no bridge (Stellar has none for
+/// now): the address (tap to reveal it in full), a QR code, Copy, Share and, on testnet while the address may claim it,
+/// Fund with Friendbot; it watches the balance (`StellarFundingWatch`). An account short of XLM but holding another
+/// asset gets "Get XLM for network fees" instead. When a deposit lands it says "Funds arrived", then offers the first
+/// trade.
 struct StellarAddFundsCard: View {
     let phase: StellarFunding.Phase
     let address: StellarAccountID
     let isTestnet: Bool
-    let onBridge: () -> Void
     /// Opens the larger QR code (Deposit).
     let onShowQR: () -> Void
     /// Claims Friendbot's test XLM (`LiteStore.faucet`).
@@ -262,17 +262,6 @@ struct StellarAddFundsCard: View {
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
-            Divider()
-            Button { Haptics.tap(); onBridge() } label: {
-                HStack {
-                    Label { Text("Bridge from Monad", tableName: "StellarHome", comment: "Stellar Home, the add-funds card: a row that opens the bridge, to move USDC from the user's Monad account to Stellar. Monad is never translated") } icon: { Image(systemName: "point.3.connected.trianglepath.dotted") }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                }
-                .font(.subheadline.weight(.medium))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
             if let amount = offer.friendbot {
                 Divider()
                 friendbotRow(amount)

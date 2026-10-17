@@ -30,8 +30,9 @@ enum LiteGate {
         case .watchOnly:
             return .unavailable(.watchOnly)
         case .apple, .google, .email, .passkey:
-            // Privy holds these wallets' keys: no Stellar key for them yet (Privy Stellar wallets come later).
-            return .unavailable(.signInMethod(account.method))
+            // Privy holds these wallets' keys: their Stellar key is a Privy wallet of the user's, found or made at the first
+            // switch (`DyorHQLiteKeys.resolvePrivy`), once the Lite API serves them (`PrivyWalletsFlag`).
+            return PrivyWalletsFlag.shared.isOn ? .offered : .unavailable(.signInMethod(account.method))
         }
     }
 

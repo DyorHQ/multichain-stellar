@@ -19,9 +19,9 @@ import StellarKit
 @MainActor
 @Observable
 final class StellarPortfolioModel {
-    /// Monad's five sections, with Earn in Perps' place.
+    /// Monad's sections, with Earn in Perps' place and no Bridge, which Stellar doesn't have for now.
     enum Section: String, CaseIterable, Identifiable {
-        case spot, earn, launch, moments, bridge
+        case spot, earn, launch, moments
         var id: String { rawValue }
 
         /// Monad's section names, and Stellar's Earn.
@@ -31,7 +31,6 @@ final class StellarPortfolioModel {
             case .earn: return MenuItem.earnTitle
             case .launch: return PortfolioModel.Section.launch.title
             case .moments: return PortfolioModel.Section.moments.title
-            case .bridge: return PortfolioModel.Section.bridge.title
             }
         }
 
@@ -42,19 +41,17 @@ final class StellarPortfolioModel {
             case .spot: return PortfolioModel.Section.spot.symbol
             case .launch: return PortfolioModel.Section.launch.symbol
             case .moments: return PortfolioModel.Section.moments.symbol
-            case .bridge: return PortfolioModel.Section.bridge.symbol
             }
         }
 
         /// Where a tap on the section's header goes (`Router.open`, which on Stellar opens Stellar's tab or side): Spot is
-        /// the Earn tab's Swap side, Earn its Earn side, and the Bridge lives on Home, as on Monad.
+        /// the Earn tab's Swap side, Earn its Earn side.
         var menuItem: MenuItem {
             switch self {
             case .spot: return .spot
             case .earn: return .earn
             case .launch: return .launch
             case .moments: return .moments
-            case .bridge: return .home
             }
         }
 
@@ -64,7 +61,6 @@ final class StellarPortfolioModel {
             case .earn: return sections.earn
             case .launch: return sections.launch
             case .moments: return sections.moments
-            case .bridge: return sections.bridge
             }
         }
     }
@@ -94,6 +90,17 @@ final class StellarPortfolioModel {
             pnlComplete = stats.pnlComplete
             networkFeesStroops = Int64(stats.networkFeesXlm) ?? 0
         }
+
+        /// `parts` added up, as the server adds its sections up into its totals.
+        init(adding parts: [Stats]) {
+            volume = parts.reduce(0) { $0 + $1.volume }
+            fees = parts.reduce(0) { $0 + $1.fees }
+            pnl = parts.reduce(0) { $0 + $1.pnl }
+            claimedFees = parts.reduce(0) { $0 + $1.claimedFees }
+            trades = parts.reduce(0) { $0 + $1.trades }
+            pnlComplete = parts.allSatisfy(\.pnlComplete)
+            networkFeesStroops = parts.reduce(0) { $0 + $1.networkFeesStroops }
+        }
     }
 
     /// One period's figures: the totals and each section's, and when they were read.
@@ -104,7 +111,7 @@ final class StellarPortfolioModel {
         var readAt: Date
 
         init(_ portfolio: StellarPortfolio, now: Date = Date()) {
-            totals = Stats(portfolio.totals)
+            totals = StellarPortfolioModel.totals(portfolio)
             sections = Dictionary(uniqueKeysWithValues: Section.allCases.map { ($0.rawValue, Stats($0.stats(portfolio.sections))) })
             readAt = StellarFormat.date(portfolio.asOf).map { min($0, now) } ?? now
         }
@@ -130,10 +137,20 @@ final class StellarPortfolioModel {
     /// One action of the period, in Activity.
     struct Row: Identifiable, Equatable {
         let item: StellarPortfolio.Item
-        let section: Section
+        /// Its section; nil for a past bridge's (`pastBridge`), listed as plain history that no section or total counts.
+        let section: Section?
         let time: Date?
         var id: String { item.id }
+
+        /// Its section's mark, or Monad's Bridge mark for a past bridge's.
+        var symbol: String { section?.symbol ?? PortfolioModel.Section.bridge.symbol }
+        /// Its section's name, or Monad's "Bridge" for a past bridge's: what the row says when nothing else words it.
+        var sectionTitle: String { section?.title ?? PortfolioModel.Section.bridge.title }
     }
+
+    /// The server's section for a bridge between Monad and Stellar. Stellar has no Bridge for now, but an account's past
+    /// bridges stay in Activity, as plain history.
+    nonisolated static let pastBridge = "bridge"
 
     /// A token the Assets card lists: a Spot holding or a launch coin.
     enum Asset: Identifiable, Equatable {
@@ -197,6 +214,12 @@ final class StellarPortfolioModel {
 
     // MARK: Figures
 
+    /// A period's totals as Stellar shows them: its sections' figures added up. The server's totals count the Bridge's
+    /// too, which Stellar doesn't have for now. Home's Total Volume is this volume, so the two screens agree.
+    nonisolated static func totals(_ portfolio: StellarPortfolio) -> Stats {
+        Stats(adding: Section.allCases.map { Stats($0.stats(portfolio.sections)) })
+    }
+
     /// `key`'s figures as shown: this session's read (`live`), else those saved when the account was last read, else nil
     /// (placeholders, never $0.00). Nothing while DyorHQ's history needs a sign-in the user hasn't asked for: the screen
     /// offers it instead (decision 6).
@@ -206,10 +229,13 @@ final class StellarPortfolioModel {
         return savedFigures[key].map { Shown(figures: $0, savedAt: $0.readAt) }
     }
 
-    /// The period's activity as the server lists it, in its order: each item in a section Portfolio shows.
+    /// The period's activity as the server lists it, in its order: each item in a section Portfolio shows, and each past
+    /// bridge's.
     static func rows(_ portfolio: StellarPortfolio?) -> [Row] {
         (portfolio?.activity ?? []).compactMap { item in
-            Section(rawValue: item.section).map { Row(item: item, section: $0, time: StellarFormat.date(item.at)) }
+            let section = Section(rawValue: item.section)
+            guard section != nil || item.section == pastBridge else { return nil }
+            return Row(item: item, section: section, time: StellarFormat.date(item.at))
         }
     }
 
