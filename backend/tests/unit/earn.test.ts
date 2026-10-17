@@ -11,9 +11,10 @@
 // - snapshots: every registry reserve read now, one row each; a pool that can't be read, or a rate that isn't a number,
 //   named in the result; old snapshots deleted; the job waits for migration 08;
 // - plans: a deposit and a withdrawal are Blend submits from, spent by and paid to the user, which the verifier's call
-//   rule accepts; a withdrawal asks for at most the account's supply;
+//   rule accepts; a withdrawal asks for at most the account's supply; one of everything asks Blend for the supply read
+//   when its step is built and 1% more, declares that supply, and is refused below what the user saw;
 // - routes: markets and history answer with no token (any token ignored), positions answer the public view for
-//   ?address= with no token, and the build needs a session.
+//   ?address= with no token, and the build needs a session; all is a boolean, for a withdrawal only.
 import { Account, Address, nativeToScVal, Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { fakeSql, goOffline, OTHER, type Row, routeRows, setTestEnv, SPONSOR, USER, userToken } from "../fixtures/routes/harness.ts";
@@ -461,6 +462,50 @@ Deno.test("plans: a withdrawal asks for at most the account's supply; unknown po
   assertEquals(await refusal(e.buildEarn(ME, "withdraw", POOL.id, BUSDC.contract, 1n)), [400, "bad_asset"]);
 });
 
+Deno.test("plans: a withdrawal of everything asks Blend for the supply read when its step is built and 1% more, and declares that supply", () => {
+  const withdraw = { amount: "1000000526", requestType: e.REQUEST.Withdraw };
+  // An amount: asked for and declared as it is, whatever the supply.
+  assertEquals(e.submitAmounts(withdraw, null), { request: "1000000526", receive: "1000000526" });
+  assertEquals(e.submitAmounts({ ...withdraw, all: false }, 2_000_000_000n), { request: "1000000526", receive: "1000000526" });
+  // Everything: the supply now (what the screen showed plus the interest since) and 1% more, which Blend pays only up to
+  // the supply, so every b-token is burned; the declared amount is the supply, at least what the user saw.
+  assertEquals(e.submitAmounts({ ...withdraw, all: true }, 1_000_001_756n), { request: "1010001774", receive: "1000001756" });
+  assertEquals(e.submitAmounts({ ...withdraw, all: true }, 1_000_000_526n), { request: "1010000532", receive: "1000000526" });
+  assertEquals(e.submitAmounts({ amount: "1", requestType: e.REQUEST.Withdraw, all: true }, 1n), { request: "2", receive: "1" });
+});
+
+Deno.test("plans: a withdrawal of everything is refused below what the user saw, without a supply, and for a deposit", async () => {
+  const withdraw = { amount: "1000000526", requestType: e.REQUEST.Withdraw, all: true };
+  for (const supply of [1_000_000_525n, 0n, null]) {
+    let code = "";
+    try {
+      e.submitAmounts(withdraw, supply);
+    } catch (err) {
+      code = (err as InstanceType<typeof ApiError>).code;
+    }
+    assertEquals(code, "bad_amount", `supply ${supply}`);
+  }
+  let code = "";
+  try {
+    e.submitAmounts({ ...withdraw, requestType: e.REQUEST.Supply }, 2_000_000_000n);
+  } catch (err) {
+    code = (err as InstanceType<typeof ApiError>).code;
+  }
+  assertEquals(code, "bad_arg");
+  database({ quotes: quotes() });
+  pools({ supplied: new Map([[XLM.contract, { supply: 600_000_000n, collateral: 400_000_000n }]]) });
+  assertEquals(await refusal(e.buildEarn(ME, "deposit", POOL.id, XLM.contract, 1n, true)), [400, "bad_arg"]);
+  // What the user saw is still at most the supply: the collateral isn't withdrawn this way.
+  assertEquals(await refusal(e.buildEarn(ME, "withdraw", POOL.id, XLM.contract, 600_000_001n, true)), [400, "bad_amount"]);
+});
+
+Deno.test("plans: the verifier accepts a withdrawal of everything: a submit to the user that spends nothing", () => {
+  const { request, receive } = e.submitAmounts({ amount: "400000000", requestType: e.REQUEST.Withdraw, all: true }, 400_001_000n);
+  const intent = e.submitIntent(POOL, BUSDC, receive, e.REQUEST.Withdraw);
+  assertEquals([intent.summary, intent.receive], ["Withdraw 40.0001 USDC", { [BUSDC.contract]: "400001000" }]);
+  assertEquals(verify(e.submitArgs(ME, BUSDC.contract, request, e.REQUEST.Withdraw), intent).outflow, {});
+});
+
 // ------------------------------------------------------------------------------------------------ routes
 
 Deno.test("routes: markets and history answer with no token, cached 30 s, and ignore one that is sent", async () => {
@@ -496,4 +541,19 @@ Deno.test("routes: positions without a token answer the public view of ?address=
 Deno.test("routes: a deposit or withdrawal plan needs a session", async () => {
   const res = await handle(new Request("http://127.0.0.1/lite/v1/earn/build", { method: "POST", body: JSON.stringify({ action: "deposit", pool: POOL.id, asset: XLM.contract, amount: "1" }) }));
   assertEquals([res.status, (await res.json()).error.code], [401, "unauthorized"]);
+});
+
+Deno.test("routes: all is true or false, and only for a withdrawal", async () => {
+  database({ quotes: quotes(Date.now()) });
+  pools({ supplied: new Map([[XLM.contract, { supply: 1_000_000_000n, collateral: 0n }]]) });
+  const token = await userToken();
+  const build = (body: unknown) =>
+    handle(new Request("http://127.0.0.1/lite/v1/earn/build", { method: "POST", headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body) }));
+  const plan = { pool: POOL.id, asset: XLM.contract, amount: "1000000000" };
+  for (const all of ["yes", 1, null]) {
+    const res = await build({ action: "withdraw", ...plan, all });
+    assertEquals([res.status, (await res.json()).error.code], [400, "bad_arg"], `all ${JSON.stringify(all)}`);
+  }
+  const deposit = await build({ action: "deposit", ...plan, all: true });
+  assertEquals([deposit.status, (await deposit.json()).error.code], [400, "bad_arg"]);
 });

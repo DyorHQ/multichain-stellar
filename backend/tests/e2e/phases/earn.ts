@@ -7,7 +7,10 @@
 //   withdrawn − deposited, at least 0 and complete;
 // - the public view of the account (?address=, no token) shows the position with DyorHQ's record null, cached 15 s;
 // - a snapshot run (the indexer's earn job, run here: a package's stack has no indexer loop) fills the market's week
-//   and month of rate history, which answers with no token.
+//   and month of rate history, which answers with no token;
+// - a withdrawal of everything, asked for the supplied figure just read as the app's Withdraw asks for it, declares at
+//   least that figure and leaves nothing in the pool, though interest grew the position since; then a 10 XLM deposit
+//   leaves a position for the phases after this one.
 import { Transaction, TransactionBuilder } from "@stellar/stellar-sdk";
 import type { E2E } from "../lite_e2e.ts";
 
@@ -137,9 +140,21 @@ export default async function earn(t: E2E): Promise<string> {
   const bad = await open(`/earn/history?pool=${market.pool}&asset=${market.asset}&range=day`);
   if (bad.status !== 400 || bad.body.error?.code !== "bad_range") throw new Error(`history for a day: ${bad.status}`);
 
+  // 6. Everything back: what the screen showed, and the interest earned since, with no dust left in the pool.
+  const shown = (await position(withdrawn)).supplied;
+  const everything = await api("POST", "/earn/build", { action: "withdraw", pool: market.pool, asset: market.asset, amount: shown, all: true });
+  const declaredAll = BigInt(everything.steps[everything.steps.length - 1].intent?.receive?.[market.asset] ?? "0");
+  if (declaredAll < BigInt(shown)) throw new Error(`a withdrawal of everything declares ${declaredAll}, less than the ${shown} shown`);
+  await runPlan(everything);
+  const left = (await api("GET", "/earn/positions")).positions.find((r: any) => r.pool === market.pool && r.asset === market.asset);
+  if (left) throw new Error(`a withdrawal of everything left ${left.supplied} stroops in the pool: ${JSON.stringify(left)}`);
+  const again = await api("POST", "/earn/build", { action: "deposit", pool: market.pool, asset: market.asset, amount: (10n * ONE).toString() });
+  await runPlan(again);
+
   return `${market.poolName} ${market.poolStatus}, XLM supply APY ${(market.supplyApy * 100).toFixed(2)}% (testnet); ` +
     `first deposit of 100 XLM declared ${xlm(declared)} and was charged ${xlm(charged)} (cap ${xlm(cap)}); ` +
-    `earned ${afterDeposit.earned} stroops, then ${afterWithdrawal.earned} after withdrawing 40; history points ${counts.join(", ")}`;
+    `earned ${afterDeposit.earned} stroops, then ${afterWithdrawal.earned} after withdrawing 40; history points ${counts.join(", ")}; ` +
+    `everything back (${shown} shown, ${declaredAll} declared), nothing left, then 10 XLM supplied again`;
 }
 
 /** The fee Horizon charged for a transaction (it may trail RPC by a few seconds). */

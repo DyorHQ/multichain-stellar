@@ -1286,7 +1286,10 @@ export interface EarnBuildRequest {
   action: "deposit" | "withdraw";
   pool: ContractAddress;
   asset: ContractAddress;
+  /** With `all`, the least the user accepts: what their screen showed. */
   amount: Units;
+  /** A withdrawal of the whole position, with whatever it earns until the transaction lands: nothing stays behind. */
+  all?: boolean;
 }
 
 // ------------------------------------------------------------------------------------------------ activity

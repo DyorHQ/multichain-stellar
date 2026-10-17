@@ -8,7 +8,7 @@
 //   supplied + withdrawn − deposited. The public view leaves those null.
 // - History (public): the indexer's earn job snapshots every market into lite.earn_snapshots every 10 minutes.
 // - Plans: a deposit or a withdrawal is one Blend submit from, spent by and paid to the user (verify.ts's call rule),
-//   built here with the same stellar-sdk as the rest.
+//   built here with the same stellar-sdk as the rest. A withdrawal of everything (`all`) leaves nothing behind.
 import { PoolMetadata, PoolV2 } from "@blend-capital/blend-sdk";
 import { xdr } from "@stellar/stellar-sdk";
 import { accountView, needsTrustline } from "./account.ts";
@@ -414,8 +414,10 @@ export async function snapshot(net: NetworkConfig = env.network, now: number = D
 
 /** POST /v1/earn/build: a deposit, or a withdrawal, after enabling the asset when its trustline is missing. A withdrawal
  *  asks for at most what the account supplies (as supply, which is what it takes): Blend pays a larger request only up
- *  to that, and the review would show more than arrives. */
-export async function buildEarn(user: string, action: "deposit" | "withdraw", poolId: string, assetId: string, amount: bigint): Promise<PlanView> {
+ *  to that, and the review would show more than arrives. A withdrawal of `all` takes the whole supply with whatever it
+ *  earns until it lands (submitAmounts); `amount` is then the least the user accepts: what their screen showed. */
+export async function buildEarn(user: string, action: "deposit" | "withdraw", poolId: string, assetId: string, amount: bigint, all = false): Promise<PlanView> {
+  if (all && action !== "withdraw") throw bad("bad_arg", "all is for a withdrawal only.");
   const net = env.network;
   const pool = poolConfig(net, poolId);
   const asset = registryAsset(net, assetId);
@@ -431,9 +433,34 @@ export async function buildEarn(user: string, action: "deposit" | "withdraw", po
   }
   steps.push({
     label: action === "deposit" ? "Deposit to Earn" : "Withdraw from Earn",
-    spec: { kind: "blend_submit", pool: pool.id, asset: asset.contract, amount: amount.toString(), requestType: action === "deposit" ? REQUEST.Supply : REQUEST.Withdraw },
+    spec: {
+      kind: "blend_submit",
+      pool: pool.id,
+      asset: asset.contract,
+      amount: amount.toString(),
+      requestType: action === "deposit" ? REQUEST.Supply : REQUEST.Withdraw,
+      ...(all ? { all: true } : {}),
+    },
   });
   return await createPlan(user, action === "deposit" ? "earn_deposit" : "earn_withdraw", steps);
+}
+
+/** A withdrawal of everything asks Blend for this share more than the account supplies when its step is built: Blend
+ *  pays a withdrawal larger than the supply only up to it and burns every b-token, so the interest earned until the
+ *  transaction lands comes too, and no dust stays in the pool. 1% is more than a supply rate below about 50,000% a year
+ *  earns in a transaction's 10-minute window (USER_TX_TIMEOUT_S). */
+const ALL_HEADROOM_DIVISOR = 100n;
+
+/** What a submit step asks Blend for (`request`) and declares it receives or spends (`receive`), in base units. A
+ *  deposit and a withdrawal of an amount: that amount, both. A withdrawal of `all`: the request is the account's supply
+ *  when the step is built (`supply`, read then) and 1% more, and the declared amount that supply, which is at least
+ *  what the user saw (`spec.amount`) and at most what arrives; a supply below what the user saw is refused. */
+export function submitAmounts(spec: { readonly [key: string]: unknown }, supply: bigint | null): { request: string; receive: string } {
+  const amount = String(spec.amount);
+  if (spec.all !== true) return { request: amount, receive: amount };
+  if (Number(spec.requestType) !== REQUEST.Withdraw) throw bad("bad_arg", "all is for a withdrawal only.");
+  if (supply === null || supply < BigInt(amount)) throw bad("bad_amount", "That's more than you can withdraw from this market.");
+  return { request: (supply + supply / ALL_HEADROOM_DIVISOR + 1n).toString(), receive: supply.toString() };
 }
 
 function requestVec(asset: string, amount: string, type: number): xdr.ScVal {
@@ -462,10 +489,12 @@ registerBuilder("blend_submit", async (user, spec) => {
   const net = env.network;
   const pool = poolConfig(net, String(spec.pool));
   const asset = registryAsset(net, String(spec.asset));
-  const amount = String(spec.amount);
   const type = Number(spec.requestType);
   if (type !== REQUEST.Supply && type !== REQUEST.Withdraw) throw new ApiError(400, "bad_request_type", "Only deposit and withdraw are offered.");
+  // A withdrawal of everything reads the supply now, when its transaction is built.
+  const supply = spec.all === true ? (await pools.supplies(pool.id, user, 0)).supplied.get(asset.contract)?.supply ?? null : null;
+  const { request, receive } = submitAmounts(spec, supply);
   const acct = await requireAccount(user);
-  const tx = await invoke(acct, pool.id, "submit", submitArgs(user, asset.contract, amount, type));
-  return { tx, intent: submitIntent(pool, asset, amount, type) };
+  const tx = await invoke(acct, pool.id, "submit", submitArgs(user, asset.contract, request, type));
+  return { tx, intent: submitIntent(pool, asset, receive, type) };
 });

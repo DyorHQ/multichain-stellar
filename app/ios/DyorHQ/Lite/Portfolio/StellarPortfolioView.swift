@@ -303,10 +303,26 @@ struct StellarPortfolioView: View {
             if section != .earn {
                 Text("\(stats.trades) trades in the period").font(.caption2).foregroundStyle(.tertiary)
                     .unreadFigure(unread)
+            } else {
+                earnedSoFar
             }
         }
         .padding(16)
         .cardBackground()
+    }
+
+    /// What the account's Earn has earned so far, whatever the period: the all-time Earn P&L (Blend's value now, plus what
+    /// was withdrawn, less what was deposited, for every market with a recorded deposit, open or withdrawn in full, at
+    /// today's prices), as the P&L reads with All chosen. Saved figures until that period's read lands, a placeholder
+    /// before; "—" while DyorHQ's history needs a sign-in (the public view has no record), "*" when a market's earnings
+    /// aren't known.
+    private var earnedSoFar: some View {
+        let lifetime = model.shown(.all, live: store?.portfolio[.all], status: status)?.figures.stats(.earn)
+        let earned = lifetime?.pnl
+        return Text("Earned so far: \(lifetime.map(StellarEarnModel.earnedSoFarText) ?? "—")", tableName: "StellarEarn", comment: "Stellar Portfolio's Earn card, under its figures: what the account's Blend lending has earned so far, whatever the period, in dollars (+$0.42; a trailing * when a market's earnings aren't known)")
+            .font(.caption2).monospacedDigit()
+            .foregroundStyle(earned.map { $0 < 0 ? Color.negative : $0 > 0 ? Color.positive : Color.secondary } ?? Color.secondary)
+            .unreadFigure(lifetime == nil && status != .needsSignIn)
     }
 
     private func small(_ title: LocalizedStringKey, _ value: String, tint: Color = .primary, unread: Bool) -> some View {

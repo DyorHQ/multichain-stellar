@@ -19,9 +19,10 @@ export function register(router: Router): void {
 
   router.on("POST /v1/earn/build", async ({ req }) => {
     const u = await user(req);
-    const body = await readJson<{ action: string; pool: string; asset: string; amount: string }>(req);
+    const body = await readJson<{ action: string; pool: string; asset: string; amount: string; all?: unknown }>(req);
     if (body.action !== "deposit" && body.action !== "withdraw") throw bad("bad_action", "action is deposit or withdraw.");
-    return json(await buildEarn(u, body.action, stringArg(body.pool, "pool", 60), stringArg(body.asset, "asset", 60), amountArg(body.amount, "amount")));
+    if (body.all !== undefined && typeof body.all !== "boolean") throw bad("bad_arg", "all is true or false.");
+    return json(await buildEarn(u, body.action, stringArg(body.pool, "pool", 60), stringArg(body.asset, "asset", 60), amountArg(body.amount, "amount"), body.all === true));
   });
 
   // A market's supply APY and utilization over a week or a month.

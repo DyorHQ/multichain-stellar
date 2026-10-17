@@ -366,8 +366,9 @@ final class StellarPortfolioModel {
 
     // MARK: Reads
 
-    /// Portfolio's reads, side by side: the period's figures and activity (DyorHQ's history), the holdings (a viewer read)
-    /// unless already read and not `force`, and the words of the activity's rows. Then which held coins are of the retired
+    /// Portfolio's reads, side by side: the period's figures and activity (DyorHQ's history), the all-time figures (the Earn
+    /// card's "Earned so far") and the holdings (a viewer read) unless already read and not `force`, and the words of the
+    /// activity's rows. Then which held coins are of the retired
     /// v1 launchpad. A passkey account with no session gets `.needsSignIn` for the history, and nothing asks: the load
     /// after its sign-in reads the history it waited for.
     func load(_ store: LiteStore?, period: VolumePeriod, force: Bool) async {
@@ -375,15 +376,22 @@ final class StellarPortfolioModel {
         loads += 1
         defer { loads -= 1 }
         async let figures: Void = store.refreshPortfolio(key)
+        async let lifetime: Void = readLifetime(store, besides: key, force: force)
         async let holdings: Void = readHoldings(store, force: force)
         async let words: Void = readActivity(store, force: force)
-        _ = await (figures, holdings, words)
+        _ = await (figures, lifetime, holdings, words)
         await readRetired(store, force: force)
         take(store.portfolio)
     }
 
     private func readHoldings(_ store: LiteStore, force: Bool) async {
         if force || store.holdings == nil { await store.refreshHoldings() }
+    }
+
+    /// The all-time figures beside another period's, unless already read and not `force`: the Earn card's "Earned so far"
+    /// is the all-time Earn P&L. A settled action reads them again with the other periods read (`LiteStore`).
+    private func readLifetime(_ store: LiteStore, besides key: VolumePeriodKey, force: Bool) async {
+        if key != .all, force || store.portfolio[.all] == nil { await store.refreshPortfolio(.all) }
     }
 
     /// The account's activity with the details its rows are worded from (`StellarActivityPresenter`), in the app's
